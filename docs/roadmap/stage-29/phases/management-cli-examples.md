@@ -12,11 +12,14 @@
 - PR title: `Stage 29 phase 15: complete management and examples`
 - Dependencies: remotely merged Phase 14
 - Workflow path: expanded; public CLI, concurrent IPC, and claimed example coverage
-- Blockers: correction 1/3 fixed the initial management implementation, but
-  manager verification found that the two CLI-labelled example entrypoints run
-  pytest instead of the claimed Loom public surfaces and that the fixed FR-40/
-  FR-43 causal matrix remains incomplete. Required independent review is in
-  progress before the bounded refiner pass.
+- Blockers: correction 1/3 fixed the initial management implementation. The
+  required independent review then confirmed four reachable blockers: current-
+  agent selection is ambiguous when replacement sessions share a timestamp;
+  ready-stage SLURM operation IDs are absent from public operation detail/wait;
+  public admission waits longer than the server slice return too early; and all
+  three `validation: full` journeys overclaim the product surfaces they invoke.
+  One bounded refiner correction (2/3) is in progress for this tight management-
+  and-evidence cluster.
 
 ## Objective And Context
 
@@ -189,16 +192,18 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: corrected candidate `92c248c`; one bounded refiner pass is
-  pending the required independent review of remaining example and causal-test
-  gaps
-- Refiner: pending after independent review
+- Implementation: corrected candidate `92c248c`; the independent review found
+  four concrete management/evidence blockers requiring one bounded correction
+- Refiner: correction 2/3 in progress for deterministic current-agent choice,
+  SLURM operation projection, renewable public admission waits, truthful
+  journeys, and their directly required causal coverage
 - Pre-submit gate: not passed; the correction-1 validation receipt is stale for
   submission because accepted example claims and causal coverage remain open
-- Independent review: in progress for concurrent IPC and broad public example
-  claims
-- Blocker corrections: 1/3 complete; a refiner correction will consume 2/3
-  after the independent findings are consolidated
+- Independent review: complete; not merge eligible at `92c248c` because the
+  four blockers above remain. It also localized expired-offer availability,
+  missing FR-43 causal assertions, and stale operation-catalog node IDs to the
+  same correction.
+- Blocker corrections: 1/3 complete; bounded refiner correction 2/3 in progress
 - PR and merge: pending
 
 ## Completion Record
@@ -209,5 +214,5 @@ Final commands:
 | Tests added or updated | Admission A/B/no-op and socket saturation/status; current logical agent, operation result/bound wait, verified-owner different-UID/scope negatives; CLI/E2E process journeys; targeted queue unit/CLI and remote/SLURM integration selections. |
 | Validated revision/tree state and evidence | Fresh `make validate-pr` passed. Fresh `make test-summary` passed: 2,927 passed, 3 skipped, 0 failures/errors (2,930 total); receipt: `build/test-summary.md`, generated `2026-08-30T18:25:03+00:00`. Targeted queue tests passed: 91 queue unit tests, 12 queue CLI E2E tests, and 19 selected CLI/remote/SLURM integration tests. |
 | Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
-| PR, review, and merge | pending required independent review, bounded refiner correction, refreshed manager pre-submit gate, and merge. |
-| Residual risk and cleanup | Corrected candidate `92c248c` is not submission-ready: CLI-labelled entrypoints shell out to pytest rather than invoking the documented Loom surface, and the accepted long-wait/shutdown plus expiry/health/principal causal matrix is not yet present. |
+| PR, review, and merge | Independent review complete with blockers; bounded refiner correction, refreshed manager pre-submit gate, and merge remain pending. |
+| Residual risk and cleanup | Corrected candidate `92c248c` is not submission-ready: same-timestamp replacement can select the retired session; SLURM assignment operation IDs are not publicly readable; the direct socket-client admission wait returns at the internal server slice; examples shell out to pytest or bypass claimed surfaces; and the accepted saturation, expiry/health/principal, manifest-invocation, and process-cleanup evidence remains incomplete. |
