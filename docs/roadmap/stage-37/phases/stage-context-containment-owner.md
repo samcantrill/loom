@@ -15,7 +15,7 @@
   containment boundaries
 - Workflow path: expanded; public stage-author API and cross-process ownership
   contract
-- Blockers: independent plan review and expanded phase-plan refinement pending
+- Blockers: independent plan review pending
 
 ## Objective And Context
 
@@ -32,9 +32,11 @@
 ## Current Source And Harness
 
 - Relevant files and symbols: `loom.pipeline.context.StageContext`, lazy
-  `loom.pipeline` exports, two constructors in `execution/runner.py`, ordinary
-  and resident constructors in `execution/stage_worker.py`, and the production
-  `_resident_stage_worker` and `slurm_bootstrap` entry paths.
+  `loom.pipeline` exports, ordinary constructors in
+  `PipelineRunner._run_stage`, `PipelineRunner._run_prepared_worker_stage`, and
+  `reconstruct_stage_execution_request`, the resident constructor in
+  `execute_resident_stage_worker_request`, and its production callers
+  `_resident_stage_worker.main` and `run_slurm_bootstrap`.
 - Existing tests and seams: `test_context.py` owns public value validation;
   `test_stage_worker.py` exposes reconstructed direct context via `FakeExecutor`;
   package API tests lock exports; agent-supervisor and SLURM suites already own
@@ -53,9 +55,11 @@ In scope:
   `STAGE`, and reject non-enum values with `PipelineValidationError`.
 - Export the enum lazily from `loom.pipeline` and update the exact package API
   contract.
-- Pass `STAGE` explicitly at every ordinary Loom context constructor.
-- Let the shared resident helper receive the owner explicitly; have both the
-  agent-supervised resident entry and SLURM bootstrap select `OUTER_BOUNDARY`.
+- Pass `STAGE` explicitly at all three ordinary Loom context constructors; the
+  public default is compatibility behavior, not internal routing logic.
+- Require the shared resident constructor to receive an owner explicitly; have
+  both the agent-supervised resident entry and SLURM bootstrap pass
+  `OUTER_BOUNDARY` at their known containment boundary.
 - Document the stage obligations and the precondition for outer-boundary
   ownership in existing pipeline/execution feature docs.
 - Add focused tests for the public/default/invalid contract and ordinary versus
@@ -86,10 +90,11 @@ Assumptions:
 - Public or durable shapes: the enum and keyword-only field are additive public
   Python API. Values are exact enum instances; strings are not coerced. No
   serialized representation changes.
-- Trust and failure boundaries: `OUTER_BOUNDARY` says the stage must keep every
-  child within inherited containment and must not signal the enclosing group.
-  It does not move normal child communication/completion/reaping into Loom.
-  `STAGE` says the stage owns complete descendant cleanup.
+- Trust and failure boundaries: `OUTER_BOUNDARY` is valid only when the entry
+  has an enclosing owner that contains descendants. It says the stage must keep
+  every child within inherited containment and must not signal the enclosing
+  group. It does not move normal child communication/completion/reaping into
+  Loom. `STAGE` says the stage owns complete descendant cleanup.
 - Cross-phase contracts: none; this single phase must expose and propagate the
   complete useful behavior.
 - Reproducibility and compatibility: the field is a live execution fact, not
@@ -115,8 +120,8 @@ Assumptions:
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | Public owner is exact and immutable | `StageContext.__post_init__` and frozen dataclass | Manual/downstream context construction | Route guessing or unsupported state reaches stage code | default/explicit/invalid/frozen unit tests |
-| Ordinary execution remains stage-owned | Runner and direct-worker constructors | New field omitted or incorrectly set during request reconstruction | Stage may leave descendants without a cleanup owner | direct fake-executor assertion and constructor audit |
-| Supported resident execution names the enclosing owner | Agent resident and SLURM bootstrap entry paths through shared resident helper | Helper hardcodes one implementation or caller omits the owner | Stage may detach and escape the actual boundary | resident-helper propagation plus both production caller assertions |
+| Ordinary execution remains stage-owned | The three ordinary internal constructors | Compatibility default masks an omitted internal assignment | Stage may leave descendants without a cleanup owner | direct fake-executor assertion plus audit of both runner constructors |
+| Supported resident execution names the enclosing owner | Agent resident and SLURM bootstrap entries through the shared resident constructor | Shared constructor invents an owner or either caller omits its known owner | Stage may detach and escape the actual boundary | shared-constructor propagation plus separate assertions at both production callers |
 | Containment proof remains boundary-specific | Existing agent supervisor and SLURM owners | Stage 37 duplicates or weakens mechanism/order | Premature result trust or orphaned descendants | existing boundary suites; no duplicate mechanism test |
 | Public import remains intentional and cheap | Lazy `loom.pipeline` export | Eager execution/queue import | Base import boundary regression | package API/import checks |
 
@@ -124,8 +129,9 @@ Assumptions:
 
 1. Add the enum, keyword-only context field, exact validation, lazy public
    export, and focused context/package tests.
-2. Thread explicit stage ownership through ordinary runner/direct worker
-   constructors and assert reconstructed direct-worker behavior.
+2. Thread explicit stage ownership through the two runner constructors and the
+   reconstructed direct-worker constructor; assert direct-worker behavior and
+   audit both runner assignments.
 3. Thread explicit outer-boundary ownership from both resident production entry
    paths through the shared helper and add focused propagation coverage.
 4. Update existing pipeline/execution StageContext documentation with owner
@@ -138,15 +144,15 @@ Assumptions:
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | required | Intentional lazy public enum export | exact `loom.pipeline.__all__` and import behavior |
-| Unit | required | Default, explicit values, invalid type, immutability, ordinary/direct and shared-helper propagation | focused context and stage-worker cases; production entry call arguments |
+| Unit | required | Exact enum members, keyword-only/default/explicit behavior, invalid string/object, immutability, ordinary/direct and resident propagation | focused context and stage-worker cases; separate call-argument assertions for `_resident_stage_worker.main` and `run_slurm_bootstrap` |
 | Contract | required via final gate | Existing `StageContext` construction remains compatible | all existing contracts pass; no new durable contract suite needed |
-| Integration | required, focused | Both real production resident routes remain wired to the outer-boundary value | smallest existing agent/SLURM paths or focused entry spies; do not rerun a cancellation matrix as new acceptance |
+| Integration | required via final gate | Existing agent and SLURM containment behavior remains unchanged | existing boundary suites pass; caller-argument unit tests own new propagation acceptance, so add no cancellation matrix |
 | E2E / opt-in | existing full gate / new test deferred | No containment mechanism changes | current agent/scheduler E2E remains authoritative; no GPU, daemon, or cluster prerequisite added |
 
 Targeted commands:
 
-    uv run pytest tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
-    uv run ruff check src/loom/pipeline/context.py src/loom/pipeline/__init__.py src/loom/pipeline/execution/runner.py src/loom/pipeline/execution/stage_worker.py src/loom/queue/_resident_stage_worker.py src/loom/queue/slurm_bootstrap.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
+    uv run pytest tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_resident_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
+    uv run ruff check src/loom/pipeline/context.py src/loom/pipeline/__init__.py src/loom/pipeline/execution/runner.py src/loom/pipeline/execution/stage_worker.py src/loom/queue/_resident_stage_worker.py src/loom/queue/slurm_bootstrap.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_resident_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
 
 Final commands:
 
@@ -184,7 +190,10 @@ Final commands:
 
 - Manager preparation: complete on branch/worktree above from base `308d132`;
   planning draft and bounded design-review correction are committed.
-- Expanded planning: phase-plan refinement pending.
+- Expanded planning: complete; public default versus explicit internal
+  propagation, both production resident callers, and focused coverage are
+  fixed without prescribing private wiring.
+- Independent plan review: pending before implementation.
 - Implementation: pending.
 - Refiner: not needed unless a qualified blocker appears.
 - Pre-submit gate: pending.
