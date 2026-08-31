@@ -5,7 +5,7 @@ Roadmap stage: 36
 Planning document: docs/roadmap/stage-36/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1 (`standalone-managed-local-starter`, pre-submit passed; PR pending)
+Current phase: 1 (`standalone-managed-local-starter`, PR #267 open; manager review passed)
 Blockers: none
 
 ## Summary
@@ -44,7 +44,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | standalone-managed-local-starter | in_progress | docs/roadmap/stage-36/phases/standalone-managed-local-starter.md | agent/stage-36-p1-standalone-managed-local-starter | pending | queue preparation facade/export, managed-local-basic project/example, docs and tests | Copy, prepare, execute, inspect, and restart one embedded managed-local run through the real service. |
+| 1 | standalone-managed-local-starter | pr_open | docs/roadmap/stage-36/phases/standalone-managed-local-starter.md | agent/stage-36-p1-standalone-managed-local-starter | #267 | queue preparation facade/export, managed-local-basic project/example, docs and tests | Copy, prepare, execute, inspect, and restart one embedded managed-local run through the real service. |
 
 ## Quality Gate
 
