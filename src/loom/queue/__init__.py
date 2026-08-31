@@ -59,6 +59,10 @@ if TYPE_CHECKING:
         LocalDaemonSocketServer,
     )
     from .local_daemon_runtime import prepare_managed_local_runtime_record
+    from .managed_local_preparation import (
+        ManagedLocalPreparationReceipt,
+        prepare_managed_local_run,
+    )
     from .agent_sessions import LocalOwnerOperatorPolicy
     from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
@@ -224,6 +228,10 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
+    if name in {"ManagedLocalPreparationReceipt", "prepare_managed_local_run"}:
+        from . import managed_local_preparation
+
+        return getattr(managed_local_preparation, name)
     if name == "ExecutionRequirement":
         from loom.pipeline.orchestration import ExecutionRequirement
 
@@ -288,6 +296,8 @@ __all__ = [
     "TimeRecoveryRequest",
     "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
+    "ManagedLocalPreparationReceipt",
+    "prepare_managed_local_run",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
     "ResourceAssignment",

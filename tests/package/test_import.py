@@ -75,7 +75,11 @@ def test_import_loom_diagnostics_public_api() -> None:
 
 def test_import_loom_queue_public_api() -> None:
     import loom.queue
-    from loom.queue import SessionReplacementRequest
+    from loom.queue import (
+        ManagedLocalPreparationReceipt,
+        SessionReplacementRequest,
+        prepare_managed_local_run,
+    )
 
     assert "QueueItem" in loom.queue.__all__
     assert "QueueService" in loom.queue.__all__
@@ -94,6 +98,10 @@ def test_import_loom_queue_public_api() -> None:
     assert "SQLiteQueueRepository" in loom.queue.__all__
     assert "validate_one_queue_per_pool" in loom.queue.__all__
     assert "SessionReplacementRequest" in loom.queue.__all__
+    assert "ManagedLocalPreparationReceipt" in loom.queue.__all__
+    assert "prepare_managed_local_run" in loom.queue.__all__
+    assert ManagedLocalPreparationReceipt
+    assert callable(prepare_managed_local_run)
     assert (
         SessionReplacementRequest(
             "replace-agent", "agent-a", "lost agent root"

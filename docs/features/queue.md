@@ -783,8 +783,8 @@ committed `.env`, offers, or workers.
 
 The supported role applications now freeze the command and configuration
 boundary: `daemon-init CONFIG` and `daemon-serve CONFIG` use a
-`loom.coordinator-service` v1 document, while `agent-init CONFIG` and
-`agent-serve CONFIG` use a `loom.outbound-agent-service` v1 document. The file
+`loom.coordinator-service` v2 document, while `agent-init CONFIG` and
+`agent-serve CONFIG` use a `loom.outbound-agent-service` v2 document. The file
 must be owned by the current user with no group/other permission bits. Init and
 serve use the same file and compare its canonical configuration fingerprint to
 the role binding. Relative paths resolve beside that file. There is no implicit

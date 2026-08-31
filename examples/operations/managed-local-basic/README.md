@@ -1,49 +1,38 @@
 # Managed Local Basic
 
-## Workflow
-
-Run the deterministic embedded lifecycle:
+This directory is a copyable single-machine starter. Edit `stages.py` and
+`pipeline.yaml`, then run the lifecycle runner from the copied directory:
 
 ```sh
-uv run python examples/operations/managed-local-basic/run_managed_local_basic.py
+python run_managed_local_basic.py
 ```
 
-It creates fresh roots, submits one dependency-ordered run, inspects bounded
-admission list/detail views, waits for success, and stops the socket server and
-supervisor through their supported paths. It then reopens the same roots to
-prove the coordinator identity and completed admission survive restart while
-the process epoch changes. The script fails if any worker or service process is
-left alive.
+The runner writes one protected local-only coordinator configuration for its
+fresh output root, initializes it once with `loom queue daemon-init`, and calls
+`prepare_managed_local_run` for `starter-run`. Preparation persists the normal
+run evidence and embedded authority, but never starts the daemon or submits
+work. Repeating preparation is an exact no-write replay; change the run name
+after a partial or changed preparation.
 
 ## Public Python Surface
 
-The journey deliberately mixes both supported operator styles:
-
 ```python
-LocalDaemon.initialize(config)
-daemon = LocalDaemon(config)
-daemon.start()
-server = LocalDaemonSocketServer(daemon, config.endpoint)
-server.start()
+from loom.queue import prepare_managed_local_run
 
-client = daemon.client_view(
-    LocalDaemonPrincipal("example-client", LocalDaemonRole.CLIENT)
+receipt = prepare_managed_local_run(
+    "coordinator-service.yaml", "pipeline.yaml", "starter-run"
 )
-status = client.status()
 ```
 
-```sh
-loom queue daemon-submit --endpoint DAEMON_SOCKET example-run RUN_URI
-loom queue daemon-admissions --endpoint DAEMON_SOCKET --limit 10
-loom queue daemon-admission --endpoint DAEMON_SOCKET ADMISSION_ID
-loom queue daemon-wait --endpoint DAEMON_SOCKET example-run --timeout 15
-```
+It then starts the foreground service with `loom queue daemon-serve`, submits
+the run, waits for terminal success, observes it through `loom inspect-run
+--endpoint`, and reads the known local report file directly. Finally it stops
+and restarts the same service roots to show stable coordinator identity, a new
+epoch, and retained terminal admission state. The runner checks that its
+foreground service processes have exited.
 
-Project setup uses the public managed-runtime preparation and embedded-authority
-initializer. It never constructs the daemon's private execution owner or reads
-its SQLite tables directly.
-
-## Variants
-
-Use `managed-remote-operations` for authenticated remote discovery and
-controls, or `managed-ready-stage-slurm` for the explicit ready-stage route.
+The generated protected config deliberately has mode `0600`; it names the
+copied project and its installed Python environment. It is not a remote-agent,
+TLS, SLURM, content-relay, or process-manager installation example. For those
+advanced routes, see `managed-remote-operations` and
+`managed-ready-stage-slurm`.

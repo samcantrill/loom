@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,28 @@ def _run_operation_journey(
     return subprocess.run(
         [sys.executable, str(script)],
         cwd=script.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root),
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+        },
+    )
+
+
+def _run_copied_operation_journey(
+    example: str, output_root: Path
+) -> subprocess.CompletedProcess[str]:
+    source = REPO_ROOT / "examples" / "operations" / example
+    copied_root = Path(tempfile.mkdtemp(prefix=f"copied-{example}-", dir=output_root))
+    copied = copied_root / "project"
+    shutil.copytree(source, copied)
+    script = copied / f"run_{example.replace('-', '_')}.py"
+    return subprocess.run(
+        [sys.executable, str(script)],
+        cwd=copied,
         capture_output=True,
         text=True,
         check=False,
@@ -477,7 +500,7 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
         output_root = Path(output)
         roots: set[Path] = set()
         for _ in range(2):
-            result = _run_operation_journey("managed-local-basic", output_root)
+            result = _run_copied_operation_journey("managed-local-basic", output_root)
             journey = _assert_manifest_claims_match_journey(
                 "managed-local-basic", result
             )
@@ -485,8 +508,8 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
             assert journey["restarted"] is True
             root = Path(journey["root"])
             roots.add(root)
-            assert (root / "coordinator" / "control.sqlite").is_file()
-            assert (root / "coordinator" / "execution.sqlite").is_file()
-            assert (root / "agent" / "journal.sqlite").is_file()
-            assert not (root / "coordinator" / "daemon.sock").exists()
+            assert (root / "deployment" / "coordinator" / "control.sqlite").is_file()
+            assert (root / "deployment" / "coordinator" / "execution.sqlite").is_file()
+            assert (root / "deployment" / "agent" / "journal.sqlite").is_file()
+            assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
         assert len(roots) == 2

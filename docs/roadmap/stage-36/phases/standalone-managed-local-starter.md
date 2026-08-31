@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 36, Phase 1
 - Manifest: docs/roadmap/stage-36/implementation-plan.md
 - Branch: agent/stage-36-p1-standalone-managed-local-starter
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-36-p1-standalone-managed-local-starter`
-- Base revision: current `origin/develop` after the approved planning packet
+- Base revision: `95e45a3a65d485b7e0d335177371986a845c1120`
 - PR target: develop
 - PR title: `Stage 36 phase 1: add standalone managed-local starter`
 - Dependencies: merged Stage 29 managed service and Stage 34 run inspection
@@ -180,24 +180,33 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending approved planning packet commit and dedicated
-  worktree creation.
+- Manager preparation: complete; approved planning packet `95e45a3`, current
+  `origin/develop`, dedicated branch/worktree, source seams, fast-path route,
+  and exact executor boundary verified.
 - Expanded planning: not needed; fast path approved.
-- Implementation: pending one `loom_phase_executor` pass.
+- Implementation: complete; added the lazy embedded-only preparation facade,
+  immutable replay comparison, self-contained copied starter, documentation,
+  and phase-scoped coverage.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
+- Pre-submit gate: passed; manager review found and corrected the embedded-only
+  policy, exact scheduling replay, process-tree evidence, and one test-table
+  typing issue without changing the approved design.
 - Independent review: not needed on the fast path unless material residual risk
   appears.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Blocker corrections: 2/3; one directly related executor repair closed the
+  accepted FR-3/FR-5/FR-7 gaps, and one manager-local mechanical correction
+  replaced heterogeneous test kwargs after the first Pyright gate stopped.
+- PR and merge: PR #267 is open to `develop`; base, head, title, non-draft
+  state, mergeability, body/diff scope, fresh local evidence, and manager
+  fast-path review are verified. Merge is pending the final eligibility check.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `src/loom/queue/managed_local_preparation.py`, lazy queue export, `managed-local-basic` self-contained pipeline/stages/lifecycle/config setup, catalog/feature/Stage 29 wording, and focused package/unit/E2E coverage. |
+| Tests added or updated | New facade unit coverage; queue public-import assertion; copied `managed-local-basic` real `daemon-init`/`daemon-serve` E2E; catalog expectations updated. |
+| Validated revision/tree state and evidence | Reviewed implementation tree through `d7ea15b`. `make validate-pr` passed: Ruff, Pyright with zero errors, 2,778 default tests, 157 config-extra tests with 3 expected skips, and source/wheel builds. `make test-summary` passed at 2026-08-31T10:03:12Z: 2,935 passed and 3 expected skips across package/unit/contract/integration/E2E/config-extra. Focused facade/import/copied-lifecycle checks and a direct copied starter run also passed. |
+| Validation-relevant changes after evidence | None; this completion-record update is workflow metadata only. |
+| PR, review, and merge | PR #267 (`develop` <- `agent/stage-36-p1-standalone-managed-local-starter`) is open and mergeable. Manager fast-path review passed with no blocker; hosted checks and human approval are intentionally not required. |
+| Residual risk and cleanup | Manager fast-path diff review passed with no blocker. Accepted limits remain: partial preparation is operator-cleaned, advanced routes use the low-level API, and process-tree proof uses the repository's Linux E2E environment. Cleanup follows remote merge. |

@@ -1,273 +1,299 @@
-"""Run, inspect, restart, and cleanly stop one managed-local pipeline."""
+"""Run the copyable embedded managed-local starter lifecycle."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
+import tempfile
+import time
+
+from loom.pipeline.stores import LocalRunStore
+from loom.queue import prepare_managed_local_run
 
 
-OPERATIONS_ROOT = Path(__file__).resolve().parents[1]
-if str(OPERATIONS_ROOT) not in sys.path:
-    sys.path.insert(0, str(OPERATIONS_ROOT))
-
-from _managed_journey_support import (  # noqa: E402
-    JourneyRecorder,
-    assert_processes_dead,
-    example_root,
-)
-from loom.artifacts import ArtifactRef  # noqa: E402
-from loom.pipeline import PipelineSpec  # noqa: E402
-from loom.pipeline.context import StageContext  # noqa: E402
-from loom.pipeline.planning import plan_pipeline  # noqa: E402
-from loom.pipeline.stores import (  # noqa: E402
-    LocalArtifactStore,
-    LocalRunStore,
-    path_to_run_uri,
-)
-from loom.pipeline.stores.coordinator_authority import (  # noqa: E402
-    initialize_embedded_coordinator_authority,
-)
-from loom.queue import (  # noqa: E402
-    ExecutionRequirement,
-    LocalDaemon,
-    LocalDaemonConfig,
-    LocalDaemonPrincipal,
-    LocalDaemonRole,
-    LocalDaemonSocketServer,
-    ResidentWorkerLaunchProfile,
-    prepare_managed_local_runtime_record,
-)
-from loom.serialization import json_dumps_pretty  # noqa: E402
-
-
-class ProduceStage:
-    def run(
-        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
-    ) -> Mapping[str, ArtifactRef]:
-        del inputs
-        return {
-            "data": context.save_artifact(
-                "data", {"value": 42}, artifact_type="json", codec_key="json.v1"
-            )
-        }
-
-
-class ConsumeStage:
-    def run(
-        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
-    ) -> Mapping[str, ArtifactRef]:
-        del inputs
-        value = context.load_input("data", expected_type="json")
-        return {
-            "report": context.save_artifact(
-                "report",
-                f"consumed {value}",
-                artifact_type="text",
-                codec_key="text.v1",
-            )
-        }
+HERE = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    recorder = JourneyRecorder()
-    root = example_root("managed-local-basic")
-    run_root = root / "runs"
-    run_store = LocalRunStore(run_root)
-    run_uri = path_to_run_uri(run_root / "pipeline-1")
-    run_store.create_run(run_uri)
-    pipeline_config = _pipeline_config()
-    pipeline = PipelineSpec.from_config(pipeline_config)
-    plan = plan_pipeline(
-        pipeline,
-        run_uri=run_uri,
-        run_store=run_store,
-        artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
-        persist=True,
-    )
-    run_store.write_runtime_metadata(
-        run_uri,
-        {
-            "executor": "local",
-            "stages": {
-                stage_name: {"executor": "local"} for stage_name in pipeline.stage_names
-            },
-        },
-    )
-    run_store.write_config_snapshot(
-        run_uri, "resolved", json_dumps_pretty({"pipeline": pipeline_config})
-    )
-    recorder.python(
-        "prepare_managed_local_runtime_record",
-        lambda: prepare_managed_local_runtime_record(
-            store=run_store,
-            run_uri=run_uri,
-            plan=plan,
-            pipeline=pipeline,
-            execution_requirements={
-                stage_name: ExecutionRequirement(
-                    "managed-local-example", "managed-local-example", "local"
-                )
-                for stage_name in pipeline.stage_names
-            },
-        ),
-    )
-    recorder.python(
-        "initialize_embedded_coordinator_authority",
-        lambda: initialize_embedded_coordinator_authority(run_uri),
-    )
-    config = LocalDaemonConfig(
-        coordinator_root=root / "coordinator",
-        agent_root=root / "agent",
-        run_store_root=run_root,
-        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
-            project_root=Path(__file__).resolve().parent,
-            python_executable=Path(sys.executable),
-            descriptor={
-                "profile_id": "local-default",
-                "revision": "v1",
-                "project_fingerprint": "managed-local-example",
-                "environment_fingerprint": "managed-local-example",
-                "executor_fingerprint": "local",
-            },
-        ),
-    )
-    recorder.python("LocalDaemon.initialize", lambda: LocalDaemon.initialize(config))
+    root = _example_root()
+    config = _write_service_config(root)
+    endpoint = root / "deployment" / "coordinator" / "daemon.sock"
+    _run_cli("queue", "daemon-init", str(config))
+    receipt = prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+    if (
+        prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+        != receipt
+    ):
+        raise RuntimeError("matching preparation replay changed the run identity")
 
-    first = LocalDaemon(config)
-    first_server = LocalDaemonSocketServer(first, config.endpoint)
+    started_pids: set[int] = set()
+    first = _start_service(config, started_pids)
     try:
-        started = recorder.python("LocalDaemon.start", first.start)
-        recorder.python("LocalDaemonSocketServer.start", first_server.start)
-        recorder.observe_process_tree(os.getpid())
-        status = recorder.cli(
-            "queue", "daemon-status", "--endpoint", str(config.endpoint)
-        )
-        submitted = recorder.cli(
+        started = _wait_for_status(endpoint)
+        _observe_service_tree(first.pid, started_pids)
+        submitted = _run_cli(
             "queue",
             "daemon-submit",
             "--endpoint",
-            str(config.endpoint),
-            "example-run",
-            run_uri,
+            str(endpoint),
+            "starter-run",
+            receipt.run_uri,
         )
-        admissions = recorder.cli(
-            "queue",
-            "daemon-admissions",
-            "--endpoint",
-            str(config.endpoint),
-            "--limit",
-            "10",
-        )
-        admission_id = str(submitted["admission_id"])
-        detail = recorder.cli(
-            "queue",
-            "daemon-admission",
-            "--endpoint",
-            str(config.endpoint),
-            admission_id,
-        )
-        completed = recorder.cli(
+        _observe_service_tree(first.pid, started_pids)
+        completed = _run_cli(
             "queue",
             "daemon-wait",
             "--endpoint",
-            str(config.endpoint),
-            "example-run",
+            str(endpoint),
+            "starter-run",
             "--timeout",
             "15",
         )
-        client = recorder.python(
-            "LocalDaemon.client_view",
-            lambda: first.client_view(
-                LocalDaemonPrincipal("example-client", LocalDaemonRole.CLIENT)
-            ),
+        inspected = _run_cli(
+            "inspect-run", receipt.run_uri, "--endpoint", str(endpoint)
         )
-        recorder.python("LocalDaemonClientView.status", client.status)
-        recorder.python(
-            "LocalDaemonClientView.admission", lambda: client.admission(admission_id)
-        )
-        if status["coordinator_id"] != started.coordinator_id:
-            raise RuntimeError("CLI status observed another coordinator")
-        admission_items = admissions.get("admissions")
-        detail_admission = detail.get("admission")
         if (
-            not isinstance(admission_items, list)
-            or len(admission_items) != 1
-            or not isinstance(detail_admission, Mapping)
-            or detail_admission.get("admission_id") != admission_id
+            completed.get("state") != "SUCCEEDED"
+            or inspected.get("run_uri") != receipt.run_uri
         ):
-            raise RuntimeError("bounded admission reads did not find the submitted run")
-        if completed["state"] != "SUCCEEDED":
-            raise RuntimeError("managed-local run did not succeed")
+            raise RuntimeError("managed-local starter run did not complete and inspect")
+        if _report_text(receipt.run_uri, root / "runs") != "consumed {'value': 42}":
+            raise RuntimeError("managed-local starter artifact contents are unexpected")
     finally:
-        recorder.python("LocalDaemonSocketServer.stop", first_server.stop)
-        recorder.python("LocalDaemon.stop", first.stop)
-    assert_processes_dead(recorder.started_pids)
+        _stop_service(first)
 
-    replacement = LocalDaemon(config)
-    replacement_server = LocalDaemonSocketServer(replacement, config.endpoint)
+    second = _start_service(config, started_pids)
     try:
-        restarted = recorder.python("LocalDaemon.start", replacement.start)
-        recorder.python("LocalDaemonSocketServer.start", replacement_server.start)
-        recorder.observe_process_tree(os.getpid())
-        retained = recorder.cli(
+        restarted = _wait_for_status(endpoint)
+        _observe_service_tree(second.pid, started_pids)
+        retained = _run_cli(
             "queue",
             "daemon-admission",
             "--endpoint",
-            str(config.endpoint),
-            admission_id,
+            str(endpoint),
+            str(submitted["admission_id"]),
         )
-        if restarted.coordinator_id != started.coordinator_id:
-            raise RuntimeError("restart changed the stable coordinator identity")
-        if restarted.coordinator_epoch == started.coordinator_epoch:
-            raise RuntimeError("restart did not rotate the coordinator epoch")
-        retained_admission = retained.get("admission")
+        admission = retained.get("admission")
         if (
-            not isinstance(retained_admission, Mapping)
-            or retained_admission.get("state") != "SUCCEEDED"
+            restarted.get("coordinator_id") != started.get("coordinator_id")
+            or restarted.get("coordinator_epoch") == started.get("coordinator_epoch")
+            or not isinstance(admission, dict)
+            or admission.get("state") != "SUCCEEDED"
         ):
-            raise RuntimeError("restart lost the terminal admission")
+            raise RuntimeError(
+                "restart did not preserve the terminal managed admission"
+            )
     finally:
-        recorder.python("LocalDaemonSocketServer.stop", replacement_server.stop)
-        recorder.python("LocalDaemon.stop", replacement.stop)
-    assert_processes_dead(recorder.started_pids)
+        _stop_service(second)
 
-    recorder.emit(
-        coordinator_id=started.coordinator_id,
-        admission_id=admission_id,
-        status="SUCCEEDED",
-        restarted=True,
-        root=str(root),
+    _assert_dead(started_pids)
+    print(
+        "journey_result: "
+        + json.dumps(
+            {
+                "surfaces": [
+                    "cli:inspect-run",
+                    "cli:queue daemon-admission",
+                    "cli:queue daemon-init",
+                    "cli:queue daemon-serve",
+                    "cli:queue daemon-status",
+                    "cli:queue daemon-submit",
+                    "cli:queue daemon-wait",
+                    "python:prepare_managed_local_run",
+                ],
+                "started_pids": sorted(started_pids),
+                "coordinator_id": started["coordinator_id"],
+                "status": "SUCCEEDED",
+                "restarted": True,
+                "root": str(root),
+            },
+            sort_keys=True,
+        )
     )
 
 
-def _pipeline_config() -> dict[str, object]:
-    return {
-        "name": "managed-local-basic",
-        "stages": [
+def _example_root() -> Path:
+    output = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", tempfile.gettempdir()))
+    output.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="managed-local-basic-", dir=output)).resolve()
+
+
+def _write_service_config(root: Path) -> Path:
+    config = root / "coordinator-service.yaml"
+    resident_python = root / "resident-python"
+    resident_python.write_text(
+        f'#!/bin/sh\nexec "{Path(sys.executable)}" "$@"\n', encoding="utf-8"
+    )
+    resident_python.chmod(0o700)
+    config.write_text(
+        json.dumps(
             {
-                "name": "produce",
-                "factory": {"_target_": "run_managed_local_basic.ProduceStage"},
-                "resources": _cpu_resource(),
-                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
-            },
-            {
-                "name": "consume",
-                "factory": {"_target_": "run_managed_local_basic.ConsumeStage"},
-                "depends_on": ["produce"],
-                "inputs": {"data": "produce.data"},
-                "resources": _cpu_resource(),
-                "outputs": {
-                    "report": {"artifact_type": "text", "codec_key": "text.v1"}
+                "schema_version": 2,
+                "kind": "loom.coordinator-service",
+                "deployment_root": "deployment",
+                "run_store_root": "runs",
+                "machine_id": "starter-machine",
+                "poll_interval_seconds": 0.01,
+                "max_accepted_time_step_seconds": 60,
+                "embedded_profile": {
+                    "descriptor": {
+                        "profile_id": "starter-local",
+                        "revision": "v1",
+                        "project_fingerprint": "managed-local-basic",
+                        "environment_fingerprint": "managed-local-basic",
+                        "executor_fingerprint": "local",
+                    },
+                    "project_root": str(HERE),
+                    "python_executable": str(resident_python),
+                    "cpu_capacity": 1,
+                    "memory_capacity_bytes": 0,
+                    "gpu_devices": [],
+                    "environment": {},
                 },
-            },
-        ],
-    }
+                "remote_profiles": [],
+                "agent_policy": {
+                    "revision": "starter-1",
+                    "agents": [],
+                    "principals": [],
+                },
+                "agent_server": None,
+                "authority": {"kind": "embedded"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    return config
 
 
-def _cpu_resource() -> dict[str, object]:
-    return {"entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}}
+def _run_cli(*args: str) -> dict[str, object]:
+    result = subprocess.run(
+        [_loom_cli(), *args, "--format", "json"],
+        cwd=HERE,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Loom CLI failed: {' '.join(args)}\n{result.stderr}")
+    envelope = json.loads(result.stdout)
+    payload = envelope.get("result") if isinstance(envelope, dict) else None
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("ok") is not True
+        or not isinstance(payload, dict)
+    ):
+        raise RuntimeError(f"Loom CLI returned an invalid envelope: {result.stdout}")
+    return payload
+
+
+def _start_service(config: Path, started_pids: set[int]) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
+        [_loom_cli(), "queue", "daemon-serve", str(config), "--format", "json"],
+        cwd=HERE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    started_pids.add(process.pid)
+    return process
+
+
+def _wait_for_status(endpoint: Path) -> dict[str, object]:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            return _run_cli("queue", "daemon-status", "--endpoint", str(endpoint))
+        except RuntimeError:
+            time.sleep(0.05)
+    raise RuntimeError("managed-local daemon did not become ready")
+
+
+def _stop_service(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        os.kill(process.pid, signal.SIGINT)
+    try:
+        _, stderr = process.communicate(timeout=15)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait(timeout=3)
+        raise RuntimeError("managed-local daemon did not stop") from exc
+    if process.returncode not in {0, 130, -signal.SIGINT}:
+        raise RuntimeError(f"managed-local daemon failed while stopping: {stderr}")
+
+
+def _report_text(run_uri: str, run_root: Path) -> str:
+    report = (
+        LocalRunStore(run_root).local_artifact_root(run_uri) / "consume" / "report.txt"
+    )
+    return report.read_text(encoding="utf-8")
+
+
+def _assert_dead(pids: set[int]) -> None:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        alive = [pid for pid in sorted(pids) if _process_exists(pid)]
+        if not alive:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(
+        "managed-local service or worker process still exists: "
+        + ", ".join(str(pid) for pid in alive)
+    )
+
+
+def _observe_service_tree(root_pid: int, observed_pids: set[int]) -> None:
+    """Capture Linux service descendants before graceful SIGINT shutdown."""
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        descendants = _linux_descendants(root_pid)
+        observed_pids.update(descendants)
+        if descendants:
+            return
+        time.sleep(0.05)
+    raise RuntimeError("managed-local daemon did not start a worker process tree")
+
+
+def _linux_descendants(root_pid: int) -> set[int]:
+    descendants: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent_pid = pending.pop()
+        children_path = Path(f"/proc/{parent_pid}/task/{parent_pid}/children")
+        try:
+            children = children_path.read_text(encoding="utf-8").split()
+        except FileNotFoundError:
+            continue
+        for value in children:
+            try:
+                child_pid = int(value)
+            except ValueError as exc:
+                raise RuntimeError("Linux process children data is invalid") from exc
+            if child_pid not in descendants:
+                descendants.add(child_pid)
+                pending.append(child_pid)
+    return descendants
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _loom_cli() -> str:
+    executable = Path(sys.executable).with_name("loom")
+    if not executable.is_file():
+        raise RuntimeError("the installed Loom CLI is unavailable")
+    return str(executable)
 
 
 if __name__ == "__main__":
