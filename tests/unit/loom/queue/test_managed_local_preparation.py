@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 import sys
@@ -90,20 +91,42 @@ def test_preparation_rejects_changed_or_partial_existing_state(tmp_path: Path) -
 def test_preparation_rejects_unsupported_service_families_before_run_creation(
     tmp_path: Path,
 ) -> None:
-    for service, message in (
-        ({"agent_server": _listener_config()}, "agent listener"),
-        ({"remote_profiles": [_descriptor()]}, "remote profiles"),
+    cases: tuple[tuple[Callable[[], Path], str], ...] = (
         (
-            {"agent_policy": _remote_agent_policy(include_agents=True)},
+            lambda: _coordinator_config(
+                tmp_path, agent_server=_listener_config()
+            ),
+            "agent listener",
+        ),
+        (
+            lambda: _coordinator_config(
+                tmp_path, remote_profiles=[_descriptor()]
+            ),
+            "remote profiles",
+        ),
+        (
+            lambda: _coordinator_config(
+                tmp_path,
+                agent_policy=_remote_agent_policy(include_agents=True),
+            ),
             "remote agents or principals",
         ),
         (
-            {"agent_policy": _remote_agent_policy(include_principals=True)},
+            lambda: _coordinator_config(
+                tmp_path,
+                agent_policy=_remote_agent_policy(include_principals=True),
+            ),
             "remote agents or principals",
         ),
-        ({"slurm_profiles": [_slurm_profile()]}, "SLURM profiles"),
-    ):
-        coordinator = _coordinator_config(tmp_path, **service)
+        (
+            lambda: _coordinator_config(
+                tmp_path, slurm_profiles=[_slurm_profile()]
+            ),
+            "SLURM profiles",
+        ),
+    )
+    for create_config, message in cases:
+        coordinator = create_config()
         pipeline = _pipeline_config(tmp_path)
 
         with pytest.raises(QueueServiceError, match=message):
