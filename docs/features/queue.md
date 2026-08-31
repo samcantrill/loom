@@ -25,6 +25,36 @@ dependency-aware placement of each ready managed stage attempt, including an
 explicit named-profile SLURM target, without turning Loom into a general cluster
 manager or silently changing the historical v11 delegated-pool owner.
 
+## Deployment Choice
+
+Use the Stage 29 coordinator/agent route when an allowed host can keep the
+coordinator reachable while dependencies become ready. That route owns dynamic
+ready-stage scheduling and joined cross-run status. On sites that prohibit a
+long-running login-node service, project code can instead prepare ordinary
+whole runs for `slurm-single-job` or static `slurm-afterok`, enqueue them in a
+delegated pool, and invoke:
+
+```sh
+loom queue drive-slurm-foreground queue.yaml --pool slurm-pool --run-root runs
+```
+
+The command performs bounded reconciliation and submission and exits at local
+quiescence; it never stays alive waiting for scheduler completion. `--once`
+runs one bounded cycle. Reopening the same queue database and shared run root
+continues from retained queue, manifest, and scheduler-call facts. This path is
+not an intermittent Stage 29 coordinator: it cannot make new output-dependent
+stage decisions after exit. Operate only one foreground driver for a queue
+database at a time; concurrent takeover and coordinator high availability are
+outside this service-less route.
+
+Coordinator-wide reporters and webhooks belong beside the Stage 29 coordinator,
+where one lifecycle join can produce one notification stream. Service-less
+drivers and compute jobs do not send equivalent lifecycle hooks independently,
+and no real-time external delivery is promised while the driver is absent.
+Remote queue queries, byte/log proxying, and a remote store are not part of this
+route; operators currently inspect the configured host and project-owned shared
+filesystem through their normal site access.
+
 ## Ownership Model
 
 Queue state records:
@@ -91,6 +121,16 @@ queue:
 `workspace_assumptions_acknowledged` records that delegated SLURM dispatch still
 assumes a pre-staged or shared workspace in v11. Bundle transport is later work.
 
+For the prepared whole-run driver, the queue item carries a closed
+`loom.slurm-prepared-run.v1` reference rather than a raw script. The referenced
+run-local SLURM manifest is the only scheduler-job inventory and retains the
+agreeing queue item ID. See [slurm.md](slurm.md) and the
+[service-less example](../../examples/operations/service-less-slurm-driving/README.md).
+Project code must explicitly attest compute visibility before first submission
+with `delegated_verification={"shared_workspace": True}` (or
+`{"shared_workspace": {"status": "proven"}}`). Loom trusts that authored
+attestation; it does not mount, copy, or probe a compute node.
+
 ## Python Operation
 
 Enqueue remains Python-first in v11:
@@ -111,6 +151,41 @@ client.enqueue(
     )
 )
 ```
+
+For a deterministic many-run generator, normalize the project-owned scientific
+mapping before hashing it. Loom does not choose those fields. `enqueue_many()`
+commits and yields one classified receipt at a time; only the consumed prefix is
+accepted if iteration stops.
+
+```python
+from loom.fingerprints import hash_mapping
+from loom.queue import QueueEnqueueRequest
+
+
+def requests(parameters):
+    for index, parameter_set in enumerate(parameters):
+        normalized_science = {
+            "project": "example-project",
+            "parameters": dict(sorted(parameter_set.items())),
+        }
+        yield QueueEnqueueRequest(
+            queue_item_id=f"run-{index:04d}",
+            queue_name="gpu",
+            run_uri=f"file:///runs/run-{index:04d}",
+            request={"parameters": normalized_science["parameters"]},
+            scientific_fingerprint=hash_mapping(normalized_science),
+        )
+
+
+for receipt in client.enqueue_many(requests(parameter_sets)):
+    print(receipt.disposition, receipt.canonical_queue_item_id)
+```
+
+The queue stores an immutable `admission_digest` for every item and uses the
+nullable `scientific_fingerprint` only to find one canonical ordinary
+admission. `force=True` bypasses scientific duplicate detection for a new ID;
+it does not bypass exact replay for that ID. Queue record and SQLite schema v2
+are a hard cut: an older queue database fails explicitly and is not migrated.
 
 Foreground drain is a compatibility mode:
 
@@ -289,7 +364,12 @@ version must contain the complete final verifier/secret/composite-key schema or
 startup rejects it without repair.
 
 Client and operator status/admission operations can use the same protected mTLS
-adapter with their separately configured roles. The owner-only Unix client route
+adapter with their separately configured roles. The `query` role is separately
+mapped to a certificate fingerprint and has no action, agent, or pool scope. It
+can call only `/v1/query/inspect_run` after the current policy is checked; the
+coordinator verifies exact admission before the injected diagnostics projection
+reads owners. The query handshake advertises `run-inspection-v1`; clients reject
+older servers rather than falling back. The owner-only Unix client route
 continues unchanged. No authority application route is exposed here, and agent
 operations cannot submit/cancel runs, reserve/bind/grant assignments, read
 artifacts, prepare providers, or invoke launchers. Remote work delivery and
@@ -703,8 +783,8 @@ committed `.env`, offers, or workers.
 
 The supported role applications now freeze the command and configuration
 boundary: `daemon-init CONFIG` and `daemon-serve CONFIG` use a
-`loom.coordinator-service` v1 document, while `agent-init CONFIG` and
-`agent-serve CONFIG` use a `loom.outbound-agent-service` v1 document. The file
+`loom.coordinator-service` v2 document, while `agent-init CONFIG` and
+`agent-serve CONFIG` use a `loom.outbound-agent-service` v2 document. The file
 must be owned by the current user with no group/other permission bits. Init and
 serve use the same file and compare its canonical configuration fingerprint to
 the role binding. Relative paths resolve beside that file. There is no implicit
@@ -828,8 +908,10 @@ absent role root. Each uses a private sibling staging directory and one final
 rename, never overwrites an existing target, and leaves no requested target on
 a pre-publication failure. Startup accepts only a complete role binding made by
 the same config. See the
-[managed-local example](../../examples/operations/managed-local-queue/README.md)
-for the two exact config shapes.
+[managed deployment example](../../examples/operations/managed-local-queue/README.md)
+for the two exact protected config shapes, and the
+[remote operations journey](../../examples/operations/managed-remote-operations/README.md)
+for a runnable generated-CA deployment.
 
 A degraded accepted-time revision never heals itself. After repairing and
 verifying the site clock, recover the exact visible revision and epoch:
@@ -852,6 +934,8 @@ A typical `machine-B` maintenance cut-over is:
 
 ```bash
 loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agents --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 
 loom queue daemon-agent-drain \
   --endpoint COORDINATOR_SOCKET \
@@ -871,7 +955,8 @@ loom queue daemon-agent-reload \
   --config-revision CURRENT_CONFIG \
   --reason trusted-config-updated
 
-# Read the applied revision from daemon-status before resuming.
+# Re-read agent detail and copy its applied configuration revision before resuming.
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 loom queue daemon-agent-resume \
   --endpoint COORDINATOR_SOCKET \
   --operation-id resume-machine-B-1 \
@@ -880,6 +965,42 @@ loom queue daemon-agent-resume \
   --config-revision RELOADED_CONFIG \
   --reason maintenance-complete
 ```
+
+The agent detail supplies the exact session, configuration, inventory, and
+availability revisions required by guarded maintenance commands. Admission and
+operation reads are likewise targeted or keyset-bounded; an operator can page
+admissions, inspect one admission, and wait for a durable control receipt
+without turning status into history export:
+
+```bash
+loom queue daemon-admissions --endpoint COORDINATOR_SOCKET --limit 50 --format json
+loom queue daemon-admission --endpoint COORDINATOR_SOCKET ADMISSION_ID --format json
+loom queue daemon-operation --endpoint COORDINATOR_SOCKET OPERATION_ID --format json
+loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --timeout 30 --format json
+```
+
+Each admission carries its own monotonic `revision`. A Python client can wait
+against that exact value; changes to another admission and no-op reconciliation
+do not complete the wait:
+
+```python
+admission = client.admission(admission_id).admission
+changed = client.wait_admission(
+    admission_id,
+    expected_revision=admission.revision,
+    timeout=30,
+)
+```
+
+`daemon-status` remains constant-size and includes `accepted_time_revision` as
+the fence for clock recovery. Operation detail returns a typed `kind`, `state`,
+`code`, and bounded `result`; ready-stage SLURM waits remain open after scheduler
+acceptance and finish only at assignment release or conflict.
+
+Unix-socket operator access is opt-in in protected coordinator configuration:
+`agent_policy.local_owner` names its allowed actions, agent IDs, and pools.
+Loom resolves that rule only to the verified owner UID of the local socket;
+remote TLS identities must use their separately configured credential rule.
 
 Coordinator scheduling configuration is reloaded independently after its
 protected local file is edited:
@@ -937,8 +1058,8 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v4 CLI result shape with agent protocol and coordinator/agent
-state version 9. Loom does not upgrade or dual-read a previous control schema.
+roots and use the v5 CLI result shape, agent protocol 10, and coordinator/agent
+state version 12. Loom does not upgrade or dual-read a previous control schema.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,

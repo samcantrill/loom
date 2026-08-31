@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.runtime import (
     RuntimeConfigSections,
+    RunStoreOptions,
     merge_config_run_options,
     parse_runtime_config_sections,
 )
+from loom.pipeline.runtime.config import bootstrap_config_run_store_options
 
 
 pytestmark = pytest.mark.unit
@@ -37,16 +41,16 @@ def test_merge_config_run_options_applies_profile_then_sparse_explicit_source() 
                     "tags": {"queue": "short"},
                     "stage_options": {
                         "train": {
-                        "resources": {
-                            "entries": {
-                                "cpu": {"kind": "cpu", "amount": 8},
-                                "memory": {
-                                    "kind": "memory",
-                                    "amount": 32768,
-                                    "unit": "MiB",
-                                },
+                            "resources": {
+                                "entries": {
+                                    "cpu": {"kind": "cpu", "amount": 8},
+                                    "memory": {
+                                        "kind": "memory",
+                                        "amount": 32768,
+                                        "unit": "MiB",
+                                    },
+                                }
                             }
-                        }
                         }
                     },
                 }
@@ -67,6 +71,47 @@ def test_merge_config_run_options_applies_profile_then_sparse_explicit_source() 
     assert options.notes == ("from CLI",)
     assert options.to_plan_selectors().only_stages == ("train",)
     assert set(options.stage_options) == {"train"}
+
+
+def test_run_store_bootstrap_and_final_merge_preserve_empty_profile_override(
+    tmp_path: Path,
+) -> None:
+    root = str(tmp_path / "runs")
+    config = {
+        "runtime": {
+            "profile": "cluster",
+            "run_store": {"root": root},
+        },
+        "runtime_profiles": {"cluster": {"run_store": {}}},
+    }
+
+    bootstrap = bootstrap_config_run_store_options(config)
+    final = merge_config_run_options(config)
+
+    assert bootstrap is not None
+    assert bootstrap.root == root
+    assert isinstance(final.run_store, RunStoreOptions)
+    assert final.run_store.root == root
+
+
+def test_run_store_bootstrap_and_final_merge_allow_explicit_root_clearing(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "runtime": {
+            "profile": "cluster",
+            "run_store": {"root": str(tmp_path / "runs")},
+        },
+        "runtime_profiles": {"cluster": {"run_store": {"root": None}}},
+    }
+
+    bootstrap = bootstrap_config_run_store_options(config)
+    final = merge_config_run_options(config)
+
+    assert bootstrap is not None
+    assert bootstrap.root is None
+    assert isinstance(final.run_store, RunStoreOptions)
+    assert final.run_store.root is None
 
 
 def test_merge_config_run_options_allows_explicit_profile_override() -> None:

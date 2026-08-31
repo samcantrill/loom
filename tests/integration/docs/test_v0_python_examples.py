@@ -58,7 +58,7 @@ PYTHON_API_EXAMPLES = {
     "execution.local",
     "execution.python-run-options",
     "operations.captured-logs",
-    "operations.managed-local-queue",
+    "operations.managed-local-basic",
     "operations.resource-leases",
     "extensions.event-sink",
     "extensions.discord-webhook",
@@ -151,7 +151,9 @@ def test_examples_catalog_manifests_are_valid() -> None:
         validation = _required_string(manifest, "validation", manifest_path)
         level = _required_string(manifest, "level", manifest_path)
         surface = _required_string(manifest, "surface", manifest_path)
-        public_surfaces = _required_string_list(manifest, "public_surfaces", manifest_path)
+        public_surfaces = _required_string_list(
+            manifest, "public_surfaces", manifest_path
+        )
         owner_docs = _required_string_list(manifest, "owner_docs", manifest_path)
         owner_stages = _required_string_list(manifest, "owner_stages", manifest_path)
         validation_path = _required_string(manifest, "validation_path", manifest_path)
@@ -172,10 +174,14 @@ def test_examples_catalog_manifests_are_valid() -> None:
         assert surface in public_surfaces
         for stage in owner_stages:
             if not stage.startswith("v") or not stage[1:].isdigit():
-                raise AssertionError(f"{manifest_path} owner_stages values must be like vN")
+                raise AssertionError(
+                    f"{manifest_path} owner_stages values must be like vN"
+                )
         for owner_doc in owner_docs:
             owner_doc_path = EXAMPLES_ROOT.parent / owner_doc
-            assert owner_doc_path.is_file(), f"{manifest_path} owner_doc {owner_doc} must exist"
+            assert owner_doc_path.is_file(), (
+                f"{manifest_path} owner_doc {owner_doc} must exist"
+            )
         assert _required_string(manifest, "title", manifest_path)
         assert _required_string(manifest, "summary", manifest_path)
         assert _required_string(manifest, "introduced_in", manifest_path)
@@ -323,13 +329,17 @@ def test_example_readme_catalog_sections_match_manifests() -> None:
         if surface == "internal_demo":
             assert example_id in _readme_example_ids(readme, "Internal Demos")
             assert example_id not in _readme_example_ids(readme, "CLI Workflows")
-            assert example_id not in _readme_example_ids(readme, "Public Python API Workflows")
+            assert example_id not in _readme_example_ids(
+                readme, "Public Python API Workflows"
+            )
             continue
 
         if surface == "cli":
             assert example_id in _readme_example_ids(readme, "CLI Workflows")
         elif surface == "python_api":
-            assert example_id in _readme_example_ids(readme, "Public Python API Workflows")
+            assert example_id in _readme_example_ids(
+                readme, "Public Python API Workflows"
+            )
         else:
             raise AssertionError(f"{manifest_path} has unknown surface {surface}")
 
@@ -429,7 +439,9 @@ def _example_script_path(example_id: str) -> str:
         manifest_path,
     )
     relative_parent = manifest_path.parent.relative_to(EXAMPLES_ROOT.parent)
-    return str(relative_parent / _required_string(entrypoints[0], "path", manifest_path))
+    return str(
+        relative_parent / _required_string(entrypoints[0], "path", manifest_path)
+    )
 
 
 def _readme_example_ids(text: str, heading: str) -> set[str]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 import io
 import json
 from pathlib import Path
@@ -227,8 +228,186 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
-    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v4"
+    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v5"
     assert payload["result"]["service_health"] == "healthy"
+
+
+def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.cli import queue as queue_cli
+    from loom.queue import AgentControl, LocalDaemonSocketClient
+
+    responses: Iterator[Mapping[str, object]] = iter(
+        (
+            {
+                "operation_id": "reload-agent-1",
+                "state": "pending_delivery",
+                "code": None,
+            },
+            {
+                "operation_id": "reload-agent-1",
+                "state": "failed",
+                "code": "reload_rejected",
+            },
+        )
+    )
+    seen: list[AgentControl] = []
+
+    def control_agent(
+        _client: LocalDaemonSocketClient, control: AgentControl
+    ) -> Mapping[str, object]:
+        seen.append(control)
+        return next(responses)
+
+    monkeypatch.setattr(LocalDaemonSocketClient, "control_agent", control_agent)
+    monkeypatch.setattr(queue_cli, "_AGENT_RELOAD_RECEIPT_POLL_SECONDS", 0.0)
+    stdout = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-agent-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-agent-1",
+            "--agent-id",
+            "agent-a",
+            "--session-id",
+            "session-a",
+            "--config-revision",
+            "config-1",
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
+    assert len(seen) == 2
+    assert seen[0] == seen[1]
+    assert json.loads(stdout.getvalue())["result"]["code"] == "reload_rejected"
+
+
+def test_queue_agent_reload_timeout_while_applying_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.cli import queue as queue_cli
+    from loom.queue import LocalDaemonSocketClient
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient,
+        "control_agent",
+        lambda *_args, **_kwargs: {
+            "operation_id": "reload-agent-applying",
+            "state": "applying",
+            "code": None,
+        },
+    )
+    monkeypatch.setattr(queue_cli, "_AGENT_RELOAD_RECEIPT_WAIT_SECONDS", 0.0)
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-agent-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-agent-applying",
+            "--agent-id",
+            "agent-a",
+            "--session-id",
+            "session-a",
+            "--config-revision",
+            "config-1",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
+
+
+def test_queue_scheduling_reload_rejection_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonSocketClient
+
+    seen: list[CoordinatorSchedulingReload] = []
+
+    def reload_scheduling(
+        _client: LocalDaemonSocketClient,
+        request: CoordinatorSchedulingReload,
+    ) -> Mapping[str, object]:
+        seen.append(request)
+        return {
+            "operation_id": request.operation_id,
+            "state": "failed",
+            "code": "reload_rejected",
+            "scheduling_epoch": request.expected_scheduling_epoch,
+        }
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient, "reload_scheduling", reload_scheduling
+    )
+    stdout = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-scheduling-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-scheduling-1",
+            "--expected-scheduling-epoch",
+            "scheduling-epoch-1",
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
+    assert [item.operation_id for item in seen] == ["reload-scheduling-1"]
+    assert json.loads(stdout.getvalue())["result"]["code"] == "reload_rejected"
+
+
+def test_queue_scheduling_reload_applying_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue import LocalDaemonSocketClient
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient,
+        "reload_scheduling",
+        lambda *_args, **_kwargs: {
+            "operation_id": "reload-scheduling-applying",
+            "state": "applying",
+            "code": None,
+            "scheduling_epoch": None,
+        },
+    )
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-scheduling-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-scheduling-applying",
+            "--expected-scheduling-epoch",
+            "scheduling-epoch-1",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
 
 
 def _launch_profile() -> ResidentWorkerLaunchProfile:
@@ -265,7 +444,7 @@ def _coordinator_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "loom.coordinator-service",
                 "deployment_root": "deployment",
                 "run_store_root": "runs",
@@ -294,6 +473,7 @@ def _coordinator_service_config(tmp_path: Path) -> Path:
                     "principals": [],
                 },
                 "agent_server": None,
+                "authority": {"kind": "embedded"},
             }
         ),
         encoding="utf-8",
@@ -307,7 +487,7 @@ def _outbound_agent_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "loom.outbound-agent-service",
                 "agent_root": "remote-agent",
                 "url": "https://localhost:8443",

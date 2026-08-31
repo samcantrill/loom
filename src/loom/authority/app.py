@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from loom import __version__
 
-from .routes import mutations, supervisor
+from .routes import coordinator, mutations, supervisor
 from .services import (
     AUTHORITY_SERVICES_STATE_KEY,
     AuthorityAppServices,
@@ -29,6 +29,7 @@ def create_authority_app(
     )
     app.include_router(supervisor.router)
     app.include_router(mutations.router)
+    app.include_router(coordinator.router)
     return app
 
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from loom.pipeline.stores import AuthorityConfig
-    from loom.queue import QueueDrainResult, QueueService
+    from loom.queue import QueueDrainResult, QueueForegroundDriveResult, QueueService
     from loom.queue.controller import (
         QueueDispatchAdapter,
         QueueInspectableDispatchAdapter,
@@ -42,7 +44,10 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
-LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
+QUEUE_SLURM_DRIVE_SCHEMA_VERSION = "loom.cli.queue.slurm-drive.v1"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v5"
+_AGENT_RELOAD_RECEIPT_WAIT_SECONDS = 10.0
+_AGENT_RELOAD_RECEIPT_POLL_SECONDS = 0.05
 
 
 def register_subparser(
@@ -147,6 +152,27 @@ def register_subparser(
     _add_output_options(drain)
     drain.set_defaults(handler=handle_drain_foreground)
 
+    slurm_drive = queue_subparsers.add_parser(
+        "drive-slurm-foreground",
+        help="submit and reconcile prepared SLURM runs without a persistent service",
+    )
+    _add_config_argument(slurm_drive)
+    slurm_drive.add_argument("--pool", dest="pool_name", metavar="POOL")
+    slurm_drive.add_argument(
+        "--once",
+        action="store_true",
+        help="run one bounded controller cycle instead of driving to local quiescence",
+    )
+    slurm_drive.add_argument(
+        "--run-root",
+        default="runs",
+        metavar="PATH",
+        help="shared local root containing prepared run state and SLURM artifacts",
+    )
+    add_authority_options(slurm_drive)
+    _add_output_options(slurm_drive)
+    slurm_drive.set_defaults(handler=handle_drive_slurm_foreground)
+
     daemon_init = queue_subparsers.add_parser(
         "daemon-init",
         help="initialize one protected coordinator deployment bundle",
@@ -195,6 +221,55 @@ def register_subparser(
             daemon_client.add_argument("--timeout", type=float, default=None)
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
+
+    admissions = queue_subparsers.add_parser(
+        "daemon-admissions", help="list bounded managed admissions"
+    )
+    admissions.add_argument("--endpoint", required=True, type=Path)
+    admissions.add_argument("--limit", type=int, default=100)
+    admissions.add_argument("--cursor")
+    admissions.set_defaults(handler=handle_daemon_admissions)
+    _add_output_options(admissions)
+
+    admission = queue_subparsers.add_parser(
+        "daemon-admission", help="inspect one managed admission"
+    )
+    admission.add_argument("--endpoint", required=True, type=Path)
+    admission.add_argument("admission_id")
+    admission.set_defaults(handler=handle_daemon_admission)
+    _add_output_options(admission)
+
+    agents = queue_subparsers.add_parser("daemon-agents", help="list bounded agents")
+    agents.add_argument("--endpoint", required=True, type=Path)
+    agents.add_argument("--limit", type=int, default=100)
+    agents.add_argument("--cursor")
+    agents.set_defaults(handler=handle_daemon_agents)
+    _add_output_options(agents)
+
+    agent = queue_subparsers.add_parser(
+        "daemon-agent", help="inspect one managed agent"
+    )
+    agent.add_argument("--endpoint", required=True, type=Path)
+    agent.add_argument("agent_id")
+    agent.set_defaults(handler=handle_daemon_agent)
+    _add_output_options(agent)
+
+    operation = queue_subparsers.add_parser(
+        "daemon-operation", help="inspect one durable operation"
+    )
+    operation.add_argument("--endpoint", required=True, type=Path)
+    operation.add_argument("operation_id")
+    operation.set_defaults(handler=handle_daemon_operation)
+    _add_output_options(operation)
+
+    operation_wait = queue_subparsers.add_parser(
+        "daemon-operation-wait", help="wait for one durable operation"
+    )
+    operation_wait.add_argument("--endpoint", required=True, type=Path)
+    operation_wait.add_argument("operation_id")
+    operation_wait.add_argument("--timeout", type=float, default=None)
+    operation_wait.set_defaults(handler=handle_daemon_operation_wait)
+    _add_output_options(operation_wait)
 
     for kind in ("drain", "resume", "reload"):
         control = queue_subparsers.add_parser(
@@ -351,6 +426,38 @@ def handle_drain_foreground(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def handle_drive_slurm_foreground(namespace: argparse.Namespace) -> int:
+    """Handle bounded service-less prepared-run SLURM driving."""
+
+    result = build_slurm_drive_result(
+        namespace.config,
+        pool_name=namespace.pool_name,
+        run_root=namespace.run_root,
+        authority_config=authority_config_from_namespace(namespace),
+        until_quiescent=not bool(namespace.once),
+    )
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=QUEUE_SLURM_DRIVE_SCHEMA_VERSION,
+                ok=True,
+                warnings=[],
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        dispatched = result.to_dict()["dispatched_count"]
+        sys.stdout.write(
+            "SLURM foreground drive: "
+            f"cycles={len(result.cycles)} "
+            f"dispatched={dispatched} "
+            f"quiescent={str(result.quiescent).lower()}\n"
+        )
+    return int(ExitCode.SUCCESS)
+
+
 def handle_daemon_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete coordinator deployment bundle."""
 
@@ -379,6 +486,8 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
 
     from threading import Event
 
+    from loom.diagnostics.run_inspection import projection_callable
+    from loom.pipeline.stores import LocalRunStore
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
     from loom.queue.deployment import load_coordinator_service_config
@@ -388,12 +497,61 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
-    daemon = LocalDaemon(config)
-    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    pending_service = None
+    agent_server = None
+
+    def load_replacement():  # type: ignore[no-untyped-def]
+        nonlocal pending_service
+        pending_service = load_coordinator_service_config(service.source_path)
+        return pending_service.daemon
+
+    def prepare_role_reload(replacement):  # type: ignore[no-untyped-def]
+        nonlocal pending_service
+        prepared = pending_service
+        if prepared is None or prepared.daemon is not replacement:
+            raise QueueServiceError("trusted coordinator role snapshot is unavailable")
+        if agent_server is None:
+            if prepared.agent_server is not None:
+                raise QueueServiceError("agent TLS listener cannot be added by reload")
+
+            def install_absent() -> None:
+                nonlocal pending_service
+                pending_service = None
+
+            return install_absent
+        if prepared.agent_server is None:
+            raise QueueServiceError("agent TLS listener cannot be removed by reload")
+        install_server = agent_server.prepare_reload(prepared.agent_server)
+
+        def install() -> None:
+            nonlocal pending_service
+            install_server()
+            pending_service = None
+
+        return install
+
+    daemon = LocalDaemon(
+        config,
+        trusted_scheduling_loader=load_replacement,
+        prepare_role_reload=prepare_role_reload,
+    )
+    server = LocalDaemonSocketServer(
+        daemon,
+        config.endpoint,
+        inspect_run=projection_callable(
+            run_store=LocalRunStore(config.run_store_root), daemon=daemon
+        ),
+    )
     agent_server = (
         None
         if service.agent_server is None
-        else LocalDaemonAgentHttpServer(daemon, service.agent_server)
+        else LocalDaemonAgentHttpServer(
+            daemon,
+            service.agent_server,
+            inspect_run=projection_callable(
+                run_store=LocalRunStore(config.run_store_root), daemon=daemon
+            ),
+        )
     )
     try:
         status = daemon.start()
@@ -452,7 +610,19 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         run_outbound_agent_service,
     )
 
+    stop = Event()
+    handled_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {
+        handled_signal: signal.getsignal(handled_signal)
+        for handled_signal in handled_signals
+    }
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+
     try:
+        for handled_signal in handled_signals:
+            signal.signal(handled_signal, request_stop)
         service = load_outbound_agent_service_config(namespace.config)
         _emit_daemon_payload(
             namespace,
@@ -462,9 +632,18 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
                 "coordinator_url": service.client.url,
             },
         )
-        run_outbound_agent_service(service, stop=Event())
+        run_outbound_agent_service(
+            service,
+            stop=stop,
+            trusted_config_loader=lambda: load_outbound_agent_service_config(
+                service.source_path
+            ),
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
+    finally:
+        for handled_signal, previous_handler in previous_handlers.items():
+            signal.signal(handled_signal, previous_handler)
     return int(ExitCode.SUCCESS)
 
 
@@ -485,6 +664,76 @@ def handle_daemon_status(namespace: argparse.Namespace) -> int:
 
     try:
         result = LocalDaemonSocketClient(namespace.endpoint).status()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).admissions(
+            limit=namespace.limit, cursor=namespace.cursor
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_admission(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).admission(
+            namespace.admission_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_agents(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).agents(
+            limit=namespace.limit, cursor=namespace.cursor
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_agent(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).agent(namespace.agent_id)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_operation(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).operation(
+            namespace.operation_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).wait_operation(
+            namespace.operation_id, timeout_seconds=namespace.timeout
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -518,21 +767,35 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
     from loom.queue import AgentControl, LocalDaemonSocketClient
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).control_agent(
-            AgentControl(
-                operation_id=namespace.operation_id,
-                kind=namespace.agent_control,
-                agent_id=namespace.agent_id,
-                expected_session_id=namespace.session_id,
-                expected_config_revision=namespace.config_revision,
-                pool=namespace.pool,
-                cancel_active=bool(namespace.cancel_active),
-                reason=namespace.reason,
-            )
+        control = AgentControl(
+            operation_id=namespace.operation_id,
+            kind=namespace.agent_control,
+            agent_id=namespace.agent_id,
+            expected_session_id=namespace.session_id,
+            expected_config_revision=namespace.config_revision,
+            pool=namespace.pool,
+            cancel_active=bool(namespace.cancel_active),
+            reason=namespace.reason,
         )
+        client = LocalDaemonSocketClient(namespace.endpoint)
+        result = client.control_agent(control)
+        if namespace.agent_control == "reload":
+            deadline = time.monotonic() + _AGENT_RELOAD_RECEIPT_WAIT_SECONDS
+            while (
+                result.get("state") in {"pending_delivery", "applying"}
+                and time.monotonic() < deadline
+            ):
+                time.sleep(_AGENT_RELOAD_RECEIPT_POLL_SECONDS)
+                result = client.control_agent(control)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    exit_code = _emit_daemon_payload(namespace, result)
+    return (
+        int(ExitCode.PIPELINE)
+        if result.get("code") == "reload_rejected"
+        or (namespace.agent_control == "reload" and result.get("state") != "applied")
+        else exit_code
+    )
 
 
 def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
@@ -548,7 +811,12 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    exit_code = _emit_daemon_payload(namespace, result)
+    return (
+        int(ExitCode.PIPELINE)
+        if result.get("code") == "reload_rejected" or result.get("state") != "applied"
+        else exit_code
+    )
 
 
 def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
@@ -714,6 +982,47 @@ def build_queue_drain_result(
         raise _queue_cli_error(exc) from exc
 
 
+def build_slurm_drive_result(
+    config_path: str | Path,
+    *,
+    pool_name: str | None,
+    run_root: str | Path,
+    authority_config: "AuthorityConfig | None",
+    until_quiescent: bool,
+) -> "QueueForegroundDriveResult":
+    """Compose the one foreground driver with project-owned run storage."""
+
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+    from loom.queue.controller import QueueController
+    from loom.queue.slurm import SLURM_QUEUE_ADAPTER_NAME, SlurmQueueDispatchAdapter
+
+    service = _started_service(config_path)
+    selected_pool = pool_name or service.spec.controller.default_pool_name
+    if selected_pool is None:
+        raise CliError(
+            "SLURM foreground drive requires --pool or controller.default_pool_name",
+            code="cli.queue.slurm_drive_pool_required",
+            exit_code=ExitCode.USAGE,
+        )
+    try:
+        run_store = create_authority_backed_serial_run_store(
+            run_root,
+            authority_config=authority_config,
+            owner_id="queue-slurm-foreground",
+        )
+        return QueueController(
+            service,
+            adapters={
+                SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(run_store=run_store)
+            },
+        ).drive_foreground(
+            pool_name=selected_pool,
+            until_quiescent=until_quiescent,
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+
+
 def _emit_status_result(
     result: "QueueOperationalStatus",
     namespace: argparse.Namespace,
@@ -854,22 +1163,31 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
 __all__ = [
     "QUEUE_CANCEL_SCHEMA_VERSION",
     "QUEUE_DRAIN_SCHEMA_VERSION",
+    "QUEUE_SLURM_DRIVE_SCHEMA_VERSION",
     "QUEUE_PREFLIGHT_SCHEMA_VERSION",
     "QUEUE_STATUS_SCHEMA_VERSION",
     "LOCAL_DAEMON_SCHEMA_VERSION",
     "build_queue_cancel_result",
     "build_queue_drain_result",
+    "build_slurm_drive_result",
     "build_queue_preflight_result",
     "build_queue_status_result",
     "handle_agent_init",
     "handle_agent_serve",
     "handle_cancel",
     "handle_drain_foreground",
+    "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
+    "handle_daemon_admission",
+    "handle_daemon_admissions",
+    "handle_daemon_agent",
+    "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
     "handle_daemon_serve",
     "handle_daemon_status",
+    "handle_daemon_operation",
+    "handle_daemon_operation_wait",
     "handle_daemon_scheduling_reload",
     "handle_daemon_time_recover",
     "handle_daemon_replace_agent_session",

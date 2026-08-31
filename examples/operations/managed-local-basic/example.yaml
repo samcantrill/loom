@@ -1,0 +1,27 @@
+id: operations.managed-local-basic
+title: Managed Local Basic
+summary: Prepare and run one copied embedded managed-local project through the persistent daemon.
+capability: operations
+level: advanced
+introduced_in: v29
+status: runnable
+validation: full
+surface: python_api
+public_surfaces: [cli, python_api]
+surface_invocations:
+  - cli:inspect-run
+  - cli:queue daemon-admission
+  - cli:queue daemon-init
+  - cli:queue daemon-serve
+  - cli:queue daemon-status
+  - cli:queue daemon-submit
+  - cli:queue daemon-wait
+  - python:prepare_managed_local_run
+owner_docs: [examples/operations/README.md, docs/features/queue.md]
+owner_stages: [v29]
+validation_path: tests/e2e/test_queue_cli.py::test_managed_local_basic_manifest_claims_match_journey
+entrypoints:
+  - path: run_managed_local_basic.py
+    kind: python
+    description: Prepare and run the embedded daemon lifecycle through protected role commands.
+tags: [queue, managed-local, lifecycle, standalone]

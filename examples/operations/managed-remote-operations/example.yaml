@@ -1,0 +1,30 @@
+id: operations.managed-remote-operations
+title: Managed Remote Operations
+summary: Discover and control an authenticated remote managed agent with exact fences.
+capability: operations
+level: advanced
+introduced_in: v29
+status: runnable
+validation: full
+surface: cli
+public_surfaces: [cli]
+surface_invocations:
+  - cli:queue agent-init
+  - cli:queue agent-serve
+  - cli:queue daemon-agent
+  - cli:queue daemon-agent-drain
+  - cli:queue daemon-agent-resume
+  - cli:queue daemon-agents
+  - cli:queue daemon-init
+  - cli:queue daemon-operation
+  - cli:queue daemon-operation-wait
+  - cli:queue daemon-serve
+  - cli:queue daemon-status
+owner_docs: [examples/operations/README.md, docs/features/queue.md]
+owner_stages: [v29]
+validation_path: tests/e2e/test_queue_cli.py::test_managed_remote_operations_manifest_claims_match_journey
+entrypoints:
+  - path: run_managed_remote_operations.py
+    kind: python
+    description: Run generated-CA mutual-TLS registration, guarded controls, operation reads, and shutdown.
+tags: [queue, remote-agent, operations, tls]

@@ -23,6 +23,7 @@ from loom.pipeline.executors.containers import (
     ContainerBuildRuntime,
     ContainerBuildStatus,
     ContainerBuildTarget,
+    ContainerEnvironment,
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
@@ -31,6 +32,12 @@ from loom.pipeline.executors.containers import (
     parse_container_build_options,
     parse_container_options,
 )
+from loom.pipeline.executors.gpu_visibility import (
+    CUDA_VISIBLE_DEVICES,
+    project_apptainer_gpu_options,
+    requested_gpu_count,
+)
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.stores.run_store import LocalRunStorePaths
 from loom.serialization import PlainData
 
@@ -51,14 +58,35 @@ def wrap_slurm_command_with_apptainer(
     *,
     container_options: ContainerOptions | Mapping[str, object],
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None,
+    resources: ResourceRequest | Mapping[str, ResourceEntry] | None = None,
 ) -> SlurmCommandArgv:
     """Wrap an existing SLURM command in deterministic Apptainer exec argv."""
 
     if not isinstance(command, SlurmCommandArgv):
         raise SlurmPlanningError("command must be SlurmCommandArgv")
+    options = (
+        apptainer_options
+        if isinstance(apptainer_options, ApptainerExecOptions)
+        else ApptainerExecOptions.from_dict(apptainer_options)
+    )
+    options = project_apptainer_gpu_options(options, resources)
+    container = (
+        container_options
+        if isinstance(container_options, ContainerOptions)
+        else parse_container_options(container_options)
+    )
+    if requested_gpu_count(resources) > 0:
+        environment = cast(ContainerEnvironment, container.environment)
+        if (
+            CUDA_VISIBLE_DEVICES in environment.variables
+            or CUDA_VISIBLE_DEVICES in environment.required_host_variables
+        ):
+            raise SlurmPlanningError(
+                "CUDA_VISIBLE_DEVICES is owned by Loom's SLURM GPU allocation projection"
+            )
     apptainer_command = build_apptainer_exec_command(
-        container_options=container_options,
-        apptainer_options=apptainer_options,
+        container_options=container,
+        apptainer_options=options,
         worker_command=command.argv,
     )
     argv = tuple(apptainer_command.argv)

@@ -30,6 +30,7 @@ from loom.queue._remote_stage_execution import (
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
+    AgentOfferRenewal,
     AgentProviderDescriptor,
     AgentControl,
     AgentControlEffect,
@@ -43,6 +44,8 @@ from loom.queue.agent_sessions import (
     AgentSessionState,
     AgentStalePollError,
     SessionReplacementRequest,
+    LocalOwnerOperatorPolicy,
+    ScopedAuthorizer,
     TransportPrincipalPolicy,
     _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES,
     _build_replacement_projection,
@@ -63,6 +66,38 @@ _TEST_RETIREMENT_SECRET = "01" * 32
 _TEST_RETIREMENT_VERIFIER = hashlib.sha256(
     bytes.fromhex(_TEST_RETIREMENT_SECRET)
 ).hexdigest()
+
+
+def test_local_owner_scope_uses_verified_owner_subject_not_process_uid() -> None:
+    policy = AgentPolicyConfig(
+        local_owner=LocalOwnerOperatorPolicy(
+            actions=("drain",), agent_ids=("agent-a",), pools=("default",)
+        )
+    )
+    owner = LocalDaemonPrincipal("uid:verified-owner", LocalDaemonRole.OPERATOR)
+    authorizer = ScopedAuthorizer(
+        policy, verified_local_owner_subject="uid:verified-owner"
+    )
+    authorizer.require_operator(owner, "drain", agent_id="agent-a", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        ScopedAuthorizer(
+            policy, verified_local_owner_subject="uid:some-other-owner"
+        ).require_operator(owner, "drain", agent_id="agent-a", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(owner, "drain", agent_id="agent-b", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(owner, "drain", agent_id="agent-a", pool="other")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(
+            LocalDaemonPrincipal(
+                "uid:verified-owner",
+                LocalDaemonRole.OPERATOR,
+                "remote-certificate",
+            ),
+            "drain",
+            agent_id="agent-a",
+            pool="default",
+        )
 
 
 def _replacement_projection_connection() -> sqlite3.Connection:
@@ -236,6 +271,17 @@ def _policy(
             ),
         ),
     )
+
+
+def test_query_transport_principal_is_role_exclusive() -> None:
+    policy = TransportPrincipalPolicy("query-credential", "query", "query")
+    assert policy.actions == ()
+    assert policy.agent_ids == ()
+    assert policy.pools == ()
+    with pytest.raises(QueueServiceError, match="cannot define operator scopes"):
+        TransportPrincipalPolicy(
+            "query-credential", "query", "query", actions=("drain",)
+        )
 
 
 def _config(
@@ -722,6 +768,47 @@ def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
                 ).fetchone()[0]
                 == 0
             )
+    finally:
+        daemon.stop()
+
+
+def test_completed_agent_reload_replays_before_the_old_session_revision_is_checked(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        control = AgentControl(
+            operation_id="reload-control-replay",
+            kind=AgentControlKind.RELOAD,
+            agent_id=session.agent_id,
+            expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool=None,
+            cancel_active=False,
+            reason="replace trusted provider config",
+        )
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        assert operator.control_agent(control)["state"] == "pending_delivery"
+        assert _view(daemon).next_control(session.session_id) == control
+        receipt = _view(daemon).acknowledge_control(
+            session.session_id,
+            AgentControlEffect(
+                operation_id=control.operation_id,
+                code="applied",
+                config_revision="config-2",
+                inventory_revision="inventory-2",
+                availability_revision="availability-2",
+            ),
+        )
+
+        assert operator.control_agent(control) == receipt
+        assert receipt["state"] == "applied"
     finally:
         daemon.stop()
 
@@ -1218,6 +1305,79 @@ def test_retirement_secret_rejects_before_mutation_and_is_redacted(
         coordinator_state = "\n".join(_sqlite_snapshot(config.control_database))
         assert _TEST_RETIREMENT_SECRET not in coordinator_state
         assert '"retirement_secret"' not in coordinator_state
+    finally:
+        daemon.stop()
+
+
+def test_offer_renewal_is_sequenced_replayed_and_retains_one_offer(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    now = ["2026-01-01T00:00:00Z"]
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    daemon.start()
+    try:
+        session = _register(daemon)
+        published = _view(daemon).publish_offer(
+            _offer(session.session_id, session.coordinator_epoch),
+            idempotency_key="offer-renewal",
+        )
+        renewal = AgentOfferRenewal(
+            session.session_id, str(published["offer_id"]), "availability-1", 1
+        )
+        now[0] = "2026-01-01T00:00:10Z"
+        first = _view(daemon).renew_offer(renewal)
+        assert _view(daemon).renew_offer(renewal) == first
+        _view(daemon).renew_offer(replace(renewal, sequence=2))
+        with pytest.raises(AgentPollSequenceGapError, match="gap"):
+            _view(daemon).renew_offer(replace(renewal, sequence=4))
+        with pytest.raises(AgentStalePollError, match="stale"):
+            _view(daemon).renew_offer(renewal)
+        with daemon._connection() as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_offers WHERE session_id = ? AND current = 1",
+                    (session.session_id,),
+                ).fetchone()[0]
+                == 1
+            )
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_offer_renewals WHERE session_id = ?",
+                    (session.session_id,),
+                ).fetchone()[0]
+                == 1
+            )
+            conn.execute(
+                "UPDATE agent_sessions SET availability_revision = ? "
+                "WHERE session_id = ?",
+                ("availability-2", session.session_id),
+            )
+            conn.commit()
+        replacement = _view(daemon).publish_offer(
+            _offer(
+                session.session_id,
+                session.coordinator_epoch,
+                availability="availability-2",
+            ),
+            idempotency_key="offer-renewal-replacement",
+        )
+        restarted_sequence = AgentOfferRenewal(
+            session.session_id,
+            str(replacement["offer_id"]),
+            "availability-2",
+            1,
+        )
+        assert _view(daemon).renew_offer(restarted_sequence)["sequence"] == 1
+        with daemon._connection() as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_offer_renewals WHERE session_id = ?",
+                    (session.session_id,),
+                ).fetchone()[0]
+                == 1
+            )
     finally:
         daemon.stop()
 

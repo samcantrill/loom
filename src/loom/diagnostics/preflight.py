@@ -2835,7 +2835,17 @@ def _check_slurm_container_compatibility(
             )
             continue
         gpu_requested = _resource_amount(resources.get("gpu")) > 0
-        gpu_flag = _apptainer_gpu_flag(apptainer_options)
+        try:
+            gpu_flag = _projected_apptainer_gpu_flag(apptainer_options, resources)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_gpu_projection_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
         detail: dict[str, PlainData] = {
             "stage_id": target.stage_id,
             "scheduler_authority": "slurm",
@@ -2854,8 +2864,8 @@ def _check_slurm_container_compatibility(
                     target.stage_id,
                     code="slurm_container_gpu_flag_missing",
                     message=(
-                        "SLURM GPU allocation is selected but Apptainer GPU "
-                        "access flags are not configured"
+                        "SLURM GPU allocation is selected but GPU passthrough "
+                        "could not be projected"
                     ),
                     detail={"resource_kind": "gpu"},
                 )
@@ -2994,7 +3004,17 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
                 )
             )
             continue
-        gpu_flag = _apptainer_gpu_flag(apptainer_options)
+        try:
+            gpu_flag = _projected_apptainer_gpu_flag(apptainer_options, resources)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_gpu_projection_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
         gpu_targets.append(
             {
                 "stage_id": target.stage_id,
@@ -3009,8 +3029,8 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
                     target.stage_id,
                     code="apptainer_gpu_flag_missing",
                     message=(
-                        "GPU resources are requested but neither Apptainer --nv "
-                        "nor --rocm is configured"
+                        "GPU resources are requested but Apptainer NVIDIA "
+                        "passthrough could not be projected"
                     ),
                     detail={"resource_kind": "gpu"},
                 )
@@ -3023,7 +3043,7 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
         status,
         _severity_for_status(status),
         (
-            "Apptainer GPU resources are either not requested or have runtime flags"
+            "Apptainer GPU resources are either not requested or project runtime flags"
             if status is PreflightCheckStatus.PASS
             else "Apptainer GPU resource mapping checks failed"
         ),
@@ -4715,6 +4735,22 @@ def _apptainer_gpu_flag(apptainer_options: object) -> str | None:
     if bool(getattr(apptainer_options, "rocm", False)):
         return "rocm"
     return None
+
+
+def _projected_apptainer_gpu_flag(
+    apptainer_options: object,
+    resources: object | None,
+) -> str | None:
+    """Report the same resource-derived GPU option used at execution time."""
+
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+    from loom.pipeline.executors.gpu_visibility import project_apptainer_gpu_options
+
+    if not isinstance(apptainer_options, ApptainerExecOptions):
+        raise TypeError("Apptainer options are not normalized")
+    return _apptainer_gpu_flag(
+        project_apptainer_gpu_options(apptainer_options, cast(Any, resources))
+    )
 
 
 def _resource_amount(resource: object | None) -> float:

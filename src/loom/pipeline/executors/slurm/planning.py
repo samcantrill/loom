@@ -210,6 +210,7 @@ def build_single_job_planned_submission(
         command,
         container_options=container_options,
         apptainer_options=apptainer_options,
+        resources=None,
     )
     manifest_relative_path = slurm_manifest_relative_path(planning_id)
     job = _build_job(
@@ -283,6 +284,7 @@ def build_afterok_planned_submission(
             for stage_name in stage_plan.upstream_stages
             if stage_name in run_stage_names
         )
+        resources = _stage_resources(stage_plan.stage_name, stage_resources)
         command = build_stage_job_command_argv(
             run_uri,
             stage_plan.stage_name,
@@ -302,8 +304,8 @@ def build_afterok_planned_submission(
                 stage_apptainer_options,
                 fallback=apptainer_options,
             ),
+            resources=resources,
         )
-        resources = _stage_resources(stage_plan.stage_name, stage_resources)
         jobs.append(
             _build_job(
                 run_uri=run_uri,
@@ -590,6 +592,7 @@ def _maybe_wrap_command(
     *,
     container_options: SlurmContainerInput | None,
     apptainer_options: SlurmApptainerOptionInput | None,
+    resources: SlurmResourceInput | None,
 ) -> SlurmCommandArgv:
     if container_options is None:
         return command
@@ -597,6 +600,7 @@ def _maybe_wrap_command(
         command,
         container_options=container_options,
         apptainer_options=apptainer_options,
+        resources=resources,
     )
 
 

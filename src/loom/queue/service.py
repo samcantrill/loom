@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import cast
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
+from loom.fingerprints import validate_digest
 from loom.timestamps import utc_timestamp
 
 from .config import QueueServiceSpec
@@ -19,13 +20,14 @@ from .models import (
     LaunchContract,
     QueueAuditEvent,
     QueueDefinition,
+    QueueEnqueueReceipt,
     QueueItem,
     QueueItemStatus,
     QueueRecoveryRecord,
     RunIntent,
     validate_queue_id,
 )
-from .repository import QueuePoolSnapshot, QueueRepository
+from .repository import QueueItemPage, QueuePoolSnapshot, QueueRepository
 from ._sqlite import SQLiteQueueRepository
 
 
@@ -55,6 +57,8 @@ class QueueEnqueueRequest:
     delegated_verification: Mapping[str, PlainData] = field(default_factory=dict)
     launch_metadata: Mapping[str, PlainData] = field(default_factory=dict)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    scientific_fingerprint: str | None = None
+    force: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -79,6 +83,16 @@ class QueueEnqueueRequest:
         ):
             raise QueueServiceError("launch_contract must be a LaunchContract or None")
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        if self.scientific_fingerprint is not None:
+            try:
+                fingerprint = validate_digest(self.scientific_fingerprint)
+            except Exception as exc:  # fingerprints are a public request boundary.
+                raise QueueServiceError(
+                    "scientific_fingerprint must be a supported digest"
+                ) from exc
+            object.__setattr__(self, "scientific_fingerprint", fingerprint)
+        if not isinstance(self.force, bool):
+            raise QueueServiceError("force must be a boolean")
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -104,6 +118,8 @@ class QueueEnqueueRequest:
                 self.launch_metadata, path="launch_metadata"
             ),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "scientific_fingerprint": self.scientific_fingerprint,
+            "force": self.force,
         }
 
 
@@ -191,6 +207,29 @@ class QueueService:
         )
 
     def enqueue(self, request: QueueEnqueueRequest) -> QueueItem:
+        """Enqueue one item and return its canonical queue item.
+
+        This compatibility operation intentionally hides classification.  Use
+        :meth:`enqueue_many` when a caller needs one durable receipt per input.
+        """
+
+        return self._admit(request).queue_item
+
+    def enqueue_many(
+        self, requests: Iterable[QueueEnqueueRequest]
+    ) -> Iterator[QueueEnqueueReceipt]:
+        """Yield one committed receipt per consumed request, in input order.
+
+        Each request is admitted in its own SQLite transaction.  An unconsumed
+        suffix has not been submitted, and an iterator failure leaves its
+        already-yielded prefix durable.
+        """
+
+        self._ensure_running()
+        for request in requests:
+            yield self._admit(request)
+
+    def _admit(self, request: QueueEnqueueRequest) -> QueueEnqueueReceipt:
         self._ensure_running()
         queue = self.spec.queue_for_name(request.queue_name)
         now = self._clock()
@@ -221,8 +260,10 @@ class QueueService:
             enqueued_at=now,
             updated_at=now,
             metadata=_thawed_mapping(request.metadata, "metadata"),
+            scientific_fingerprint=request.scientific_fingerprint,
+            scientific_deduplication_bypassed=request.force,
         )
-        return self.repository.enqueue(item)
+        return self.repository.admit(item)
 
     def inspect_item(self, queue_item_id: str) -> QueueItemInspection:
         self._ensure_running()
@@ -251,10 +292,18 @@ class QueueService:
         self._require_pool(pool_name)
         return self.repository.read_pool_snapshot(pool_name)
 
-    def recovery_items(self) -> tuple[QueueItem, ...]:
+    def list_items(self, *, limit: int, cursor: str | None = None) -> QueueItemPage:
+        """Return one bounded FIFO page for admission clients and diagnostics."""
+
+        self._ensure_running()
+        return self.repository.list_items(limit=limit, cursor=cursor)
+
+    def recovery_items(
+        self, *, limit: int | None = None, pool_name: str | None = None
+    ) -> tuple[QueueItem, ...]:
         self._ensure_running()
         items: list[QueueItem] = []
-        for record in self.repository.scan_recovery():
+        for record in self.repository.scan_recovery(limit=limit, pool_name=pool_name):
             item = self.repository.read_item(record.queue_item_id)
             if item is not None:
                 items.append(item)
@@ -334,9 +383,11 @@ class QueueService:
             queue_item_id, reason_code=reason_code, expected=expected
         )
 
-    def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]:
+    def scan_recovery(
+        self, *, limit: int | None = None
+    ) -> tuple[QueueRecoveryRecord, ...]:
         self._ensure_running()
-        return self.repository.scan_recovery()
+        return self.repository.scan_recovery(limit=limit)
 
     def list_audit_events(self, queue_item_id: str) -> tuple[QueueAuditEvent, ...]:
         self._ensure_running()

@@ -70,6 +70,8 @@ class AuthorityProtocolOperationKind(StrEnum):
     CLEANUP_REPORTS = "cleanup_reports"
     CLEANUP_RESULTS = "cleanup_results"
     OFFLINE_IMPORT = "offline_import"
+    COORDINATOR_EXECUTION = "coordinator_execution"
+    RELIABILITY_FACTS = "reliability_facts"
 
 
 class AuthorityProtocolErrorCategory(StrEnum):

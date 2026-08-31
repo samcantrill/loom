@@ -1,14 +1,13 @@
 # Roadmap Stage 32 Implementation Plan
 
-Status: approved
+Status: complete
 Roadmap stage: 32
 Planning document: docs/roadmap/stage-32/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 `pending`
-Blockers: Stage 29 Phase 12 must merge before Phase 1 begins
-Worktree root: record once at implementation start; default to a
-`loom-worktrees` sibling of the discovered control checkout
+Current phase: Phase 3 `merged`; Phase 2 is superseded
+Blockers: none
+Worktree root: `/home/can134/work/active/loom-worktrees`
 
 ## Summary
 
@@ -41,7 +40,8 @@ Worktree root: record once at implementation start; default to a
 - Shared public and durable contracts: existing `queue_item_id` is exact retry
   identity; `scientific_fingerprint` is canonical or null; force bypasses
   semantic deduplication only; run-local submitted-operation/manifest records
-  remain the scheduler-job inventory owner.
+  remain the scheduler-job inventory owner and retain the canonical queue item
+  ID for Stage 34's exact run-to-item lookup.
 - Shared reproducibility, compatibility, and import constraints: queue records
   and the SQLite schema hard-cut together with no migration; generated examples
   are deterministic; default tests use fake commands/filesystems and no network.
@@ -56,21 +56,23 @@ Worktree root: record once at implementation start; default to a
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | durable-many-run-admission | pending | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | pending | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
-| 2 | service-less-slurm-driving | pending | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | pending | delegated controller/CLI, prepared-run Slurm adapter, marker recovery, lifecycle join, HPC docs/tests | Submit and reconcile many single-job or `afterok` runs without a long-running coordinator. |
+| 1 | durable-many-run-admission | merged | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) merged | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
+| 2 | service-less-slurm-driving | blocked | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | not opened | rejected delegated controller/CLI candidate retained for review evidence | Record the exhausted candidate and its FR-9/FR-10 review blockers. |
+| 3 | service-less-slurm-completion | merged | docs/roadmap/stage-32/phases/service-less-slurm-completion.md | agent/stage-32-p3-service-less-slurm-completion | [#261](https://github.com/samcantrill/loom/pull/261) merged | complete delegated controller/CLI and prepared-run Slurm outcome, per-job snapshot fallback, shared-workspace proof, HPC docs/tests | Deliver the full service-less Slurm outcome in one replacement PR from current `develop`. |
 
 ## Quality Gate
 
 - Planning gate: behavior, minimum design, complexity delta, invariant owners,
-  causal validation, and two-phase shape are complete.
+  causal validation, and the replacement phase shape are complete.
 - Manager review: passed; every requirement maps to one phase and the previous
   duplicate deployment/query/data-transfer scope has been removed.
-- Optional independent review: not used; manager-local removal-first review is
-  recorded in `planning.md`. Reconsider only if implementation needs a new
-  scheduler or authority format beyond the fixed contracts.
-- Correction: not needed.
-- Ready for implementation: planning is approved; Phase 1 remains gated on the
-  Stage 29 Phase 12 merge.
+- Optional independent review: the Phase 2 implementation review identified
+  concrete FR-9 and FR-10 gaps; both are fixed acceptance conditions for the
+  approved replacement and Phase 3 retains expanded-path review.
+- Correction: the maintainer approved one replacement phase on 2026-08-30;
+  Phase 2 remains blocked rather than receiving a fourth correction pass.
+- Implementation gate: complete; Phase 1 and replacement Phase 3 are remotely
+  merged, while Phase 2 remains the superseded blocked record.
 - Accepted risks: project fingerprint correctness is trusted, old queue
   databases are rejected, shared storage is required, and incomplete work with
   expired accounting remains unknown.
@@ -82,5 +84,12 @@ Worktree root: record once at implementation start; default to a
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | Project semantic normalization can be incorrect. | pending |
-| 2 | pending | pending | Fake Slurm cannot certify site accounting/visibility policy. | pending |
+| 1 | [#257](https://github.com/samcantrill/loom/pull/257) squash-merged as `b93d4ac` | Full local gate passed: 2,770 tests overall plus package build, Ruff, and Pyright. | Project semantic normalization can be incorrect. | Dedicated worktree and local/remote phase branches removed. |
+| 2 | No PR; blocked after independent review. | Candidate `c9cbd2c` passed Ruff, Pyright, package build, 2,676 default tests, and 157 config-extra tests (3 expected skips); `make test-summary` reported 2,833 passing tests. | FR-9 retained scheduler facts were not persisted/merged per missing job; FR-10 lacked positive compute-visible-path proof before `sbatch`. | Superseded worktree and local branch removed after replacement merge; no remote branch existed. |
+| 3 | [#261](https://github.com/samcantrill/loom/pull/261) squash-merged as `0bee233` | Full local gate and expanded review passed: 2,844 tests with 3 expected skips plus package build, Ruff, and Pyright. | Fake Slurm cannot certify site accounting visibility or shared-mount policy beyond explicit project evidence. | Dedicated worktree and local/remote phase branches removed. |
+
+Final requirement audit: FR-1 through FR-5 are present in merged Phase 1
+[#257](https://github.com/samcantrill/loom/pull/257); FR-6 through FR-11 are
+present in replacement Phase 3 [#261](https://github.com/samcantrill/loom/pull/261).
+The merged source, causal tests, documentation, and cleanup records leave no
+pending Stage 32 implementation phase.

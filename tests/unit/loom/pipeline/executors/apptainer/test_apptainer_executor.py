@@ -367,7 +367,9 @@ def test_singularity_executor_defaults_command_to_singularity(
 
 def test_apptainer_executor_projects_resource_intent_to_metadata(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "device-0")
     resources = ResourceRequest(
         entries={
             "cpu": ResourceEntry(kind="cpu", amount=2),
@@ -375,7 +377,14 @@ def test_apptainer_executor_projects_resource_intent_to_metadata(
             "gpu": ResourceEntry(kind="gpu", amount=1),
         }
     )
-    store, run_uri, request = _request(tmp_path, resources=resources)
+    store, run_uri, request = _request(
+        tmp_path,
+        resources=resources,
+        adapter_options={
+            "container": {"image": {"reference": "analysis.sif"}},
+            "apptainer": {"cleanenv": True},
+        },
+    )
 
     def write_result(_command: ApptainerExecCommand) -> None:
         store.write_stage_worker_result(
@@ -394,6 +403,93 @@ def test_apptainer_executor_projects_resource_intent_to_metadata(
     resource_meta = cast(dict[str, object], container["resources"])
     entries = cast(dict[str, object], resource_meta["entries"])
     assert set(entries) == {"cpu", "gpu", "memory"}
+
+
+def test_apptainer_executor_projects_validated_gpu_visibility_without_persisting_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-allocated")
+    resources = ResourceRequest(entries={"gpu": ResourceEntry(kind="gpu", amount=1)})
+    store, run_uri, request = _request(
+        tmp_path,
+        resources=resources,
+        adapter_options={
+            "container": {"image": {"reference": "analysis.sif"}},
+            "apptainer": {"cleanenv": True},
+        },
+    )
+
+    def write_result(_command: ApptainerExecCommand) -> None:
+        store.write_stage_worker_result(
+            run_uri, "build", _worker_success(run_uri).to_dict(), attempt=1
+        )
+
+    runner = RecordingApptainerRunner(callback=write_result)
+    result = ApptainerExecutor(run_store=store, apptainer_command_runner=runner).execute(
+        request
+    )
+
+    assert result.status == StageStatus.SUCCEEDED
+    assert "--nv" in runner.calls[0].argv
+    assert "CUDA_VISIBLE_DEVICES=GPU-allocated" in runner.calls[0].argv
+    assert "CUDA_VISIBLE_DEVICES=[redacted]" in cast(
+        Sequence[str], runner.calls[0].redacted_argv
+    )
+    assert result.executor_metadata["gpu_visibility"] == {
+        "requested_gpu_count": 1,
+        "visible_gpu_count": 1,
+    }
+    assert "GPU-allocated" not in repr(result.executor_metadata)
+
+
+@pytest.mark.parametrize("visible", (None, "0,1", "0,0", "bad token"))
+def test_apptainer_executor_rejects_invalid_managed_gpu_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    visible: str | None,
+) -> None:
+    if visible is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    resources = ResourceRequest(entries={"gpu": ResourceEntry(kind="gpu", amount=1)})
+    store, _run_uri, request = _request(tmp_path, resources=resources)
+    runner = RecordingApptainerRunner()
+
+    result = ApptainerExecutor(run_store=store, apptainer_command_runner=runner).execute(
+        request
+    )
+
+    assert result.status == StageStatus.FAILED
+    assert runner.calls == []
+    assert "CUDA_VISIBLE_DEVICES" in cast(ExecutionFailure, result.failure).message
+
+
+def test_apptainer_executor_rejects_authored_managed_cuda_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "device-7")
+    resources = ResourceRequest(entries={"gpu": ResourceEntry(kind="gpu", amount=1)})
+    store, _run_uri, request = _request(
+        tmp_path,
+        resources=resources,
+        adapter_options={
+            "container": {
+                "image": {"reference": "analysis.sif"},
+                "environment": {"variables": {"CUDA_VISIBLE_DEVICES": "0"}},
+            },
+            "apptainer": {"cleanenv": True},
+        },
+    )
+
+    result = ApptainerExecutor(
+        run_store=store, apptainer_command_runner=RecordingApptainerRunner()
+    ).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    assert "owned by Loom" in cast(ExecutionFailure, result.failure).message
 
 
 def test_apptainer_executor_missing_container_options_is_failure(

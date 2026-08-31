@@ -103,6 +103,62 @@ def test_run_default_uri_executes_under_store_default_root(
     assert stderr.getvalue() == ""
 
 
+def test_run_profile_root_persists_fresh_and_resume_state_in_selected_collection(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    root = tmp_path / "configured-runs"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime_profiles:\n"
+            "  storage:\n"
+            "    run_store:\n"
+            f"      root: {root}\n"
+        )
+
+    with _local_authority_args() as authority_args:
+        fresh_stdout = io.StringIO()
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--profile",
+                    "storage",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=fresh_stdout,
+                stderr=io.StringIO(),
+            )
+            == 0
+        )
+        run_uri = json.loads(fresh_stdout.getvalue())["result"]["run_uri"]
+        assert run_uri.startswith(path_to_run_uri(root).removesuffix("/"))
+
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--profile",
+                    "storage",
+                    "--run-uri",
+                    run_uri,
+                    "--resume",
+                    *authority_args,
+                ],
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+            == 0
+        )
+
+    assert run_uri_to_path(run_uri).is_dir()
+
+
 def test_run_offline_first_writes_non_authoritative_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

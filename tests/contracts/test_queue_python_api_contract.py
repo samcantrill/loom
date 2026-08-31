@@ -119,16 +119,22 @@ def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
     assert config.machine_id == "machine-A"
     assert {
         "AgentResourceProvider",
+        "AgentPage",
+        "AgentProjection",
         "ClaimCommand",
         "ClaimOutcome",
         "ClaimResult",
         "CpuResourceProvider",
         "LocalDaemon",
         "LocalDaemonAdmissionRequest",
+        "LocalDaemonOperation",
         "LocalDaemonSocketClient",
+        "LocalOwnerOperatorPolicy",
         "MemoryResourceProvider",
         "ObserveRequest",
         "ObserveResult",
+        "OperationWaitKind",
+        "OperationWaitResult",
         "ResidentWorkerLaunchProfile",
     }.issubset(queue.__all__)
 
@@ -188,6 +194,7 @@ def test_queue_cycle_selection_evidence_contract_is_narrow_plain_data() -> None:
         "capacity_blocked": True,
         "next_maintenance_at": None,
         "selection_stop_reason": "queue_selection.policy_error",
+        "reconciliation_pending": False,
     }
 
 

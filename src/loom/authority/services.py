@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import cast
 
 from loom.pipeline.stores import (
@@ -27,6 +28,9 @@ DEFAULT_AUTHORITY_SERVICE_GENERATION = "authority-fastapi-skeleton"
 DEFAULT_AUTHORITY_BACKEND_NAME = "fastapi-authority-skeleton"
 REPOSITORY_AUTHORITY_BACKEND_NAME = "fastapi-authority-repository"
 AUTHORITY_SERVICES_STATE_KEY = "authority_services"
+AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY = (
+    "authority_peer_certificate_fingerprint"
+)
 
 
 class AuthorityRouteGroup(StrEnum):
@@ -34,6 +38,7 @@ class AuthorityRouteGroup(StrEnum):
 
     SUPERVISOR = "supervisor"
     MUTATION = "authority_mutation"
+    COORDINATOR = "coordinator_authority"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,7 @@ class AuthorityAppServices:
     diagnostics: tuple[StoreDiagnostic, ...] = ()
     repository: AuthorityRepository | None = None
     mutation_service: AuthorityMutationService | None = None
+    coordinator_credentials: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -80,6 +86,28 @@ class AuthorityAppServices:
         ):
             raise TypeError(
                 "mutation_service must be an AuthorityMutationService or None"
+            )
+        credentials = self.coordinator_credentials
+        if credentials is not None:
+            normalized: dict[str, str] = {}
+            for service_id, fingerprint in credentials.items():
+                service = _non_empty_string(service_id, "coordinator service ID")
+                if (
+                    not isinstance(fingerprint, str)
+                    or len(fingerprint) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in fingerprint
+                    )
+                ):
+                    raise ValueError(
+                        "coordinator credential fingerprint must be lowercase SHA-256"
+                    )
+                normalized[service] = fingerprint
+            object.__setattr__(
+                self,
+                "coordinator_credentials",
+                MappingProxyType(normalized),
             )
         object.__setattr__(
             self,
@@ -187,6 +215,7 @@ def repository_authority_services(
     repository: AuthorityRepository,
     *,
     workspace_id: str | None = None,
+    coordinator_credentials: Mapping[str, str] | None = None,
 ) -> AuthorityAppServices:
     """Return app services backed by a private authority repository."""
 
@@ -203,6 +232,7 @@ def repository_authority_services(
         capabilities=repository_authority_capabilities(),
         repository=repository,
         mutation_service=mutation_service,
+        coordinator_credentials=coordinator_credentials,
     )
 
 

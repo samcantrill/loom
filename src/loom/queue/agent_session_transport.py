@@ -34,6 +34,7 @@ from loom.queue._managed_local import (
     ClaimCommand,
     ClaimOutcome,
     ManagedAssignment,
+    ManagedLocalError,
     ObserveRequest,
     ProviderReleaseEvidence,
     SQLiteAgentJournal,
@@ -47,11 +48,14 @@ from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.stores.errors import InvalidRunURIError
+from loom.pipeline.stores.run_uri import validate_run_uri
 from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
     AgentAssignmentControl,
     AgentOffer,
+    AgentOfferRenewal,
     AgentProviderDescriptor,
     AgentProviderReleaseProof,
     AgentControl,
@@ -95,6 +99,7 @@ from ._agent_process_supervisor import (
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
+    AdmissionNotFoundError,
     CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
@@ -103,10 +108,12 @@ from .local_daemon import (
     RecoverUnknownAssignment,
     TimeRecoveryReceipt,
     TimeRecoveryRequest,
+    _LOCAL_DAEMON_SCHEMA_VERSION,
 )
 
 
 _MAX_BODY_BYTES = 65_536
+_MAX_QUERY_RESPONSE_BYTES = 1_048_576
 _MAX_JSON_DEPTH = 8
 _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
@@ -145,6 +152,15 @@ class _IndeterminateAgentProtocolError(QueueServiceError):
     """The request may have mutated its durable owner before transport failed."""
 
 
+class _RunInspectionHttpError(QueueServiceError):
+    """One safe query failure with its fixed HTTP status."""
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__("run inspection request was rejected")
+        self.code = code
+        self.status = status
+
+
 @dataclass(frozen=True, slots=True)
 class AgentTlsServerConfig:
     host: str
@@ -181,6 +197,7 @@ class AgentTlsClientConfig:
         | None
     ) = None
     deployment_configuration_fingerprint: str | None = None
+    active_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -231,6 +248,57 @@ class AgentTlsClientConfig:
         ):
             raise QueueServiceError(
                 "agent deployment configuration fingerprint is invalid"
+            )
+        active = self.active_configuration_fingerprint
+        if active is not None and (
+            not isinstance(active, str)
+            or len(active) != 64
+            or any(character not in "0123456789abcdef" for character in active)
+        ):
+            raise QueueServiceError("agent active configuration fingerprint is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedAgentReload:
+    """One fully validated owner-local reload plan awaiting durable activation."""
+
+    replacement: AgentTlsClientConfig
+    profiles: Mapping[str, ResidentExecutionProfile]
+    retained_profiles: Mapping[str, ResidentExecutionProfile]
+    retained: bool
+    install_role: Callable[[], None]
+    config_revision: str
+    inventory_revision: str
+    active_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunInspectionTlsClientConfig:
+    """One protected mTLS identity for the read-only inspection operation."""
+
+    url: str
+    server_ca_path: Path
+    certificate_path: Path
+    private_key_path: Path
+
+    def __post_init__(self) -> None:
+        parsed = urlsplit(self.url)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise QueueServiceError("run inspection TLS URL is invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or (port is not None and not 1 <= port <= 65535)
+            or parsed.path not in ("", "/")
+            or parsed.username is not None
+            or parsed.password is not None
+            or bool(parsed.query)
+            or bool(parsed.fragment)
+        ):
+            raise QueueServiceError(
+                "run inspection TLS URL must be one HTTPS service identity"
             )
 
 
@@ -317,6 +385,26 @@ def _resident_provider_descriptors(
     return tuple(result)
 
 
+def _wire_capacity_atom(atom: CapacityAtom, agent_id: str) -> CapacityAtom:
+    """Remove the private agent namespace and normalize the wire memory unit."""
+
+    prefix = f"{agent_id}:"
+    local_key = atom.local_capacity_key
+    if local_key.startswith(prefix):
+        local_key = local_key[len(prefix) :]
+    return CapacityAtom(
+        atom.owner_resource_kind,
+        local_key,
+        atom.amount,
+        (
+            "byte"
+            if atom.owner_resource_kind == "memory" and atom.unit == "B"
+            else atom.unit
+        ),
+        atom.granularity,
+    )
+
+
 class _RemoteAgentJournal:
     """The outbound agent's private, replayable session evidence.
 
@@ -325,7 +413,11 @@ class _RemoteAgentJournal:
     """
 
     def __init__(
-        self, root: Path, *, expected_configuration_fingerprint: str | None = None
+        self,
+        root: Path,
+        *,
+        expected_configuration_fingerprint: str | None = None,
+        expected_active_configuration_fingerprint: str | None = None,
     ) -> None:
         self._root = Path(root)
         if not self._root.is_dir():
@@ -336,43 +428,19 @@ class _RemoteAgentJournal:
         self._path = self._root / "control.sqlite"
         if not self._path.is_file() or stat.S_IMODE(self._path.stat().st_mode) & 0o077:
             raise QueueServiceError("remote agent control state is unavailable")
+        # Preserve the protected-configuration rejection point before lock
+        # contention while repeating the same proof under the lock below.
         try:
-            with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9:
-                    raise QueueServiceError("remote agent root schema is unsupported")
-                metadata = {
-                    str(row[0]): str(row[1])
-                    for row in conn.execute("SELECT key, value FROM root_metadata")
-                }
-                if metadata.get("role") != "local-agent" or not metadata.get(
-                    "stable_id"
-                ):
-                    raise QueueServiceError("remote agent root identity is invalid")
-                validate_agent_session_schema(conn, coordinator=False)
-                if expected_configuration_fingerprint is not None:
-                    binding_path = self._root / _AGENT_BINDING_FILE
-                    if (
-                        not binding_path.is_file()
-                        or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
-                    ):
-                        raise QueueServiceError("remote agent binding is unavailable")
-                    binding = json.loads(binding_path.read_text(encoding="utf-8"))
-                    if binding != {
-                        "schema_version": 1,
-                        "role": "outbound-agent",
-                        "stable_id": metadata["stable_id"],
-                        "configuration_fingerprint": (
-                            expected_configuration_fingerprint
-                        ),
-                    }:
-                        raise QueueServiceError("remote agent binding is invalid")
+            metadata = self._validated_metadata(
+                expected_configuration_fingerprint,
+                expected_active_configuration_fingerprint,
+            )
         except QueueError:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise QueueServiceError(
                 "remote agent control state is unavailable"
             ) from exc
-        self.root_id = metadata["stable_id"]
         self._lock = (self._root / "owner.lock").open("a+", encoding="utf-8")
         (self._root / "owner.lock").chmod(0o600)
         try:
@@ -380,9 +448,265 @@ class _RemoteAgentJournal:
         except BlockingIOError as exc:
             self._lock.close()
             raise QueueServiceError("remote agent root is already locked") from exc
+        try:
+            metadata = self._validated_metadata(
+                expected_configuration_fingerprint,
+                expected_active_configuration_fingerprint,
+            )
+        except QueueError:
+            self._lock.close()
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            self._lock.close()
+            raise QueueServiceError(
+                "remote agent control state is unavailable"
+            ) from exc
+        self.root_id = metadata["stable_id"]
+
+    def _validated_metadata(
+        self,
+        expected_configuration_fingerprint: str | None,
+        expected_active_configuration_fingerprint: str | None,
+    ) -> dict[str, str]:
+        """Read and validate the immutable binding and recoverable active state."""
+
+        with self._connection() as conn:
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != (
+                _LOCAL_DAEMON_SCHEMA_VERSION
+            ):
+                raise QueueServiceError("remote agent root schema is unsupported")
+            metadata = {
+                str(row[0]): str(row[1])
+                for row in conn.execute("SELECT key, value FROM root_metadata")
+            }
+            if metadata.get("role") != "local-agent" or not metadata.get("stable_id"):
+                raise QueueServiceError("remote agent root identity is invalid")
+            validate_agent_session_schema(conn, coordinator=False)
+            if expected_configuration_fingerprint is None:
+                return metadata
+            binding_path = self._root / _AGENT_BINDING_FILE
+            if (
+                not binding_path.is_file()
+                or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+            ):
+                raise QueueServiceError("remote agent binding is unavailable")
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            if binding != {
+                "schema_version": 2,
+                "role_kind": "outbound-agent",
+                "stable_id": metadata["stable_id"],
+                "immutable_fingerprint": expected_configuration_fingerprint,
+            }:
+                raise QueueServiceError("remote agent binding is invalid")
+            active = metadata.get("active_configuration_fingerprint")
+            pending = tuple(
+                conn.execute(
+                    "SELECT replacement_fingerprint FROM agent_controls_local "
+                    "WHERE effect_json IS NULL "
+                    "AND replacement_fingerprint IS NOT NULL"
+                )
+            )
+            if len(pending) > 1:
+                raise QueueServiceError(
+                    "multiple protected agent reload intents are active"
+                )
+            if pending and str(pending[0][0]) != (
+                expected_active_configuration_fingerprint
+            ):
+                raise QueueServiceError(
+                    "protected agent configuration conflicts with pending reload"
+                )
+            if active != expected_active_configuration_fingerprint and not pending:
+                raise QueueServiceError(
+                    "protected agent configuration changed without reload"
+                )
+            return metadata
 
     def close(self) -> None:
         self._lock.close()
+
+    def bind_reload_intent(
+        self, control: AgentControl, replacement_fingerprint: str
+    ) -> None:
+        """Bind one delivered reload to the exact fully prepared replacement."""
+
+        if control.kind.value != "reload" or not replacement_fingerprint:
+            raise QueueConflictError("agent reload intent is invalid")
+        encoded = _canonical_json(control.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, replacement_fingerprint, effect_json "
+                "FROM agent_controls_local WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is None or str(row["request_json"]) != encoded:
+                raise QueueConflictError("agent reload delivery is not durable")
+            if row["effect_json"] is not None:
+                raise QueueConflictError("agent reload is already complete")
+            existing = row["replacement_fingerprint"]
+            if existing is not None and str(existing) != replacement_fingerprint:
+                raise QueueConflictError("agent reload replacement conflicts")
+            conn.execute(
+                "UPDATE agent_controls_local SET replacement_fingerprint = ? "
+                "WHERE operation_id = ?",
+                (replacement_fingerprint, control.operation_id),
+            )
+            conn.commit()
+
+    def complete_reload(
+        self,
+        control: AgentControl,
+        config: AgentTlsClientConfig,
+        effect: AgentControlEffect,
+    ) -> None:
+        """Atomically activate the protected source and its terminal effect."""
+
+        fingerprint = _agent_active_fingerprint(config)
+        expected = AgentControlEffect(
+            operation_id=control.operation_id,
+            code="applied",
+            config_revision=_agent_config_revision(config),
+            inventory_revision=_agent_inventory_revision(config),
+            availability_revision=_agent_revision(
+                "availability",
+                {
+                    "operation_id": control.operation_id,
+                    "drained": True,
+                    "inventory_revision": _agent_inventory_revision(config),
+                },
+            ),
+        )
+        if effect != expected:
+            raise QueueConflictError("agent reload effect conflicts with replacement")
+        encoded_request = _canonical_json(control.value())
+        encoded_effect = _canonical_json(effect.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, replacement_fingerprint, effect_json "
+                "FROM agent_controls_local WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if (
+                row is None
+                or str(row["request_json"]) != encoded_request
+                or str(row["replacement_fingerprint"]) != fingerprint
+            ):
+                raise QueueConflictError("agent reload intent is unavailable")
+            if row["effect_json"] is not None:
+                if str(row["effect_json"]) != encoded_effect:
+                    raise QueueConflictError("agent reload effect conflicts")
+                conn.commit()
+                return
+            session_row = conn.execute(
+                "SELECT value_json FROM agent_sessions_local WHERE session_id = ?",
+                (control.expected_session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise QueueConflictError("agent reload session is unavailable")
+            raw_session = json.loads(str(session_row["value_json"]))
+            if not isinstance(raw_session, Mapping):
+                raise QueueServiceError("agent reload session is invalid")
+            session = _session_from_value(raw_session)
+            if session.config_revision != control.expected_config_revision:
+                raise QueueConflictError("agent reload session revision is stale")
+            revision = conn.execute(
+                "SELECT value FROM root_metadata "
+                "WHERE key = 'active_configuration_revision'"
+            ).fetchone()
+            availability = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'availability_state'"
+            ).fetchone()
+            if (
+                revision is None
+                or not str(revision["value"]).isdecimal()
+                or availability is None
+                or str(availability["value"]) != "drained"
+            ):
+                raise QueueServiceError("remote active configuration is unavailable")
+            updated = replace(
+                session,
+                config_revision=effect.config_revision,
+                inventory_revision=effect.inventory_revision,
+                availability_revision=effect.availability_revision,
+            )
+            conn.execute(
+                "UPDATE root_metadata SET value = ? "
+                "WHERE key = 'active_configuration_revision'",
+                (str(int(str(revision["value"])) + 1),),
+            )
+            conn.execute(
+                "UPDATE root_metadata SET value = ? "
+                "WHERE key = 'active_configuration_fingerprint'",
+                (fingerprint,),
+            )
+            conn.execute(
+                "UPDATE agent_sessions_local SET value_json = ? "
+                "WHERE session_id = ?",
+                (_canonical_json(updated.value()), updated.session_id),
+            )
+            conn.execute(
+                "UPDATE agent_controls_local SET effect_json = ? "
+                "WHERE operation_id = ?",
+                (encoded_effect, control.operation_id),
+            )
+            conn.commit()
+
+    def recover_pending_reload(self, config: AgentTlsClientConfig) -> None:
+        """Complete the one accepted reload represented by this process source."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT request_json, replacement_fingerprint FROM "
+                    "agent_controls_local WHERE effect_json IS NULL "
+                    "AND replacement_fingerprint IS NOT NULL"
+                )
+            )
+        if not rows:
+            return
+        if len(rows) != 1:
+            raise QueueServiceError("multiple protected agent reload intents are active")
+        row = rows[0]
+        if str(row["replacement_fingerprint"]) != _agent_active_fingerprint(config):
+            raise QueueConflictError(
+                "protected agent configuration conflicts with pending reload"
+            )
+        raw_control = json.loads(str(row["request_json"]))
+        if not isinstance(raw_control, Mapping):
+            raise QueueServiceError("agent reload intent is invalid")
+        control = AgentControl.from_value(raw_control)
+        if control.kind.value != "reload":
+            raise QueueServiceError("agent reload intent is invalid")
+        effect = AgentControlEffect(
+            operation_id=control.operation_id,
+            code="applied",
+            config_revision=_agent_config_revision(config),
+            inventory_revision=_agent_inventory_revision(config),
+            availability_revision=_agent_revision(
+                "availability",
+                {
+                    "operation_id": control.operation_id,
+                    "drained": True,
+                    "inventory_revision": _agent_inventory_revision(config),
+                },
+            ),
+        )
+        self.complete_reload(control, config, effect)
+
+    def availability_drained(self) -> bool:
+        """Return the durable owner-local withdrawal state."""
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'availability_state'"
+            ).fetchone()
+        if row is None:
+            return False
+        if str(row[0]) not in {"active", "drained"}:
+            raise QueueServiceError("remote agent availability state is invalid")
+        return str(row[0]) == "drained"
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -565,6 +889,96 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
+    def prepare_offer_renewal(
+        self, renewal: AgentOfferRenewal
+    ) -> Mapping[str, PlainData] | None:
+        """Persist one bounded renewal intent before issuing it remotely."""
+
+        session = self.session(renewal.session_id)
+        if session.availability_revision != renewal.availability_revision:
+            raise QueueConflictError("offer renewal does not match the durable session")
+        digest = _canonical_digest(renewal.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT offer_id, availability_revision, sequence, digest, result_json "
+                "FROM agent_offer_renewals_local WHERE session_id = ?",
+                (renewal.session_id,),
+            ).fetchone()
+            if (
+                row is None
+                or str(row["offer_id"]) != renewal.offer_id
+                or str(row["availability_revision"]) != renewal.availability_revision
+            ):
+                raise QueueConflictError(
+                    "offer renewal requires the durable current offer"
+                )
+            current = int(row["sequence"])
+            if renewal.sequence < current:
+                raise AgentStalePollError("offer renewal sequence is stale")
+            if renewal.sequence == current:
+                if str(row["digest"]) != digest:
+                    raise QueueConflictError(
+                        "offer renewal sequence was reused with different content"
+                    )
+                if row["result_json"] is None:
+                    conn.commit()
+                    return None
+                value = json.loads(str(row["result_json"]))
+                if not isinstance(value, Mapping):
+                    raise QueueServiceError("offer renewal receipt is invalid")
+                conn.commit()
+                return freeze_plain_data(value, path="agent offer renewal replay")
+            if renewal.sequence != current + 1:
+                raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+            conn.execute(
+                "UPDATE agent_offer_renewals_local SET sequence = ?, digest = ?, result_json = NULL WHERE session_id = ?",
+                (renewal.sequence, digest, renewal.session_id),
+            )
+            conn.commit()
+        return None
+
+    def complete_offer_renewal(
+        self, renewal: AgentOfferRenewal, result: Mapping[str, PlainData]
+    ) -> None:
+        with self._connection() as conn:
+            updated = conn.execute(
+                "UPDATE agent_offer_renewals_local SET result_json = ? WHERE session_id = ? "
+                "AND offer_id = ? AND availability_revision = ? AND sequence = ?",
+                (
+                    _canonical_json(result),
+                    renewal.session_id,
+                    renewal.offer_id,
+                    renewal.availability_revision,
+                    renewal.sequence,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("offer renewal intent is unavailable")
+            conn.commit()
+
+    def next_offer_renewal(self, session_id: str) -> AgentOfferRenewal | None:
+        session = self.session(session_id)
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT r.offer_id, r.availability_revision, r.sequence, "
+                "r.result_json FROM agent_offer_renewals_local r "
+                "JOIN agent_offers_local o ON o.session_id = r.session_id "
+                "WHERE r.session_id = ? AND o.state = 'ACTIVE'",
+                (session_id,),
+            ).fetchone()
+        if row is None or str(row["availability_revision"]) != (
+            session.availability_revision
+        ):
+            return None
+        sequence = int(row["sequence"])
+        return AgentOfferRenewal(
+            session_id,
+            str(row["offer_id"]),
+            str(row["availability_revision"]),
+            sequence if row["result_json"] is None and sequence else sequence + 1,
+        )
+
     def prepare_poll(
         self,
         session_id: str,
@@ -618,9 +1032,7 @@ class _RemoteAgentJournal:
                     if str(current["state"]) == "PENDING":
                         conn.commit()
                         return None
-                    raise QueueConflictError(
-                        "work poll was fenced and is not reusable"
-                    )
+                    raise QueueConflictError("work poll was fenced and is not reusable")
                 if str(current["state"]) == "PENDING":
                     raise AgentPollActiveError("work poll is already active")
                 conn.execute(
@@ -665,6 +1077,18 @@ class _RemoteAgentJournal:
                     "UPDATE agent_offers_local SET state = 'ACTIVE' WHERE session_id = ?",
                     (session_id,),
                 )
+                offer_id = result.get("offer_id")
+                availability_revision = request.get("availability_revision")
+                if not isinstance(offer_id, str) or not isinstance(
+                    availability_revision, str
+                ):
+                    raise QueueServiceError("agent offer receipt is invalid")
+                conn.execute(
+                    "INSERT INTO agent_offer_renewals_local(session_id, offer_id, availability_revision, sequence, digest, result_json) "
+                    "VALUES (?, ?, ?, 0, '', NULL) ON CONFLICT(session_id) DO UPDATE SET "
+                    "offer_id = excluded.offer_id, availability_revision = excluded.availability_revision, sequence = 0, digest = '', result_json = NULL",
+                    (session_id, offer_id, availability_revision),
+                )
             conn.commit()
 
     def complete_poll(
@@ -686,9 +1110,7 @@ class _RemoteAgentJournal:
                 raise QueueServiceError("agent poll state is unavailable")
             if row["result_json"] is not None:
                 if str(row["result_json"]) != encoded:
-                    raise QueueConflictError(
-                        "poll replay returned a different result"
-                    )
+                    raise QueueConflictError("poll replay returned a different result")
                 conn.commit()
                 return
             if str(row["state"]) != "PENDING":
@@ -724,31 +1146,78 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
-    def prepare_control(self, control: AgentControl) -> AgentControlEffect | None:
+    def replayed_control_effect(
+        self, control: AgentControl
+    ) -> AgentControlEffect | None:
+        """Return an already completed exact control without new local effects."""
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json, effect_json FROM agent_controls_local "
+                "WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+        if row is None or row["effect_json"] is None:
+            return None
+        if str(row["request_json"]) != _canonical_json(control.value()):
+            raise QueueConflictError("agent control operation conflicts")
+        value = json.loads(str(row["effect_json"]))
+        if not isinstance(value, Mapping):
+            raise QueueServiceError("agent control effect is invalid")
+        return AgentControlEffect.from_value(value)
+
+    def prepare_control(
+        self,
+        control: AgentControl,
+        *,
+        replacement_fingerprint: str | None = None,
+    ) -> AgentControlEffect | None:
         """Persist delivery and withdrawal before applying owner-local effects."""
 
+        if replacement_fingerprint is not None and control.kind.value != "reload":
+            raise QueueConflictError(
+                "only an agent reload can bind a replacement fingerprint"
+            )
         encoded = _canonical_json(control.value())
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT request_json, effect_json FROM agent_controls_local "
+                "SELECT request_json, replacement_fingerprint, effect_json "
+                "FROM agent_controls_local "
                 "WHERE operation_id = ?",
                 (control.operation_id,),
             ).fetchone()
             if row is not None:
                 if str(row["request_json"]) != encoded:
                     raise QueueConflictError("agent control operation conflicts")
+                existing_fingerprint = row["replacement_fingerprint"]
+                if (
+                    replacement_fingerprint is not None
+                    and existing_fingerprint is not None
+                    and str(existing_fingerprint) != replacement_fingerprint
+                ):
+                    raise QueueConflictError("agent reload replacement conflicts")
                 if row["effect_json"] is not None:
                     conn.commit()
                     value = json.loads(str(row["effect_json"]))
                     if not isinstance(value, Mapping):
                         raise QueueServiceError("agent control effect is invalid")
                     return AgentControlEffect.from_value(value)
+                if (
+                    replacement_fingerprint is not None
+                    and existing_fingerprint is None
+                ):
+                    conn.execute(
+                        "UPDATE agent_controls_local SET replacement_fingerprint = ? "
+                        "WHERE operation_id = ?",
+                        (replacement_fingerprint, control.operation_id),
+                    )
             else:
                 conn.execute(
                     "INSERT INTO agent_controls_local(operation_id, request_json, "
-                    "effect_json, acknowledged) VALUES (?, ?, NULL, 0)",
-                    (control.operation_id, encoded),
+                    "replacement_fingerprint, effect_json, acknowledged) "
+                    "VALUES (?, ?, ?, NULL, 0)",
+                    (control.operation_id, encoded, replacement_fingerprint),
                 )
             session = self.session(control.expected_session_id)
             if session.config_revision != control.expected_config_revision:
@@ -773,9 +1242,18 @@ class _RemoteAgentJournal:
                     (session.session_id,),
                 )
                 conn.execute(
+                    "DELETE FROM agent_offer_renewals_local WHERE session_id = ?",
+                    (session.session_id,),
+                )
+                conn.execute(
                     "UPDATE agent_poll_state_local SET state = 'FENCED' "
                     "WHERE session_id = ?",
                     (session.session_id,),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES "
+                    "('availability_state', 'drained') ON CONFLICT(key) "
+                    "DO UPDATE SET value = excluded.value"
                 )
             conn.commit()
         return None
@@ -814,6 +1292,12 @@ class _RemoteAgentJournal:
                     "WHERE session_id = ?",
                     (_canonical_json(updated.value()), updated.session_id),
                 )
+                if control.kind.value == "resume":
+                    conn.execute(
+                        "INSERT INTO root_metadata(key, value) VALUES "
+                        "('availability_state', 'active') ON CONFLICT(key) "
+                        "DO UPDATE SET value = excluded.value"
+                    )
             elif (
                 effect.config_revision != session.config_revision
                 or effect.inventory_revision != session.inventory_revision
@@ -993,8 +1477,7 @@ class _RemoteAgentJournal:
                 "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
             ).fetchone()
             pending_poll = conn.execute(
-                "SELECT 1 FROM agent_poll_state_local "
-                "WHERE state = 'PENDING' LIMIT 1"
+                "SELECT 1 FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
             ).fetchone()
         return row is not None or pending_poll is not None
 
@@ -1290,9 +1773,16 @@ def _canonical_digest(value: Mapping[str, PlainData]) -> str:
 class LocalDaemonAgentHttpServer:
     """Loopback/deployment server; it exposes no inbound agent listener."""
 
-    def __init__(self, daemon: LocalDaemon, config: AgentTlsServerConfig) -> None:
+    def __init__(
+        self,
+        daemon: LocalDaemon,
+        config: AgentTlsServerConfig,
+        *,
+        inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
+    ) -> None:
         self._daemon = daemon
         self._config = config
+        self._inspect_run = inspect_run
         self._server: _MutualTlsHttpServer | None = None
         self._thread: Thread | None = None
 
@@ -1305,24 +1795,38 @@ class LocalDaemonAgentHttpServer:
     def start(self) -> None:
         if self._server is not None:
             raise QueueServiceError("agent TLS server is already started")
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.load_cert_chain(
-            self._config.certificate_path, self._config.private_key_path
-        )
-        context.load_verify_locations(cafile=self._config.client_ca_path)
+        context = _agent_server_context(self._config)
         server = _MutualTlsHttpServer(
             (self._config.host, self._config.port),
             context,
             self._daemon,
             dict(self._config.credential_fingerprints),
+            self._inspect_run,
         )
         self._server = server
         self._thread = Thread(
             target=server.serve_forever, daemon=True, name="loom-agent-mtls"
         )
         self._thread.start()
+
+    def prepare_reload(self, config: AgentTlsServerConfig) -> Callable[[], None]:
+        """Prepare a non-failing TLS-context swap for the resident listener."""
+
+        server = self._server
+        if server is None:
+            raise QueueServiceError("agent TLS server is not started")
+        if (config.host, config.port) != (self._config.host, self._config.port):
+            raise QueueConflictError(
+                "agent TLS reload cannot replace the resident endpoint"
+            )
+        context = _agent_server_context(config)
+        fingerprints = dict(config.credential_fingerprints)
+
+        def install() -> None:
+            server.replace_tls(context, fingerprints)
+            self._config = config
+
+        return install
 
     def stop(self) -> None:
         server = self._server
@@ -1335,6 +1839,142 @@ class LocalDaemonAgentHttpServer:
         self._thread = None
 
 
+class RunInspectionHttpClient:
+    """No-redirect HTTPS client for one configured read-only query identity."""
+
+    def __init__(self, config: RunInspectionTlsClientConfig) -> None:
+        self._config = config
+
+    def inspect_run(self, run_uri: str) -> Mapping[str, PlainData]:
+        """Return the exact server result envelope or fail closed on transport."""
+
+        parsed = urlsplit(self._config.url)
+        assert parsed.hostname is not None
+        body = json.dumps(
+            {"run_uri": run_uri}, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        if len(body) > _MAX_BODY_BYTES:
+            return _run_inspection_failure("invalid_request")
+        connection: http.client.HTTPSConnection | None = None
+        try:
+            context = ssl.create_default_context(cafile=self._config.server_ca_path)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(
+                self._config.certificate_path, self._config.private_key_path
+            )
+            connection = http.client.HTTPSConnection(
+                parsed.hostname,
+                parsed.port or 443,
+                context=context,
+                timeout=_HTTP_TIMEOUT_SECONDS,
+            )
+            connection.request(
+                "POST",
+                "/v1/query/handshake",
+                body=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            handshake = connection.getresponse()
+            handshake_raw = handshake.read(_MAX_BODY_BYTES + 1)
+            if len(handshake_raw) > _MAX_BODY_BYTES:
+                return _run_inspection_failure("unavailable")
+            if handshake.getheader("Content-Type") != "application/json":
+                return _run_inspection_failure("unavailable")
+            try:
+                handshake_value = _decode(handshake_raw)
+                _exact(handshake_value, {"ok", "result"})
+            except QueueError:
+                return _run_inspection_failure("unavailable")
+            handshake_result = handshake_value.get("result")
+            if _is_run_inspection_failure(handshake_result):
+                if handshake.status != _run_inspection_http_status(
+                    cast(Mapping[str, object], handshake_result)
+                ):
+                    return _run_inspection_failure("unavailable")
+                return freeze_plain_data(
+                    handshake_result, path="run inspection handshake failure"
+                )
+            capabilities = (
+                handshake_result.get("capabilities")
+                if isinstance(handshake_result, Mapping)
+                else None
+            )
+            if (
+                handshake.status != 200
+                or handshake_value.get("ok") is not True
+                or not isinstance(capabilities, Sequence)
+                or isinstance(capabilities, (str, bytes))
+                or "run-inspection-v1" not in capabilities
+            ):
+                return _run_inspection_failure("unavailable")
+            connection.request(
+                "POST",
+                "/v1/query/inspect_run",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            raw = response.read(_MAX_QUERY_RESPONSE_BYTES + 1)
+        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+            del exc
+            return _run_inspection_failure("unavailable")
+        finally:
+            if connection is not None:
+                connection.close()
+        if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
+            return _run_inspection_failure("unavailable")
+        if response.getheader("Content-Type") != "application/json":
+            return _run_inspection_failure("unavailable")
+        try:
+            payload = _decode_run_inspection_response(raw)
+            _exact(payload, {"ok", "result"})
+        except QueueError:
+            return _run_inspection_failure("unavailable")
+        if payload.get("ok") is not True:
+            return _run_inspection_failure("unavailable")
+        result = payload.get("result")
+        if not isinstance(result, Mapping):
+            return _run_inspection_failure("unavailable")
+        expected_status = _run_inspection_http_status(result)
+        if response.status != expected_status:
+            return _run_inspection_failure("unavailable")
+        return cast(
+            Mapping[str, PlainData],
+            thaw_plain_data(result, path="run inspection HTTP response"),
+        )
+
+
+def _run_inspection_failure(code: str) -> Mapping[str, PlainData]:
+    """Build the closed Phase 1 error shape without importing diagnostics."""
+
+    return freeze_plain_data(
+        {"schema_version": 1, "code": code}, path="run inspection failure"
+    )
+
+
+def _is_run_inspection_failure(value: object) -> bool:
+    code = value.get("code") if isinstance(value, Mapping) else None
+    return (
+        isinstance(value, Mapping)
+        and value.get("schema_version") == 1
+        and isinstance(code, str)
+        and code
+        in {"invalid_request", "not_found", "unauthorized", "unavailable", "internal"}
+        and set(value) == {"schema_version", "code"}
+    )
+
+
+def _run_inspection_http_status(value: Mapping[str, object]) -> int:
+    code = value.get("code")
+    return {
+        "invalid_request": 400,
+        "not_found": 404,
+        "unauthorized": 403,
+        "unavailable": 503,
+        "internal": 503,
+    }.get(code if isinstance(code, str) else "", 200)
+
+
 class LocalDaemonAgentHttpClient:
     """A no-redirect persistent HTTPS caller for one configured service name."""
 
@@ -1343,60 +1983,95 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
         *,
         trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+        prepare_role_reload: (
+            Callable[[AgentTlsClientConfig], Callable[[], None]] | None
+        ) = None,
     ) -> None:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
+        self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
-        # Validate the durable supervisor binding before acquiring the exclusive
-        # root lock.  A rejected opening must not strand that lock.
-        self._supervisor = self._open_supervisor(config)
+        self._supervisor: AgentProcessSupervisorClient | None = None
+        # The journal validates the durable deployment binding and obtains the
+        # exclusive application lock before an empty supervisor can be started.
         self._journal = (
             _RemoteAgentJournal(
                 config.agent_root,
                 expected_configuration_fingerprint=(
                     config.deployment_configuration_fingerprint
                 ),
+                expected_active_configuration_fingerprint=_agent_active_fingerprint(
+                    config
+                ),
             )
             if config.agent_root
             else None
         )
-        self._profiles = {
-            item.descriptor.profile_id: item for item in config.resident_profiles
-        }
-        self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
-        self._execution_journal = (
-            SQLiteAgentJournal(
-                Path(config.agent_root) / "journal.sqlite",
-                _allow_initialize=False,
+        created_supervisor = False
+        try:
+            self._execution_journal = (
+                SQLiteAgentJournal(
+                    Path(config.agent_root) / "journal.sqlite",
+                    _allow_initialize=False,
+                )
+                if config.agent_root is not None
+                else None
             )
-            if config.agent_root is not None
-            else None
-        )
-        if self._execution_journal is not None:
-            self._execution_journal._open_existing()
-        self._restart_with_retained_work = bool(
-            self._execution_journal.retained_claim_commands()
-            if self._execution_journal is not None
-            else ()
-        ) or bool(
-            self._journal.has_unresolved_assignment_references()
-            if self._journal is not None
-            else False
-        )
-        self._runtime_agent_id: str | None = None
-        self._runtime_provider_key: str | None = None
-        self._providers: dict[str, AgentResourceProvider] = {}
-        self._configured_provider_members: tuple[AgentResourceProvider, ...] | None = (
-            None
-        )
-        self._configured_provider_agent_id: str | None = None
-        self._cancelled_assignments: set[str] = set(
-            self._journal.contained_assignment_ids()
-            if self._journal is not None
-            else ()
-        )
-        self._drained = False
-        self._control_lock = RLock()
+            if self._execution_journal is not None:
+                try:
+                    self._execution_journal._open_existing()
+                except ManagedLocalError as exc:
+                    raise QueueServiceError(
+                        "remote execution journal is unavailable"
+                    ) from exc
+            # Reuse the normal shutdown predicate before creating a detached
+            # service.  A corrupt journal therefore rejects process-free,
+            # while retained work remains protected if later construction
+            # fails.
+            try:
+                self._restart_with_retained_work = self._has_retained_agent_work()
+            except ManagedLocalError as exc:
+                raise QueueServiceError(
+                    "remote retained-work proof is unavailable"
+                ) from exc
+            self._supervisor, created_supervisor = self._open_supervisor(config)
+            self._profiles = {
+                item.descriptor.profile_id: item for item in config.resident_profiles
+            }
+            self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
+            self._runtime_agent_id: str | None = None
+            self._runtime_provider_key: str | None = None
+            self._providers: dict[str, AgentResourceProvider] = {}
+            self._configured_provider_members: (
+                tuple[AgentResourceProvider, ...] | None
+            ) = None
+            self._configured_provider_agent_id: str | None = None
+            self._cancelled_assignments: set[str] = set(
+                self._journal.contained_assignment_ids()
+                if self._journal is not None
+                else ()
+            )
+            if self._journal is not None:
+                self._journal.recover_pending_reload(config)
+            self._drained = (
+                self._journal.availability_drained()
+                if self._journal is not None
+                else False
+            )
+            self._control_lock = RLock()
+        except Exception:
+            supervisor = self._supervisor
+            if created_supervisor and supervisor is not None:
+                try:
+                    if not self._has_retained_agent_work():
+                        supervisor.shutdown_clean()
+                except (AgentProcessSupervisorError, ManagedLocalError, QueueError):
+                    pass
+            if self._journal is not None:
+                self._journal.close()
+                self._journal = None
+            self._supervisor = None
+            raise
 
     @property
     def agent_root_id(self) -> str:
@@ -1426,7 +2101,6 @@ class LocalDaemonAgentHttpClient:
         target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         staging = target.parent / f".{target.name}.staging-{secrets.token_hex(8)}"
         journal: _RemoteAgentJournal | None = None
-        supervisor: AgentProcessSupervisorClient | None = None
         try:
             LocalDaemon.initialize_agent_root(staging)
             with sqlite3.connect(staging / "control.sqlite") as conn:
@@ -1439,10 +2113,10 @@ class LocalDaemonAgentHttpClient:
                 staging / _AGENT_BINDING_FILE,
                 json.dumps(
                     {
-                        "schema_version": 1,
-                        "role": "outbound-agent",
+                        "schema_version": 2,
+                        "role_kind": "outbound-agent",
                         "stable_id": str(stable_row[0]),
-                        "configuration_fingerprint": (
+                        "immutable_fingerprint": (
                             config.deployment_configuration_fingerprint
                         ),
                     },
@@ -1452,33 +2126,42 @@ class LocalDaemonAgentHttpClient:
                 ).encode("utf-8"),
             )
             (staging / _AGENT_BINDING_FILE).chmod(0o600)
+            with sqlite3.connect(staging / "control.sqlite") as conn:
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
+                    ("active_configuration_revision", "1"),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
+                    ("active_configuration_fingerprint", _agent_active_fingerprint(config)),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES "
+                    "('availability_state', 'active')"
+                )
+                conn.commit()
             journal = _RemoteAgentJournal(
                 staging,
                 expected_configuration_fingerprint=(
                     config.deployment_configuration_fingerprint
                 ),
+                expected_active_configuration_fingerprint=_agent_active_fingerprint(
+                    config
+                ),
             )
             profiles = tuple(item.launch_profile for item in config.resident_profiles)
             configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
-            supervisor = AgentProcessSupervisorService.initialize(
+            AgentProcessSupervisorService.initialize_process_free(
                 staging, configuration=configuration
             )
-            AgentProcessSupervisorClient(staging, configuration)
-            supervisor.shutdown_empty_for_relocation()
-            supervisor = None
             journal.close()
             journal = None
             if target.exists():
                 raise QueueServiceError("remote agent requires a fresh root")
             staging.rename(target)
-            AgentProcessSupervisorService.start_empty_initialized(
-                target, configuration=configuration
-            )
         except AgentProcessSupervisorError as exc:
             raise QueueServiceError(str(exc)) from exc
         finally:
-            if supervisor is not None:
-                supervisor.shutdown_empty_for_relocation()
             if journal is not None:
                 journal.close()
             if staging.exists():
@@ -1487,7 +2170,7 @@ class LocalDaemonAgentHttpClient:
     @staticmethod
     def _open_supervisor(
         config: AgentTlsClientConfig,
-    ) -> AgentProcessSupervisorClient | None:
+    ) -> tuple[AgentProcessSupervisorClient | None, bool]:
         if not config.resident_profiles:
             if (
                 config.agent_root is not None
@@ -1496,7 +2179,7 @@ class LocalDaemonAgentHttpClient:
                 raise QueueServiceError(
                     "managed_supervisor_state_requires_reinitialization"
                 )
-            return None
+            return None, False
         if config.agent_root is None:
             raise QueueServiceError("remote resident execution requires an agent root")
         # The journal verifies the root and serializes agent application use;
@@ -1509,8 +2192,21 @@ class LocalDaemonAgentHttpClient:
                     root_id,
                     tuple(item.launch_profile for item in config.resident_profiles),
                 ),
-            )
+            ), False
         except AgentProcessSupervisorError as exc:
+            if str(exc) == "managed supervisor endpoint is unavailable":
+                try:
+                    return AgentProcessSupervisorService.start_empty_initialized(
+                        config.agent_root,
+                        configuration=SupervisorLaunchConfiguration(
+                            root_id,
+                            tuple(
+                                item.launch_profile for item in config.resident_profiles
+                            ),
+                        ),
+                    ), True
+                except AgentProcessSupervisorError as start_exc:
+                    raise QueueServiceError(str(start_exc)) from start_exc
             raise QueueServiceError(str(exc)) from exc
 
     def close(self) -> None:
@@ -1518,6 +2214,20 @@ class LocalDaemonAgentHttpClient:
         if self._journal is not None:
             self._journal.close()
             self._journal = None
+
+    def shutdown_clean(self) -> None:
+        """Stop the resident supervisor only after both agent owners are empty."""
+
+        supervisor = self._supervisor
+        if supervisor is None:
+            return
+        if self._has_retained_agent_work():
+            raise QueueConflictError("agent has retained work")
+        try:
+            supervisor.shutdown_clean()
+        except AgentProcessSupervisorError as exc:
+            raise QueueConflictError(str(exc)) from exc
+        self._supervisor = None
 
     def _close_connection(self) -> None:
         if self._connection is not None:
@@ -1536,7 +2246,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v9",
+                    "agent-sessions-v10",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1659,6 +2369,21 @@ class LocalDaemonAgentHttpClient:
         journal.complete_mutation("offer", idempotency_key, result)
         return result
 
+    def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
+        if self._drained or self._restart_with_retained_work:
+            raise QueueConflictError("agent cannot renew executable capacity")
+        journal = self._require_journal()
+        replay = journal.prepare_offer_renewal(renewal)
+        if replay is not None:
+            return replay
+        result = self._call("renew", {"renewal": renewal.value()})
+        journal.complete_offer_renewal(renewal, result)
+        return result
+
+    def renew_current_offer(self, session_id: str) -> Mapping[str, PlainData] | None:
+        renewal = self._require_journal().next_offer_renewal(session_id)
+        return None if renewal is None else self.renew_offer(renewal)
+
     def wait_for_work(
         self,
         session_id: str,
@@ -1724,9 +2449,40 @@ class LocalDaemonAgentHttpClient:
         if not isinstance(raw, Mapping):
             raise QueueServiceError("agent control response is invalid")
         control = AgentControl.from_value(raw)
-        effect = journal.prepare_control(control)
+        effect = journal.replayed_control_effect(control)
+        prepared_reload: _PreparedAgentReload | None = None
+        prepared_error: str | None = None
+        cancellation_prepared = False
+        if effect is None and control.kind.value == "reload":
+            with self._control_lock:
+                if control.cancel_active:
+                    cancellation_prepared = True
+                    if not self._cancel_active_assignments():
+                        prepared_error = "unknown_work"
+                if prepared_error is None:
+                    if self._trusted_config_loader is None:
+                        prepared_error = "reload_unavailable"
+                    else:
+                        try:
+                            prepared_reload = self._prepare_agent_reload()
+                        except (QueueError, OSError, TypeError, ValueError):
+                            prepared_error = "reload_rejected"
         if effect is None:
-            effect = self._apply_agent_control(control)
+            effect = journal.prepare_control(
+                control,
+                replacement_fingerprint=(
+                    None
+                    if prepared_reload is None
+                    else prepared_reload.active_fingerprint
+                ),
+            )
+        if effect is None:
+            effect = self._apply_agent_control(
+                control,
+                prepared_reload=prepared_reload,
+                prepared_error=prepared_error,
+                cancellation_prepared=cancellation_prepared,
+            )
             journal.record_control_effect(control, effect)
         self._call(
             "control_ack",
@@ -1735,45 +2491,65 @@ class LocalDaemonAgentHttpClient:
         journal.acknowledge_control(control.operation_id)
         return control
 
-    def _apply_agent_control(self, control: AgentControl) -> AgentControlEffect:
+    def _apply_agent_control(
+        self,
+        control: AgentControl,
+        *,
+        prepared_reload: _PreparedAgentReload | None = None,
+        prepared_error: str | None = None,
+        cancellation_prepared: bool = False,
+    ) -> AgentControlEffect:
         """Apply an inert command using only trusted owner-local configuration."""
 
         session = self._require_journal().session(control.expected_session_id)
         with self._control_lock:
             if control.kind.value in {"drain", "reload"}:
                 self._drained = True
-            if control.cancel_active and not self._cancel_active_assignments():
+            if prepared_error is not None:
+                return self._unchanged_control_effect(
+                    control, session, prepared_error
+                )
+            if (
+                control.cancel_active
+                and not cancellation_prepared
+                and not self._cancel_active_assignments()
+            ):
                 return self._unchanged_control_effect(control, session, "unknown_work")
             if control.kind.value == "reload":
-                loader = self._trusted_config_loader
-                if loader is None:
+                if prepared_reload is None and self._trusted_config_loader is None:
                     return self._unchanged_control_effect(
                         control, session, "reload_unavailable"
                     )
                 try:
-                    replacement = loader()
-                    self._validate_reload_config(replacement)
+                    plan = prepared_reload or self._prepare_agent_reload()
                 except (QueueError, OSError, TypeError, ValueError):
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
                     )
-                retained = self._has_retained_agent_work()
-                if retained:
-                    self._retained_profiles.update(
+                journal = self._require_journal()
+                journal.bind_reload_intent(control, plan.active_fingerprint)
+                effect = AgentControlEffect(
+                    operation_id=control.operation_id,
+                    code="applied",
+                    config_revision=plan.config_revision,
+                    inventory_revision=plan.inventory_revision,
+                    availability_revision=_agent_revision(
+                        "availability",
                         {
-                            _resident_profile_key(item): item
-                            for item in self._profiles.values()
-                        }
-                    )
-                self._config = replacement
-                self._profiles = {
-                    item.descriptor.profile_id: item
-                    for item in replacement.resident_profiles
-                }
-                if not retained:
+                            "operation_id": control.operation_id,
+                            "drained": True,
+                            "inventory_revision": plan.inventory_revision,
+                        },
+                    ),
+                )
+                journal.complete_reload(control, plan.replacement, effect)
+                self._config = plan.replacement
+                plan.install_role()
+                self._profiles = dict(plan.profiles)
+                self._retained_profiles = dict(plan.retained_profiles)
+                if not plan.retained:
                     self._reset_runtime_providers()
-                config_revision = _agent_config_revision(replacement)
-                inventory_revision = _agent_inventory_revision(replacement)
+                return effect
             else:
                 config_revision = session.config_revision
                 inventory_revision = session.inventory_revision
@@ -1801,6 +2577,45 @@ class LocalDaemonAgentHttpClient:
                 availability_revision=availability_revision,
             )
 
+    def _prepare_agent_reload(self) -> _PreparedAgentReload:
+        loader = self._trusted_config_loader
+        if loader is None:
+            raise QueueServiceError("trusted agent configuration loader is unavailable")
+        replacement = loader()
+        retained = self._has_retained_agent_work()
+        self._validate_reload_config(replacement, retained_work=retained)
+        next_profiles = {
+            item.descriptor.profile_id: item for item in replacement.resident_profiles
+        }
+        next_retained_profiles = dict(self._retained_profiles)
+        if retained:
+            next_retained_profiles.update(
+                {
+                    _resident_profile_key(item): item
+                    for item in self._profiles.values()
+                }
+            )
+
+        def install_role() -> None:
+            return
+
+        if self._prepare_role_reload is not None:
+            install_role = self._prepare_role_reload(replacement)
+            if not callable(install_role):
+                raise QueueServiceError(
+                    "trusted agent role reload plan is unavailable"
+                )
+        return _PreparedAgentReload(
+            replacement=replacement,
+            profiles=next_profiles,
+            retained_profiles=next_retained_profiles,
+            retained=retained,
+            install_role=install_role,
+            config_revision=_agent_config_revision(replacement),
+            inventory_revision=_agent_inventory_revision(replacement),
+            active_fingerprint=_agent_active_fingerprint(replacement),
+        )
+
     @staticmethod
     def _unchanged_control_effect(
         control: AgentControl, session: AgentSession, code: str
@@ -1813,9 +2628,21 @@ class LocalDaemonAgentHttpClient:
             availability_revision=session.availability_revision,
         )
 
-    def _validate_reload_config(self, replacement: AgentTlsClientConfig) -> None:
+    def _validate_reload_config(
+        self,
+        replacement: AgentTlsClientConfig,
+        *,
+        retained_work: bool | None = None,
+    ) -> None:
         if not isinstance(replacement, AgentTlsClientConfig):
             raise QueueServiceError("trusted agent configuration is invalid")
+        if (
+            replacement.deployment_configuration_fingerprint
+            != self._config.deployment_configuration_fingerprint
+        ):
+            raise QueueConflictError(
+                "agent reload cannot replace immutable role configuration"
+            )
         if (
             replacement.agent_root != self._config.agent_root
             or replacement.url != self._config.url
@@ -1833,10 +2660,20 @@ class LocalDaemonAgentHttpClient:
                 "agent reload requires fresh agent-root initialization for "
                 "resident profile set"
             )
+        if retained_work is None:
+            retained_work = self._has_retained_agent_work()
+        if retained_work and _agent_active_fingerprint(
+            replacement
+        ) != _agent_active_fingerprint(self._config):
+            raise QueueConflictError(
+                "agent reload cannot replace active configuration with retained work"
+            )
         existing = (*self._profiles.values(), *self._retained_profiles.values())
         for candidate in replacement.resident_profiles:
             for retained in existing:
                 if (
+                    retained_work
+                    and
                     retained.descriptor == candidate.descriptor
                     and _resident_profile_key(retained)
                     != _resident_profile_key(candidate)
@@ -1928,9 +2765,7 @@ class LocalDaemonAgentHttpClient:
 
     def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
         return TimeRecoveryReceipt.from_dict(
-            self._call(
-                "recover_time", {"request": request.to_dict()}, role="operator"
-            )
+            self._call("recover_time", {"request": request.to_dict()}, role="operator")
         )
 
     def replace_agent_session(
@@ -3278,6 +4113,54 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote agent provider identity changed")
         return dict(self._providers)
 
+    def _offer_provider_snapshot(
+        self,
+        *,
+        session_id: str,
+        availability_revision: str,
+        capacity_profile: ResidentExecutionProfile,
+    ) -> tuple[
+        tuple[AgentProviderDescriptor, ...],
+        tuple[CapacityAtom, ...],
+        tuple[str, ...],
+    ]:
+        """Observe the configured factory once and project its safe wire facts."""
+
+        session = self._require_journal().session(session_id)
+        providers = self._provider_composition(session.agent_id, capacity_profile)
+        atoms: list[CapacityAtom] = []
+        live_claim_ids: set[str] = set()
+        for kind, provider in sorted(providers.items()):
+            observed = provider.observe(
+                ObserveRequest(
+                    session.agent_id,
+                    session_id,
+                    f"offer:{availability_revision}:observe:{kind}",
+                )
+            )
+            atoms.extend(
+                _wire_capacity_atom(atom, session.agent_id) for atom in observed.atoms
+            )
+            live_claim_ids.update(observed.live_claim_ids)
+        members = self._configured_provider_members
+        if members is None:
+            raise QueueConflictError("remote agent provider composition is missing")
+        return (
+            tuple(
+                sorted(
+                    (
+                        AgentProviderDescriptor(
+                            provider.descriptor, provider.claim_contracts
+                        )
+                        for provider in members
+                    ),
+                    key=lambda item: item.descriptor.key,
+                )
+            ),
+            tuple(sorted(atoms, key=lambda item: item.key)),
+            tuple(sorted(live_claim_ids)),
+        )
+
     def _validate_offer_provider_capacity(
         self, offer: AgentOffer, agent_id: str
     ) -> None:
@@ -3291,23 +4174,7 @@ class LocalDaemonAgentHttpClient:
                 )
             )
             for atom in result.atoms:
-                prefix = f"{agent_id}:"
-                local_key = atom.local_capacity_key
-                if local_key.startswith(prefix):
-                    local_key = local_key[len(prefix) :]
-                observed.append(
-                    CapacityAtom(
-                        atom.owner_resource_kind,
-                        local_key,
-                        atom.amount,
-                        (
-                            "byte"
-                            if atom.owner_resource_kind == "memory" and atom.unit == "B"
-                            else atom.unit
-                        ),
-                        atom.granularity,
-                    )
-                )
+                observed.append(_wire_capacity_atom(atom, agent_id))
         if tuple(sorted(observed, key=lambda item: item.key)) != offer.capacity_atoms:
             raise QueueConflictError(
                 "offer capacity differs from configured provider observations"
@@ -3469,10 +4336,12 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         context: ssl.SSLContext,
         daemon: LocalDaemon,
         credential_fingerprints: Mapping[str, str],
+        inspect_run: Callable[[str], Mapping[str, PlainData]] | None,
     ) -> None:
         self._context = context
         self.daemon_owner = daemon
         self.credential_fingerprints = credential_fingerprints
+        self.inspect_run = inspect_run
         super().__init__(address, _Handler)
 
     def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
@@ -3482,6 +4351,25 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         except Exception:
             connection.close()
             raise
+
+    def replace_tls(
+        self,
+        context: ssl.SSLContext,
+        credential_fingerprints: Mapping[str, str],
+    ) -> None:
+        """Install a fully prepared context for subsequent requests."""
+
+        self._context = context
+        self.credential_fingerprints = credential_fingerprints
+
+
+def _agent_server_context(config: AgentTlsServerConfig) -> ssl.SSLContext:
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_cert_chain(config.certificate_path, config.private_key_path)
+    context.load_verify_locations(cafile=config.client_ca_path)
+    return context
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -3495,6 +4383,8 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
     def do_POST(self) -> None:  # noqa: N802
+        query_path = self.path.startswith("/v1/query/")
+        query_credential = False
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -3518,6 +4408,7 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 principal_id = slurm_profile.bootstrap_principal_id
                 mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
+            query_credential = mapped_role == LocalDaemonRole.QUERY.value
             if self.headers.get("Content-Type") != "application/json":
                 raise QueueServiceError("agent protocol content type is invalid")
             lengths = self.headers.get_all("Content-Length", [])
@@ -3545,6 +4436,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "register",
                     "reconcile",
                     "offer",
+                    "renew",
                     "poll",
                     "authorize",
                     "input",
@@ -3576,8 +4468,14 @@ class _Handler(BaseHTTPRequestHandler):
                     role_name,
                     operation,
                     payload,
+                    inspect_run=self._daemon_server.inspect_run,
                 )
-            self._reply(200, {"ok": True, "result": result})
+            if role_name == LocalDaemonRole.QUERY.value:
+                self._reply_query_result(result)
+            else:
+                self._reply(200, {"ok": True, "result": result})
+        except _RunInspectionHttpError as exc:
+            self._reply_query_failure(exc.code, exc.status)
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
         except AgentStalePollError:
@@ -3592,9 +4490,36 @@ class _Handler(BaseHTTPRequestHandler):
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError:
-            self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
+            if query_path or query_credential:
+                code = "invalid_request" if query_credential else "unauthorized"
+                self._reply_query_failure(code, 400 if query_credential else 403)
+            else:
+                self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
         except Exception:
-            self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
+            if query_path:
+                self._reply_query_failure("unavailable", 503)
+            else:
+                self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
+
+    def _reply_query_result(self, result: Mapping[str, PlainData]) -> None:
+        status = _run_inspection_http_status(result)
+        payload = {"ok": True, "result": result}
+        encoded = json.dumps(
+            thaw_plain_data(payload, path="run inspection HTTP response"),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded) > _MAX_QUERY_RESPONSE_BYTES:
+            self._reply_query_failure("unavailable", 503)
+            return
+        self._reply(status, payload)
+
+    def _reply_query_failure(self, code: str, status: int) -> None:
+        self._reply(
+            status,
+            {"ok": True, "result": {"schema_version": 1, "code": code}},
+        )
 
     def _reply(self, status: int, payload: Mapping[str, object]) -> None:
         body = json.dumps(
@@ -3639,6 +4564,12 @@ def _dispatch(
         return view.publish_offer(
             _offer(offer), idempotency_key=_string(value, "idempotency_key")
         )
+    if operation == "renew":
+        _exact(value, {"renewal"})
+        renewal = value["renewal"]
+        if not isinstance(renewal, Mapping):
+            raise QueueServiceError("agent offer renewal is invalid")
+        return view.renew_offer(AgentOfferRenewal.from_value(renewal))
     if operation == "poll":
         _exact(
             value,
@@ -3861,6 +4792,8 @@ def _dispatch_application(
     role: str,
     operation: str,
     value: Mapping[str, object],
+    *,
+    inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
 ) -> Mapping[str, PlainData]:
     if operation == "handshake":
         _exact(value, set())
@@ -3870,7 +4803,11 @@ def _dispatch_application(
         return freeze_plain_data(
             {
                 "protocol_version": "1",
-                "capabilities": ["authenticated-application-v1"],
+                "capabilities": (
+                    ["authenticated-application-v1", "run-inspection-v1"]
+                    if role == LocalDaemonRole.QUERY.value and inspect_run is not None
+                    else ["authenticated-application-v1"]
+                ),
                 "coordinator_id": daemon._require_started(),
                 "coordinator_epoch": daemon._epoch or "",
                 "role": role,
@@ -3890,6 +4827,38 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("client admission request is invalid")
             return view.submit(LocalDaemonAdmissionRequest.from_dict(request)).to_dict()
+    elif role == LocalDaemonRole.QUERY.value:
+        if operation != "inspect_run" or inspect_run is None:
+            raise _RunInspectionHttpError("invalid_request", 400)
+        try:
+            _exact(value, {"run_uri"})
+            run_uri = _string(value, "run_uri")
+        except QueueError as exc:
+            raise _RunInspectionHttpError("invalid_request", 400) from exc
+        try:
+            run_uri_bytes = run_uri.encode("utf-8")
+        except UnicodeEncodeError:
+            return {"schema_version": 1, "code": "invalid_request"}
+        if len(run_uri_bytes) > 4 * 1024:
+            return {"schema_version": 1, "code": "invalid_request"}
+        try:
+            run_uri = validate_run_uri(run_uri)
+        except (InvalidRunURIError, OSError, ValueError):
+            return {"schema_version": 1, "code": "invalid_request"}
+        try:
+            daemon._require_view_role(principal, LocalDaemonRole.QUERY)
+        except QueueError as exc:
+            raise _RunInspectionHttpError("unauthorized", 403) from exc
+        try:
+            daemon.admission_for_run_uri(run_uri)
+        except (AdmissionNotFoundError, FileNotFoundError, LookupError):
+            return {"schema_version": 1, "code": "not_found"}
+        except Exception:
+            return {"schema_version": 1, "code": "unavailable"}
+        try:
+            return inspect_run(run_uri)
+        except Exception:
+            return {"schema_version": 1, "code": "unavailable"}
     elif role == "operator":
         view = daemon.operator_view(principal)
         if operation == "status":
@@ -4248,21 +5217,40 @@ def _decode(raw: bytes) -> Mapping[str, object]:
     return value
 
 
-def _bounded_json(value: object, *, depth: int) -> None:
+def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
+    """Decode the bounded Phase 1 result envelope without widening agent input."""
+
+    if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
+        raise QueueServiceError("run inspection response is too large")
+    try:
+        value = json.loads(
+            raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise QueueServiceError("run inspection response JSON is invalid") from exc
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("run inspection response is not an object")
+    _bounded_json(value, depth=0, max_collection=256)
+    return value
+
+
+def _bounded_json(
+    value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION
+) -> None:
     if depth > _MAX_JSON_DEPTH:
         raise QueueServiceError("agent protocol JSON is too deeply nested")
     if isinstance(value, Mapping):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol object is too large")
         for key, item in value.items():
             if not isinstance(key, str) or not key or len(key) > 160:
                 raise QueueServiceError("agent protocol object key is invalid")
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif isinstance(value, list):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol collection is too large")
         for item in value:
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif value is not None and not isinstance(value, (str, int, bool)):
         raise QueueServiceError("agent protocol JSON value is invalid")
 
@@ -4370,6 +5358,18 @@ def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
     )
 
 
+def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
+    if config.active_configuration_fingerprint is not None:
+        return config.active_configuration_fingerprint
+    return _agent_revision(
+        "active",
+        {
+            "config": _agent_config_revision(config),
+            "inventory": _agent_inventory_revision(config),
+        },
+    )
+
+
 def _agent_revision(prefix: str, value: Mapping[str, object]) -> str:
     encoded = json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -4397,4 +5397,6 @@ __all__ = [
     "AgentTlsServerConfig",
     "LocalDaemonAgentHttpClient",
     "LocalDaemonAgentHttpServer",
+    "RunInspectionHttpClient",
+    "RunInspectionTlsClientConfig",
 ]

@@ -11,6 +11,8 @@ import loom.queue.controller as queue_controller
 from loom.queue import (
     FakeQueueDispatchAdapter,
     QueueController,
+    QueueControllerStep,
+    QueueCycleResult,
     QueueDispatchCancellation,
     QueueDispatchDisposition,
     QueueDispatchInspection,
@@ -18,6 +20,7 @@ from loom.queue import (
     QueueDispatchResult,
     QueueEnqueueRequest,
     QueueItemStatus,
+    QueueForegroundDriveResult,
     QueueSelectionContext,
     QueueSelectionDecision,
     QueueSelectionDisposition,
@@ -28,6 +31,23 @@ from loom.queue import (
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
+
+
+def test_foreground_drive_counts_only_durable_dispatch_outcomes() -> None:
+    cycle = QueueCycleResult(
+        reconciliation_steps=(),
+        dispatch_steps=(
+            QueueControllerStep("unknown"),
+            QueueControllerStep("dispatched"),
+        ),
+        active_count=1,
+        capacity_blocked=False,
+        next_maintenance_at=None,
+    )
+
+    result = QueueForegroundDriveResult(cycles=(cycle,), quiescent=False).to_dict()
+
+    assert result["dispatched_count"] == 1
 
 
 def test_dispatch_result_requires_explicit_factual_dispositions() -> None:

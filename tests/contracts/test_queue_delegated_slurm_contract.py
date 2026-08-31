@@ -10,7 +10,13 @@ from loom.pipeline.executors.slurm.commands import (
     SlurmCommandResult,
 )
 from loom.serialization import thaw_plain_data
-from loom.queue import LaunchContract, QueueItem, QueueItemStatus, RunIntent
+from loom.queue import (
+    QUEUE_RECORD_SCHEMA_VERSION,
+    LaunchContract,
+    QueueItem,
+    QueueItemStatus,
+    RunIntent,
+)
 from loom.queue.slurm import SlurmQueueDispatchAdapter
 
 
@@ -102,7 +108,7 @@ def _with_dispatch_handle(item: QueueItem, *, job_id: str) -> QueueItem:
     data = item.to_dict()
     data["status"] = QueueItemStatus.DISPATCHED.value
     data["dispatch_handle"] = {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "adapter": "slurm",
         "handle_id": f"slurm:{item.queue_item_id}:1:{job_id}",
         "dispatched_at": "2020-01-01T00:00:01Z",

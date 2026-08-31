@@ -1,13 +1,18 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: production correction complete; Phases 10-12 merged;
-historical blocked evidence remains read-only
+Status: lifecycle, composition, and management correction complete; Phase 13
+is retained blocked evidence, and Phases 13A, 14, and 15 are merged
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 12 `merged`
-Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
+Current phase: none; Stage 29 correction is complete
+Blockers: none at the stage level. Phase 13 candidate `748f938` passed its
+focused and full gates, but required review reproduced two expected startup-
+rejection supervisor leaks after correction 3/3. Fresh Phase 13A selectively
+reused that candidate, closed the bounded lifecycle findings, and squash-merged
+as `8ff2d3c` after required review. Phase 9 correction
+budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
 managed supervisor/same-session restart vertical, but its correction 3/3 found
@@ -28,7 +33,10 @@ window and assignment-scoped background execution; Phase 11 closes resident
 identity, environment, and provider composition; Phase 12 bounds status/polls,
 adds per-admission/time health, makes root initialization atomic, and supplies
 the supported coordinator/agent deployment commands. Every new phase uses fresh
-schema identities and provides no migration or dual read.
+schema identities and provides no migration or dual read. The maintainer
+subsequently approved Phases 13-15 to close offer/supervisor/assignment/SLURM
+lifecycle, reloadable protected composition and authority injection, and the
+bounded management/CLI/example surface found incomplete after Phase 12.
 
 ## Summary
 
@@ -36,7 +44,7 @@ schema identities and provides no migration or dual read.
   dependency-aware system that admits runs but schedules each ready executable
   stage attempt against global agent resources or one explicitly selected
   ready-stage SLURM profile.
-- Approved behavior: planning FR-1 through FR-30. The run remains the client
+- Approved behavior: planning FR-1 through FR-44. The run remains the client
   queue/control object; a prepared `(run_uri, stage_name, attempt)` is the
   scheduling unit. CPUs are integer, memory/VRAM are exact bytes, hard rules
   filter, soft rules rank only feasible managed placements, and SLURM routing is
@@ -704,6 +712,10 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 10 | `global-scheduler-assignment-concurrency` | merged | `docs/roadmap/stage-29/phases/global-scheduler-assignment-concurrency.md` | `agent/stage-29-p10-global-scheduler-assignment-concurrency` | [#250](https://github.com/samcantrill/loom/pull/250) merged | Protected-policy run priority; durable enqueue sequence; globally ordered 256-item ready window; all-admission projection; assignment-keyed asynchronous local/remote/SLURM launch and reconciliation; same-run concurrency; per-admission reconciliation health | Fresh local gates and manager-local review passed at source/test revision `23dec2d`; squash-merged as `c2dab20`. |
 | 11 | `resident-agent-correctness-security` | merged | `docs/roadmap/stage-29/phases/resident-agent-correctness-security.md` | `agent/stage-29-p11-resident-agent-correctness-security` | [#253](https://github.com/samcantrill/loom/pull/253) merged | Mandatory managed execution requirement; one candidate per agent resident profile; exact pinned profile target; allowlisted worker environment; explicit agent provider composition; planner/provider contract startup validation; public provider conformance check | Fresh full validation, durable test summary, and manager-local review passed; squash-merged as `5fac22c`. |
 | 12 | `operational-bounds-deployment` | merged | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | [#254](https://github.com/samcantrill/loom/pull/254) merged | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command for permitted service hosts; persistent-managed versus service-less whole-run SLURM guidance | Correction 1/3 adapted the Discord reporter through bounded pages/details; manager correction 2/3 fenced abandoned polls on coordinator restart, completed assignment counts, and closed the typed hard-cut public surface. Fresh full validation and the 2,757-pass categorized receipt passed; squash-merged as `4097729`. |
+| 13 | `lifecycle-recovery-correctness` | blocked | `docs/roadmap/stage-29/phases/lifecycle-recovery-correctness.md` | `agent/stage-29-p13-lifecycle-recovery-correctness` | No PR opened | Validated sequenced renewal, continuous exact-assignment reconciliation, authoritative definite-SLURM-rejection order, and process-free/quiescent supervisor lifecycle candidate | Required review reproduced a newly started empty supervisor surviving changed local scheduling configuration and mismatched outbound deployment binding rejection after correction 3/3; preserve `824e935` read-only. |
+| 13A | `lifecycle-startup-failure-closure` | merged | `docs/roadmap/stage-29/phases/lifecycle-startup-failure-closure.md` | `agent/stage-29-p13a-lifecycle-startup-failure-closure` | [#262](https://github.com/samcantrill/loom/pull/262) merged | Selective Phase 13 reuse plus pre-start durable validation and ownership-aware cleanup of only a newly created empty supervisor | Required review findings closed at correction 3/3; fresh full validation and the 2,841-pass categorized summary passed; squash-merged as `8ff2d3c`. |
+| 14 | `reload-authority-composition` | merged | `docs/roadmap/stage-29/phases/reload-authority-composition.md` | `agent/stage-29-p14-reload-authority-composition` | [#265](https://github.com/samcantrill/loom/pull/265) merged | Immutable role binding versus reloadable active configuration; production trusted loaders; complete protected scheduling/SLURM/provider/authority composition; injected coordinator-authority factory; reload CLI failure semantics | A protected service config can construct and reload every supported production component, restart from its active revision, and reach authority only through the configured adapter. |
+| 15 | `management-cli-examples` | merged | `docs/roadmap/stage-29/phases/management-cli-examples.md` | `agent/stage-29-p15-management-cli-examples` | [#266](https://github.com/samcantrill/loom/pull/266) merged | Per-admission semantic revisions; bounded renewable long polls; bounded admission/agent/operation reads and CLI; portable verified local-owner policy; accepted-time/health/principal-replay corrections; execution-owned SLURM operations; three real managed-operation journeys with exact surface claims and process cleanup | Required independent review and final manager review passed. Fresh `make validate-pr` passed 2,772 default plus 157 configuration-extra tests and builds; `make test-summary` records 2,929 passed, 3 skipped, and no failures/errors. Squash-merged as `9b8f71d`; dedicated local/remote branch and worktree cleanup is complete. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned
@@ -741,6 +753,9 @@ production correction and proceed strictly in order. Phase 10 owns the global
 scheduler and assignment execution unit, Phase 11 owns executable resident-agent
 identity/security, and Phase 12 owns bounded operations and deployment. Old
 Stage 29 roots and managed runtime/session records are deliberately unsupported.
+Phase 13 is blocked evidence after its required review found two startup-
+failure process leaks. Fresh Phase 13A selectively reuses its validated source
+and closes only ownership-aware construction cleanup before Phase 14 begins.
 
 ## Quality Gate
 
@@ -965,7 +980,7 @@ Stage 29 roots and managed runtime/session records are deliberately unsupported.
   fencing/checkpointing; coordinator availability target; or accepted code-
   bundle/sandbox behavior; or an accepted cross-owner run-forget contract.
 
-## Production Correction Audit
+## Prior Production Correction Audit
 
 The final audit against the maintainer's ten approved correction requirements
 found no gap. Phase 10 owns requirements 1-3 and 9: global scheduling, assignment-
@@ -978,6 +993,25 @@ health/recovery, and it completes the requested atomic fresh-root plus supported
 coordinator/outbound-agent deployment surface. The hard cut bumps and rejects
 the affected roots, runtime/session records, poll protocol, and status surface;
 there is no migration or dual read.
+
+That audit covered only the ten Phase 10-12 requirements. The later
+maintainer-approved FR-31 through FR-44 correction is now owned by Phase 13A
+and Phases 14-15; it supersedes any interpretation that the full Stage 29
+service is currently complete.
+
+## Current Correction Planning Gate
+
+The expanded design-safety pass found that clean supervisor rotation must also
+exclude retained agent-journal references to the retiring epoch, and that a
+bounded management worker pool must reserve capacity from long polls. Both were
+added to the fixed contracts and causal tests. The bounded manifest/phase review
+then found one overbroad CLI failure statement; Phase 14 was narrowed to the
+approved coordinator/outbound-agent reload failures. The resulting FR-31 through
+FR-44 manifest and original three linked phase plans passed the manager quality
+gate. Phase 13 required review later reproduced two startup-rejection leaks.
+Fresh Phase 13A reuses the validated candidate, changes no accepted behavior,
+and adds only ownership-aware cleanup plus causal process tests; its lean
+manager quality gate has no unresolved blocker.
 
 ## Completion
 
@@ -1011,3 +1045,7 @@ there is no migration or dual read.
 | 10 | [#250](https://github.com/samcantrill/loom/pull/250), squash-merged as `c2dab20` | Source/test revision `23dec2d`; `make validate-pr` passed Ruff, Pyright, 2,586 default tests, 142 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,728 passes; manager-local review passed | No known Phase 10 blocker; execution-profile/environment composition and bounded operations/deployment remain owned by Phases 11-12 | Dedicated worktree and local/remote phase branches removed; the dirty control checkout was left untouched and merge metadata was committed from a clean manager worktree |
 | 11 | [#253](https://github.com/samcantrill/loom/pull/253), squash-merged as `5fac22c` | Source/test revision `3034d58`; `make validate-pr` passed Ruff, Pyright, 2,590 default tests, 154 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,744 passes; manager-local review passed | No known Phase 11 blocker; CPU/memory capacity accounting deliberately makes no OS-enforcement claim, and bounded operations/deployment remain Phase 12 | Dedicated phase worktree and local/remote phase branches removed; merge metadata recorded from a clean manager worktree |
 | 12 | [#254](https://github.com/samcantrill/loom/pull/254), squash-merged as `4097729` | Source/test revision `20d7ca8`; `make validate-pr` passed Ruff, zero-finding Pyright, 2,602 default tests, 155 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,757 passes; manager-local review passed after correction 2/3 | No known Phase 12 blocker; targeted owner detail and optional Discord traversal are deliberately outside the constant-size summary/scheduler path, and persistent managed/ready-stage SLURM still require a permitted stable coordinator host | Dedicated worktree and local/remote phase branches removed; unrelated control-checkout work preserved |
+| 13 | No PR opened; blocked head `824e935` | Source/test `748f938` passed focused lifecycle matrices and fresh `make validate-pr` | Required review reproduced local scheduling-fingerprint and outbound deployment-fingerprint rejection leaks | Correction 3/3 exhausted; branch/worktree retained read-only and exact review processes cleaned |
+| 13A | [#262](https://github.com/samcantrill/loom/pull/262), squash-merged as `8ff2d3c` | Source/test `6a578f8`; focused lifecycle matrices, refreshed `make validate-pr`, and a fresh 2,841-pass categorized summary with 3 expected skips passed; required review blocker closed by correction 3/3 | No known phase blocker; Phase 14 owns protected reload and authority composition | Dedicated worktree and local/remote phase branches removed after the verified merge; blocked Phase 13 evidence retained read-only |
+| 14 | [PR #265](https://github.com/samcantrill/loom/pull/265), squash-merged as `41fbae3` | Source/test `308ed41`; fresh `make validate-pr` passed Ruff, zero-finding Pyright, 2,764 default tests, 157 config-extra tests with 3 expected skips, and both builds; fresh categorized summary recorded 2,921 passes; required independent review and its bounded correction follow-up passed | No known blocker; accepted reloads are fingerprint-bound and restart-recoverable, and coordinator authority is bound to the verified service principal | Correction 3/3 complete; dedicated worktree and local/remote phase branches removed after the verified merge |
+| 15 | [#266](https://github.com/samcantrill/loom/pull/266), squash-merged as `9b8f71d` | Final reviewed source/test tree `9c87de5`; focused causal/E2E matrices passed; `make validate-pr` passed 2,772 default and 157 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and both builds; fresh summary records 2,929 passes | No known phase blocker; real site CA/prolog and production SLURM validation remain opt-in while default tests use generated certificates and a deterministic fake gateway | Correction 3/3 complete; dedicated worktree and local/remote phase branches removed after exact merge-tree verification |

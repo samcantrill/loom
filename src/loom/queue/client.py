@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from loom.serialization import PlainData
 
-from .models import QueueItem
+from .models import QueueEnqueueReceipt, QueueItem
+from .repository import QueueItemPage
 from .service import (
     QueueEnqueueRequest,
     QueueItemInspection,
@@ -33,6 +34,16 @@ class QueueClient:
     def enqueue(self, request: QueueEnqueueRequest) -> QueueItem:
         return self._service.enqueue(request)
 
+    def enqueue_many(
+        self, requests: Iterable[QueueEnqueueRequest]
+    ) -> Iterator[QueueEnqueueReceipt]:
+        """Stream classified receipts for exactly the consumed request prefix."""
+
+        return self._service.enqueue_many(requests)
+
+    def list_items(self, *, limit: int, cursor: str | None = None) -> QueueItemPage:
+        return self._service.list_items(limit=limit, cursor=cursor)
+
     def inspect(self, queue_item_id: str) -> QueueItemInspection:
         return self._service.inspect_item(queue_item_id)
 
@@ -56,7 +67,9 @@ class QueueClient:
 
         return QueueController(self._service).run_once(pool_name=pool_name)
 
-    def drain_foreground(self, *, pool_name: str | None = None, max_items: int | None = None):
+    def drain_foreground(
+        self, *, pool_name: str | None = None, max_items: int | None = None
+    ):
         from .controller import QueueController
 
         return QueueController(self._service).drain_foreground(

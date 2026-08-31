@@ -1,0 +1,281 @@
+# Phase 14 Execution Plan: Reload And Authority Composition
+
+## Metadata
+
+- Status: merged
+- Roadmap stage and phase: Stage 29, Phase 14
+- Manifest: `docs/roadmap/stage-29/implementation-plan.md`
+- Branch: `agent/stage-29-p14-reload-authority-composition`
+- Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p14-reload-authority-composition`
+- Base revision: `961b87f8ec1a490bd38e9c1de5992a75b18bd2dc`
+- PR target: `develop`
+- PR title: `Stage 29 phase 14: complete protected role composition`
+- Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
+- Workflow path: expanded; durable configuration identity and authority trust boundary
+- Blockers: none
+
+## Objective And Context
+
+- Vertical outcome: the protected coordinator/outbound-agent YAML constructs and
+  safely reloads the full supported scheduling, provider, SLURM, and authority
+  composition, then restarts from the persisted active revision.
+- Earlier dependency: Phase 13A delivers the validated Phase 13 serve-owned
+  supervisor lifetime and offer publication versus renewal; reload that changes
+  availability must use those semantics.
+- Later work explicitly out of scope: new management read commands, portable
+  local-owner policy, and example journeys belong to Phase 15.
+
+## Current Source And Harness
+
+- `src/loom/queue/deployment.py` owns protected schema-v1 loading but currently
+  constructs only built-in local capacity/profiles and TLS policy.
+- `src/loom/queue/local_daemon.py` binds the full deployment fingerprint and
+  accepts an optional trusted scheduling loader not wired by CLI service paths.
+- `src/loom/queue/agent_session_transport.py` similarly binds the outbound
+  configuration and has an optional trusted loader.
+- `src/loom/cli/queue.py` loads service config once, constructs role clients
+  without source loaders, and emits success for rejected reload receipts.
+- `src/loom/queue/local_daemon_execution.py` directly constructs
+  `SQLitePerRunAuthorityStore` at production call sites despite an existing
+  scoped coordinator wrapper.
+- Existing scheduling/provider component protocols and authority client/store
+  adapters are reused; no new generic plugin or store framework is needed.
+
+## Scope
+
+In scope:
+
+- Canonical immutable-role and reloadable-active configuration projections,
+  fingerprints, persisted revisions/epochs, startup checks, and hard-cut schema.
+- Trusted loader wiring from `source_path` for coordinator and outbound agent.
+- Protected schema for authority selection/TLS identity, priority resolver,
+  scheduling planners/rules/scorers/policy, ready-stage SLURM profiles and
+  provider, embedded agent provider composition, and remote resident provider
+  composition.
+- Explicit trusted `_target_` construction and validation against existing
+  public protocols/descriptors/claim contracts.
+- Queue-owned coordinator-authority protocol plus injected per-run factory;
+  direct embedded and authenticated persistent adapters.
+- Additive authority-repository v5-to-v6 migration for the authenticated
+  service-principal binding; legacy unprincipalled admissions remain fail-closed
+  to authenticated coordinator routes.
+- Nonzero CLI result for rejected coordinator or agent reload receipts.
+
+Out of scope:
+
+- Automatic target discovery, untrusted/sandboxed config, new scheduling or
+  provider semantics, authority HA, protected role-root/config migration, or
+  secret serialization into fingerprints.
+- Phase 15 list/detail/operation CLI additions.
+
+Assumptions:
+
+- Authored owner-protected config is trusted project/site code.
+- Existing authority client configuration can express the supported HTTPS
+  endpoint and scoped service/workspace identity; extend only the narrow role
+  adapter required by current coordinator operations.
+- Immutable supervisor executable profile-set identity cannot live-reload.
+
+## Fixed Contracts And Private Discretion
+
+- Observable behavior: reload rereads the exact protected source; immutable
+  changes are rejected without swap; a complete valid replacement persists its
+  active fingerprint/epoch and becomes live; restart accepts that exact active
+  revision. Rejected reload receipts exit nonzero.
+- Durable shapes: role binding stores role kind, stable ID, schema/root/service
+  identity and immutable fingerprint. Active configuration stores monotonically
+  changing revision, reloadable fingerprint, and scheduling/configuration epoch.
+- Trust boundary: only protected local source creates `_target_` objects.
+  Configured persistent authority uses authenticated least privilege; embedded
+  direct access is an explicit trusted composition.
+- Authenticated authority boundary: expose only the existing
+  `PreparedAttemptExecutionAuthority` operations as explicit coordinator- and
+  run-scoped service calls. Exact retries reuse the existing durable operation,
+  assignment, attempt, fence, recovery, and output identities and typed
+  conflict/error semantics; do not add generic authority CRUD or a SQLite
+  fallback.
+- Cross-phase contracts: Phase 15 reads scheduling/time/configuration revisions
+  but does not mutate fingerprint ownership.
+- Reproducibility: fingerprints use canonical non-secret authored values; live
+  objects, source absolute path, certificates' secret bytes, and ambient state
+  are excluded unless already part of a stable public descriptor.
+- Private choices: internal dataclass names, target-construction helper, adapter
+  class names, and transaction layout may vary.
+
+## Proportionality
+
+- Existing seam reused: protected loader, component registries/descriptors,
+  provider conformance, scoped authority wrapper, authority clients, and reload
+  control protocols.
+- Material additions are required by current service commands and previously
+  advertised reload/composition behavior.
+- Deferred: general dependency injection container, plugin discovery, remote
+  config server, configuration history UI, and authority federation.
+
+## Invariant Ownership
+
+| Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
+| --- | --- | --- | --- | --- |
+| Immutable role identity never changes in place | role binding/startup validator | protected file edit/reload | wrong root/service/supervisor takeover | immutable mutation matrix |
+| Active config is complete and restartable | role active-configuration transaction | reload and crash/response loss | live/durable divergence | crash/restart and exact fingerprint tests |
+| Every configured target satisfies its existing contract | protected composition loader | trusted but malformed target | runtime scheduler/provider failure | dummy good/bad target tests |
+| Production authority access follows injected configured adapter | queue execution authority protocol/factory | direct SQLite construction | bypassed trust/service boundary | fake/HTTPS composition and source guard |
+
+## Implementation Slices
+
+1. Define canonical immutable/reloadable projections and role active-state
+   persistence; replace full-YAML binding and add startup/reload crash tests.
+2. Expand and version the protected coordinator/agent schemas; construct and
+   validate configured scheduling, SLURM, provider, priority, and authority
+   objects exactly once.
+3. Wire source-based trusted loaders into both production serve paths and make
+   rejected coordinator and outbound-agent reloads fail the CLI command.
+4. Define/inject the coordinator-authority protocol/factory, adapt embedded and
+   authenticated authority owners, and remove direct SQLite construction from
+   production execution.
+5. Run full composition/reload/restart matrices and hard-cut old configs/roots.
+
+## Test And Validation Plan
+
+| Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
+| --- | --- | --- | --- |
+| Package | required | intentional authority/config exports | cheap import and `__all__` |
+| Unit | required | projection fingerprints, schema, target checks, CLI exits | canonical equality/change and malformed targets |
+| Contract | required | planner/provider/policy/authority structural adapters | downstream dummy implementations |
+| Integration | required | successful reload/restart and HTTPS/direct authority paths | persisted active revision and exact calls |
+| E2E | required | real coordinator/agent service reload | protected file replacement and process restart |
+
+Targeted commands:
+
+    uv run --extra config pytest tests/unit/loom/queue/test_deployment.py tests/unit/loom/cli/test_queue.py
+    uv run --extra config pytest tests/integration/queue/test_agent_session_transport.py tests/integration/queue/test_local_daemon_production.py tests/contracts
+
+Final commands:
+
+    make validate-pr
+    make test-summary
+
+## Risks, Review, And Stops
+
+- Main risks: fingerprinting secrets/paths, persisting active config before an
+  unusable replacement, duplicating scheduling registries, or broadening the
+  authority protocol into database CRUD.
+- Review focus: restart after reload and proof that persistent execution never
+  silently falls back to direct SQLite.
+- Stop if: existing authenticated authority APIs cannot implement an operation
+  required by the production daemon without a material public authority design
+  decision; target construction needs untrusted loading; or Phase 13A's immutable
+  supervisor profile decision is contradicted.
+- Accepted debt: certificate/config rotation is explicit reload and active
+  service connection replacement; distributed config coordination is deferred.
+
+## Manager Review Findings
+
+Corrections 2/3 and 3/3 were qualified because each finding was reachable from
+a supported schema-v2 production role and violated FR-35 through FR-38. All
+findings below are resolved in validated source/test revision `308ed41`:
+
+1. Immutable and reloadable fingerprints are not canonical protected-value
+   projections. Coordinator and outbound immutable projections include authored
+   filesystem/TLS paths, while active fingerprints are recomputed from runtime
+   objects, `repr`, executable paths, and incomplete fields. Coordinator reload
+   also fails to fence authority/service and supervisor-profile identity. The
+   smallest fix is to compute both fingerprints in `deployment.py` from explicit
+   non-secret, path-free authored projections, carry them on the role configs,
+   validate the immutable fingerprint on reload, and persist/verify the authored
+   reloadable fingerprint and epoch.
+2. A successful outbound reload persists and swaps only the inner HTTP client's
+   configuration. The service loop continues to publish offers from the original
+   `OutboundAgentServiceConfig` and reconnects with its original client, which is
+   then rejected by the newly persisted active fingerprint. The smallest fix is
+   one coherent reloadable outbound role snapshot used by offer publication,
+   reconnect, registration, operational timing, persistence, and restart.
+3. The protected schema does not construct the promised production composition.
+   Authenticated authority accepts only an arbitrary callable target rather than
+   the supported HTTPS service/workspace/TLS fields; nested trusted targets are
+   not constructed; a complete SLURM profile cannot compose its runner/private
+   provider; and outbound resident provider composition is absent. The smallest
+   fix is the explicit schema-v2 shapes from FR-37, eager recursive target
+   construction where a constructor argument is itself a target, structural
+   protocol validation, and causal loader/startup tests.
+4. `CoordinatorAuthorityStore` exposes only `open_run`, execution casts it to
+   `Any`, and the authenticated adapter implements only prepared-attempt calls.
+   The first production admission calls missing coordinator binding, lifecycle,
+   cancellation, and reliability methods. The agent-control path also still
+   imports `SQLitePerRunAuthorityStore` directly. The smallest fix is one typed
+   queue-owned protocol containing exactly the methods reached by coordinator
+   execution, concrete embedded/authenticated adapters owned at the store/service
+   boundary, explicit authenticated service calls with workspace/service scope
+   and typed replay/conflict semantics, and an import/search guard covering all
+   production queue execution paths.
+
+The independent review then found two final supported-path blockers for
+correction 3/3:
+
+5. Coordinator and outbound reload could durably remain `applying` after a
+   process loss while startup still compared the new protected source with the
+   old active fingerprint. The correction now persists only a fully prepared
+   intent bound to the exact replacement fingerprint, atomically completes its
+   active revision and terminal effect, and resumes that same intent on startup.
+   Exact coordinator replay returns the recovered terminal receipt; outbound
+   restart retains the completed effect for acknowledgement. Non-applied CLI
+   receipts exit nonzero.
+6. The coordinator mTLS route verified the service/certificate pair but dropped
+   the verified identity before mutation dispatch. Authority repository schema
+   v6 now stores that service principal with the coordinator admission and
+   requires it on every later coordinator operation and exact admission replay.
+   Two independently valid principals cannot open, bind, or mutate each other's
+   runs.
+
+The correction must add the package, unit, contract, integration, and E2E
+coverage already required by this plan. Existing schema-fixture edits and
+unrelated older reload tests do not prove these new boundaries.
+
+## Executor Handoff
+
+- Read section range: this entire phase plan plus Stage 29 planning FR-35-38 and
+  DD-35-37.
+- Safe implementation slices: 1-5 above.
+- Decisions not to revisit: two fingerprint domains, source-based trusted
+  loaders, complete eager composition, injected authority, and nonzero rejected
+  reload outcomes.
+- Conditions requiring manager action: missing authority capability, new
+  heavyweight dependency, compatibility/migration requirement, or scope drift
+  into Phase 15.
+
+## Workflow State
+
+- Manager preparation: passed at clean current `origin/develop`
+  `961b87f`; Phase 13A merge/cleanup, FR-35 through FR-38, DD-35 through
+  DD-37, source owners, target matrices, authority seam, and stop conditions
+  were verified
+- Expanded planning: no phase-planner pass needed; the approved plan already
+  fixes both fingerprint domains, trusted eager target construction, the narrow
+  authority factory, and reload CLI semantics. Independent review remains
+  required for the durable reload and authority trust boundaries.
+- Implementation: complete at source/test revision `308ed41`; the protected
+  coordinator/outbound roles compose and reload their whole supported snapshot,
+  durable accepted reloads recover across restart, and authenticated authority
+  operations are bound to the verified service principal.
+- Refiner: correction 2/3 closed the four connected configuration-to-runtime
+  findings; manager correction 3/3 closed the two final independent-review
+  blockers without expanding the accepted surface.
+- Pre-submit gate: passed; fresh `make validate-pr` completed Ruff, zero-finding
+  Pyright, 2,764 default tests, 157 config-extra tests with 3 expected skips,
+  and both package builds.
+- Independent review: passed on bounded follow-up with no supported-path blocker
+  remaining for reload crash recovery or coordinator-principal ownership.
+- Blocker corrections: 3/3 complete; no known blocker remains.
+- PR: [#265](https://github.com/samcantrill/loom/pull/265), squash-merged as
+  `41fbae3`
+
+## Completion Record
+
+| Item | Result |
+| --- | --- |
+| Implementation and changed paths | Source/test revision `308ed41` completes canonical role projections, schema-v2 trusted composition, whole-role coordinator/outbound reload, durable fingerprint-bound recovery, source-loader/service rotation, injected embedded/HTTPS coordinator authority, v6 principal ownership, and nonzero non-applied reload CLI behavior across `queue`, `authority`, pipeline-store adapters, CLI, and causal tests. |
+| Tests added or updated | Unit/contract/package guards cover projections, nested targets, schema/migration, CLI outcomes, and import direction. Integration/E2E tests cover real coordinator/outbound reload and restart, service reconnection, TLS rotation, live mTLS authority calls, same-CA rejection, two-valid-principal isolation, and crash recovery after each durable reload intent. |
+| Validated revision/tree state and evidence | At source/test revision `308ed41`, fresh `make validate-pr` passed Ruff, Pyright with zero findings, 2,764 default tests with 136 deselected, 157 config-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` recorded package 120, unit 1,943, contract 300, integration 337, E2E 64, and config-extra 157: 2,921 passes, zero failures/errors, 3 expected skips. |
+| Validation-relevant changes after evidence | Only this roadmap evidence and matching manifest metadata changed after the validated source/test revision; no source, test, dependency, build, or validation configuration changed. |
+| PR, review, and merge | Independent review and bounded follow-up passed; [PR #265](https://github.com/samcantrill/loom/pull/265) squash-merged into `develop` as `41fbae3`. |
+| Residual risk and cleanup | No known phase blocker. Protected role roots/configs remain an intentional hard cut. Migrated authority v5 admissions have no authenticated service identity and therefore remain fail-closed on the new authenticated routes rather than being guessed or claimed. The dedicated worktree and local/remote phase branches were removed after the verified merge. |

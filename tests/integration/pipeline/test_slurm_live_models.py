@@ -36,9 +36,14 @@ def test_fake_sbatch_flow_records_live_manifest_job_identity() -> None:
         submit_host="submit-host",
         submit_user="submit-user",
     )
+    direct_payload = draft.to_dict()
+
+    assert "queue_item_id" not in direct_payload
+    assert "scheduler_operations" not in direct_payload
+
     manifest = SlurmLiveSubmissionManifest(
         **{
-            **draft.to_dict(),
+            **direct_payload,
             "submitted_jobs": [
                 SlurmSubmittedJob(
                     logical_key="pipeline",

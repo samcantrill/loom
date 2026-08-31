@@ -2,19 +2,23 @@
 
 ## Metadata
 
-- Status: planned
+- Status: blocked
 - Roadmap stage and phase: Stage 32, Phase 2
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p2-service-less-slurm-driving
 - Worktree root and path: use the manifest-recorded root;
   `<root>/stage-32-p2-service-less-slurm-driving`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `2f8dfd93c98bb60a67fe8033075e5fc316c1b8f9`
 - PR target: develop
 - PR title: `Stage 32 phase 2: add service-less SLURM driving`
 - Dependencies: Stage 32 Phase 1 remotely merged; existing whole-run Slurm planning/live submission/status and delegated queue controller
 - Requirements and decisions: FR-6 through FR-11; FQ-3 through FQ-5; DQ-4 through DQ-7
 - Workflow path: expanded; external-call uncertainty and multi-owner terminal joins are fixed by the stage plan
-- Blockers: Phase 1 merge
+- Blockers: independent review found two accepted-contract gaps after all three
+  correction passes were consumed: prepared inspection does not persist and
+  merge per-job last-known scheduler evidence (FR-9), and prepared dispatch does
+  not require positive compute-visible/shared-path evidence before `sbatch`
+  (FR-10).
 
 ## Objective And Context
 
@@ -55,7 +59,8 @@ In scope:
   call.
 - Reuse the existing whole-run Slurm submitters and manifests. The queue dispatch
   handle references the retained submitted operation/manifest and does not copy
-  the logical job list into a second durable inventory.
+  the logical job list into a second durable inventory. The run-local record
+  retains the canonical queue item ID and must agree with that handle.
 - Persist exact per-scheduler-call operation identity/digest and include its
   bounded marker in scheduler-visible comment metadata. Reuse discovery over
   live and retained accounting rows when a call remains `SUBMITTING`/unknown or
@@ -131,9 +136,10 @@ Assumptions:
   scheduler commands/credentials through the new contract; protected
   preparation supplies scripts/options; scheduler output is bounded and parsed;
   authority state cannot be fabricated from Slurm.
-- Cross-phase contracts: consumes Phase 1 submission identity/digest and returns
-  canonical queue item IDs. A later Stage 34 query may join these typed facts but
-  cannot reinterpret them.
+- Cross-phase contracts: consumes Phase 1 submission identity/digest, returns
+  canonical queue item IDs, and retains that ID in the run-local operation or
+  manifest. Stage 34 may follow it for a primary-key read but cannot reinterpret
+  either owner.
 - Reproducibility and compatibility: exact planned submission/operation digests,
   stable markers, retained partial manifests, no blind call replay, and no
   change to direct local or Stage 29 managed execution.
@@ -237,24 +243,29 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 merge and exact implementation base.
+- Manager preparation: passed; Phase 1 is remotely merged and the dedicated
+  worktree used base `2f8dfd9`.
 - Expanded planning: stage-level minimum design is complete; one phase-plan
   refinement is permitted only for a concrete external-call ownership ambiguity.
-- Implementation: pending.
-- Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: expected because scheduler-call uncertainty and
-  authority/scheduler terminal joins remain material external boundaries.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Implementation: superseded; candidate `c9cbd2c` was fully validated but not
+  merge-eligible, and replacement Phase 3 closed both accepted-contract gaps.
+- Refiner: correction 1/3 applied; two later manager corrections completed the
+  recovery and operator surfaces.
+- Pre-submit gate: passed at `c9cbd2c`; Ruff, Pyright, default/config-extra
+  suites, package build, and `make test-summary` all passed.
+- Independent review: blocked on per-job retained scheduler evidence and
+  positive compute-visible path proof.
+- Blocker corrections: 3/3; no correction budget remains.
+- PR and merge: blocked; no PR was opened. The approved Phase 3 replacement
+  carries the outcome from current `develop`.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Superseded blocked candidate; replacement Phase 3 carries the accepted implementation from current `develop`. |
+| Tests added or updated | Both modes, exact recovery, partial `afterok`, bounds, authority joins, CLI JSON, and fake reopen journey. |
+| Validated revision/tree state and evidence | Candidate `c9cbd2c`: 2,676 default and 157 config-extra tests passed with 3 expected skips; Ruff, Pyright, source/wheel build, and 2,833-test summary passed. |
+| Validation-relevant changes after evidence | Blocked-status documentation only. |
+| PR, review, and merge | Independent review blocked FR-9 and FR-10; no PR opened or merged. |
+| Residual risk and cleanup | Never merge Phase 2. Its clean worktree and local branch were removed after replacement Phase 3 merged; no remote branch existed. |

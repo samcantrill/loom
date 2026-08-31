@@ -20,9 +20,15 @@ if TYPE_CHECKING:
         ObserveResult,
     )
     from ._remote_stage_execution import GpuDeviceDescriptor
+    from .coordinator_authority import (
+        CoordinatorAuthorityFactory,
+        CoordinatorAuthorityStore,
+    )
     from .local_daemon import (
         AdmissionNotFoundError,
         AdmissionPage,
+        AgentPage,
+        AgentProjection,
         AdmissionWaitKind,
         AdmissionWaitResult,
         AgentControl,
@@ -38,6 +44,9 @@ if TYPE_CHECKING:
         DaemonStatus,
         LocalDaemonPrincipal,
         LocalDaemonRole,
+        LocalDaemonOperation,
+        OperationWaitKind,
+        OperationWaitResult,
         ManagedRecoveryTarget,
         RecoverUnknownAssignment,
         SessionReplacementRequest,
@@ -50,6 +59,11 @@ if TYPE_CHECKING:
         LocalDaemonSocketServer,
     )
     from .local_daemon_runtime import prepare_managed_local_runtime_record
+    from .managed_local_preparation import (
+        ManagedLocalPreparationReceipt,
+        prepare_managed_local_run,
+    )
+    from .agent_sessions import LocalOwnerOperatorPolicy
     from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
     QUEUE_CONFIG_SCHEMA_VERSION,
@@ -83,6 +97,7 @@ from .controller import (
     QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueDrainResult,
+    QueueForegroundDriveResult,
     QueueInspectableDispatchAdapter,
     QueuePreStartCleanupStatus,
 )
@@ -104,6 +119,8 @@ from .models import (
     QueueAuditEvent,
     QueueClaim,
     QueueDefinition,
+    QueueEnqueueDisposition,
+    QueueEnqueueReceipt,
     QueueItem,
     QueueItemStatus,
     QueuePool,
@@ -112,7 +129,7 @@ from .models import (
     RunIntent,
     validate_one_queue_per_pool,
 )
-from .repository import QueuePoolSnapshot, QueueRepository
+from .repository import QueueItemPage, QueuePoolSnapshot, QueueRepository
 from .service import (
     QueueEnqueueRequest,
     QueueItemInspection,
@@ -148,8 +165,13 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonSocketServer",
         "DaemonStatus",
         "AdmissionPage",
+        "AgentPage",
+        "AgentProjection",
         "AdmissionWaitKind",
         "AdmissionWaitResult",
+        "LocalDaemonOperation",
+        "OperationWaitKind",
+        "OperationWaitResult",
         "ManagedRecoveryTarget",
         "RecoverUnknownAssignment",
         "SessionReplacementRequest",
@@ -175,6 +197,13 @@ _MANAGED_RESOURCE_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "CoordinatorAuthorityFactory",
+        "CoordinatorAuthorityStore",
+    }:
+        from . import coordinator_authority
+
+        return getattr(coordinator_authority, name)
     if name == "ResidentWorkerLaunchProfile":
         from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
@@ -183,6 +212,10 @@ def __getattr__(name: str) -> object:
         from . import _managed_local
 
         return getattr(_managed_local, name)
+    if name == "LocalOwnerOperatorPolicy":
+        from .agent_sessions import LocalOwnerOperatorPolicy
+
+        return LocalOwnerOperatorPolicy
     if name in _LOCAL_DAEMON_EXPORTS:
         if name in {"LocalDaemonSocketClient", "LocalDaemonSocketServer"}:
             from . import local_daemon_transport
@@ -195,6 +228,10 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
+    if name in {"ManagedLocalPreparationReceipt", "prepare_managed_local_run"}:
+        from . import managed_local_preparation
+
+        return getattr(managed_local_preparation, name)
     if name == "ExecutionRequirement":
         from loom.pipeline.orchestration import ExecutionRequirement
 
@@ -225,6 +262,8 @@ __all__ = [
     "AdmissionNotFoundError",
     "AgentControl",
     "CoordinatorSchedulingReload",
+    "CoordinatorAuthorityFactory",
+    "CoordinatorAuthorityStore",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionDetail",
     "LocalDaemonAdmissionRequest",
@@ -238,8 +277,13 @@ __all__ = [
     "LocalDaemonSocketServer",
     "DaemonStatus",
     "AdmissionPage",
+    "AgentPage",
+    "AgentProjection",
     "AdmissionWaitKind",
     "AdmissionWaitResult",
+    "LocalDaemonOperation",
+    "OperationWaitKind",
+    "OperationWaitResult",
     "ManagedRecoveryTarget",
     "MemoryResourceProvider",
     "ObserveRequest",
@@ -250,7 +294,10 @@ __all__ = [
     "SlurmRecoveryTarget",
     "TimeRecoveryReceipt",
     "TimeRecoveryRequest",
+    "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
+    "ManagedLocalPreparationReceipt",
+    "prepare_managed_local_run",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
     "ResourceAssignment",
@@ -276,10 +323,14 @@ __all__ = [
     "QueueDispatchNonStartCause",
     "QueueDispatchResult",
     "QueueDrainResult",
+    "QueueForegroundDriveResult",
     "QueueEnqueueRequest",
+    "QueueEnqueueDisposition",
+    "QueueEnqueueReceipt",
     "QueueError",
     "QueueItemInspection",
     "QueueItem",
+    "QueueItemPage",
     "QueueItemStatus",
     "QueuePool",
     "QueuePoolSnapshot",

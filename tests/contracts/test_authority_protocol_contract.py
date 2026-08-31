@@ -71,6 +71,8 @@ def test_authority_protocol_contract_exposes_stable_vocabulary() -> None:
         "cleanup_reports",
         "cleanup_results",
         "offline_import",
+        "coordinator_execution",
+        "reliability_facts",
     }
     assert {category.value for category in AuthorityProtocolErrorCategory} == {
         "resolver",
