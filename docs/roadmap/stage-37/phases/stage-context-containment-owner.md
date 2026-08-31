@@ -1,0 +1,204 @@
+# Phase 1 Execution Plan: Stage-Context Containment Owner
+
+## Metadata
+
+- Status: planned
+- Roadmap stage and phase: Stage 37, Phase 1
+- Manifest: `docs/roadmap/stage-37/implementation-plan.md`
+- Branch: `codex/stage-context-containment-owner`
+- Worktree root and path: `/nas/home/can134/work/loom-worktrees`;
+  `/nas/home/can134/work/loom-worktrees/stage-context-containment-owner`
+- Base revision: `308d132b0a79b6ddd8514e68cd71c4583f557f90`
+- PR target: develop
+- PR title: `Stage Context - Phase 1: Process Containment Ownership`
+- Dependencies: approved Stage 37 planning and current agent-supervisor/SLURM
+  containment boundaries
+- Workflow path: expanded; public stage-author API and cross-process ownership
+  contract
+- Blockers: independent plan review and expanded phase-plan refinement pending
+
+## Objective And Context
+
+- Vertical outcome: an ordinary or managed stage receives a typed, immutable
+  containment-owner fact through the same public `StageContext`, letting project
+  code launch children without route guessing.
+- Earlier dependency: existing runner/direct-worker construction remains
+  stage-owned, while the agent supervisor and scheduler job keep their current
+  boundary-specific containment behavior.
+- Later work explicitly out of scope: process launch/signal helpers, new
+  containment mechanisms, persistence, provenance, configuration, fingerprints,
+  route capabilities, cancellation/retry changes, and rphys implementation.
+
+## Current Source And Harness
+
+- Relevant files and symbols: `loom.pipeline.context.StageContext`, lazy
+  `loom.pipeline` exports, two constructors in `execution/runner.py`, ordinary
+  and resident constructors in `execution/stage_worker.py`, and the production
+  `_resident_stage_worker` and `slurm_bootstrap` entry paths.
+- Existing tests and seams: `test_context.py` owns public value validation;
+  `test_stage_worker.py` exposes reconstructed direct context via `FakeExecutor`;
+  package API tests lock exports; agent-supervisor and SLURM suites already own
+  their real containment mechanisms.
+- Import, dependency, or harness constraints: pipeline context stays
+  import-light and cannot import queue/executor code. Stage 37 adds no optional
+  dependency and does not duplicate full cancellation/containment E2E tests.
+
+## Scope
+
+In scope:
+
+- Define public `ProcessContainmentOwner(StrEnum)` with exactly `STAGE =
+  "stage"` and `OUTER_BOUNDARY = "outer_boundary"`.
+- Add keyword-only `StageContext.process_containment_owner`, defaulting to
+  `STAGE`, and reject non-enum values with `PipelineValidationError`.
+- Export the enum lazily from `loom.pipeline` and update the exact package API
+  contract.
+- Pass `STAGE` explicitly at every ordinary Loom context constructor.
+- Let the shared resident helper receive the owner explicitly; have both the
+  agent-supervised resident entry and SLURM bootstrap select `OUTER_BOUNDARY`.
+- Document the stage obligations and the precondition for outer-boundary
+  ownership in existing pipeline/execution feature docs.
+- Add focused tests for the public/default/invalid contract and ordinary versus
+  resident propagation.
+
+Out of scope:
+
+- Authored config/environment keys, metadata inspection, route enums,
+  executor-capability negotiation, durable schemas, fingerprints/provenance,
+  subprocess wrappers, registries, cgroups, new signals/timeouts, or changes to
+  existing agent/scheduler proof ordering.
+
+Assumptions:
+
+- The current agent resident entry is always launched beneath
+  `AgentProcessSupervisor` and current SLURM bootstrap runs inside the scheduler
+  job boundary.
+- Existing downstream/manual `StageContext` fixtures may omit the new field and
+  must conservatively retain stage ownership.
+- A frozen dataclass field is sufficiently read-only; no private setter or
+  second context type is necessary.
+
+## Fixed Contracts And Private Discretion
+
+- Observable behavior: stage code imports the enum from `loom.pipeline` and
+  reads `context.process_containment_owner`; ordinary/direct execution yields
+  `STAGE`, supported resident entries yield `OUTER_BOUNDARY`.
+- Public or durable shapes: the enum and keyword-only field are additive public
+  Python API. Values are exact enum instances; strings are not coerced. No
+  serialized representation changes.
+- Trust and failure boundaries: `OUTER_BOUNDARY` says the stage must keep every
+  child within inherited containment and must not signal the enclosing group.
+  It does not move normal child communication/completion/reaping into Loom.
+  `STAGE` says the stage owns complete descendant cleanup.
+- Cross-phase contracts: none; this single phase must expose and propagate the
+  complete useful behavior.
+- Reproducibility and compatibility: the field is a live execution fact, not
+  scientific intent or fingerprint input. Omitted manual construction remains
+  source-compatible and conservative.
+- Private choices the executor may simplify: exact helper parameter placement,
+  local test fixtures/capture mechanism, and prose location within the existing
+  StageContext sections.
+
+## Proportionality
+
+- Existing seam reused: the frozen `StageContext`, lazy pipeline exports,
+  current constructor inventory, and existing resident entry boundaries.
+- Material additions and current justification: one enum and field are required
+  because the rphys consumer otherwise guesses between mutually incompatible
+  child-process obligations.
+- Optional hardening and future capability deferred: automatic context-factory
+  registry, durable audit, executor declarations, process utility APIs, and a
+  third owner state.
+
+## Invariant Ownership
+
+| Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
+| --- | --- | --- | --- | --- |
+| Public owner is exact and immutable | `StageContext.__post_init__` and frozen dataclass | Manual/downstream context construction | Route guessing or unsupported state reaches stage code | default/explicit/invalid/frozen unit tests |
+| Ordinary execution remains stage-owned | Runner and direct-worker constructors | New field omitted or incorrectly set during request reconstruction | Stage may leave descendants without a cleanup owner | direct fake-executor assertion and constructor audit |
+| Supported resident execution names the enclosing owner | Agent resident and SLURM bootstrap entry paths through shared resident helper | Helper hardcodes one implementation or caller omits the owner | Stage may detach and escape the actual boundary | resident-helper propagation plus both production caller assertions |
+| Containment proof remains boundary-specific | Existing agent supervisor and SLURM owners | Stage 37 duplicates or weakens mechanism/order | Premature result trust or orphaned descendants | existing boundary suites; no duplicate mechanism test |
+| Public import remains intentional and cheap | Lazy `loom.pipeline` export | Eager execution/queue import | Base import boundary regression | package API/import checks |
+
+## Implementation Slices
+
+1. Add the enum, keyword-only context field, exact validation, lazy public
+   export, and focused context/package tests.
+2. Thread explicit stage ownership through ordinary runner/direct worker
+   constructors and assert reconstructed direct-worker behavior.
+3. Thread explicit outer-boundary ownership from both resident production entry
+   paths through the shared helper and add focused propagation coverage.
+4. Update existing pipeline/execution StageContext documentation with owner
+   obligations and scope limits.
+5. Run focused tests, then the stable full validation and summary gates; update
+   only this phase's workflow/completion state.
+
+## Test And Validation Plan
+
+| Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
+| --- | --- | --- | --- |
+| Package | required | Intentional lazy public enum export | exact `loom.pipeline.__all__` and import behavior |
+| Unit | required | Default, explicit values, invalid type, immutability, ordinary/direct and shared-helper propagation | focused context and stage-worker cases; production entry call arguments |
+| Contract | required via final gate | Existing `StageContext` construction remains compatible | all existing contracts pass; no new durable contract suite needed |
+| Integration | required, focused | Both real production resident routes remain wired to the outer-boundary value | smallest existing agent/SLURM paths or focused entry spies; do not rerun a cancellation matrix as new acceptance |
+| E2E / opt-in | existing full gate / new test deferred | No containment mechanism changes | current agent/scheduler E2E remains authoritative; no GPU, daemon, or cluster prerequisite added |
+
+Targeted commands:
+
+    uv run pytest tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
+    uv run ruff check src/loom/pipeline/context.py src/loom/pipeline/__init__.py src/loom/pipeline/execution/runner.py src/loom/pipeline/execution/stage_worker.py src/loom/queue/_resident_stage_worker.py src/loom/queue/slurm_bootstrap.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
+
+Final commands:
+
+    make validate-pr
+    make test-summary
+
+## Risks, Review, And Stops
+
+- Main risks: branding an implementation instead of the actual outer owner;
+  silently accepting strings; relying on the compatibility default inside Loom;
+  incorrectly claiming outer containment on an unsupported route; or importing
+  queue/executor code into pipeline context.
+- Review focus: exact public names/values, keyword-only compatibility, explicit
+  propagation at all current constructors/callers, stage obligations, and no
+  durable/config/process-framework expansion.
+- Stop if: implementation needs a third owner, a durable/config schema, a new
+  containment guarantee, scheduler/agent behavior changes, or public semantics
+  not fixed by Stage 37 planning.
+- Accepted debt and revisit trigger: the fact is not durably inspectable and its
+  semantics are POSIX/process-boundary oriented; revisit only for a concrete
+  inspection consumer or maintained non-POSIX route.
+
+## Executor Handoff
+
+- Read section range: `Objective And Context` through `Risks, Review, And Stops`.
+- Safe implementation slices: the five slices above.
+- Decisions not to revisit: enum/field names, exact two values, conservative
+  default, strict enum validation, explicit internal propagation, no persistence
+  or process helper, and unchanged containment mechanisms.
+- Conditions requiring manager action: a current production context path cannot
+  assign an owner without route inference, either resident boundary lacks the
+  documented containment obligation, or tests require changing public behavior.
+
+## Workflow State
+
+- Manager preparation: complete on branch/worktree above from base `308d132`;
+  planning draft and bounded design-review correction are committed.
+- Expanded planning: phase-plan refinement pending.
+- Implementation: pending.
+- Refiner: not needed unless a qualified blocker appears.
+- Pre-submit gate: pending.
+- Independent review: pending after implementation.
+- Blocker corrections: 0/3.
+- PR and merge: pending.
+
+## Completion Record
+
+| Item | Result |
+| --- | --- |
+| Implementation and changed paths | pending |
+| Tests added or updated | pending |
+| Validated revision/tree state and evidence | pending |
+| Validation-relevant changes after evidence | pending |
+| PR, review, and merge | pending |
+| Residual risk and cleanup | pending |
