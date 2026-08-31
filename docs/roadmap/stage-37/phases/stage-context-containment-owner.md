@@ -15,7 +15,7 @@
   containment boundaries
 - Workflow path: expanded; public stage-author API and cross-process ownership
   contract
-- Blockers: independent plan review pending
+- Blockers: none
 
 ## Objective And Context
 
@@ -39,7 +39,8 @@
   `_resident_stage_worker.main` and `run_slurm_bootstrap`.
 - Existing tests and seams: `test_context.py` owns public value validation;
   `test_stage_worker.py` exposes reconstructed direct context via `FakeExecutor`;
-  package API tests lock exports; agent-supervisor and SLURM suites already own
+  package API tests lock exports; `test_slurm_ready_stage.py` directly invokes
+  the shared resident helper; agent-supervisor and SLURM suites already own
   their real containment mechanisms.
 - Import, dependency, or harness constraints: pipeline context stays
   import-light and cannot import queue/executor code. Stage 37 adds no optional
@@ -146,13 +147,14 @@ Assumptions:
 | Package | required | Intentional lazy public enum export | exact `loom.pipeline.__all__` and import behavior |
 | Unit | required | Exact enum members, keyword-only/default/explicit behavior, invalid string/object, immutability, ordinary/direct and resident propagation | focused context and stage-worker cases; separate call-argument assertions for `_resident_stage_worker.main` and `run_slurm_bootstrap` |
 | Contract | required via final gate | Existing `StageContext` construction remains compatible | all existing contracts pass; no new durable contract suite needed |
-| Integration | required via final gate | Existing agent and SLURM containment behavior remains unchanged | existing boundary suites pass; caller-argument unit tests own new propagation acceptance, so add no cancellation matrix |
+| Integration | required, focused plus final gate | Existing agent and SLURM containment behavior remains unchanged; the direct SLURM fixture call supplies its owner | one mixed-route case plus existing boundary suites; add no cancellation matrix |
 | E2E / opt-in | existing full gate / new test deferred | No containment mechanism changes | current agent/scheduler E2E remains authoritative; no GPU, daemon, or cluster prerequisite added |
 
 Targeted commands:
 
     uv run pytest tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_resident_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
-    uv run ruff check src/loom/pipeline/context.py src/loom/pipeline/__init__.py src/loom/pipeline/execution/runner.py src/loom/pipeline/execution/stage_worker.py src/loom/queue/_resident_stage_worker.py src/loom/queue/slurm_bootstrap.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_resident_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py
+    uv run pytest tests/integration/queue/test_slurm_ready_stage.py -k mixed_route_run_uses_one_slurm_submit_and_verified_loom_result
+    uv run ruff check src/loom/pipeline/context.py src/loom/pipeline/__init__.py src/loom/pipeline/execution/runner.py src/loom/pipeline/execution/stage_worker.py src/loom/queue/_resident_stage_worker.py src/loom/queue/slurm_bootstrap.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/queue/test_resident_stage_worker.py tests/unit/loom/queue/test_slurm_bootstrap.py tests/integration/queue/test_slurm_ready_stage.py
 
 Final commands:
 
@@ -193,7 +195,9 @@ Final commands:
 - Expanded planning: complete; public default versus explicit internal
   propagation, both production resident callers, and focused coverage are
   fixed without prescribing private wiring.
-- Independent plan review: pending before implementation.
+- Independent plan review: passed with no blocker. Its non-blocking observation
+  that `test_slurm_ready_stage.py` directly invokes the shared helper is now in
+  the caller inventory and focused test lane.
 - Implementation: pending.
 - Refiner: not needed unless a qualified blocker appears.
 - Pre-submit gate: pending.

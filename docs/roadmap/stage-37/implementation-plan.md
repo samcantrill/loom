@@ -1,6 +1,6 @@
 # Roadmap Stage 37 Implementation Plan
 
-Status: approved
+Status: approved and ready for implementation
 Roadmap stage: 37
 Planning document: docs/roadmap/stage-37/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -58,10 +58,12 @@ Blockers: none
   `OUTER_BOUNDARY`.
 - Manager review: requirement/design/phase traceability, one-phase vertical
   shape, and proportional validation pass.
-- Optional independent review: required for this expanded public-API plan and
-  pending before implementation.
-- Correction: none yet at implementation-plan review.
-- Ready for implementation: pending independent plan review.
+- Optional independent review: passed with no blocker. It identified one
+  non-blocking direct shared-helper call in the SLURM integration fixture; the
+  phase inventory and focused validation now include it.
+- Correction: one manager-local planning clarification added the existing
+  SLURM integration caller/test file; no behavior or phase shape changed.
+- Ready for implementation: yes.
 - Accepted risks: the semantic contract is POSIX/process-boundary oriented;
   manually constructed contexts can assert `OUTER_BOUNDARY`, so documentation
   must state its precondition.
