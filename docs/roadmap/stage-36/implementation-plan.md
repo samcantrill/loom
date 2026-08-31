@@ -1,11 +1,11 @@
 # Roadmap Stage 36 Implementation Plan
 
-Status: approved
+Status: complete
 Roadmap stage: 36
 Planning document: docs/roadmap/stage-36/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1 (`standalone-managed-local-starter`, PR #267 open; manager review passed)
+Current phase: complete
 Blockers: none
 
 ## Summary
@@ -44,17 +44,20 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | standalone-managed-local-starter | pr_open | docs/roadmap/stage-36/phases/standalone-managed-local-starter.md | agent/stage-36-p1-standalone-managed-local-starter | #267 | queue preparation facade/export, managed-local-basic project/example, docs and tests | Copy, prepare, execute, inspect, and restart one embedded managed-local run through the real service. |
+| 1 | standalone-managed-local-starter | merged | docs/roadmap/stage-36/phases/standalone-managed-local-starter.md | agent/stage-36-p1-standalone-managed-local-starter | [#267](https://github.com/samcantrill/loom/pull/267) | queue preparation facade/export, managed-local-basic project/example, docs and tests | Copy, prepare, execute, inspect, and restart one embedded managed-local run through the real service. |
 
 ## Quality Gate
 
 - Planning gate: passed; requirements, design, proportionality, validation, and
   single vertical phase are locked.
-- Manager review: passed against current `develop` at `3990d79`.
+- Manager review: passed against the complete implementation diff with no
+  remaining blocker.
 - Optional independent review: not needed on the lean route; no unresolved
   durable or trust-boundary choice remains.
-- Correction: not needed.
-- Ready for implementation: yes; maintainer approval recorded 2026-08-31.
+- Corrections: one bounded executor repair closed the embedded-policy, exact
+  replay, and descendant-cleanup gaps; one manager-local typing correction
+  closed the first pre-submit Pyright failure. The corrected full gate passed.
+- Stage result: complete; PR #267 was verified and squash-merged as `a8d314c`.
 - Accepted risks: partial state is not repaired; advanced compositions stay on
   the low-level API; local E2E cannot certify a site process manager.
 - Revisit triggers: implementation requires a new durable schema, changes an
@@ -64,4 +67,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | [#267](https://github.com/samcantrill/loom/pull/267) squash-merged as `a8d314c` | Fresh `make validate-pr` and `make test-summary` passed after two scoped corrections; 2,935 categorized tests passed with 3 expected skips. | No known blocker; partial preparation remains operator-cleaned and advanced routes retain the low-level API. | Dedicated worktree and exact local/remote phase branches removed. |

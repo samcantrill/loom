@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 36, Phase 1
 - Manifest: docs/roadmap/stage-36/implementation-plan.md
 - Branch: agent/stage-36-p1-standalone-managed-local-starter
@@ -11,6 +11,7 @@
 - Base revision: `95e45a3a65d485b7e0d335177371986a845c1120`
 - PR target: develop
 - PR title: `Stage 36 phase 1: add standalone managed-local starter`
+- PR: [#267](https://github.com/samcantrill/loom/pull/267)
 - Dependencies: merged Stage 29 managed service and Stage 34 run inspection
 - Workflow path: fast; the approved additive facade composes existing owners
   and introduces no schema or unresolved trust decision
@@ -196,9 +197,9 @@ Final commands:
 - Blocker corrections: 2/3; one directly related executor repair closed the
   accepted FR-3/FR-5/FR-7 gaps, and one manager-local mechanical correction
   replaced heterogeneous test kwargs after the first Pyright gate stopped.
-- PR and merge: PR #267 is open to `develop`; base, head, title, non-draft
-  state, mergeability, body/diff scope, fresh local evidence, and manager
-  fast-path review are verified. Merge is pending the final eligibility check.
+- PR and merge: PR #267 base, head, title, non-draft state, clean mergeability,
+  body/diff scope, fresh local evidence, and manager fast-path review were
+  verified; it was squash-merged as `a8d314c` on 2026-08-31.
 
 ## Completion Record
 
@@ -208,5 +209,5 @@ Final commands:
 | Tests added or updated | New facade unit coverage; queue public-import assertion; copied `managed-local-basic` real `daemon-init`/`daemon-serve` E2E; catalog expectations updated. |
 | Validated revision/tree state and evidence | Reviewed implementation tree through `d7ea15b`. `make validate-pr` passed: Ruff, Pyright with zero errors, 2,778 default tests, 157 config-extra tests with 3 expected skips, and source/wheel builds. `make test-summary` passed at 2026-08-31T10:03:12Z: 2,935 passed and 3 expected skips across package/unit/contract/integration/E2E/config-extra. Focused facade/import/copied-lifecycle checks and a direct copied starter run also passed. |
 | Validation-relevant changes after evidence | None; this completion-record update is workflow metadata only. |
-| PR, review, and merge | PR #267 (`develop` <- `agent/stage-36-p1-standalone-managed-local-starter`) is open and mergeable. Manager fast-path review passed with no blocker; hosted checks and human approval are intentionally not required. |
-| Residual risk and cleanup | Manager fast-path diff review passed with no blocker. Accepted limits remain: partial preparation is operator-cleaned, advanced routes use the low-level API, and process-tree proof uses the repository's Linux E2E environment. Cleanup follows remote merge. |
+| PR, review, and merge | [#267](https://github.com/samcantrill/loom/pull/267) target, head, title, body, non-draft state, and clean mergeability were verified. Manager fast-path review and all local gates passed; it was squash-merged to `develop` as `a8d314c` on 2026-08-31. |
+| Residual risk and cleanup | No known blocker. Accepted limits remain: partial preparation is operator-cleaned, advanced routes use the low-level API, and process-tree proof uses the repository's Linux E2E environment. The dedicated worktree and exact local/remote phase branches were removed after remote merge verification. |

@@ -1,30 +1,31 @@
 # Roadmap Stage 36 Planning: Standalone Managed-Local Starter
 
-Status: approved
+Status: complete
 Roadmap stage: 36
 Evidence tree: `/home/can134/work/active/loom` at
 `3990d79906c89151649b32623b6d20ef42db60bc`; relevant dirty paths: none
 Planning route: lean; the accepted change composes existing public planning,
 deployment, authority, and daemon boundaries without a new durable schema or
 trust boundary
-Current gate: passed; the maintainer approved implementation on 2026-08-31
+Current gate: implementation complete; Phase 1 passed the fast-path review and
+validation gates and was squash-merged in PR #267 on 2026-08-31
 Blockers: none
 
-This file is current authoritative state. The maintainer first requested a
-copyable single-machine coordinator/daemon journey, reviewed the current
-managed-local implementation and remaining gap, accepted the minimum design,
-and explicitly requested implementation on 2026-08-31.
+This file is current authoritative state. The maintainer requested a copyable
+single-machine coordinator/daemon journey, accepted the minimum design, and
+explicitly requested implementation. The one implementation phase is remotely
+merged and Stage 36 completed on 2026-08-31.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Stage 29 supplies durable embedded execution, protected service configuration, exact runtime records, CLI management, restart, and cleanup; Stage 34 supplies singular run inspection. The current example proves those pieces only through an in-process test-oriented composition. | None. | Reuse the merged owners. |
-| Functionality | One protected local-only coordinator config and one authored pipeline can prepare, initialize, serve, submit, wait, inspect, read an artifact, restart, and replay preparation from a copied directory. | None. | Implement one vertical phase. |
-| Design | Add one narrow public preparation facade and make `managed-local-basic` its standalone service consumer. Keep exact runtime preparation as the low-level owner. | None. | Preserve existing schemas and commands. |
-| Validation | Public preparation identity/replay and the copied real-service lifecycle are the causal boundaries. | None. | Add unit/package and copied E2E coverage. |
-| Detailed plan | One phase joins the public facade to its only current downstream-template consumer. | None. | Execute Phase 1. |
-| Approval | The maintainer approved the explained behavior and requested implementation. | None. | Proceed on the fast path. |
+| Evidence | Stage 29 supplies durable embedded execution and service management; Stage 34 supplies singular run inspection; the copied starter now composes those owners through the real service. | None. | Delivered without replacing an owner. |
+| Functionality | One protected local-only coordinator config and one authored pipeline prepare, initialize, serve, submit, wait, inspect, read an artifact, restart, and replay preparation from a copied directory. | None. | Complete in PR #267. |
+| Design | The narrow public preparation facade owns ordering and replay while the low-level runtime record remains the exact executable-intent owner. | None. | Revisit only for a documented advanced-route consumer. |
+| Validation | Public preparation, immutable replay/conflict, randomized copy portability, real subprocess execution, restart, artifact content, and process-tree cleanup pass focused and full gates. | None. | Complete. |
+| Detailed plan | One vertical phase joined the public facade to its standalone starter consumer. | None. | Remotely merged. |
+| Approval | The maintainer approved the explained behavior and requested implementation. | None. | Stage 36 complete. |
 
 ## Evidence And Scope
 
