@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 36, Phase 1
 - Manifest: docs/roadmap/stage-36/implementation-plan.md
 - Branch: agent/stage-36-p1-standalone-managed-local-starter
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-36-p1-standalone-managed-local-starter`
-- Base revision: current `origin/develop` after the approved planning packet
+- Base revision: `95e45a3a65d485b7e0d335177371986a845c1120`
 - PR target: develop
 - PR title: `Stage 36 phase 1: add standalone managed-local starter`
 - Dependencies: merged Stage 29 managed service and Stage 34 run inspection
@@ -180,10 +180,13 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending approved planning packet commit and dedicated
-  worktree creation.
+- Manager preparation: complete; approved planning packet `95e45a3`, current
+  `origin/develop`, dedicated branch/worktree, source seams, fast-path route,
+  and exact executor boundary verified.
 - Expanded planning: not needed; fast path approved.
-- Implementation: pending one `loom_phase_executor` pass.
+- Implementation: complete; added the lazy embedded-only preparation facade,
+  immutable replay comparison, self-contained copied starter, documentation,
+  and phase-scoped coverage.
 - Refiner: not needed unless a qualified blocker appears.
 - Pre-submit gate: pending.
 - Independent review: not needed on the fast path unless material residual risk
@@ -195,9 +198,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | `src/loom/queue/managed_local_preparation.py`, lazy queue export, `managed-local-basic` self-contained pipeline/stages/lifecycle/config setup, catalog/feature/Stage 29 wording, and focused package/unit/E2E coverage. |
+| Tests added or updated | New facade unit coverage; queue public-import assertion; copied `managed-local-basic` real `daemon-init`/`daemon-serve` E2E; catalog expectations updated. |
+| Validated revision/tree state and evidence | `make validate-pr` passed (ruff, pyright, default/config-extra tests, build); `make test-summary` passed at 2026-08-31T06:35:51Z (2,933 passed; 3 expected skips). Focused facade/public/copy E2E pass: 6 passed. |
+| Validation-relevant changes after evidence | None; this completion-record update is workflow metadata only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

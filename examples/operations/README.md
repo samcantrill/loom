@@ -36,7 +36,7 @@ workflows.
 | --- | --- |
 | `operations.captured-logs` | Captured local stdout/stderr, explicit file-backed output registration, and a separate workspace file. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
-| `operations.managed-local-basic` | Embedded managed-local lifecycle with terminal admission and supervisor cleanup. |
+| `operations.managed-local-basic` | Copyable embedded managed-local preparation, service lifecycle, inspection, and restart. |
 
 ## Representative End-to-End Evidence
 

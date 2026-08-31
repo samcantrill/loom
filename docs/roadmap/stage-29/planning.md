@@ -1,8 +1,7 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: lifecycle, composition, and management correction approved; Phase 13
-is blocked evidence, Phase 13A is merged, and Phases 14-15 are pending after
-the merged Phases 1-13A baseline
+Status: merged; this historical planning record supplies the managed service
+and run-inspection dependencies consumed by later stages
 Roadmap stage: 29
 Evidence baseline: clean `develop` at
 `cae37be038419b6dc3b134af30ced0d54b626c5a`; Phases 10-12 are merged as
