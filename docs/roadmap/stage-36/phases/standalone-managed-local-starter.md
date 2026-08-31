@@ -188,10 +188,14 @@ Final commands:
   immutable replay comparison, self-contained copied starter, documentation,
   and phase-scoped coverage.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
+- Pre-submit gate: passed; manager review found and corrected the embedded-only
+  policy, exact scheduling replay, process-tree evidence, and one test-table
+  typing issue without changing the approved design.
 - Independent review: not needed on the fast path unless material residual risk
   appears.
-- Blocker corrections: 0/3.
+- Blocker corrections: 2/3; one directly related executor repair closed the
+  accepted FR-3/FR-5/FR-7 gaps, and one manager-local mechanical correction
+  replaced heterogeneous test kwargs after the first Pyright gate stopped.
 - PR and merge: pending.
 
 ## Completion Record
@@ -200,7 +204,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `src/loom/queue/managed_local_preparation.py`, lazy queue export, `managed-local-basic` self-contained pipeline/stages/lifecycle/config setup, catalog/feature/Stage 29 wording, and focused package/unit/E2E coverage. |
 | Tests added or updated | New facade unit coverage; queue public-import assertion; copied `managed-local-basic` real `daemon-init`/`daemon-serve` E2E; catalog expectations updated. |
-| Validated revision/tree state and evidence | `make validate-pr` passed (ruff, pyright, default/config-extra tests, build); `make test-summary` passed at 2026-08-31T06:35:51Z (2,933 passed; 3 expected skips). Focused facade/public/copy E2E pass: 6 passed. |
+| Validated revision/tree state and evidence | Reviewed implementation tree through `d7ea15b`. `make validate-pr` passed: Ruff, Pyright with zero errors, 2,778 default tests, 157 config-extra tests with 3 expected skips, and source/wheel builds. `make test-summary` passed at 2026-08-31T10:03:12Z: 2,935 passed and 3 expected skips across package/unit/contract/integration/E2E/config-extra. Focused facade/import/copied-lifecycle checks and a direct copied starter run also passed. |
 | Validation-relevant changes after evidence | None; this completion-record update is workflow metadata only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Manager fast-path diff review passed with no blocker. Accepted limits remain: partial preparation is operator-cleaned, advanced routes use the low-level API, and process-tree proof uses the repository's Linux E2E environment. Cleanup follows remote merge. |

@@ -5,7 +5,7 @@ Roadmap stage: 36
 Planning document: docs/roadmap/stage-36/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1 (`standalone-managed-local-starter`, implementation complete; pre-submit pending)
+Current phase: 1 (`standalone-managed-local-starter`, pre-submit passed; PR pending)
 Blockers: none
 
 ## Summary
