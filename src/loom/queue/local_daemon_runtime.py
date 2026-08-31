@@ -68,6 +68,69 @@ def prepare_managed_local_runtime_record(
     executable merely by being present in a run directory.
     """
 
+    payload = _runtime_payload(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=execution_requirements,
+        options=options,
+        slurm_profiles=slurm_profiles,
+        scheduling_components=scheduling_components,
+    )
+    payload["digest"] = _digest(payload)
+    path = _record_path(store, run_uri)
+    atomic_write_json(path, payload)
+    path.chmod(0o600)
+    return str(payload["digest"])
+
+
+def _runtime_record_matches_current_intent(
+    record: Mapping[str, PlainData],
+    *,
+    store: LocalRunStore,
+    run_uri: str,
+    plan: ExecutionPlan,
+    pipeline: PipelineSpec,
+    execution_requirements: Mapping[str, ExecutionRequirement],
+    options: RunOptions | Mapping[str, object] | None = None,
+    slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
+    scheduling_components: LocalDaemonSchedulingComponents | None = None,
+) -> bool:
+    """Return whether a verified record is the current executable intent.
+
+    This is intentionally private: the runtime-record module remains the sole
+    owner of both the durable payload and its digest, while preparation can
+    safely compare a replay against the current trusted composition.
+    """
+
+    expected = _runtime_payload(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=execution_requirements,
+        options=options,
+        slurm_profiles=slurm_profiles,
+        scheduling_components=scheduling_components,
+    )
+    expected["digest"] = _digest(expected)
+    return dict(record) == expected
+
+
+def _runtime_payload(
+    *,
+    store: LocalRunStore,
+    run_uri: str,
+    plan: ExecutionPlan,
+    pipeline: PipelineSpec,
+    execution_requirements: Mapping[str, ExecutionRequirement],
+    options: RunOptions | Mapping[str, object] | None = None,
+    slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
+    scheduling_components: LocalDaemonSchedulingComponents | None = None,
+) -> dict[str, PlainData]:
+    """Build the exact payload shared by preparation and replay comparison."""
+
     if plan.run_uri != run_uri or set(plan.stage_order) != set(pipeline.stage_names):
         raise QueueServiceError("managed-local runtime preparation identity conflicts")
     if set(execution_requirements) != set(plan.stage_order) or any(
@@ -127,7 +190,7 @@ def prepare_managed_local_runtime_record(
             ),
             planners=planners,
         ).to_dict()
-    payload: dict[str, PlainData] = {
+    return {
         "schema_version": _SCHEMA_VERSION,
         "run_uri": run_uri,
         "plan": plan.to_dict(),
@@ -144,11 +207,6 @@ def prepare_managed_local_runtime_record(
             normalized
         ).max_parallel_stages,
     }
-    payload["digest"] = _digest(payload)
-    path = _record_path(store, run_uri)
-    atomic_write_json(path, payload)
-    path.chmod(0o600)
-    return str(payload["digest"])
 
 
 def _stage_placement_policy(

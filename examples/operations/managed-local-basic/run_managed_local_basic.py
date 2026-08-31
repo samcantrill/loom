@@ -34,6 +34,7 @@ def main() -> None:
     first = _start_service(config, started_pids)
     try:
         started = _wait_for_status(endpoint)
+        _observe_service_tree(first.pid, started_pids)
         submitted = _run_cli(
             "queue",
             "daemon-submit",
@@ -42,6 +43,7 @@ def main() -> None:
             "starter-run",
             receipt.run_uri,
         )
+        _observe_service_tree(first.pid, started_pids)
         completed = _run_cli(
             "queue",
             "daemon-wait",
@@ -67,6 +69,7 @@ def main() -> None:
     second = _start_service(config, started_pids)
     try:
         restarted = _wait_for_status(endpoint)
+        _observe_service_tree(second.pid, started_pids)
         retained = _run_cli(
             "queue",
             "daemon-admission",
@@ -232,12 +235,58 @@ def _report_text(run_uri: str, run_root: Path) -> str:
 
 
 def _assert_dead(pids: set[int]) -> None:
-    for pid in pids:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        alive = [pid for pid in sorted(pids) if _process_exists(pid)]
+        if not alive:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(
+        "managed-local service or worker process still exists: "
+        + ", ".join(str(pid) for pid in alive)
+    )
+
+
+def _observe_service_tree(root_pid: int, observed_pids: set[int]) -> None:
+    """Capture Linux service descendants before graceful SIGINT shutdown."""
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        descendants = _linux_descendants(root_pid)
+        observed_pids.update(descendants)
+        if descendants:
+            return
+        time.sleep(0.05)
+    raise RuntimeError("managed-local daemon did not start a worker process tree")
+
+
+def _linux_descendants(root_pid: int) -> set[int]:
+    descendants: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent_pid = pending.pop()
+        children_path = Path(f"/proc/{parent_pid}/task/{parent_pid}/children")
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+            children = children_path.read_text(encoding="utf-8").split()
+        except FileNotFoundError:
             continue
-        raise RuntimeError(f"managed-local service process still exists: {pid}")
+        for value in children:
+            try:
+                child_pid = int(value)
+            except ValueError as exc:
+                raise RuntimeError("Linux process children data is invalid") from exc
+            if child_pid not in descendants:
+                descendants.add(child_pid)
+                pending.append(child_pid)
+    return descendants
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _loom_cli() -> str:

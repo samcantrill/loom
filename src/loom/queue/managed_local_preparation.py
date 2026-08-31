@@ -27,6 +27,7 @@ from loom.serialization import PlainData, json_dumps_pretty
 from .deployment import CoordinatorServiceConfig, load_coordinator_service_config
 from .errors import QueueConflictError, QueueServiceError
 from .local_daemon_runtime import (
+    _runtime_record_matches_current_intent,
     load_managed_local_runtime_record,
     prepare_managed_local_runtime_record,
 )
@@ -74,6 +75,7 @@ def prepare_managed_local_run(
             pipeline=pipeline,
             options=options,
             requirements=requirements,
+            service=service,
         )
 
     store.create_run(run_uri)
@@ -124,6 +126,10 @@ def _validate_embedded_service(service: CoordinatorServiceConfig) -> None:
     if daemon.remote_profiles:
         raise QueueServiceError(
             "managed-local preparation does not support remote profiles"
+        )
+    if daemon.agent_policy.agents or daemon.agent_policy.principals:
+        raise QueueServiceError(
+            "managed-local preparation does not support remote agents or principals"
         )
     if daemon.slurm_profiles:
         raise QueueServiceError(
@@ -242,9 +248,12 @@ def _replay_receipt(
     pipeline: PipelineSpec,
     options: RunOptions,
     requirements: Mapping[str, ExecutionRequirement],
+    service: CoordinatorServiceConfig,
 ) -> ManagedLocalPreparationReceipt:
     try:
-        _replay_matches(store, run_uri, composed, pipeline, options, requirements)
+        _replay_matches(
+            store, run_uri, composed, pipeline, options, requirements, service
+        )
         record = load_managed_local_runtime_record(store, run_uri)
         embedded_coordinator_authority(run_uri)
         plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
@@ -267,6 +276,7 @@ def _replay_matches(
     pipeline: PipelineSpec,
     options: RunOptions,
     requirements: Mapping[str, ExecutionRequirement],
+    service: CoordinatorServiceConfig,
 ) -> None:
     store.open_run(run_uri)
     resolved = _resolved_mapping(composed)
@@ -315,11 +325,16 @@ def _replay_matches(
     ):
         raise QueueServiceError("managed-local runtime metadata conflicts")
     record = load_managed_local_runtime_record(store, run_uri)
-    if (
-        record["plan"] != plan.to_dict()
-        or record["runtime_options"] != options.to_dict()
-        or record["execution_requirements"]
-        != {name: requirement.to_dict() for name, requirement in requirements.items()}
+    if not _runtime_record_matches_current_intent(
+        record,
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=requirements,
+        options=options,
+        slurm_profiles=service.daemon.slurm_profiles,
+        scheduling_components=service.daemon.scheduling_components,
     ):
         raise QueueServiceError("managed-local exact runtime intent conflicts")
 
