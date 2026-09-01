@@ -55,6 +55,7 @@ from loom.queue._managed_local import (
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
+    _assignment_from_dict,
     _compose_agent_resource_providers,
     run_managed_local_assignment,
 )
@@ -5387,21 +5388,40 @@ def build_local_daemon_owner_views(
                     }
                 )
             for row in conn.execute(
-                "SELECT assignment_id, run_uri, state, session_id, offer_id, "
-                "claim_id, receipt_json FROM coordinator_assignments "
+                "SELECT assignment_id, identity_json, run_uri, stage_work_id, state, "
+                "agent_id, session_id, offer_id, claim_id, receipt_json "
+                "FROM coordinator_assignments "
                 f"WHERE run_uri IN ({run_placeholders}) ORDER BY assignment_id",
                 run_uris,
             ):
-                assignments_by_run.setdefault(str(row[1]), []).append(
+                assignment = _assignment_from_dict(json.loads(str(row[1])))
+                if (
+                    assignment.assignment_id != str(row[0])
+                    or assignment.run_uri != str(row[2])
+                    or assignment.stage_work_id != str(row[3])
+                    or assignment.agent_id != str(row[5])
+                    or assignment.session_id != str(row[6])
+                    or assignment.offer_id != str(row[7])
+                    or assignment.claim_id != str(row[8])
+                ):
+                    raise QueueServiceError(
+                        "coordinator assignment identity conflicts with its index"
+                    )
+                assignments_by_run.setdefault(str(row[2]), []).append(
                     {
                         "assignment_id": str(row[0]),
                         "target": "managed_agent",
-                        "state": str(row[2]),
-                        "session_id": str(row[3]),
-                        "offer_id": str(row[4]),
-                        "claim_id": str(row[5]),
+                        "state": str(row[4]),
+                        "run_uri": assignment.run_uri,
+                        "stage_work_id": assignment.stage_work_id,
+                        "stage_name": assignment.stage_name,
+                        "attempt": assignment.attempt,
+                        "agent_id": assignment.agent_id,
+                        "session_id": str(row[6]),
+                        "offer_id": str(row[7]),
+                        "claim_id": str(row[8]),
                         "receipt_digest": hashlib.sha256(
-                            str(row[6]).encode("utf-8")
+                            str(row[9]).encode("utf-8")
                         ).hexdigest(),
                     }
                 )
@@ -5505,19 +5525,19 @@ def build_local_daemon_owner_views(
                 if not assignment_ids
                 else conn.execute(
                     "SELECT assignment_id, identity_json, state, "
-                    "process_execution_id, availability_revision "
+                    "process_execution_id, grant_fence, availability_revision "
                     "FROM assignments WHERE assignment_id IN ("
                     f"{assignment_placeholders}) ORDER BY assignment_id",
                     assignment_ids,
                 )
             )
             for row in rows:
-                identity = json.loads(str(row[1]))
-                if not isinstance(identity, Mapping):
-                    continue
-                run_uri = identity.get("run_uri")
-                if not isinstance(run_uri, str):
-                    continue
+                assignment = _assignment_from_dict(json.loads(str(row[1])))
+                if assignment.assignment_id != str(row[0]):
+                    raise QueueServiceError(
+                        "agent assignment identity conflicts with its index"
+                    )
+                run_uri = assignment.run_uri
                 agent_work_by_run.setdefault(run_uri, []).append(
                     {
                         "assignment_id": str(row[0]),
@@ -5525,8 +5545,9 @@ def build_local_daemon_owner_views(
                         "process_execution_id": (
                             None if row[3] is None else str(row[3])
                         ),
+                        "execution_fence": (None if row[4] is None else str(row[4])),
                         "availability_revision": (
-                            None if row[4] is None else str(row[4])
+                            None if row[5] is None else str(row[5])
                         ),
                     }
                 )
@@ -5572,6 +5593,17 @@ def build_local_daemon_owner_views(
                 "stages": {
                     stage.stage_name: stage.status.value for stage in snapshot.stages
                 },
+                "attempts": [
+                    {
+                        "stage_name": stage.stage_name,
+                        "attempt": attempt.attempt,
+                        "attempt_id": attempt.attempt_id,
+                        "state": attempt.status.value,
+                        "revision": attempt.revision.to_dict(),
+                    }
+                    for stage in snapshot.stages
+                    for attempt in stage.attempts
+                ],
                 "freshness": "current",
             }
         view = ensure_plain_data(

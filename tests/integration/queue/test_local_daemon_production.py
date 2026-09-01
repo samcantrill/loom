@@ -450,9 +450,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         assert provider.operations.count("activate") == 2
         assert provider.operations.count("environment") == 2
         assert provider.operations.count("release") == 2
-        preprocess_artifacts = run_store.local_stage_artifact_dir(
-            run_uri, "preprocess"
-        )
+        preprocess_artifacts = run_store.local_stage_artifact_dir(run_uri, "preprocess")
         assert (preprocess_artifacts / "payload" / "value.txt").read_text(
             encoding="utf-8"
         ) == "companion-value"
@@ -1720,7 +1718,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
 
     monkeypatch.setattr(execution.supervisor, "launch", launch_then_lose_response)
     monkeypatch.setattr(execution.supervisor, "query", query_unknown_launch)
-    client.submit(LocalDaemonAdmissionRequest("recovery-item", run_uri))
+    submitted = client.submit(LocalDaemonAdmissionRequest("recovery-item", run_uri))
     _wait_for_supervisor_launch_count(config, expected=1)
     deadline = time.monotonic() + 5
     snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
@@ -1751,17 +1749,38 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     attempt = next(
         item for item in stage.attempts if item.attempt_id == assignment.attempt_id
     )
+    detail = client.admission(submitted.admission_id)
+    assignment_view = cast(Mapping[str, object], detail.owners["assignment"])
+    assignment_facts = cast(list[Mapping[str, object]], assignment_view["assignments"])
+    execution_view = cast(Mapping[str, object], detail.owners["execution"])
+    execution_facts = cast(list[Mapping[str, object]], execution_view["journal"])
+    authority_attempts = cast(list[Mapping[str, object]], detail.authority["attempts"])
+    assert len(assignment_facts) == len(execution_facts) == len(authority_attempts) == 1
+    assignment_fact = assignment_facts[0]
+    execution_fact = execution_facts[0]
+    authority_attempt = authority_attempts[0]
+    attempt_revision = cast(Mapping[str, object], authority_attempt["revision"])
+    assert assignment_fact["assignment_id"] == execution_fact["assignment_id"]
+    assert assignment_fact["stage_name"] == authority_attempt["stage_name"]
+    assert assignment_fact["attempt"] == authority_attempt["attempt"]
+    assert assignment_fact["assignment_id"] == assignment.assignment_id
+    assert execution_fact["process_execution_id"] == launch.process_execution_id
+    assert execution_fact["execution_fence"] == launch.execution_fence
+    assert attempt_revision["sequence"] == attempt.revision.sequence
     request = RecoverUnknownAssignment(
         recovery_id="recovery-contained-1",
-        run_uri=run_uri,
-        stage_name=assignment.stage_name,
-        attempt=assignment.attempt,
-        stage_work_id=assignment.stage_work_id,
-        assignment_id=assignment.assignment_id,
-        process_execution_id=launch.process_execution_id,
-        execution_fence=launch.execution_fence,
-        target=ManagedRecoveryTarget(assignment.agent_id, assignment.session_id),
-        expected_state_version=attempt.revision.sequence,
+        run_uri=cast(str, assignment_fact["run_uri"]),
+        stage_name=cast(str, assignment_fact["stage_name"]),
+        attempt=cast(int, assignment_fact["attempt"]),
+        stage_work_id=cast(str, assignment_fact["stage_work_id"]),
+        assignment_id=cast(str, assignment_fact["assignment_id"]),
+        process_execution_id=cast(str, execution_fact["process_execution_id"]),
+        execution_fence=cast(str, execution_fact["execution_fence"]),
+        target=ManagedRecoveryTarget(
+            cast(str, assignment_fact["agent_id"]),
+            cast(str, assignment_fact["session_id"]),
+        ),
+        expected_state_version=cast(int, attempt_revision["sequence"]),
         requested_outcome=requested_outcome,
         consider_retry=True,
         reason="integration containment proof",
