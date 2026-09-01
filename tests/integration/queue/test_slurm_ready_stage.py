@@ -16,7 +16,7 @@ from typing import cast
 import pytest
 
 import loom.queue.slurm_ready_stage as slurm_ready_stage
-from loom.pipeline import PipelineSpec
+from loom.pipeline import PipelineSpec, ProcessContainmentOwner
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
 from loom.pipeline.executors.slurm.commands import (
     FakeSlurmCommandRunner,
@@ -674,6 +674,7 @@ def _exercise_mixed_route_run(
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
             workspace_root=workspace.root,
+            process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
         )
         report = workspace.retain_result(worker_result)
         view.declare_report(assignment_id, incarnation, fence, report)

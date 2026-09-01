@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline import PipelineSpec
+from loom.pipeline import PipelineSpec, ProcessContainmentOwner, StageContext
 from loom.pipeline.execution import (
     StageExecutionRequest,
     StageExecutionResult,
@@ -20,6 +20,7 @@ from loom.pipeline.execution import (
     prepare_stage_attempt,
     run_stage_worker,
 )
+from loom.pipeline.execution.models import StageWorkerRequest
 from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 from loom.pipeline.execution.lifecycle import write_run_status
 from loom.pipeline.planning import plan_pipeline
@@ -29,6 +30,7 @@ from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.serialization import PlainData, thaw_plain_data
 from loom.serialization import json_dumps_pretty
+import loom.pipeline.execution.stage_worker as stage_worker
 
 
 pytestmark = pytest.mark.unit
@@ -65,7 +67,9 @@ class FakeExecutor:
         )
 
 
-def _spec(*, target: str = "tests.support.pipeline_execution_stages.JsonProducerStage") -> PipelineSpec:
+def _spec(
+    *, target: str = "tests.support.pipeline_execution_stages.JsonProducerStage"
+) -> PipelineSpec:
     return PipelineSpec.from_config(
         {
             "name": "demo",
@@ -74,7 +78,9 @@ def _spec(*, target: str = "tests.support.pipeline_execution_stages.JsonProducer
                     "name": "build",
                     "factory": {"_target_": target},
                     "config": {"value": 7},
-                    "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+                    "outputs": {
+                        "data": {"artifact_type": "json", "codec_key": "json.v1"}
+                    },
                 }
             ],
         }
@@ -192,7 +198,9 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
     assert result.attempt == 1
     assert result.executor_name == "local"
     assert result.executor_metadata == {"fake": True}
-    assert store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    assert (
+        store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    )
     assert store.read_stage_outputs(run_uri, "build") is None
     assert store.read_stage_failure(run_uri, "build") is None
     assert store.read_stage_provenance(run_uri, "build") is None
@@ -202,6 +210,10 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
     assert status.status == StageStatus.PENDING
     assert executor.request is not None
     assert executor.request.stage.factory.target_path.endswith("JsonProducerStage")
+    assert (
+        executor.request.context.process_containment_owner
+        is ProcessContainmentOwner.STAGE
+    )
     resolved_config = cast(
         Mapping[str, object],
         thaw_plain_data(executor.request.context.resolved_config),
@@ -210,6 +222,45 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
         "name": "snapshot-demo",
         "stages": [{"name": "build"}],
     }
+
+
+def test_resident_stage_worker_passes_containment_owner_to_stage_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, run_uri = _prepared_run(tmp_path)
+    request_data = store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert request_data is not None
+    captured: dict[str, object] = {}
+
+    class CapturingStage:
+        def run(self, context: object, _inputs: object) -> dict[str, ArtifactRef]:
+            captured["context"] = context
+            return {
+                "data": cast("StageContext", context).save_artifact(
+                    "data",
+                    {"value": 7},
+                    artifact_type="json",
+                    codec_key="json.v1",
+                )
+            }
+
+    monkeypatch.setattr(
+        stage_worker,
+        "construct_stage",
+        lambda **_kwargs: CapturingStage(),
+    )
+
+    result = stage_worker.execute_resident_stage_worker_request(
+        worker_request=StageWorkerRequest.from_dict(request_data),
+        workspace_root=tmp_path / "resident-workspace",
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+    )
+
+    assert result.status is StageStatus.SUCCEEDED
+    assert (
+        cast("StageContext", captured["context"]).process_containment_owner
+        is ProcessContainmentOwner.OUTER_BOUNDARY
+    )
 
 
 def test_run_stage_worker_validates_authority_fencing_before_execution(
@@ -363,7 +414,9 @@ def test_run_stage_worker_requires_persisted_plan(tmp_path: Path) -> None:
 
 
 def test_run_stage_worker_records_target_construction_failure(tmp_path: Path) -> None:
-    store, run_uri = _prepared_run(tmp_path, target="tests.support.pipeline_execution_stages.MissingStage")
+    store, run_uri = _prepared_run(
+        tmp_path, target="tests.support.pipeline_execution_stages.MissingStage"
+    )
 
     result = run_stage_worker(
         run_store=store,
@@ -375,4 +428,6 @@ def test_run_stage_worker_records_target_construction_failure(tmp_path: Path) ->
     failure = cast(ExecutionFailure, result.failure)
     assert failure.failure_type == "target_construction"
     assert result.exit_code == 1
-    assert store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    assert (
+        store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    )

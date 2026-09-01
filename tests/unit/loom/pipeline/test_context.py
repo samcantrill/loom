@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.context import StageContext
+from loom.pipeline.context import ProcessContainmentOwner, StageContext
 from loom.pipeline.early_stopping import EarlyStopSignal
 from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
@@ -25,6 +25,67 @@ def test_context_normalizes_paths_and_mappings() -> None:
     )
     pipeline_config = cast(dict[str, PlainData], context.resolved_config["pipeline"])
     assert pipeline_config["name"] == "x"
+
+
+def test_context_process_containment_owner_defaults_to_stage_and_is_immutable() -> None:
+    context = StageContext(
+        run_uri="run-1",
+        stage_name="build",
+        resolved_config={},
+        stage_config={},
+    )
+
+    assert context.process_containment_owner is ProcessContainmentOwner.STAGE
+    with pytest.raises(AttributeError):
+        context.process_containment_owner = ProcessContainmentOwner.OUTER_BOUNDARY  # type: ignore[misc]
+
+
+def test_process_containment_owner_has_exactly_two_public_values() -> None:
+    assert tuple(ProcessContainmentOwner) == (
+        ProcessContainmentOwner.STAGE,
+        ProcessContainmentOwner.OUTER_BOUNDARY,
+    )
+    assert ProcessContainmentOwner.STAGE.value == "stage"
+    assert ProcessContainmentOwner.OUTER_BOUNDARY.value == "outer_boundary"
+
+
+def test_context_process_containment_owner_is_keyword_only() -> None:
+    with pytest.raises(TypeError):
+        StageContext(
+            "run-1",
+            "build",
+            {},
+            {},
+            {},
+            {},
+            {},
+            None,
+            None,
+            None,
+            None,
+            ProcessContainmentOwner.OUTER_BOUNDARY,  # type: ignore[reportCallIssue]  # Deliberately invalid positional owner.
+        )
+
+
+def test_context_requires_exact_process_containment_owner_enum() -> None:
+    context = StageContext(
+        run_uri="run-1",
+        stage_name="build",
+        resolved_config={},
+        stage_config={},
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+    )
+
+    assert context.process_containment_owner is ProcessContainmentOwner.OUTER_BOUNDARY
+    for invalid_value in ("stage", object()):
+        with pytest.raises(PipelineValidationError, match="process_containment_owner"):
+            StageContext(
+                run_uri="run-1",
+                stage_name="build",
+                resolved_config={},
+                stage_config={},
+                process_containment_owner=cast(ProcessContainmentOwner, invalid_value),
+            )
 
 
 def test_context_freezes_nested_mappings_and_inputs() -> None:
@@ -46,7 +107,9 @@ def test_context_freezes_nested_mappings_and_inputs() -> None:
     with pytest.raises(TypeError):
         cast(dict[str, object], context.resolved_config["pipeline"])["name"] = "no"
     with pytest.raises(TypeError):
-        cast(dict[str, ArtifactRef], context.inputs)["late"] = cast(ArtifactRef, object())
+        cast(dict[str, ArtifactRef], context.inputs)["late"] = cast(
+            ArtifactRef, object()
+        )
 
 
 def test_context_rejects_non_plain_data_config() -> None:
@@ -98,7 +161,9 @@ def test_context_stop_early_rejects_non_plain_detail() -> None:
     )
 
     with pytest.raises(ValueError, match="plain data"):
-        context.stop_early("bad detail", detail=cast(dict[str, PlainData], {"x": object()}))
+        context.stop_early(
+            "bad detail", detail=cast(dict[str, PlainData], {"x": object()})
+        )
 
 
 def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> None:

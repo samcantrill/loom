@@ -10,7 +10,7 @@ from threading import Event, Thread
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.context import StageContext
+from loom.pipeline.context import ProcessContainmentOwner, StageContext
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.executors.base import Executor
 from loom.pipeline.planning import (
@@ -1512,6 +1512,7 @@ class PipelineRunner:
             context = StageContext(
                 run_uri=run_uri,
                 stage_name=stage.name,
+                process_containment_owner=ProcessContainmentOwner.STAGE,
                 resolved_config=config_mapping,
                 stage_config=stage.stage_config,
                 inputs=inputs,
@@ -1711,6 +1712,7 @@ class PipelineRunner:
             context = StageContext(
                 run_uri=run_uri,
                 stage_name=stage.name,
+                process_containment_owner=ProcessContainmentOwner.STAGE,
                 resolved_config=config_mapping,
                 stage_config=stage.stage_config,
                 inputs=inputs,
