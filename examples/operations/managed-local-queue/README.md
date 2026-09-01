@@ -29,6 +29,9 @@ profile identity; a mismatch makes the offer ineligible. The coordinator's
 policy maps the verified client certificate to the site-owned logical agent ID,
 pools, and capabilities. The agent cannot grant itself any of those values.
 Paths are resolved relative to each config file.
+The resident `python_executable` entry is made absolute without resolving its
+final symlink, because invoking a virtual-environment launcher by that entry
+path is what selects the configured environment.
 
 ## Public Python Surface
 

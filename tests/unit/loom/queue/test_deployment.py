@@ -167,6 +167,10 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     second_source = _write_protected(second_root / "coordinator.yaml", payload)
     second = load_coordinator_service_config(second_source)
 
+    assert (
+        second.daemon.resident_worker_launch_profile.python_executable
+        == alternate_python.absolute()
+    )
     assert second.immutable_fingerprint == first.immutable_fingerprint
     assert second.active_fingerprint == first.active_fingerprint
 
@@ -208,6 +212,9 @@ def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     payload["resident_profiles"][0]["python_executable"] = str(alternate_python)
     moved = load_outbound_agent_service_config(
         _write_protected(tmp_path / "agent-moved.yaml", payload)
+    )
+    assert moved.client.resident_profiles[0].python_executable == (
+        alternate_python.absolute()
     )
     assert moved.immutable_fingerprint == first.immutable_fingerprint
     assert moved.active_fingerprint == first.active_fingerprint
