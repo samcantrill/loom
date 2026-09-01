@@ -1,6 +1,6 @@
 # Roadmap Stage 37 Implementation Plan
 
-Status: approved and ready for implementation
+Status: implementation complete; PR open
 Roadmap stage: 37
 Planning document: docs/roadmap/stage-37/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -49,7 +49,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | stage-context-containment-owner | planned | docs/roadmap/stage-37/phases/stage-context-containment-owner.md | codex/stage-context-containment-owner | pending | pipeline context/export, current context constructors and resident callers, feature docs, focused tests | Expose and propagate one typed containment-owner fact across ordinary and enclosing-boundary execution. |
+| 1 | stage-context-containment-owner | pr_open | docs/roadmap/stage-37/phases/stage-context-containment-owner.md | codex/stage-context-containment-owner | [#269](https://github.com/samcantrill/loom/pull/269) | pipeline context/export, current context constructors and resident callers, feature docs, focused tests | Expose and propagate one typed containment-owner fact across ordinary and enclosing-boundary execution. |
 
 ## Quality Gate
 
@@ -74,4 +74,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | PR #269 open; review and merge pending | Implementation complete; full validation passed | POSIX/process-boundary semantics and unsupported manual owner assertions remain documented | Worktree and branch retained until merge |
