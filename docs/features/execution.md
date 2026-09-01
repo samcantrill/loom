@@ -421,7 +421,8 @@ Its immutable `process_containment_owner` tells stage code who owns descendant
 cleanup. `STAGE` requires the stage to clean up all children it launches.
 `OUTER_BOUNDARY` is valid only when an enclosing agent or scheduler boundary
 contains those descendants; the stage must retain that containment and must not
-signal the enclosing group. The field is a live execution fact, not config,
+signal the enclosing group. The stage still owns normal child communication,
+completion, and reaping. The field is a live execution fact, not config,
 provenance, or a containment mechanism.
 
 ### 5.6 Attempt

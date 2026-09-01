@@ -1119,7 +1119,8 @@ or `artifact_store`.
 descendant it launches. With `ProcessContainmentOwner.OUTER_BOUNDARY`, an
 enclosing agent or scheduler boundary already contains descendants; the stage
 must keep children within that inherited containment and must not signal the
-enclosing group. This is not authored configuration, persisted provenance, or a
+enclosing group. The stage still owns normal child communication, completion,
+and reaping. This is not authored configuration, persisted provenance, or a
 process-management helper.
 
 The facade helper set is:
