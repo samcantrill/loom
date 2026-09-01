@@ -914,7 +914,7 @@ def _resident_profile(
     return ResidentExecutionProfile(
         _profile_descriptor(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
-        _path(value, "python_executable", base),
+        _executable_path(value, "python_executable", base),
         _positive_int(value, "cpu_capacity"),
         _non_negative_int(value, "memory_capacity_bytes"),
         tuple(devices),
@@ -1064,6 +1064,12 @@ def _strings(
 def _path(data: Mapping[str, object], field: str, base: Path) -> Path:
     value = Path(_string(data, field))
     return value.resolve() if value.is_absolute() else (base / value).resolve()
+
+
+def _executable_path(data: Mapping[str, object], field: str, base: Path) -> Path:
+    """Make an executable entry path absolute without resolving its leaf symlink."""
+    value = Path(_string(data, field))
+    return Path(os.path.abspath(value if value.is_absolute() else base / value))
 
 
 def _positive_int(data: Mapping[str, object], field: str) -> int:
