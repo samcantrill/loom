@@ -40,6 +40,33 @@ def test_context_process_containment_owner_defaults_to_stage_and_is_immutable() 
         context.process_containment_owner = ProcessContainmentOwner.OUTER_BOUNDARY  # type: ignore[misc]
 
 
+def test_process_containment_owner_has_exactly_two_public_values() -> None:
+    assert tuple(ProcessContainmentOwner) == (
+        ProcessContainmentOwner.STAGE,
+        ProcessContainmentOwner.OUTER_BOUNDARY,
+    )
+    assert ProcessContainmentOwner.STAGE.value == "stage"
+    assert ProcessContainmentOwner.OUTER_BOUNDARY.value == "outer_boundary"
+
+
+def test_context_process_containment_owner_is_keyword_only() -> None:
+    with pytest.raises(TypeError):
+        StageContext(
+            "run-1",
+            "build",
+            {},
+            {},
+            {},
+            {},
+            {},
+            None,
+            None,
+            None,
+            None,
+            ProcessContainmentOwner.OUTER_BOUNDARY,
+        )
+
+
 def test_context_requires_exact_process_containment_owner_enum() -> None:
     context = StageContext(
         run_uri="run-1",

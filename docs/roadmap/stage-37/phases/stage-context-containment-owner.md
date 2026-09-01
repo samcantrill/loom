@@ -200,13 +200,16 @@ Final commands:
   the caller inventory and focused test lane.
 - Implementation: complete; public owner fact, ordinary and resident propagation,
   focused tests, and feature documentation are present in the phase worktree.
-- Refiner: not needed unless a qualified blocker appears.
+- Refiner: blocker correction pass 1/3 complete; added a direct resident-helper
+  propagation test and tight public-shape assertions after independent review.
 - Pre-submit gate: passed on the implementation tree. The isolated
   rerun of the earlier timestamp-sensitive guarded-SLURM test passed, followed
   by a fresh `make validate-pr` pass through Ruff, Pyright, 2,783 default tests,
   157 config-extra tests with 3 expected skips, and both package builds.
-- Independent review: pending against PR #269 after implementation.
-- Blocker corrections: 0/3.
+- Independent review: qualified coverage/public-shape blocker corrected in pass
+  1/3; follow-up review and merge remain manager-owned.
+- Blocker corrections: 1/3 (independent-review test coverage/public-shape
+  correction).
 - PR: https://github.com/samcantrill/loom/pull/269; open against `develop` from
   `codex/stage-context-containment-owner`. Merge is pending independent review.
 
@@ -215,8 +218,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added `ProcessContainmentOwner` and keyword-only `StageContext.process_containment_owner`; lazily exported it; passed explicit `STAGE` through both runner paths and direct worker reconstruction; required a resident-owner argument and passed `OUTER_BOUNDARY` from agent and SLURM entries. Updated pipeline/execution feature docs and the managed-SLURM example/fixture call sites. |
-| Tests added or updated | Added enum/default/invalid/immutability coverage, direct-worker propagation, resident-agent and SLURM-bootstrap caller assertions, package export coverage, and the explicit direct-SLURM fixture owner. |
-| Validated revision/tree state and evidence | Implementation revision `685d538`; focused package/unit lane: 29 passed; focused mixed-route SLURM integration: 1 passed; the isolated earlier guarded-SLURM failure rerun passed unchanged. Fresh `make validate-pr` passed Ruff, Pyright, 2,783 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. `make test-summary` on the same implementation tree passed package 121, unit 1959, contract 300, integration 337, e2e 66, and config-extra 157; receipt: `build/test-summary.md` (generated 2026-09-01T00:30:21Z). |
-| Validation-relevant changes after evidence | Public feature prose was clarified to retain normal child communication/completion/reaping with the stage, plus this workflow evidence update; no source or test changed, and `git diff --check` passed. |
+| Tests added or updated | Added enum/default/invalid/immutability coverage, direct-worker propagation, resident-agent and SLURM-bootstrap caller assertions, package export coverage, and the explicit direct-SLURM fixture owner. Blocker correction pass 1/3 adds a direct `execute_resident_stage_worker_request` execution test that captures the constructed `StageContext` and observes `OUTER_BOUNDARY`; it fails if the helper stops assigning that value. It also locks the exact two enum values and rejects positional owner supply. |
+| Validated revision/tree state and evidence | Implementation revision `685d538`; focused package/unit lane: 29 passed; focused mixed-route SLURM integration: 1 passed; the isolated earlier guarded-SLURM failure rerun passed unchanged. Fresh `make validate-pr` passed Ruff, Pyright, 2,783 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. `make test-summary` on the same implementation tree passed package 121, unit 1959, contract 300, integration 337, e2e 66, and config-extra 157; receipt: `build/test-summary.md` (generated 2026-09-01T00:30:21Z). Blocker correction pass 1/3: `uv run pytest tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/test_context.py tests/package/test_pipeline_api.py` passed (27 passed), and Ruff passed on those three files. |
+| Validation-relevant changes after evidence | Public feature prose was clarified to retain normal child communication/completion/reaping with the stage, plus this workflow evidence update; no source or test changed, and `git diff --check` passed. Blocker correction pass 1/3 adds the focused resident-helper propagation and public-shape tests; narrow unit/package validation and Ruff evidence are recorded with the correction commit. |
 | PR, review, and merge | PR #269 is open and mergeable against `develop`; independent review and merge are pending. |
 | Residual risk and cleanup | The first `make validate-pr` had 2,782 passed / 1 unrelated guarded-SLURM timestamp race; its isolated unchanged-tree rerun and the complete fresh gate passed. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented and the worktree/branch remain until PR completion. |

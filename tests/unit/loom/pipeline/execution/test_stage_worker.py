@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline import PipelineSpec, ProcessContainmentOwner
+from loom.pipeline import PipelineSpec, ProcessContainmentOwner, StageContext
 from loom.pipeline.execution import (
     StageExecutionRequest,
     StageExecutionResult,
@@ -20,6 +20,7 @@ from loom.pipeline.execution import (
     prepare_stage_attempt,
     run_stage_worker,
 )
+from loom.pipeline.execution.models import StageWorkerRequest
 from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 from loom.pipeline.execution.lifecycle import write_run_status
 from loom.pipeline.planning import plan_pipeline
@@ -29,6 +30,7 @@ from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.serialization import PlainData, thaw_plain_data
 from loom.serialization import json_dumps_pretty
+import loom.pipeline.execution.stage_worker as stage_worker
 
 
 pytestmark = pytest.mark.unit
@@ -220,6 +222,45 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
         "name": "snapshot-demo",
         "stages": [{"name": "build"}],
     }
+
+
+def test_resident_stage_worker_passes_containment_owner_to_stage_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, run_uri = _prepared_run(tmp_path)
+    request_data = store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert request_data is not None
+    captured: dict[str, object] = {}
+
+    class CapturingStage:
+        def run(self, context: object, _inputs: object) -> dict[str, ArtifactRef]:
+            captured["context"] = context
+            return {
+                "data": cast("StageContext", context).save_artifact(
+                    "data",
+                    {"value": 7},
+                    artifact_type="json",
+                    codec_key="json.v1",
+                )
+            }
+
+    monkeypatch.setattr(
+        stage_worker,
+        "construct_stage",
+        lambda **_kwargs: CapturingStage(),
+    )
+
+    result = stage_worker.execute_resident_stage_worker_request(
+        worker_request=StageWorkerRequest.from_dict(request_data),
+        workspace_root=tmp_path / "resident-workspace",
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+    )
+
+    assert result.status is StageStatus.SUCCEEDED
+    assert (
+        cast("StageContext", captured["context"]).process_containment_owner
+        is ProcessContainmentOwner.OUTER_BOUNDARY
+    )
 
 
 def test_run_stage_worker_validates_authority_fencing_before_execution(
