@@ -20,7 +20,7 @@ from _managed_journey_support import (  # noqa: E402
     wait_until,
 )
 from loom.artifacts import ArtifactRef  # noqa: E402
-from loom.pipeline import PipelineSpec  # noqa: E402
+from loom.pipeline import PipelineSpec, ProcessContainmentOwner  # noqa: E402
 from loom.pipeline.context import StageContext  # noqa: E402
 from loom.pipeline.execution.stage_worker import (  # noqa: E402
     execute_resident_stage_worker_request,
@@ -270,6 +270,7 @@ def main() -> None:
             lambda: execute_resident_stage_worker_request(
                 worker_request=workspace.worker_request(),
                 workspace_root=workspace.root,
+                process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
             ),
         )
         report = workspace.retain_result(worker_result)

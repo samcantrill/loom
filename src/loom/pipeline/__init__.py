@@ -12,7 +12,11 @@ from loom.pipeline.errors import (
     StageContractError,
     StatusSerializationError,
 )
-from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.resources import (
+    ResourceEntry,
+    ResourceRequest,
+    parse_resource_request,
+)
 from loom.pipeline.runtime import (
     CONTINUE_INDEPENDENT_FAILURE_POLICY,
     DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY,
@@ -93,15 +97,15 @@ from loom.pipeline.transition_policy import (
 )
 
 if TYPE_CHECKING:
-    from loom.pipeline.context import StageContext
+    from loom.pipeline.context import ProcessContainmentOwner, StageContext
     from loom.pipeline.execution import PipelineRunner, RunRequest, RunResult
 
 
 def __getattr__(name: str) -> object:
-    if name == "StageContext":
-        from loom.pipeline.context import StageContext as _StageContext
+    if name in {"ProcessContainmentOwner", "StageContext"}:
+        from loom.pipeline import context
 
-        return _StageContext
+        return getattr(context, name)
     if name in {"PipelineRunner", "RunRequest", "RunResult"}:
         from loom.pipeline import execution
 
@@ -121,6 +125,7 @@ __all__ = [
     "check_pipeline_stage_targets",
     "Stage",
     "StageContext",
+    "ProcessContainmentOwner",
     "RunStatus",
     "TransitionIntent",
     "InvalidRunTransition",

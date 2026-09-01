@@ -13,6 +13,7 @@ import sys
 from typing import Mapping, cast
 from uuid import uuid4
 
+from loom.pipeline.context import ProcessContainmentOwner
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import SchedulingComponentDescriptor
@@ -65,7 +66,10 @@ class SlurmBootstrapClientConfig:
                 raise QueueServiceError(f"SLURM bootstrap {name} is invalid")
         if self.executor_name != "local":
             raise QueueServiceError("SLURM bootstrap executor is unsupported")
-        if not isinstance(self.capability_file_path, Path) or not self.capability_file_path.is_absolute():
+        if (
+            not isinstance(self.capability_file_path, Path)
+            or not self.capability_file_path.is_absolute()
+        ):
             raise QueueServiceError("SLURM bootstrap capability_file_path is invalid")
         workspace = Path(self.workspace_root).resolve()
         project = Path(self.project_root).resolve()
@@ -280,6 +284,7 @@ def run_slurm_bootstrap(
             result = execute_resident_stage_worker_request(
                 worker_request=workspace.worker_request(),
                 workspace_root=workspace.root,
+                process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
             )
             report = workspace.retain_result(result)
         else:

@@ -1114,6 +1114,14 @@ class StageContext:
 Public context attributes should not include `run_dir`, `stage_dir`, `run_store`,
 or `artifact_store`.
 
+`process_containment_owner` is an immutable live execution fact. With
+`ProcessContainmentOwner.STAGE`, stage code owns complete cleanup of every
+descendant it launches. With `ProcessContainmentOwner.OUTER_BOUNDARY`, an
+enclosing agent or scheduler boundary already contains descendants; the stage
+must keep children within that inherited containment and must not signal the
+enclosing group. This is not authored configuration, persisted provenance, or a
+process-management helper.
+
 The facade helper set is:
 
 ```python

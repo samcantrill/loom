@@ -9,7 +9,7 @@ import traceback
 from typing import cast
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.context import StageContext
+from loom.pipeline.context import ProcessContainmentOwner, StageContext
 from loom.pipeline.errors import PipelineValidationError, StageContractError
 from loom.pipeline.executors import Executor, LocalExecutor
 from loom.pipeline.planning import (
@@ -266,6 +266,7 @@ def execute_resident_stage_worker_request(
     *,
     worker_request: StageWorkerRequest,
     workspace_root: Path,
+    process_containment_owner: ProcessContainmentOwner,
 ) -> StageWorkerResult:
     """Execute one path-free resident request in an agent-owned workspace.
 
@@ -310,12 +311,11 @@ def execute_resident_stage_worker_request(
         context = StageContext(
             run_uri=worker_request.run_uri,
             stage_name=worker_request.stage_name,
+            process_containment_owner=process_containment_owner,
             resolved_config=_minimal_resolved_config(stage),
             stage_config=stage.stage_config,
             inputs=worker_request.inputs,
-            local_output_dir=artifact_store.local_stage_dir(
-                worker_request.stage_name
-            ),
+            local_output_dir=artifact_store.local_stage_dir(worker_request.stage_name),
             local_workspace_dir=root / "workspace",
             provenance={},
             metadata={
@@ -539,6 +539,7 @@ def reconstruct_stage_execution_request(
     context = StageContext(
         run_uri=worker_request.run_uri,
         stage_name=worker_request.stage_name,
+        process_containment_owner=ProcessContainmentOwner.STAGE,
         resolved_config=resolved_config,
         stage_config=stage.stage_config,
         inputs=worker_request.inputs,

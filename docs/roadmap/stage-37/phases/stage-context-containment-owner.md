@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 37, Phase 1
 - Manifest: `docs/roadmap/stage-37/implementation-plan.md`
 - Branch: `codex/stage-context-containment-owner`
@@ -198,9 +198,13 @@ Final commands:
 - Independent plan review: passed with no blocker. Its non-blocking observation
   that `test_slurm_ready_stage.py` directly invokes the shared helper is now in
   the caller inventory and focused test lane.
-- Implementation: pending.
+- Implementation: complete; public owner fact, ordinary and resident propagation,
+  focused tests, and feature documentation are present in the phase worktree.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
+- Pre-submit gate: evidence recorded. `make validate-pr` reached its default
+  harness after Ruff and Pyright passed, then had one unrelated timestamp race
+  in `test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot`;
+  the subsequent unchanged-tree `make test-summary` passed every recorded lane.
 - Independent review: pending after implementation.
 - Blocker corrections: 0/3.
 - PR and merge: pending.
@@ -209,9 +213,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `ProcessContainmentOwner` and keyword-only `StageContext.process_containment_owner`; lazily exported it; passed explicit `STAGE` through both runner paths and direct worker reconstruction; required a resident-owner argument and passed `OUTER_BOUNDARY` from agent and SLURM entries. Updated pipeline/execution feature docs and the managed-SLURM example/fixture call sites. |
+| Tests added or updated | Added enum/default/invalid/immutability coverage, direct-worker propagation, resident-agent and SLURM-bootstrap caller assertions, package export coverage, and the explicit direct-SLURM fixture owner. |
+| Validated revision/tree state and evidence | Focused package/unit lane: 29 passed; focused mixed-route SLURM integration: 1 passed; Ruff and formatter checks passed. `make test-summary` on the unchanged implementation tree passed package 121, unit 1959, contract 300, integration 337, e2e 66, and config-extra 157; receipt: `build/test-summary.md` (generated 2026-09-01T00:30:21Z). |
+| Validation-relevant changes after evidence | None. This completion-record update is workflow documentation only. |
+| PR, review, and merge | pending manager handling. |
+| Residual risk and cleanup | `make validate-pr` had 2782 passed / 1 failed because the existing guarded-SLURM recovery assertion compared a `scheduler_observed_at` value that advanced by one second between reads. The same unchanged tree's broad summary lane passed its SLURM integration suite. No Stage 37 code residual risk identified; manager should retain the flaky-gate evidence for pre-submit disposition. |

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 
@@ -17,6 +18,13 @@ from loom.serialization import PlainData, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 
+class ProcessContainmentOwner(StrEnum):
+    """Owner of the process-containment boundary for a stage invocation."""
+
+    STAGE = "stage"
+    OUTER_BOUNDARY = "outer_boundary"
+
+
 @dataclass(frozen=True, slots=True)
 class StageContext:
     run_uri: RunURI
@@ -26,6 +34,10 @@ class StageContext:
     inputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
     provenance: Mapping[str, PlainData] = field(default_factory=dict)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    process_containment_owner: ProcessContainmentOwner = field(
+        default=ProcessContainmentOwner.STAGE,
+        kw_only=True,
+    )
     artifact_store: InitVar[ArtifactStore | None] = None
     output_specs: InitVar[Mapping[str, OutputSpec] | None] = None
     local_output_dir: InitVar[str | Path | None] = None
@@ -51,6 +63,10 @@ class StageContext:
             raise PipelineValidationError("run_uri must be a non-empty string")
         if not isinstance(self.stage_name, str) or not self.stage_name:
             raise PipelineValidationError("stage_name must be a non-empty string")
+        if type(self.process_containment_owner) is not ProcessContainmentOwner:
+            raise PipelineValidationError(
+                "process_containment_owner must be a ProcessContainmentOwner"
+            )
         try:
             object.__setattr__(
                 self,

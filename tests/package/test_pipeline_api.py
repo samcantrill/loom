@@ -24,6 +24,7 @@ def test_pipeline_public_exports() -> None:
         "check_pipeline_stage_targets",
         "Stage",
         "StageContext",
+        "ProcessContainmentOwner",
         "RunStatus",
         "TransitionIntent",
         "InvalidRunTransition",
@@ -230,3 +231,9 @@ def test_pipeline_imports_are_explicit() -> None:
     assert "pipeline" not in loom_package.__all__
     assert pipeline
     assert graph
+
+
+def test_pipeline_lazily_exports_process_containment_owner() -> None:
+    from loom.pipeline import ProcessContainmentOwner
+
+    assert ProcessContainmentOwner.STAGE.value == "stage"
