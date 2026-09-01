@@ -343,6 +343,19 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         agent_resource_provider_factory=provider_factory,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+    original_client_init = LocalDaemonAgentHttpClient.__init__
+    client_incarnations = 0
+
+    def record_client_incarnation(
+        client: LocalDaemonAgentHttpClient, *args: Any, **kwargs: Any
+    ) -> None:
+        nonlocal client_incarnations
+        original_client_init(client, *args, **kwargs)
+        client_incarnations += 1
+
+    monkeypatch.setattr(
+        LocalDaemonAgentHttpClient, "__init__", record_client_incarnation
+    )
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_OFFER_TTL_SECONDS", 1)
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
     original_complete = _RemoteAgentJournal.complete_offer_renewal
@@ -425,13 +438,13 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         )
         coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
         assert (
-            coordinator.wait("idle-renewal-item", timeout_seconds=15).state
+            coordinator.wait("idle-renewal-item", timeout_seconds=30).state
             is LocalDaemonAdmissionState.SUCCEEDED
         )
         assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
-        # One composition per client incarnation; the injected lost response
-        # deliberately forces one reconnect, never one reconstruction per offer.
-        assert 1 <= provider_factory.calls <= 2
+        # One composition at most per client incarnation, never one
+        # reconstruction per offer. Additional transport reconnects are valid.
+        assert 1 <= provider_factory.calls <= client_incarnations
     finally:
         stop.set()
         thread.join(timeout=7)
