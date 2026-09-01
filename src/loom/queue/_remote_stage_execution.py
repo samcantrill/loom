@@ -638,7 +638,7 @@ def _claim_from_dict(value: object) -> ResourceClaim:
 
 @dataclass(frozen=True, slots=True)
 class _ResidentAssignmentBundle:
-    """Hard-cutover semantic request with no run URI, host path, or URL."""
+    """Shared resident request; remote transports enforce path-free semantics."""
 
     assignment_id: str
     stage_work_id: str
@@ -693,11 +693,6 @@ class _ResidentAssignmentBundle:
             or runtime.get("stage_id") != self.stage_name
         ):
             raise QueueServiceError("resident assignment semantics are invalid")
-        _validate_remote_semantic_data(
-            fingerprint=fingerprint,
-            resolved_runtime=runtime,
-            worker_metadata=metadata,
-        )
         try:
             fingerprint_record = StageFingerprintRecord.from_dict(fingerprint)
         except Exception as exc:
@@ -762,6 +757,14 @@ class _ResidentAssignmentBundle:
             self,
             "provider_descriptors",
             tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
+        )
+
+    def validate_remote_transport(self) -> None:
+        """Reject coordinator-local locations before remote transport or replay."""
+        _validate_remote_semantic_data(
+            fingerprint=self.fingerprint,
+            resolved_runtime=self.resolved_runtime,
+            worker_metadata=self.worker_metadata,
         )
 
     @classmethod
@@ -897,6 +900,13 @@ class _ResidentAssignmentBundle:
             ),
             schema_version=cast(int, value["schema_version"]),
         )
+
+    @classmethod
+    def from_remote_dict(cls, value: object) -> "_ResidentAssignmentBundle":
+        """Decode and validate one bundle received through remote transport."""
+        request = cls.from_dict(value)
+        request.validate_remote_transport()
+        return request
 
 
 @dataclass(frozen=True, slots=True)

@@ -1117,7 +1117,7 @@ class _RemoteAgentJournal:
                 raise QueueConflictError("work poll was fenced")
             if poll_result == "assignment":
                 request_value = result.get("request")
-                request = _ResidentAssignmentBundle.from_dict(request_value)
+                request = _ResidentAssignmentBundle.from_remote_dict(request_value)
                 conn.execute(
                     "INSERT INTO agent_session_references(session_id, "
                     "reference_kind, reference_id, resolved) "
@@ -3143,6 +3143,7 @@ class LocalDaemonAgentHttpClient:
             cast(Path, self._config.agent_root), assignment_id
         )
         request = workspace.request()
+        request.validate_remote_transport()
         profile = self._profile_for_descriptor(request.profile)
         if profile is None:
             raise QueueConflictError(
@@ -3209,7 +3210,7 @@ class LocalDaemonAgentHttpClient:
         if delivery.get("result") != "assignment":
             return delivery
         raw_request = delivery.get("request")
-        request = _ResidentAssignmentBundle.from_dict(
+        request = _ResidentAssignmentBundle.from_remote_dict(
             thaw_plain_data(raw_request, path="remote delivered request")
         )
         profile = self._profile_for_descriptor(request.profile)
@@ -3579,6 +3580,7 @@ class LocalDaemonAgentHttpClient:
                 cast(Path, self._config.agent_root), assignment_id
             )
             request = workspace.request()
+            request.validate_remote_transport()
             profile = self._profile_for_descriptor(request.profile)
             if profile is None:
                 raise QueueConflictError("retained assignment has no resident profile")

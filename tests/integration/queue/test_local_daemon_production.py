@@ -296,7 +296,10 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
                         "tests.support.pipeline_execution_stages.JsonProducerStage"
                     )
                 },
-                "config": {"value": 42},
+                "config": {
+                    "value": 42,
+                    "working_root": str(tmp_path / "same-host-work"),
+                },
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },

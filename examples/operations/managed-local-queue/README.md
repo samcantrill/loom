@@ -37,6 +37,12 @@ code persists the plan, resolved config, and exact managed-local runtime record
 first; daemon clients then submit only the queue item identity and `run_uri`.
 `runtime.json` is safe observability metadata and is not executable input.
 
+A same-host managed-local assignment preserves project-authored stage config,
+including local filesystem paths that the resident worker can resolve on that
+host. This does not make those values remotely portable: remote-agent delivery
+continues to reject path- or URI-bearing fingerprint, runtime, and worker
+metadata and uses its protected agent-local paths and bounded artifact relay.
+
 The important public flow is:
 
 ```python
