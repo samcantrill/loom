@@ -2434,6 +2434,16 @@ is idempotent and conflicting overlap fails closed. No implicit archive format
 is invented; a later explicit tree or direct-backend contract may extend the
 data boundary.
 
+The same-host managed-local route does not use that network tree contract. It
+atomically mirrors each successful resident stage's regular-file artifact
+directory into the coordinator run and isolates a prior stage directory beside
+each bound primary input. This preserves manifest-relative companion files with
+the same paths they have during ordinary local execution. Only returned
+`ArtifactRef` values are declared outputs or authority facts; sibling files
+remain payload companions. Symlinks and non-regular members fail closed, and an
+exact already-published tree is the only accepted replay. Remote agents and
+SLURM bootstraps remain regular-file-only.
+
 Managed whole-run `LaunchContract.resources`, synthetic whole-run command
 snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for
 new managed runs. Delegated adapters remain supported. `ManagedLocalQueueRuntime`

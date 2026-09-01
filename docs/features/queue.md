@@ -665,6 +665,13 @@ transaction:
    availability revision then makes released atoms schedulable. Authority
    terminality alone never asserts that provider release already occurred.
 
+For the protected same-host resident route, Loom preserves the regular files in
+the stage artifact directory as one atomically published local tree and stages a
+separate copy beside each primary input. This lets a declared file artifact use
+relative companion files without making those companions additional declared
+outputs. It does not extend the authenticated remote relay: remote agents and
+SLURM bootstraps still transfer only the declared immutable regular files.
+
 The coordinator and each agent use separate explicit local-filesystem SQLite
 state roots and process locks. Shared/NFS SQLite is not a cross-machine
 communication mode. Preflight checks distinct roots, permissions, schema,

@@ -442,7 +442,7 @@ def test_input_publish_before_commit_replay_adopts_only_exact_target(
             (len(first), "input-1"),
         )
         conn.commit()
-    (workspace.root / "inputs" / "source").write_bytes(b"conflict")
+    workspace.input_path("source").write_bytes(b"conflict")
     with pytest.raises(QueueConflictError, match="conflicts with durable identity"):
         workspace.stage_input_chunk("input-1", len(first), final, final=True)
     with sqlite3.connect(workspace._db) as conn:

@@ -1210,6 +1210,16 @@ class _ResidentAssignmentWorkspace:
     def assignment_id(self) -> str:
         return self.root.name
 
+    def input_root(self, logical_name: str) -> Path:
+        """Return the assignment-owned directory for one isolated input payload."""
+
+        return self.root / "inputs" / _identifier(logical_name, "logical_name")
+
+    def input_path(self, logical_name: str) -> Path:
+        """Return the assignment-owned primary path for one input payload."""
+
+        return self.input_root(logical_name) / ".loom-primary.artifact"
+
     def has_request(self) -> bool:
         with self._connect() as conn:
             return (
@@ -1286,7 +1296,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError(
                     "input transfer is not authorized for this assignment"
                 )
-            target = self.root / "inputs" / str(row["logical_name"])
+            target = self.input_path(str(row["logical_name"]))
             part = self.root / "input-staging" / f"{transfer_id}.part"
             received = int(row["received_bytes"])
             if bool(row["finalized"]):
@@ -1454,7 +1464,7 @@ class _ResidentAssignmentWorkspace:
             thaw_plain_data(request.fingerprint, path="remote fingerprint")
         )
         inputs = {
-            item.logical_name: item.local_ref(self.root / "inputs" / item.logical_name)
+            item.logical_name: item.local_ref(self.input_path(item.logical_name))
             for item in request.inputs
         }
         logs = self.root / "logs"

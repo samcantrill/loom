@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sqlite3
+import stat
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -23,6 +27,7 @@ from time import sleep
 from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
+from loom.io.uris import uri_to_path
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
 from loom.pipeline.planning import StageFingerprintRecord
 from loom.pipeline.status import StageStatus
@@ -71,9 +76,9 @@ from ._remote_stage_execution import (
     _RemoteArtifact,
     _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
+    _RemoteOutputArtifact,
     _read_regular_file_bytes,
 )
-from .errors import QueueError
 
 
 class ManagedLocalError(ValueError):
@@ -3098,6 +3103,7 @@ def run_managed_local_assignment(
     profile = ResidentProfileDescriptor.from_dict(resident_launch_profile.descriptor)
     remote_inputs: list[_RemoteArtifact] = []
     input_paths: dict[str, Path] = {}
+    input_refs: dict[str, ArtifactRef] = {}
     total_input_bytes = 0
     for logical_name, ref in sorted(worker_request.inputs.items()):
         transfer_id = (
@@ -3120,6 +3126,7 @@ def run_managed_local_assignment(
             raise ManagedLocalError("resident assignment inputs exceed the bound")
         remote_inputs.append(artifact)
         input_paths[transfer_id] = source
+        input_refs[transfer_id] = ref
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
     delivered = _ResidentAssignmentBundle.from_worker_request(
         assignment_id=assignment.assignment_id,
@@ -3137,6 +3144,14 @@ def run_managed_local_assignment(
     workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
     workspace.persist_request(delivered, resident_launch_profile)
     for artifact in remote_inputs:
+        _stage_same_host_input_closure(
+            workspace=workspace,
+            artifact=artifact,
+            ref=input_refs[artifact.transfer_id],
+            source=input_paths[artifact.transfer_id],
+            run_store=run_store,
+            run_uri=worker_request.run_uri,
+        )
         workspace.stage_input(
             artifact.transfer_id,
             _read_regular_file_bytes(input_paths[artifact.transfer_id]),
@@ -3600,7 +3615,10 @@ def _project_resident_result(
     artifact_store = LocalArtifactStore(
         run_store.local_artifact_root(worker_request.run_uri)
     )
-    outputs: dict[str, ArtifactRef] = {}
+    retained: list[tuple[_RemoteOutputArtifact, Path]] = []
+    aliases: dict[Path, Path] = {}
+    target_root = artifact_store.local_stage_dir(worker_request.stage_name)
+    source_root = workspace.root / "artifacts" / worker_request.stage_name
     for item in report.outputs:
         data = bytearray()
         offset = 0
@@ -3613,27 +3631,40 @@ def _project_resident_result(
         digest = hashlib.sha256(data).hexdigest()
         if digest != item.digest or len(data) != item.size_bytes:
             raise ManagedLocalError("resident retained output identity conflicts")
-        target = (
-            artifact_store.local_artifact_path(
-                worker_request.stage_name, item.logical_name, item.codec_key
+        try:
+            source = uri_to_path(result.outputs[item.logical_name].uri)
+            if source.is_symlink():
+                raise ValueError("resident output is a link")
+            relative = source.resolve(strict=True).relative_to(
+                source_root.resolve(strict=True)
             )
-            if item.codec_key is not None
-            else artifact_store.local_stage_dir(worker_request.stage_name)
-            / item.logical_name
+        except (KeyError, OSError, RuntimeError, ValueError) as exc:
+            raise ManagedLocalError(
+                "resident output is outside its stage artifact directory"
+            ) from exc
+        target = target_root / relative
+        aliases[relative] = (
+            workspace.root / "retained-outputs" / item.logical_name
         )
-        if target.exists():
-            try:
-                published = _read_regular_file_bytes(target)
-            except (OSError, QueueError) as exc:
-                raise ManagedLocalError(
-                    "published resident output is not a regular file"
-                ) from exc
-            if hashlib.sha256(published).hexdigest() != digest:
-                raise ManagedLocalError(
-                    "published resident output conflicts with retained bytes"
-                )
-        else:
-            atomic_write_bytes(target, bytes(data))
+        retained.append((item, target))
+
+    if retained:
+        _publish_regular_file_tree(
+            source_root=source_root,
+            target_root=target_root,
+            aliases=aliases,
+            field="resident output artifact directory",
+        )
+
+    outputs: dict[str, ArtifactRef] = {}
+    for item, target in retained:
+        if (
+            _regular_file_size_and_digest(target)
+            != (item.size_bytes, item.digest)
+        ):
+            raise ManagedLocalError(
+                "published resident output conflicts with retained bytes"
+            )
         outputs[item.logical_name] = ArtifactRef(
             artifact_id=item.artifact_id,
             uri=target.resolve().as_uri(),
@@ -3649,6 +3680,213 @@ def _project_resident_result(
     return _map_resident_result_identity(
         result, worker_request=worker_request, outputs=outputs
     )
+
+
+def _stage_same_host_input_closure(
+    *,
+    workspace: _ResidentAssignmentWorkspace,
+    artifact: _RemoteArtifact,
+    ref: ArtifactRef,
+    source: Path,
+    run_store: LocalRunStore,
+    run_uri: str,
+) -> None:
+    """Mirror one prior local stage directory beside its isolated primary input."""
+
+    producer_stage = ref.producer_stage
+    if producer_stage is None:
+        return
+    artifact_root = run_store.local_artifact_root(run_uri)
+    source_root = LocalArtifactStore(artifact_root).local_stage_dir(producer_stage)
+    try:
+        source.resolve(strict=True).relative_to(source_root.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError):
+        # External and source artifacts retain the regular-file-only behavior.
+        return
+    _publish_regular_file_tree(
+        source_root=source_root,
+        target_root=workspace.input_root(artifact.logical_name),
+        aliases={Path(workspace.input_path(artifact.logical_name).name): source},
+        field=f"resident input {artifact.logical_name!r} artifact directory",
+    )
+
+
+def _publish_regular_file_tree(
+    *,
+    source_root: Path,
+    target_root: Path,
+    aliases: Mapping[Path, Path],
+    field: str,
+) -> None:
+    """Atomically publish a regular-file tree and replay only exact bytes."""
+
+    sources = _regular_tree_sources(source_root, field=field)
+    for relative, source in aliases.items():
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise ManagedLocalError(f"{field} alias is unsafe")
+        previous = sources.get(relative)
+        if previous is not None and not _regular_files_match(previous, source):
+            raise ManagedLocalError(f"{field} aliases conflicting bytes")
+        sources[relative] = source
+
+    try:
+        target_details = target_root.lstat()
+    except FileNotFoundError:
+        target_details = None
+    except OSError as exc:
+        raise ManagedLocalError(f"{field} target could not be inspected") from exc
+    if target_details is not None:
+        if stat.S_ISLNK(target_details.st_mode) or not stat.S_ISDIR(
+            target_details.st_mode
+        ):
+            raise ManagedLocalError(f"{field} target is unsafe")
+        if not _regular_tree_matches(sources, target_root, field=field):
+            raise ManagedLocalError(f"{field} replay conflicts")
+        return
+
+    target_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{target_root.name}.managed-", dir=target_root.parent
+        )
+    )
+    try:
+        for relative, source in sorted(
+            sources.items(), key=lambda item: item[0].as_posix()
+        ):
+            _copy_regular_file(source, temporary / relative, field=field)
+        _fsync_local_tree(temporary)
+        try:
+            os.replace(temporary, target_root)
+        except OSError as exc:
+            if not _regular_tree_matches(sources, target_root, field=field):
+                raise ManagedLocalError(f"{field} could not be published") from exc
+        _fsync_local_directory(target_root.parent)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def _regular_tree_sources(source_root: Path, *, field: str) -> dict[Path, Path]:
+    try:
+        details = source_root.lstat()
+        canonical_root = source_root.resolve(strict=True)
+    except OSError as exc:
+        raise ManagedLocalError(f"{field} source is unavailable") from exc
+    if (
+        stat.S_ISLNK(details.st_mode)
+        or not stat.S_ISDIR(details.st_mode)
+        or canonical_root != source_root
+    ):
+        raise ManagedLocalError(f"{field} source is not a canonical directory")
+
+    sources: dict[Path, Path] = {}
+    for current, directory_names, file_names in os.walk(
+        source_root, topdown=True, followlinks=False
+    ):
+        directory_names.sort()
+        file_names.sort()
+        current_path = Path(current)
+        for name in directory_names:
+            candidate = current_path / name
+            candidate_details = candidate.lstat()
+            if stat.S_ISLNK(candidate_details.st_mode) or not stat.S_ISDIR(
+                candidate_details.st_mode
+            ):
+                raise ManagedLocalError(f"{field} contains an unsafe directory")
+        for name in file_names:
+            candidate = current_path / name
+            candidate_details = candidate.lstat()
+            if stat.S_ISLNK(candidate_details.st_mode) or not stat.S_ISREG(
+                candidate_details.st_mode
+            ):
+                raise ManagedLocalError(f"{field} contains a non-regular file")
+            sources[candidate.relative_to(source_root)] = candidate
+    return sources
+
+
+def _copy_regular_file(source: Path, target: Path, *, field: str) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as exc:
+        raise ManagedLocalError(f"{field} contains an unreadable file") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ManagedLocalError(f"{field} contains a non-regular file")
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with os.fdopen(descriptor, "rb", closefd=False) as source_stream:
+            with target.open("xb") as target_stream:
+                shutil.copyfileobj(source_stream, target_stream, length=1024 * 1024)
+                target_stream.flush()
+                os.fsync(target_stream.fileno())
+    except OSError as exc:
+        raise ManagedLocalError(f"{field} file could not be copied") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _regular_files_match(first: Path, second: Path) -> bool:
+    try:
+        return _regular_file_size_and_digest(first) == _regular_file_size_and_digest(
+            second
+        )
+    except ManagedLocalError:
+        return False
+
+
+def _regular_tree_matches(
+    sources: Mapping[Path, Path], target_root: Path, *, field: str
+) -> bool:
+    try:
+        targets = _regular_tree_sources(target_root, field=field)
+    except ManagedLocalError:
+        return False
+    return sources.keys() == targets.keys() and all(
+        _regular_files_match(source, targets[relative])
+        for relative, source in sources.items()
+    )
+
+
+def _regular_file_size_and_digest(path: Path) -> tuple[int, str]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ManagedLocalError("resident artifact is not a readable regular file") from exc
+    digest = hashlib.sha256()
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise ManagedLocalError("resident artifact is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return details.st_size, digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_local_tree(root: Path) -> None:
+    directories = [root]
+    directories.extend(path for path in root.rglob("*") if path.is_dir())
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        _fsync_local_directory(directory)
+
+
+def _fsync_local_directory(path: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _assignment_dict(value: ManagedAssignment) -> dict[str, PlainData]:

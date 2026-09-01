@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import time
 import os
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.io.uris import uri_to_path
 from loom.pipeline.context import StageContext
 
 
@@ -24,6 +26,23 @@ class JsonProducerStage:
             path = Path(counter_path)
             current = int(path.read_text(encoding="utf-8")) if path.exists() else 0
             path.write_text(str(current + 1), encoding="utf-8")
+        if context.stage_config.get("relative_companion") is True:
+            output = context.local_output_path("data", suffix=".json")
+            companion = output.parent / "payload" / "value.txt"
+            companion.parent.mkdir(parents=True, exist_ok=True)
+            companion.write_text("companion-value", encoding="utf-8")
+            output.write_text(
+                json.dumps({"value": value, "companion": "payload/value.txt"}),
+                encoding="utf-8",
+            )
+            return {
+                "data": context.register_local_artifact(
+                    "data",
+                    output,
+                    artifact_type="json",
+                    codec_key="json.v1",
+                )
+            }
         return {
             "data": context.save_artifact(
                 "data",
@@ -92,10 +111,15 @@ class TextConsumerStage:
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
         data = context.load_input("data", expected_type="json")
+        companion_text = ""
+        if isinstance(data, Mapping) and isinstance(data.get("companion"), str):
+            input_path = uri_to_path(context.input_artifact("data").uri)
+            companion = input_path.parent / data["companion"]
+            companion_text = f" companion={companion.read_text(encoding='utf-8')}"
         return {
             "text": context.save_artifact(
                 "text",
-                f"seen {data}",
+                f"seen {data}{companion_text}",
                 artifact_type="text",
                 codec_key="text.v1",
             )
