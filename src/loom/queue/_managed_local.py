@@ -3534,11 +3534,19 @@ def run_managed_local_assignment(
         if not result_path.is_file() and cancellation_seen:
             cancelled = _cancelled_worker_result(workspace.worker_request())
             atomic_write_bytes(result_path, _json(cancelled.to_dict()).encode("utf-8"))
+        if not result_path.is_file():
+            missing = ManagedLocalError(
+                "resident worker exited without a durable worker result"
+            )
+            failed = _managed_root_failed_worker_result(
+                workspace.worker_request(),
+                missing,
+                process_exit_code=receipt.exit_code,
+            )
+            atomic_write_bytes(result_path, _json(failed.to_dict()).encode("utf-8"))
         contained = supervisor.contain(launch)
         if contained.state is not SupervisorLaunchState.CONTAINED:
             raise ManagedLocalError("supervisor process-group containment is unknown")
-        if not result_path.is_file():
-            raise ManagedLocalError("supervisor exited without a durable worker result")
         if (
             contained.worker_result_digest
             != hashlib.sha256(result_path.read_bytes()).hexdigest()
@@ -4361,10 +4369,16 @@ def _cancelled_worker_result(request: StageWorkerRequest) -> StageWorkerResult:
 
 
 def _managed_root_failed_worker_result(
-    request: StageWorkerRequest, error: BaseException
+    request: StageWorkerRequest,
+    error: BaseException,
+    *,
+    process_exit_code: int | None = None,
 ) -> StageWorkerResult:
     failed_at = utc_timestamp()
     message = str(error) or type(error).__name__
+    observed_exit_code = 1 if process_exit_code is None else process_exit_code
+    process_signal = -observed_exit_code if observed_exit_code < 0 else None
+    exit_code = None if process_signal is not None else observed_exit_code
     failure = ExecutionFailure(
         schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
         run_uri=request.run_uri,
@@ -4378,7 +4392,9 @@ def _managed_root_failed_worker_result(
         stdout_path=request.stdout_path,
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
-        details={"process_created": True},
+        exit_code=exit_code,
+        signal=process_signal,
+        details={"process_created": True, "worker_result": "missing"},
     )
     return StageWorkerResult(
         schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
@@ -4393,8 +4409,9 @@ def _managed_root_failed_worker_result(
         stdout_path=request.stdout_path,
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
-        exit_code=1,
-        executor_metadata={"process_created": True},
+        exit_code=exit_code,
+        signal=process_signal,
+        executor_metadata={"process_created": True, "worker_result": "missing"},
     )
 
 

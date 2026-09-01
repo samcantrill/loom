@@ -78,6 +78,11 @@ the supported behavior; the authoritative contracts and phase ownership remain i
 - `SUBMITTED` means granted. Only a confirmed exact-current-fence process fact
   advances to `RUNNING`. A lost or ambiguous launcher outcome is
   `START_UNKNOWN`, remains bound, and never licenses relaunch or retry.
+- Once the resident supervisor observes its worker root exit and positively
+  contains the complete process group, a missing durable worker result becomes
+  an `executor_infrastructure` failure with the observed exit code or signal.
+  No outputs are retained or published. This is not guarded-recovery work:
+  launch or containment uncertainty still remains unknown and fails closed.
 - Disconnect, timeout, missing PID, expired offer, or credential change does not
   prove failure or containment. Accepted unknown work is not automatically
   reassigned and does not consume retry budget.

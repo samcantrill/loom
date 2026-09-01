@@ -6,7 +6,9 @@ from collections.abc import Mapping
 from dataclasses import replace
 import importlib
 import json
+import os
 from pathlib import Path
+import signal
 import sqlite3
 import sys
 from threading import Event, Thread
@@ -1879,6 +1881,82 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         assert observed.live_claim_ids == (assignment.claim_id,)
     finally:
         replacement.stop()
+
+
+def test_resident_worker_loss_terminalizes_after_containment_without_output_or_retry(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root,
+        run_name="lost-worker-run",
+        stage_name="slow",
+        seconds=30.0,
+        retry_max_attempts=1,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    client = daemon.client_view(
+        LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+    )
+    try:
+        submitted = client.submit(
+            LocalDaemonAdmissionRequest("lost-worker-item", run_uri)
+        )
+        _supervisor_id, worker_pid = _running_supervisor_identity(config)
+
+        os.kill(worker_pid, signal.SIGKILL)
+        terminal = client.wait("lost-worker-item", timeout_seconds=10)
+
+        detail = client.admission(submitted.admission_id)
+        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        stage = next(item for item in snapshot.stages if item.stage_name == "slow")
+        assignment_view = cast(Mapping[str, object], detail.owners["assignment"])
+        assignments = cast(list[Mapping[str, object]], assignment_view["assignments"])
+        assert terminal.state is LocalDaemonAdmissionState.FAILED
+        assert detail.authority["state"] == "FAILED"
+        assert stage.status is StageStatus.FAILED
+        assert len(stage.attempts) == 1
+        assert stage.attempts[0].reason is not None
+        assert (
+            stage.attempts[0].reason.message
+            == "resident worker exited without a durable worker result"
+        )
+        assert len(assignments) == 1
+        assert assignments[0]["state"] == "released"
+        worker_result = SQLiteAgentJournal(
+            config.agent_root / "journal.sqlite"
+        ).read_result(cast(str, assignments[0]["assignment_id"]))
+        assert worker_result is not None
+        assert worker_result.status is StageStatus.FAILED
+        assert worker_result.exit_code is None
+        assert worker_result.signal == signal.SIGKILL
+        assert worker_result.executor_metadata == {
+            "process_created": True,
+            "worker_result": "missing",
+        }
+        run_store = LocalRunStore(run_root)
+        assert run_store.read_artifact_index(run_uri) == {}
+        assert run_store.read_stage_outputs(run_uri, "slow") is None
+        with sqlite3.connect(
+            config.agent_root / "supervisor" / "supervisor.sqlite"
+        ) as conn:
+            supervisor_state = conn.execute(
+                "SELECT state, exit_code, result_digest FROM launches"
+            ).fetchone()
+        assert supervisor_state is not None
+        assert supervisor_state[0] == SupervisorLaunchState.CONTAINED.value
+        assert supervisor_state[1] == -signal.SIGKILL
+        assert supervisor_state[2] is not None
+    finally:
+        daemon.stop()
 
 
 def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
