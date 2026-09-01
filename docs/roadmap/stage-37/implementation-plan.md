@@ -1,6 +1,6 @@
 # Roadmap Stage 37 Implementation Plan
 
-Status: implementation complete; PR open
+Status: implementation and review complete; PR merge pending
 Roadmap stage: 37
 Planning document: docs/roadmap/stage-37/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -74,4 +74,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | PR #269 open; review and merge pending | Implementation complete; full validation passed | POSIX/process-boundary semantics and unsupported manual owner assertions remain documented | Worktree and branch retained until merge |
+| 1 | PR #269 open; independent review condition satisfied; merge pending | Implementation and correction complete; final full validation passed | POSIX/process-boundary semantics, unsupported manual owner assertions, and an unrelated timestamp-test flake remain documented | Worktree and branch retained until merge |

@@ -205,16 +205,22 @@ Final commands:
   A fresh full gate exposed Pyright's expected invalid-call diagnostic in the
   positional-only rejection test; the test-only `reportCallIssue` annotation
   records that deliberate assertion and is validated separately.
-- Pre-submit gate: passed on the implementation tree. The isolated
-  rerun of the earlier timestamp-sensitive guarded-SLURM test passed, followed
-  by a fresh `make validate-pr` pass through Ruff, Pyright, 2,783 default tests,
-  157 config-extra tests with 3 expected skips, and both package builds.
-- Independent review: qualified coverage/public-shape blocker corrected in pass
-  1/3; follow-up review and merge remain manager-owned.
+- Pre-submit gate: passed at corrected revision `eb8c040`. A fresh
+  `make validate-pr` passed Ruff, Pyright, 2,786 default tests, 157 config-extra
+  tests with 3 expected skips, and both package builds. The preceding full run
+  and the refreshed summary each encountered one unrelated one-second
+  `scheduler_observed_at` race in `test_slurm_ready_stage.py`; each exact case
+  passed immediately on the unchanged tree, and the final full gate included
+  the entire integration suite successfully.
+- Independent review: the reviewer found one required propagation-coverage gap
+  and one localized public-shape test gap. Correction pass 1/3 closes both; the
+  manager verified the regression test, exact enum/keyword-only assertions, and
+  fresh full validation. The review condition is satisfied and the PR is merge
+  eligible; the workflow permits no second reviewer loop.
 - Blocker corrections: 1/3 (independent-review test coverage/public-shape
   correction).
 - PR: https://github.com/samcantrill/loom/pull/269; open against `develop` from
-  `codex/stage-context-containment-owner`. Merge is pending independent review.
+  `codex/stage-context-containment-owner`. Merge is pending final remote checks.
 
 ## Completion Record
 
@@ -222,7 +228,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `ProcessContainmentOwner` and keyword-only `StageContext.process_containment_owner`; lazily exported it; passed explicit `STAGE` through both runner paths and direct worker reconstruction; required a resident-owner argument and passed `OUTER_BOUNDARY` from agent and SLURM entries. Updated pipeline/execution feature docs and the managed-SLURM example/fixture call sites. |
 | Tests added or updated | Added enum/default/invalid/immutability coverage, direct-worker propagation, resident-agent and SLURM-bootstrap caller assertions, package export coverage, and the explicit direct-SLURM fixture owner. Blocker correction pass 1/3 adds a direct `execute_resident_stage_worker_request` execution test that captures the constructed `StageContext` and observes `OUTER_BOUNDARY`; it fails if the helper stops assigning that value. It also locks the exact two enum values and rejects positional owner supply. The intentional positional call carries a narrow `reportCallIssue` ignore so static analysis accepts the negative test. |
-| Validated revision/tree state and evidence | Implementation revision `685d538`; focused package/unit lane: 29 passed; focused mixed-route SLURM integration: 1 passed; the isolated earlier guarded-SLURM failure rerun passed unchanged. Fresh `make validate-pr` passed Ruff, Pyright, 2,783 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. `make test-summary` on the same implementation tree passed package 121, unit 1959, contract 300, integration 337, e2e 66, and config-extra 157; receipt: `build/test-summary.md` (generated 2026-09-01T00:30:21Z). Blocker correction pass 1/3: `uv run pytest tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/test_context.py tests/package/test_pipeline_api.py` passed (27 passed), and Ruff passed on those three files. Follow-up: file-scoped Pyright passed with 0 errors after the deliberate invalid-call annotation; `test_context.py` passed (13 passed) and Ruff passed. |
-| Validation-relevant changes after evidence | Public feature prose was clarified to retain normal child communication/completion/reaping with the stage, plus this workflow evidence update; no source or test changed, and `git diff --check` passed. Blocker correction pass 1/3 adds the focused resident-helper propagation and public-shape tests; narrow unit/package validation and Ruff evidence are recorded with the correction commit. A fresh `make validate-pr` exposed only Pyright's deliberate positional-call diagnostic; this follow-up adds the narrow annotation and reruns the affected type/test/lint lane. |
-| PR, review, and merge | PR #269 is open and mergeable against `develop`; independent review and merge are pending. |
-| Residual risk and cleanup | The first `make validate-pr` had 2,782 passed / 1 unrelated guarded-SLURM timestamp race; its isolated unchanged-tree rerun and the complete fresh gate passed. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented and the worktree/branch remain until PR completion. |
+| Validated revision/tree state and evidence | Corrected revision `eb8c040`; focused correction lane: 27 passed with Ruff, followed by file-scoped Pyright with 0 errors, 13 affected context tests, and Ruff after the deliberate invalid-call annotation. Final fresh `make validate-pr` passed Ruff, Pyright, 2,786 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. The earlier implementation-tree `make test-summary` passed 2,940 tests. The refreshed corrected-tree summary passed package 121, unit 1,962, contract 300, integration 336/337, e2e 66, and config-extra 157; its sole failure was the unrelated one-second guarded-SLURM timestamp race, whose exact unchanged-tree rerun passed (1 passed). |
+| Validation-relevant changes after evidence | Only this workflow evidence update follows the final successful full gate and qualified summary rerun; no source or test changed, and `git diff --check` passes. |
+| PR, review, and merge | PR #269 is open and mergeable against `develop`; the independent review condition is satisfied after correction pass 1/3, and merge is pending final remote checks. |
+| Residual risk and cleanup | The timestamp-sensitive Slurm reconciliation assertion remains an unrelated repository flake and passed on each isolated unchanged-tree rerun. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented and the worktree/branch remain until PR completion. |
