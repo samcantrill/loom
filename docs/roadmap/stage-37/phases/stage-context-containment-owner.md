@@ -222,7 +222,7 @@ Final commands:
 - PR: https://github.com/samcantrill/loom/pull/269; opened against `develop` from
   `codex/stage-context-containment-owner`; squash-merged as
   `f81330eec309fcf0c656613da7498154c2e2c6ca` on 2026-09-01. The remote feature
-  branch is deleted; local worktree cleanup is pending this metadata push.
+  branch, local feature branch, and phase worktree are removed.
 
 ## Completion Record
 
@@ -233,4 +233,4 @@ Final commands:
 | Validated revision/tree state and evidence | Corrected revision `eb8c040`; focused correction lane: 27 passed with Ruff, followed by file-scoped Pyright with 0 errors, 13 affected context tests, and Ruff after the deliberate invalid-call annotation. Final fresh `make validate-pr` passed Ruff, Pyright, 2,786 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. The earlier implementation-tree `make test-summary` passed 2,940 tests. The refreshed corrected-tree summary passed package 121, unit 1,962, contract 300, integration 336/337, e2e 66, and config-extra 157; its sole failure was the unrelated one-second guarded-SLURM timestamp race, whose exact unchanged-tree rerun passed (1 passed). |
 | Validation-relevant changes after evidence | Only this workflow evidence update follows the final successful full gate and qualified summary rerun; no source or test changed, and `git diff --check` passes. |
 | PR, review, and merge | PR #269 was squash-merged to `develop` as `f81330eec309fcf0c656613da7498154c2e2c6ca` after the independent review condition was satisfied in correction pass 1/3. |
-| Residual risk and cleanup | The timestamp-sensitive Slurm reconciliation assertion remains an unrelated repository flake and passed on each isolated unchanged-tree rerun. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented. The remote feature branch is deleted; local worktree cleanup follows this metadata push. |
+| Residual risk and cleanup | The timestamp-sensitive Slurm reconciliation assertion remains an unrelated repository flake and passed on each isolated unchanged-tree rerun. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented. Remote/local feature branches and the phase worktree are removed. |

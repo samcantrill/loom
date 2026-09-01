@@ -74,4 +74,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | PR #269 squash-merged as `f81330eec309fcf0c656613da7498154c2e2c6ca` | Implementation and correction complete; final full validation passed | POSIX/process-boundary semantics, unsupported manual owner assertions, and an unrelated timestamp-test flake remain documented | Remote branch deleted; local worktree cleanup pending metadata push |
+| 1 | PR #269 squash-merged as `f81330eec309fcf0c656613da7498154c2e2c6ca` | Implementation and correction complete; final full validation passed | POSIX/process-boundary semantics, unsupported manual owner assertions, and an unrelated timestamp-test flake remain documented | Remote/local feature branches and phase worktree removed |
