@@ -1,11 +1,11 @@
 # Roadmap Stage 37 Implementation Plan
 
-Status: implementation and review complete; PR merge pending
+Status: complete; merged
 Roadmap stage: 37
 Planning document: docs/roadmap/stage-37/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1
+Current phase: complete
 Blockers: none
 
 ## Summary
@@ -49,7 +49,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | stage-context-containment-owner | pr_open | docs/roadmap/stage-37/phases/stage-context-containment-owner.md | codex/stage-context-containment-owner | [#269](https://github.com/samcantrill/loom/pull/269) | pipeline context/export, current context constructors and resident callers, feature docs, focused tests | Expose and propagate one typed containment-owner fact across ordinary and enclosing-boundary execution. |
+| 1 | stage-context-containment-owner | merged | docs/roadmap/stage-37/phases/stage-context-containment-owner.md | codex/stage-context-containment-owner | [#269](https://github.com/samcantrill/loom/pull/269) | pipeline context/export, current context constructors and resident callers, feature docs, focused tests | Expose and propagate one typed containment-owner fact across ordinary and enclosing-boundary execution. |
 
 ## Quality Gate
 
@@ -74,4 +74,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | PR #269 open; independent review condition satisfied; merge pending | Implementation and correction complete; final full validation passed | POSIX/process-boundary semantics, unsupported manual owner assertions, and an unrelated timestamp-test flake remain documented | Worktree and branch retained until merge |
+| 1 | PR #269 squash-merged as `f81330eec309fcf0c656613da7498154c2e2c6ca` | Implementation and correction complete; final full validation passed | POSIX/process-boundary semantics, unsupported manual owner assertions, and an unrelated timestamp-test flake remain documented | Remote branch deleted; local worktree cleanup pending metadata push |
