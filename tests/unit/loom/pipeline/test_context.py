@@ -63,7 +63,7 @@ def test_context_process_containment_owner_is_keyword_only() -> None:
             None,
             None,
             None,
-            ProcessContainmentOwner.OUTER_BOUNDARY,
+            ProcessContainmentOwner.OUTER_BOUNDARY,  # type: ignore[reportCallIssue]  # Deliberately invalid positional owner.
         )
 
 
