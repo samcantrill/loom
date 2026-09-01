@@ -3270,7 +3270,7 @@ class AgentSessionService:
             ).fetchone()
             if delivery is None:
                 raise QueueConflictError("remote delivered request is unavailable")
-            request = _ResidentAssignmentBundle.from_dict(
+            request = _ResidentAssignmentBundle.from_remote_dict(
                 json.loads(str(delivery["request_json"]))
             )
             output_mismatch = (
@@ -5009,6 +5009,7 @@ def _target_remote_delivery(
     _identifier(availability_revision, "availability_revision")
     if not isinstance(request, _ResidentAssignmentBundle):
         raise QueueServiceError("targeted delivery request is invalid")
+    request.validate_remote_transport()
     _identifier(request.assignment_id, "assignment_id")
     if not isinstance(run_uri, str) or not run_uri:
         raise QueueServiceError("targeted delivery run identity is invalid")

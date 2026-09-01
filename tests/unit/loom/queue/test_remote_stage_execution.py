@@ -91,7 +91,11 @@ def _profile(tmp_path: Path) -> ResidentExecutionProfile:
     )
 
 
-def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
+def _request(
+    profile: ResidentExecutionProfile,
+    *,
+    stage_config: dict[str, str] | None = None,
+) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
         1,
         "run-opaque-1",
@@ -109,7 +113,7 @@ def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
                 stage_name="build",
                 factory_target="pkg.Stage",
                 factory_init={},
-                stage_config={},
+                stage_config={} if stage_config is None else stage_config,
                 fingerprint_fields={},
                 declared_inputs={"source": "seed.data"},
                 bound_inputs={},
@@ -243,23 +247,26 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
 
 
 def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> None:
-    request = _request(_profile(tmp_path))
-    fingerprint = thaw_plain_data(request.fingerprint, path="fingerprint")
-    assert isinstance(fingerprint, dict)
-    payload = fingerprint["payload"]
-    assert isinstance(payload, dict)
-    payload["stage_config"] = {"cache_path": "/coordinator/private"}
+    request = _request(
+        _profile(tmp_path),
+        stage_config={"cache_path": "/coordinator/private"},
+    )
+    assert _ResidentAssignmentBundle.from_dict(request.to_dict()) == request
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        request.validate_remote_transport()
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        _ResidentAssignmentBundle.from_remote_dict(request.to_dict())
 
+    portable_request = _request(_profile(tmp_path))
+    metadata_request = replace(
+        portable_request,
+        worker_metadata={"coordinator_path": "/coordinator/private"},
+    )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        metadata_request.validate_remote_transport()
     with pytest.raises(QueueServiceError, match="path-bearing"):
         replace(
-            request,
-            worker_metadata={"coordinator_path": "/coordinator/private"},
-        )
-    with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(request, fingerprint=fingerprint)
-    with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(
-            request.inputs[0],
+            portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
 
@@ -515,6 +522,18 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         request = _request(profile)
         input_path = tmp_path / "input.data"
         input_path.write_bytes(b"input")
+        with pytest.raises(QueueServiceError, match="path-bearing"):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=_request(
+                    profile,
+                    stage_config={"cache_path": "/coordinator/private"},
+                ),
+                run_uri="file:///coordinator/run",
+                input_paths={"input-1": input_path},
+            )
         _target_remote_delivery(
             daemon,
             session_id=session.session_id,
