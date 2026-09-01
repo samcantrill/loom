@@ -299,6 +299,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
                 "config": {
                     "value": 42,
                     "working_root": str(tmp_path / "same-host-work"),
+                    "relative_companion": True,
                 },
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
@@ -449,6 +450,15 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         assert provider.operations.count("activate") == 2
         assert provider.operations.count("environment") == 2
         assert provider.operations.count("release") == 2
+        preprocess_artifacts = run_store.local_stage_artifact_dir(
+            run_uri, "preprocess"
+        )
+        assert (preprocess_artifacts / "payload" / "value.txt").read_text(
+            encoding="utf-8"
+        ) == "companion-value"
+        assert "companion=companion-value" in (
+            run_store.local_stage_artifact_dir(run_uri, "train") / "text.txt"
+        ).read_text(encoding="utf-8")
         assert run_store.read_stage_outputs(run_uri, "preprocess") is None
         assert run_store.read_stage_outputs(run_uri, "train") is None
     finally:

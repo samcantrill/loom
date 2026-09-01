@@ -19,6 +19,7 @@ from loom.queue._managed_local import (
     SQLiteCoordinatorAssignments,
     ObserveRequest,
     _compose_agent_resource_providers,
+    _publish_regular_file_tree,
 )
 from loom.pipeline.orchestration import (
     ExecutionRequirement,
@@ -363,6 +364,28 @@ def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     with pytest.raises(ManagedLocalError, match="conflicts"):
         journal.record_event(assignment.assignment_id, 1, "event-1", {"kind": "result"})
     assert journal.acknowledge(assignment.assignment_id, 1) == 1
+
+
+def test_regular_file_tree_replay_rejects_extra_companion(tmp_path) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    (source / "primary.json").write_text("{}", encoding="utf-8")
+    _publish_regular_file_tree(
+        source_root=source,
+        target_root=target,
+        aliases={},
+        field="test artifact directory",
+    )
+    (target / "stale.txt").write_text("stale", encoding="utf-8")
+
+    with pytest.raises(ManagedLocalError, match="replay conflicts"):
+        _publish_regular_file_tree(
+            source_root=source,
+            target_root=target,
+            aliases={},
+            field="test artifact directory",
+        )
 
 
 def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) -> None:
