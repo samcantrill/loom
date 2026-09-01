@@ -201,7 +201,7 @@ Final commands:
 - Implementation: complete; public owner fact, ordinary and resident propagation,
   focused tests, and feature documentation are present in the phase worktree.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: passed on the unchanged implementation tree. The isolated
+- Pre-submit gate: passed on the implementation tree. The isolated
   rerun of the earlier timestamp-sensitive guarded-SLURM test passed, followed
   by a fresh `make validate-pr` pass through Ruff, Pyright, 2,783 default tests,
   157 config-extra tests with 3 expected skips, and both package builds.
@@ -216,6 +216,6 @@ Final commands:
 | Implementation and changed paths | Added `ProcessContainmentOwner` and keyword-only `StageContext.process_containment_owner`; lazily exported it; passed explicit `STAGE` through both runner paths and direct worker reconstruction; required a resident-owner argument and passed `OUTER_BOUNDARY` from agent and SLURM entries. Updated pipeline/execution feature docs and the managed-SLURM example/fixture call sites. |
 | Tests added or updated | Added enum/default/invalid/immutability coverage, direct-worker propagation, resident-agent and SLURM-bootstrap caller assertions, package export coverage, and the explicit direct-SLURM fixture owner. |
 | Validated revision/tree state and evidence | Implementation revision `685d538`; focused package/unit lane: 29 passed; focused mixed-route SLURM integration: 1 passed; the isolated earlier guarded-SLURM failure rerun passed unchanged. Fresh `make validate-pr` passed Ruff, Pyright, 2,783 default tests, 157 config-extra tests with 3 expected skips, sdist, and wheel. `make test-summary` on the same implementation tree passed package 121, unit 1959, contract 300, integration 337, e2e 66, and config-extra 157; receipt: `build/test-summary.md` (generated 2026-09-01T00:30:21Z). |
-| Validation-relevant changes after evidence | None. This completion-record update is workflow documentation only. |
+| Validation-relevant changes after evidence | Public feature prose was clarified to retain normal child communication/completion/reaping with the stage, plus this workflow evidence update; no source or test changed, and `git diff --check` passed. |
 | PR, review, and merge | pending manager handling. |
 | Residual risk and cleanup | The first `make validate-pr` had 2,782 passed / 1 unrelated guarded-SLURM timestamp race; its isolated unchanged-tree rerun and the complete fresh gate passed. No Stage 37 code residual risk is known; public semantics remain POSIX/execution-boundary oriented and the worktree/branch remain until PR completion. |
