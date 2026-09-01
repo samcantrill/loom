@@ -175,6 +175,16 @@ Copy the complete immutable assignment, attempt, fence, state-version, and
 target identity from current joined status; do not reconstruct missing values.
 The request deliberately contains no containment claim:
 
+For same-host managed work, targeted admission detail exposes those values on
+their separate owner-labelled axes. Read `stage_work_id`, `stage_name`,
+`attempt`, `agent_id`, and `session_id` from the matching
+`owners["assignment"]["assignments"]` entry; read `process_execution_id` and
+`execution_fence` from the matching `owners["execution"]["journal"]` entry; and
+read the attempt revision `sequence` from the matching
+`authority["attempts"]` entry. These are a non-atomic joined observation, so the
+recovery operation still revalidates the complete identity before persisting
+intent.
+
 ```python
 from loom.queue import ManagedRecoveryTarget, RecoverUnknownAssignment
 
