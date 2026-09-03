@@ -1,5 +1,6 @@
 """Package-level import smoke tests."""
 
+import re
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -145,3 +146,31 @@ def test_project_metadata_exposes_loom_console_script_entry_point() -> None:
 
     assert project["scripts"] == {"loom": "loom.cli.main:main"}
     assert "gui-scripts" not in project
+
+
+def test_weave_dependency_source_is_revision_pinned_and_locked() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    weave_source = pyproject["tool"]["uv"]["sources"]["weave"]
+    git_url = "https://github.com/samcantrill/weave.git"
+
+    assert weave_source["git"] == git_url
+    revision = weave_source["rev"]
+    assert re.fullmatch(r"[0-9a-f]{40}", revision)
+
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    loom_package = next(
+        package for package in lock["package"] if package["name"] == "loom"
+    )
+    weave_package = next(
+        package for package in lock["package"] if package["name"] == "weave"
+    )
+    pinned_url = f"{git_url}?rev={revision}"
+
+    weave_requirements = tuple(
+        requirement
+        for requirement in loom_package["metadata"]["requires-dist"]
+        if requirement["name"] == "weave"
+    )
+    assert len(weave_requirements) == 2
+    assert all(requirement["git"] == pinned_url for requirement in weave_requirements)
+    assert weave_package["source"]["git"] == f"{pinned_url}#{revision}"
