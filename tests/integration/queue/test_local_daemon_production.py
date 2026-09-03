@@ -13,10 +13,11 @@ import sqlite3
 import sys
 from threading import Event, Thread
 import time
-from typing import Never, cast
+from typing import Any, Never, cast
 
 import pytest
 
+import loom.queue._managed_local as managed_local
 from loom.pipeline import PipelineSpec, parse_resource_request
 from loom.queue._managed_local import (
     AssignmentState,
@@ -25,6 +26,7 @@ from loom.queue._managed_local import (
     ManagedAssignment,
     ObserveRequest,
     SQLiteAgentJournal,
+    _assignment_dict,
     _configured_provider_descriptor,
 )
 from loom.queue._agent_process_supervisor import (
@@ -1884,7 +1886,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
 
 
 def test_resident_worker_loss_terminalizes_after_containment_without_output_or_retry(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_root = tmp_path / "runs"
     run_uri = _persist_sleep_run(
@@ -1903,6 +1905,16 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
+    release_entered = Event()
+    release_allowed = Event()
+    original_release_revision = managed_local._release_revision
+
+    def delay_release_revision(**kwargs: object) -> str:
+        release_entered.set()
+        assert release_allowed.wait(10)
+        return cast(Any, original_release_revision)(**kwargs)
+
+    monkeypatch.setattr(managed_local, "_release_revision", delay_release_revision)
     client = daemon.client_view(
         LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
     )
@@ -1913,6 +1925,24 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         _supervisor_id, worker_pid = _running_supervisor_identity(config)
 
         os.kill(worker_pid, signal.SIGKILL)
+        assert release_entered.wait(10)
+        try:
+            daemon.reconcile_once()
+            settling = client.admission(submitted.admission_id)
+            assignment_view = cast(
+                Mapping[str, object], settling.owners["assignment"]
+            )
+            assignments = cast(
+                list[Mapping[str, object]], assignment_view["assignments"]
+            )
+            assert settling.admission.state is LocalDaemonAdmissionState.ACTIVE
+            assert len(assignments) == 1
+            assert assignments[0]["state"] == "logical_released"
+            assert SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).stages[
+                0
+            ].status is StageStatus.FAILED
+        finally:
+            release_allowed.set()
         terminal = client.wait("lost-worker-item", timeout_seconds=10)
 
         detail = client.admission(submitted.admission_id)
@@ -1956,6 +1986,7 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         assert supervisor_state[1] == -signal.SIGKILL
         assert supervisor_state[2] is not None
     finally:
+        release_allowed.set()
         daemon.stop()
 
 
@@ -2160,6 +2191,52 @@ def test_startup_keeps_proven_released_coordinator_capacity_available(
     assert observed.live_claim_ids == ()
 
 
+def test_terminal_settlement_exempts_only_guarded_recovery_retention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _daemon_config(tmp_path)
+    command = _retained_claim(
+        config,
+        assignment_id="retained-unknown",
+        agent_id=config.machine_id,
+    )
+    _coordinator_assignment(
+        config,
+        command.assignment.assignment_id,
+        "unknown",
+        agent_id=config.machine_id,
+        assignment=command.assignment,
+    )
+    execution = _execution(config)
+    terminal = LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.FAILED)
+    try:
+        assert execution._settled_terminal_outcome(  # noqa: SLF001
+            command.assignment.run_uri,
+            terminal,
+            slurm_in_flight=False,
+            slurm_diagnostic=None,
+        ).state is LocalDaemonAdmissionState.ACTIVE
+
+        monkeypatch.setattr(
+            execution,
+            "_recovery_retains_assignment",
+            lambda assignment_id: assignment_id == command.assignment.assignment_id,
+        )
+
+        assert (
+            execution._settled_terminal_outcome(  # noqa: SLF001
+                command.assignment.run_uri,
+                terminal,
+                slurm_in_flight=False,
+                slurm_diagnostic=None,
+            )
+            is terminal
+        )
+    finally:
+        execution.close()
+        execution.supervisor.shutdown_for_test()
+
+
 def test_startup_fails_closed_when_live_coordinator_state_lacks_exact_claim(
     tmp_path: Path,
 ) -> None:
@@ -2249,7 +2326,9 @@ def _execution(config: LocalDaemonConfig) -> LocalDaemonExecution:
     )
 
 
-def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCommand:
+def _retained_claim(
+    config: LocalDaemonConfig, *, assignment_id: str, agent_id: str = "agent"
+) -> ClaimCommand:
     atom = CapacityAtom(
         "cpu", f"{config.machine_id}:cpu", ExactQuantity(1), "count", ExactQuantity(1)
     )
@@ -2269,7 +2348,7 @@ def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCo
         stage_name="stage",
         attempt=1,
         attempt_id="attempt",
-        agent_id="agent",
+        agent_id=agent_id,
         session_id="session",
         offer_id="offer",
         claim_id=f"claim-{assignment_id}",
@@ -2292,7 +2371,12 @@ def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCo
 
 
 def _coordinator_assignment(
-    config: LocalDaemonConfig, assignment_id: str, state: str
+    config: LocalDaemonConfig,
+    assignment_id: str,
+    state: str,
+    *,
+    agent_id: str = "agent",
+    assignment: ManagedAssignment | None = None,
 ) -> None:
     initialize_local_daemon_owner_stores(config)
     import sqlite3
@@ -2305,12 +2389,20 @@ def _coordinator_assignment(
             ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 assignment_id,
-                "{}",
+                (
+                    "{}"
+                    if assignment is None
+                    else json.dumps(
+                        _assignment_dict(assignment),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                ),
                 "file:///retained-run",
                 "work",
                 state,
                 "{}",
-                "agent",
+                agent_id,
                 "session",
                 "offer",
                 f"claim-{assignment_id}",

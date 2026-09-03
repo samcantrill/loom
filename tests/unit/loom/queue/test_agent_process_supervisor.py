@@ -281,26 +281,21 @@ def test_process_free_initialization_requires_serve_and_clean_shutdown(
             client.shutdown_clean()
         assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
         client.shutdown_clean()
+        with pytest.raises(ProcessLookupError):
+            os.kill(process_id, 0)
     finally:
         if client._endpoint.exists():  # noqa: SLF001
             client.shutdown_for_test()
-
-    deadline = monotonic() + 2
-    while monotonic() < deadline:
-        try:
-            os.kill(process_id, 0)
-        except ProcessLookupError:
-            break
-        sleep(0.01)
-    with pytest.raises(ProcessLookupError):
-        os.kill(process_id, 0)
 
     restarted = AgentProcessSupervisorService.start_empty_initialized(
         agent, configuration=configuration
     )
     try:
         assert restarted.continuity_epoch != first_epoch
+        restarted_process_id = restarted.service_process_id
         restarted.shutdown_clean()
+        with pytest.raises(ProcessLookupError):
+            os.kill(restarted_process_id, 0)
     finally:
         if restarted._endpoint.exists():  # noqa: SLF001
             restarted.shutdown_for_test()
