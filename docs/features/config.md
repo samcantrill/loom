@@ -735,34 +735,33 @@ everything else -> string
 ```
 
 
-### 9.1 Project CLI Argv Shorthand
+### 9.1 Project CLI Config-Argument Shorthand
 
 The config-composition surface adds Python helpers for project-specific CLIs
 that want Hydra-like config shorthand without making `weave` own a command-line
 executable:
 
 ```python
-from weave import compose_config_from_argv
+from weave import compose_config_from_args
 
-result = compose_config_from_argv(
+result = compose_config_from_args(
+    "configs/experiment.yaml",
     [
-        "run",
-        "configs/experiment.yaml",
         "data/=data_A",
         "model/=model_B",
         "+runtime/=local",
         "run.seed=123",
         "--dry-run",
     ],
-    command_choices={"run", "inspect"},
     allow_unparsed=True,
 )
 ```
 
-The argv shape is:
+The project CLI parses its own command and base-config selection, then passes a
+config-argument vector shaped as:
 
 ```text
-<command> <base-config> <config-shorthand-or-command-arg>...
+<config-shorthand-or-project-arg>...
 ```
 
 No-slash left-hand sides lower to ordinary override strings and keep the same
@@ -806,17 +805,21 @@ exists. `scope/=` may replace an existing leaf with a mapping; recursive merge
 semantics and `_replace_: true` inside the scoped overlay are otherwise the same
 as regular overlays.
 
-Tokens beginning with `-` are returned as command-specific unparsed args when
+Tokens beginning with `-` are returned as project-specific unparsed args when
 `allow_unparsed=True`; otherwise they fail with structured config errors. The
-helpers validate `command_choices` but do not hard-code command names, print,
-exit, or parse command-specific flags.
+helpers do not print, exit, own project commands, or parse project flags.
 
-`compose_config_from_argv(...)` returns a `ConfigArgvCompositionResult` with the
-selected command, base config path, parsed argv records, unparsed args,
-helper-local warnings, and the `ComposedConfig`. `inspect_config_from_argv(...)`
-is available from `weave.api` and returns a `ConfigArgvInspectionResult` whose
+`compose_config_from_args(...)` returns a `ConfigArgsCompositionResult` with
+the base config path, parsed argument records, unparsed args, helper-local
+warnings, and the `ComposedConfig`. `inspect_config_args(...)` returns a
+`ConfigArgsInspectionResult` whose
 inspection includes an argv-only `argv_scoped_overlays` stage immediately after
 `file_include_expansion`.
+
+The retained `compose_config_from_argv(...)` and
+`inspect_config_from_argv(...)` names accept explicit base-first vectors for
+compatibility. New project adapters should prefer the separate base path and
+config-argument vector above.
 
 Warnings are advisory result data only. `possible_missing_scoped_overlay_slash`
 warns when a no-slash value override targets an existing mapping and the RHS
@@ -1166,8 +1169,9 @@ Recommended API:
 from weave import (
     RecipeCatalog,
     compose_config,
-    compose_config_from_argv,
+    compose_config_from_args,
     compose_config_with_catalog,
+    inspect_config_args,
     inspect_config_composition,
     instantiate,
     register_recipe,
@@ -1176,9 +1180,8 @@ from weave import (
 )
 ```
 
-Detailed argv result, warning, inspection, and parsed-record types are available
-from `weave.api`. The top-level package intentionally exposes only
-`compose_config_from_argv` for argv shorthand.
+Detailed config-argument result, warning, inspection, and parsed-record types
+are available from `weave.api`.
 
 `compose_config`:
 
@@ -1204,8 +1207,8 @@ inspection = inspect_config_composition(
 tests. It exposes stable plain-data stage records for composition decisions; it
 is not a pipeline construction API and callers should not build
 `PipelineSpec`/`StageSpec` objects from inspection internals. Use
-`compose_config` for normal composition, `compose_config_from_argv` for
-project-CLI argv shorthand, `instantiate` for trusted object graphs, and direct
+`compose_config` for normal composition, `compose_config_from_args` for
+project-CLI config shorthand, `instantiate` for trusted object graphs, and direct
 `PipelineSpec` inputs when running a pipeline without `weave`.
 
 `compose_config_with_catalog`:
@@ -1224,9 +1227,9 @@ cfg = compose_config_with_catalog(
 )
 ```
 
-`compose_config` returns a `ComposedConfig`. `compose_config_from_argv` returns
-a `ConfigArgvCompositionResult` whose `composed_config` field is a
-`ComposedConfig` and whose argv metadata fields are helper-local.
+`compose_config` returns a `ComposedConfig`. `compose_config_from_args` returns
+a `ConfigArgsCompositionResult` whose `composed_config` field is a
+`ComposedConfig` and whose config-argument metadata fields are helper-local.
 
 `ComposedConfig` has:
 
@@ -1324,9 +1327,9 @@ Reason:
 
 This contract ships Python helper APIs for project-specific CLIs, not a first-
 party `weave` executable and not Loom CLI behavior. Project CLIs may pass their
-argv fragments to `compose_config_from_argv(...)` or
-`inspect_config_from_argv(...)`, format returned warnings and structured errors
-however they prefer, and keep command-specific flags in `unparsed_args`.
+base selection and config-argument vectors to `compose_config_from_args(...)`
+or `inspect_config_args(...)`, format returned warnings and structured errors
+however they prefer, and keep project-specific flags in `unparsed_args`.
 
 Future Loom CLI commands should wrap the same public APIs without adding
 separate config semantics. For example, a future `loom run` adapter may compose

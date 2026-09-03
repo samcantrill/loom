@@ -22,7 +22,7 @@ config = [
 ]
 
 [tool.uv.sources]
-weave = { git = "https://github.com/samcantrill/weave.git", rev = "31c06ba21e56c25dd8c7c8d06eb3ef1a87827867" }
+weave = { git = "https://github.com/samcantrill/weave.git", rev = "6a99a4d7e6f008748c0761e6ab1c359d62aacbbd" }
 
 [build-system]
 requires = [
