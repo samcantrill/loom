@@ -1716,12 +1716,12 @@ class LocalDaemonExecution:
         snapshot = scoped_authority.open_run(admission.run_uri)
         terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
         if terminal is not None:
-            if slurm_in_flight:
-                return LocalDaemonExecutionOutcome(
-                    LocalDaemonAdmissionState.ACTIVE,
-                    slurm_diagnostic or "SLURM release remains durably in flight",
-                )
-            return terminal
+            return self._settled_terminal_outcome(
+                admission.run_uri,
+                terminal,
+                slurm_in_flight=slurm_in_flight,
+                slurm_diagnostic=slurm_diagnostic,
+            )
         orchestrator.reconcile(
             admission_id=admission.admission_id,
             plan=intent.plan,
@@ -1747,12 +1747,12 @@ class LocalDaemonExecution:
         snapshot = scoped_authority.open_run(admission.run_uri)
         terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
         if terminal is not None:
-            if slurm_in_flight:
-                return LocalDaemonExecutionOutcome(
-                    LocalDaemonAdmissionState.ACTIVE,
-                    slurm_diagnostic or "SLURM release remains durably in flight",
-                )
-            return terminal
+            return self._settled_terminal_outcome(
+                admission.run_uri,
+                terminal,
+                slurm_in_flight=slurm_in_flight,
+                slurm_diagnostic=slurm_diagnostic,
+            )
         if slurm_in_flight or any(
             stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
             for stage in snapshot.stages
@@ -1766,6 +1766,35 @@ class LocalDaemonExecution:
             slurm_diagnostic
             or "no dependency-ready stage currently has managed capacity",
         )
+
+    def _settled_terminal_outcome(
+        self,
+        run_uri: str,
+        terminal: LocalDaemonExecutionOutcome,
+        *,
+        slurm_in_flight: bool,
+        slurm_diagnostic: str | None,
+    ) -> LocalDaemonExecutionOutcome:
+        """Publish terminal truth only after ordinary assignment release settles."""
+
+        if slurm_in_flight:
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.ACTIVE,
+                slurm_diagnostic or "SLURM release remains durably in flight",
+            )
+        retained = self.coordinator.retained_assignments(
+            agent_id=self.config.machine_id
+        )
+        if any(
+            assignment.run_uri == run_uri
+            and not self._recovery_retains_assignment(assignment.assignment_id)
+            for assignment, _receipt in retained
+        ):
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.ACTIVE,
+                "local assignment release remains durably in flight",
+            )
+        return terminal
 
     def schedule_once(
         self, admissions: Mapping[str, LocalDaemonAdmission]

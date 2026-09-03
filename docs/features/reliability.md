@@ -83,6 +83,11 @@ the supported behavior; the authoritative contracts and phase ownership remain i
   an `executor_infrastructure` failure with the observed exit code or signal.
   No outputs are retained or published. This is not guarded-recovery work:
   launch or containment uncertainty still remains unknown and fails closed.
+- A managed-local admission becomes publicly terminal only after every ordinary
+  local assignment for that run has released its provider claims and
+  coordinator capacity. The internal `logical_released` state is still
+  settling, while an assignment explicitly retained by guarded recovery
+  remains the documented exception.
 - Disconnect, timeout, missing PID, expired offer, or credential change does not
   prove failure or containment. Accepted unknown work is not automatically
   reassigned and does not consume retry budget.

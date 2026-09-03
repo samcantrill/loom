@@ -771,6 +771,14 @@ class AgentProcessSupervisorClient:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
             )
+        process_id = status.get("service_process_id")
+        if (
+            isinstance(process_id, bool)
+            or not isinstance(process_id, int)
+            or process_id < 1
+        ):
+            raise AgentProcessSupervisorError("managed supervisor response is invalid")
+        self.service_process_id = process_id
         self.supervisor_id = _required_string(status, "supervisor_id")
         self.continuity_epoch = _required_string(status, "continuity_epoch")
 
@@ -823,10 +831,24 @@ class AgentProcessSupervisorClient:
 
     def _wait_for_shutdown(self) -> None:
         deadline = monotonic() + 2
-        while self._endpoint.exists():
+        while True:
+            try:
+                os.kill(self.service_process_id, 0)
+            except ProcessLookupError:
+                process_exists = False
+            except PermissionError:
+                process_exists = True
+            except OSError as exc:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor process state is unavailable"
+                ) from exc
+            else:
+                process_exists = True
+            if not self._endpoint.exists() and not process_exists:
+                return
             if monotonic() >= deadline:
                 raise AgentProcessSupervisorError(
-                    "managed supervisor endpoint did not stop"
+                    "managed supervisor process did not stop"
                 )
             sleep(0.01)
 
