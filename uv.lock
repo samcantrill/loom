@@ -265,8 +265,8 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
-    { name = "weave", git = "https://github.com/samcantrill/weave.git" },
-    { name = "weave", marker = "extra == 'config'", git = "https://github.com/samcantrill/weave.git" },
+    { name = "weave", git = "https://github.com/samcantrill/weave.git?rev=6a99a4d7e6f008748c0761e6ab1c359d62aacbbd" },
+    { name = "weave", marker = "extra == 'config'", git = "https://github.com/samcantrill/weave.git?rev=6a99a4d7e6f008748c0761e6ab1c359d62aacbbd" },
 ]
 provides-extras = ["config"]
 
@@ -655,7 +655,7 @@ wheels = [
 [[package]]
 name = "weave"
 version = "0.1.0"
-source = { git = "https://github.com/samcantrill/weave.git#31c06ba21e56c25dd8c7c8d06eb3ef1a87827867" }
+source = { git = "https://github.com/samcantrill/weave.git?rev=6a99a4d7e6f008748c0761e6ab1c359d62aacbbd#6a99a4d7e6f008748c0761e6ab1c359d62aacbbd" }
 dependencies = [
     { name = "omegaconf" },
     { name = "pydantic" },

@@ -27,7 +27,7 @@ configuration example surface.
 | Raw source snapshots | Opt in to raw source snapshots and show that the default is metadata-only. |
 | Target instantiation | Keep `_target_` config inert during composition, then explicitly instantiate trusted targets. |
 | Nested target graphs | Construct objects with nested `_target_`, `_args_`, `_partial_`, and `_inject_`. |
-| Project CLI argv shorthand | Show project-owned CLI argv parsed through `compose_config_from_argv`, including scoped overlays, passthrough args, and warnings without implying a first-party `weave` executable. |
+| Project CLI config arguments | Show a project-owned CLI passing an explicit base and config arguments through `compose_config_from_args`, including scoped overlays, passthrough args, and warnings without implying a first-party `weave` executable. |
 | Error handling | Catch structured config errors and inspect context fields. |
 | Import boundaries | Demonstrate that target instantiation can be used separately from YAML composition. |
 
@@ -41,7 +41,7 @@ configuration example surface.
 | `recipes` | Trusted recipe registration, recipe expansion, interpolation, recipe manifest, redaction. | Existing runnable example; keep as the canonical recipe example. |
 | `artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable smoke example that avoids printing secrets and compares two fingerprints. |
 | `target-instantiation` | Nested `_target_` graph, `_args_`, `_partial_`, `_inject_`, explicit instantiation after composition or direct config. | Existing runnable example; extend only if needed for composed handoff. |
-| `project-cli-argv` | `compose_config_from_argv`, command validation, scoped overlays, add/update semantics, passthrough args, and helper-local warnings. | Runnable smoke example for project-owned CLI adapters; it must not document or imply a `weave` console command. |
+| `project-cli-argv` | `compose_config_from_args`, explicit base selection, scoped overlays, add/update semantics, passthrough args, and helper-local warnings. | Runnable smoke example for project-owned CLI adapters; it must not document or imply a `weave` console command. |
 | `config-composition.errors` | Structured exceptions for missing include, invalid override, unsupported resolver, unsupported `_copy_`. | Existing runnable smoke example catches errors and prints context summaries. |
 
 ## Example Coverage Checks
@@ -65,6 +65,6 @@ Each runnable example should have:
 | `recipes` | Recipes, overlays, ordinary overrides, interpolation, redaction, recipe manifest, fingerprint. | Keep; optionally add one source artifact print once docs want artifact reviewability in examples. |
 | `artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprint comparison, `oc.env` resolver facts, redaction, metadata-only snapshot defaults, and raw snapshot opt-in. | Keep output concise and avoid printing raw snapshot content or resolved secret values. |
 | `target-instantiation` | Direct nested target instantiation with `_args_`, `_partial_`, and `_inject_`. | Keep; add a composed-target handoff example only if a separate example would not be clearer. |
-| `project-cli-argv` | Project-owned CLI argv shorthand through `compose_config_from_argv`, scoped overlays, add/update scoped overlay behavior, ordinary overrides, passthrough command args, and warnings. | Keep clear that `weave` exposes Python helpers, not a first-party executable or Loom CLI behavior. |
+| `project-cli-argv` | Project-owned CLI config arguments through `compose_config_from_args`, scoped overlays, add/update scoped overlay behavior, ordinary overrides, passthrough project args, and warnings. | Keep clear that `weave` exposes Python helpers, not a first-party executable or Loom CLI behavior. |
 | `config-composition.errors` | Missing include, invalid include override, unsupported resolver, unsupported `_copy_`, and structured context summaries. | Keep as the canonical config error-handling smoke example. |
 | `execution.local` | Pipeline execution using composed plain config. | Keep under execution examples; do not use it as config artifact evidence. |
