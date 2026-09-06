@@ -54,6 +54,35 @@ protocol method or breaking supported injected runners. Cancellation must still
 reach remaining group members after root exit. This is a candidate to review,
 not authorization to change the public protocol before the design gate.
 
+### Runtime Evidence And Unapproved Candidate
+
+The inspected host exposes SingularityCE 3.10.4 and cgroups v2. Its CLI exposes
+`--pid`, `--no-init`, `--cpus`, and `--memory`. These are availability facts, not
+proof of permitted namespaces, delegated cgroups, or actual container cleanup.
+A bounded unprivileged user/PID-namespace probe failed while writing its UID map;
+that does not establish whether the installed setuid runtime can create a PID
+namespace. No actual image has been selected or executed for this stage.
+
+The [Linux PID namespace contract](https://man7.org/linux/man-pages/man7/pid_namespaces.7.html)
+provides a possible boundary: namespace-init termination causes the kernel to
+kill the namespace's processes, including processes in different process groups.
+The inspected SingularityCE v3.10.4 source uses an init shim with PID isolation
+unless `no-init` is selected (`internal/pkg/runtime/engine/singularity/process_linux.go`)
+and sets a parent-death signal on the namespace process (`cmd/starter/c/starter.c`).
+This suggests investigating runtime `--pid` with its init shim as a containment
+backstop, combined with bounded termination and positive observation of the
+owned launcher boundary. It is not yet an accepted mechanism or proof.
+
+The unresolved composition question is concrete: creating a fresh launcher
+session inside legacy whole-run managed execution can escape that adapter's
+enclosing process group. Conversely, killing the caller's inherited group is
+not safe for direct Python/CLI use. Runtime exit, namespace-init settlement,
+interruption, and physical lease retention must be demonstrated together before
+selecting the mechanism. Do not solve this by relabelling ordinary workers as
+`OUTER_BOUNDARY` without establishing their actual owner, or by adding another
+general supervisor protocol. If the existing owners cannot compose with a
+bounded change, present the required broader ownership design separately.
+
 ## Scope
 
 Approved outcome: configured deadlines, bounded graceful termination and
