@@ -2961,6 +2961,30 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md`](roadmap/stage-29/phases/slurm-ready-stage-delegation.md)
 - [`docs/roadmap/stage-29/phases/agent-controls-cancellation.md`](roadmap/stage-29/phases/agent-controls-cancellation.md)
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
+## v38 - Selective Container Port And Correctness Review
+
+Status: approved selective-port outcome; Phase 1 implementation ready after an
+independent upstream audit. Later container lifecycle implementation remains
+subject to its explicit design review.
+
+Preserve useful local changes without reverting newer upstream run-root, GPU,
+serialization, or managed-execution contracts. The ordered increments are:
+
+1. Keep stage-owned target graphs inert during generic CLI target validation.
+2. Map supported direct-container CPU/memory requests, with truthful runtime
+   enforcement claims and a bounded malformed-allocation grammar correction.
+3. Establish reviewed, tested timeout cleanup and containment ownership before
+   enabling direct-container deadlines; resolve the confirmed legacy queue
+   root-exit/descendant-release gap at its actual owner.
+
+Every implementation requires independent correctness review, current local
+validation, and a PR merged to develop. The original dirty checkout remains
+preserved. Scientific operations, determinism, remote submission APIs, and rphys
+domain-failure transport are excluded.
+
+- [Planning and upstream audit](roadmap/stage-38/planning.md)
+- [Implementation manifest](roadmap/stage-38/implementation-plan.md)
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist

@@ -1,0 +1,173 @@
+# Phase 1 Execution Plan: Stage-Owned Target Validation
+
+## Metadata
+
+- Status: in_progress
+- Roadmap stage and phase: Stage 38, Phase 1
+- Manifest: `docs/roadmap/stage-38/implementation-plan.md`
+- Branch: `agent/stage-38-p1-stage-target-validation`
+- Worktree: `stage-38-p1-stage-target-validation` under the recorded root
+- Base revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
+- PR target: develop
+- PR title: `fix(cli): preserve stage-owned data during target validation`
+- Dependencies: independent upstream audit accepted; no predecessor PR
+- Workflow path: bounded implementation; independently reviewed as required
+- Blockers: none
+
+## Objective And Context
+
+Make `loom validate --check-targets` check outer stage factories and other
+applicable generic targets without independently constructing nested targets
+owned by a stage. This is FR-1 and preserves FR-4 compatibility. The old local
+guard is evidence of the needed projection, not a replacement file to copy.
+Resource mapping, GPU grammar remediation, and process timeouts are later work.
+
+## Current Source And Harness
+
+Primary source is `src/loom/cli/validate.py`: `handle` composes and statically
+validates before checking stage factories and generic targets. The first
+checker consumes the pipeline spec; the second currently receives the complete
+resolved config with only outer factory skip paths. Locked Weave traverses
+children even under a skipped path. Pipeline `stage_factory.py:construct_stage`
+passes factory init values to the outer constructor without generic nested
+instantiation. Stage specs freeze plain data, so init mappings need not be
+mutable dict instances.
+
+Existing orchestration tests are `tests/unit/loom/cli/test_validate.py`; public
+CLI/composition coverage is `tests/e2e/test_cli_core.py`. Existing harmless
+constructor markers live in `tests/support/config_samples.py`. Inspect those
+seams before adding a new fixture. The existing default and JSON/text warning
+tests must retain their meaning. Use the phase worktree's locked Python 3.12
+environment, not the dirty checkout or the active rphys environment.
+
+## Scope
+
+In scope: the smallest validation projection, focused unit and public CLI tests,
+small supporting constructor fixtures if needed, and current configuration/CLI
+documentation. The manager owns Stage 38 planning/manifest metadata; the executor
+updates only this card's workflow/completion receipt.
+
+Out of scope: Weave changes, stage execution, recursive construction of init,
+pipeline parsing redesign, new registry, dependency or durable schema changes,
+resource/timeout implementation, unrelated source formatting, and modifications
+to the original checkout.
+
+Assume authored config is trusted code and target checking is explicit consent
+to construction. This is an ownership correction, not sandboxing or globally
+side-effect-free validation. User constructors remain free to perform their own
+work; Loom must not run nested stage-owned constructors independently.
+
+## Fixed Contracts And Private Discretion
+
+- Outer factory checking remains pipeline-owned and occurs before generic
+  checking. Invalid outer imports, constructor arguments, and non-Stage results
+  still fail with existing error/warning behavior.
+- Generic traversal sees neither pipeline metadata nor stage factory/init and
+  stage config target graphs. Those are data under the existing stage contract.
+- Generic targets outside these owned subtrees remain checked. Do not disable
+  the generic checker or drop unrelated config to obtain a green test.
+- Input composed configuration is unchanged by the projection. Factory init
+  reaches the outer constructor with existing frozen/plain mapping semantics.
+- The checked count is exactly the outer factories plus applicable generic
+  target blocks, not omitted nested stage-owned blocks. Warning code, opt-in
+  consent boundary, JSON envelope, exit codes, and static default stay stable.
+- No run is submitted, stage run method invoked, or run directory created by
+  this change. Public imports and composed/persisted configuration remain intact.
+- Private helper names, detached-copy strategy, and marker-fixture placement
+  are implementation discretion. Prefer the smallest readable projection and
+  existing fixture mechanisms; a new generalized traversal abstraction is not
+  required for this single CLI consumer.
+
+## Proportionality
+
+Reuse the two current checkers and add only the boundary projection between
+composition and generic checking. Skipping the outer path alone was proven
+insufficient; changing Weave traversal globally would change unrelated consumers.
+Do not add arbitrary malformed internal object cases. Public authored data and
+the generic checker boundary are the supported producers under test.
+
+## Invariant Ownership
+
+| Invariant | Owner | Reachable boundary / consequence | Coverage |
+| --- | --- | --- | --- |
+| Stage-owned target graphs remain data | CLI projection | Authored nested targets otherwise run early or with wrong semantics | Public CLI markers in all three owned locations |
+| Outer factory and generic targets are still checked | Existing pipeline and Weave checkers | Overbroad filtering hides invalid unrelated targets | Valid marker counts, invalid outer, invalid generic |
+| Config remains unchanged | Projection | Shared composed data is reused for later interpretation | Nested equality before/after checking |
+| Warnings and counts describe actual behavior | CLI result owner | User misunderstands consent or targets checked | JSON count/warning and existing text/default tests |
+
+## Implementation Slices
+
+1. Inspect the current composition/checker path and existing marker fixtures;
+   establish one failing public regression on the current baseline.
+2. Add the minimal detached validation view and wire only generic checking to it.
+3. Cover metadata, stage config, and init nesting; verify generic targets,
+   invalid outer factories, immutable init semantics, and no input mutation.
+4. Update CLI/config docs to describe which targets run on opt-in consent and
+   which remain stage-owned data. Remove contradictory "all targets" wording
+   only where this command's behavior is documented.
+5. Run the targeted lanes and stable final gates; commit the implementation and
+   complete the phase receipt without preparing a PR.
+
+## Test And Validation Plan
+
+| Suite | Requirement | Minimal assertions |
+| --- | --- | --- |
+| Unit | required | Projection does not mutate inputs; orchestration order, errors, warning/count contracts |
+| E2E | required | Authored YAML through public CLI, real harmless constructors; nested targets inert, outer and unrelated targets checked |
+| Package/contract | final gate | No new public exports/dependencies; existing stage semantics remain compatible |
+| Integration | affected CLI tests and final gate | Existing composition/checking remains functional |
+| Live runtime | not needed for this phase | No execution or host-runtime behavior changes |
+
+Targeted commands:
+
+    .venv/bin/python -m pytest -q tests/unit/loom/cli/test_validate.py tests/e2e/test_cli_core.py
+
+Final commands:
+
+    make validate-pr
+    make test-summary
+
+Run final gates once the validation-relevant tree is stable. Record exact commit
+or tree evidence and summary path; do not reuse old-checkout or baseline receipts
+as implementation validation. A local gate failure must be classified before
+correcting anything outside this phase.
+
+## Risks, Review, And Stops
+
+Main risks are over-filtering unrelated targets, accidental input mutation,
+double construction, altered init semantics, misleading counts, and stale docs.
+Independent review must trace the production path and tests, not merely approve
+the private helper. Stop for a missing public contract, unavoidable unrelated
+changes, source overlap, or a baseline gate failure requiring broader correction.
+Do not perform optional hardening or reopen the approved ownership boundary.
+
+## Executor Handoff
+
+Read Current Source And Harness through this heading, plus Metadata and manifest
+Shared Constraints. Implement slices 1-5 only after the manager records startup
+readiness. You are not alone: do not revert other work. Write only the scoped
+CLI/test/doc owners and this card's receipts. Do not delegate, create workflow
+sidecars, push/open a PR, review, merge, or remove a worktree. Return commits,
+checks, changed paths, and any bounded blocker to the manager.
+
+## Workflow State
+
+- Manager preparation: complete; source, locked baseline, 236-test receipt,
+  independent audit dispositions, scope, and executor packet verified
+- Expanded planning: no new first-phase product decision
+- Implementation: not started
+- Pre-submit gate: pending
+- Independent review: pending
+- Blocker corrections: 0/3
+- PR and merge: pending
+
+## Completion Record
+
+| Item | Result |
+| --- | --- |
+| Implementation and changed paths | not started |
+| Tests added or updated | pending |
+| Validated revision/tree state and evidence | baseline only; implementation pending |
+| Validation-relevant changes after evidence | pending |
+| PR, review, and merge | pending |
+| Residual risk and cleanup | owned worktree retained; original dirty checkout preserved |
