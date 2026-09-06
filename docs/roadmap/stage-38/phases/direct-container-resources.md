@@ -31,6 +31,15 @@ intent. Relevant tests are direct Apptainer command/executor units and
 integration, capability contracts, preflight units, executable SLURM scripts,
 SLURM container composition, and `tests/container_acceptance`.
 
+Two existing boundaries need explicit attention: public `ContainerResourceIntent`
+can be constructed without `ResourceRequest` semantic validation, and
+`slurm/container.py:wrap_slurm_command_with_apptainer` calls the same command
+builder while preserving container resource intent. Include that existing
+wrapper in scope only as necessary to retain scheduler-owned limits. Do not
+infer the execution route from an authored capability record. Preflight's current
+CPU/memory check reports advisory mappings without trying exact byte conversion;
+reuse the command owner's conversion rules rather than duplicating them there.
+
 ## Scope
 
 In scope: deterministic CPU/memory argv conversion, actionable unsupported
@@ -55,6 +64,10 @@ downloads without explicit authority, and host system administration.
   do not report observed host enforcement without actual evidence.
 - Unsupported runtime options must lead to an actionable failure; never retry
   without requested limits or silently degrade into advisory execution.
+  Current missing-worker-result errors carry redacted process metadata but no
+  resource-specific remedy. The new rejection path must explain where to inspect
+  runtime diagnostics and how to supply a compatible runtime/cgroup setup,
+  without claiming every startup failure was caused by resource limits.
 - Preserve upstream GPU passthrough, count validation, redacted metadata, and
   explicit `nv=True`. SLURM remains the CPU/memory enforcement owner on its
   scheduler route; direct flags must not accidentally change that composition.

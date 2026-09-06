@@ -46,6 +46,14 @@ not optional hardening. Its integration/phase placement must be resolved in the
 expanded lifecycle design; do not copy the resident daemon or silently redesign
 the full queue to address it.
 
+Removal-first candidate for A-10: strengthen the built-in process handle's
+terminal observation so its adapter retains/renews leases while the owned group
+still exists, preserving the root exit code separately. Inspect whether that
+can satisfy existing `LocalProcess` obligations without adding a required
+protocol method or breaking supported injected runners. Cancellation must still
+reach remaining group members after root exit. This is a candidate to review,
+not authorization to change the public protocol before the design gate.
+
 ## Scope
 
 Approved outcome: configured deadlines, bounded graceful termination and
