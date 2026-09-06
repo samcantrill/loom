@@ -855,9 +855,12 @@ print success or errors
 ```
 
 Default validation should stay static. `--check-targets` is the explicit consent
-boundary for importing and constructing all `_target_` blocks through
-config-owned APIs after static validation succeeds. The command should warn that
-trusted project constructors may run.
+boundary for importing and constructing generic config `_target_` blocks outside
+`pipeline` after static validation succeeds, and for checking pipeline stage
+factories through the pipeline contract. Other pipeline values, including
+pipeline metadata, each stage's `config`, and `factory.init`, remain data for
+their pipeline or stage owner and are not independently constructed. The command
+should warn that trusted project constructors may run.
 
 Should not:
 

@@ -127,8 +127,7 @@ def handle(namespace: argparse.Namespace) -> int:
         try:
             pipeline_target_result = _check_pipeline_stage_targets(pipeline_result.spec)
             generic_target_result = _check_config_targets(
-                composed.resolved,
-                skip_paths=pipeline_result.stage_factory_target_paths,
+                _generic_target_validation_view(composed.resolved), skip_paths=()
             )
         except Exception as exc:
             _attach_cli_warnings(exc, warnings)
@@ -204,11 +203,22 @@ def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckR
 
 
 def _check_config_targets(
-    config: Mapping[str, object], *, skip_paths: Sequence[str]
+    config: Mapping[str, object], *, skip_paths: Sequence[str] = ()
 ) -> "TargetCheckResult":
     from weave import check_config_targets
 
     return check_config_targets(config, skip_paths=tuple(skip_paths))
+
+
+def _generic_target_validation_view(config: Mapping[str, object]) -> dict[str, object]:
+    """Return the non-pipeline portion of a composed config for generic checks.
+
+    Pipeline mappings are interpreted by pipeline-owned validation and stage
+    construction.  Their target-shaped values are data, rather than generic
+    construction requests.
+    """
+
+    return {key: value for key, value in config.items() if key != "pipeline"}
 
 
 def _write_text_warnings(warnings: Sequence[CliWarning]) -> None:

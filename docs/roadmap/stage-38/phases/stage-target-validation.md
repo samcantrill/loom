@@ -155,7 +155,7 @@ checks, changed paths, and any bounded blocker to the manager.
 - Manager preparation: complete; source, locked baseline, 236-test receipt,
   independent audit dispositions, scope, and executor packet verified
 - Expanded planning: no new first-phase product decision
-- Implementation: not started
+- Implementation: complete; final validation and independent review pending
 - Pre-submit gate: pending
 - Independent review: pending
 - Blocker corrections: 0/3
@@ -165,9 +165,24 @@ checks, changed paths, and any bounded blocker to the manager.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | not started |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | baseline only; implementation pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Generic checker receives a new top-level mapping without `pipeline`; pipeline checker retains outer construction. CLI source, unit/E2E tests, README and CLI docs changed. |
+| Tests added or updated | Real public CLI marker regression (baseline failed at 7 targets versus expected 4), invalid outer and generic targets, projection non-mutation and orchestration. Targeted tests: 24 passed. |
+| Validated revision/tree state and evidence | Final gates pending: interrupted executor lost terminal receipts; parent verified original gate processes ended and no complete summary exists. Missing evidence must be regenerated. |
+| Validation-relevant changes after evidence | None since targeted receipt; only documentation clarified afterward. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | owned worktree retained; original dirty checkout preserved |
+
+The full `pipeline` mapping is excluded from generic construction, rather than
+recursively editing three named subtrees. `PipelineSpec`/`StageSpec` reject
+unknown orchestration fields; accepted metadata, output metadata, resource
+attributes, placement, config, and init values are plain pipeline-owned data.
+`docs/features/execution.md` assigns generic Weave construction outside pipeline
+stage specs and stage construction to the existing pipeline owner. No generic
+construction consumer is removed inside this boundary. Unrelated top-level
+targets retain their original values and generic traversal; the projection itself
+does not mutate composed data.
+
+Manager takeover is limited to the executor's remaining documentation, missing
+gate evidence, and commit: the resumed executor's sandbox failed before command
+execution, while parent commands remained available. No implementation was
+discarded or restarted and no second executor was spawned.
