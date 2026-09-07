@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -267,6 +267,7 @@ def test_timeout_and_cleanup_failure_reject_early_success_before_reading(
     from loom.pipeline.executors.apptainer import SubprocessApptainerExecRunner
 
     store, run_uri, request = _request(tmp_path)
+    assert isinstance(request.resolved_runtime, ResolvedStageRuntimeOptions)
     request = replace(
         request,
         resolved_runtime=replace(
@@ -305,6 +306,7 @@ def test_timeout_and_cleanup_failure_reject_early_success_before_reading(
     assert not result.outputs
     assert result.failure is not None and error in result.failure.message
     fact = result.executor_metadata["reliability_timeout"]
+    assert isinstance(fact, Mapping)
     assert fact["outcome"] == ("timed_out" if timed_out else "enforced")
 
 
@@ -312,6 +314,7 @@ def test_timeout_refuses_injected_runner_before_launch(tmp_path: Path) -> None:
     from dataclasses import replace
 
     store, _, request = _request(tmp_path)
+    assert isinstance(request.resolved_runtime, ResolvedStageRuntimeOptions)
     request = replace(
         request,
         resolved_runtime=replace(
@@ -331,7 +334,9 @@ def test_timeout_refuses_injected_runner_before_launch(tmp_path: Path) -> None:
         result.failure is not None
         and "built-in subprocess runner" in result.failure.message
     )
-    assert result.executor_metadata["reliability_timeout"]["outcome"] == "unsupported"
+    fact = result.executor_metadata["reliability_timeout"]
+    assert isinstance(fact, Mapping)
+    assert fact["outcome"] == "unsupported"
 
 
 def test_apptainer_executor_reads_successful_worker_result(tmp_path: Path) -> None:

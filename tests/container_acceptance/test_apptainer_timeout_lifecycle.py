@@ -158,8 +158,10 @@ def test_real_direct_namespace_settlement(
             assert result.returncode != 0
             if mode != "root_first":
                 assert result.timed_out
+                assert result.error is not None
                 assert result.error.startswith("container execution deadline exceeded")
             if mode == "uncertain":
+                assert result.error is not None
                 assert (
                     "namespace init identity unavailable; cleanup unresolved"
                     in result.error
@@ -232,6 +234,7 @@ def test_deadline_during_runtime_startup_reports_missing_init(
         timeout_seconds=0.2,
     )
     assert result.returncode == 124 and result.timed_out
+    assert result.error is not None
     assert result.error.startswith("container execution deadline exceeded")
     assert "namespace init identity unavailable; cleanup unresolved" in result.error
 
@@ -346,6 +349,7 @@ def test_real_resident_query_then_contain_settles_namespace(
     launch = replace(_launch(supervisor, workspace), profile=profile)
     receipt = supervisor.launch(launch)
     root = receipt.process_id
+    assert root is not None
     handles = {root: os.pidfd_open(root)}
     try:
         deadline = monotonic() + 5
