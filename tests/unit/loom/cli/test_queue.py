@@ -150,6 +150,42 @@ def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
     assert (deployment / "deployment-binding.json").is_file()
 
 
+@pytest.mark.optional_dependency
+def test_queue_role_check_uses_only_its_explicit_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _coordinator_service_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    profile = payload["embedded_profile"]
+    assert isinstance(profile, dict)
+    profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    config.chmod(0o600)
+    environment = tmp_path / "coordinator.env"
+    environment.write_text("LOOM_ROLE_CPU=1\n", encoding="utf-8")
+    environment.chmod(0o600)
+    monkeypatch.setenv("LOOM_ROLE_CPU", "9")
+    stdout = io.StringIO()
+
+    result = main(
+        [
+            "queue",
+            "daemon-check",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert result == 0
+    assert json.loads(stdout.getvalue())["result"]["operation"] == "check"
+    assert not (tmp_path / "deployment").exists()
+
+
 def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> None:
     result = main(
         [

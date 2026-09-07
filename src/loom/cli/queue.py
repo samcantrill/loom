@@ -173,11 +173,19 @@ def register_subparser(
     _add_output_options(slurm_drive)
     slurm_drive.set_defaults(handler=handle_drive_slurm_foreground)
 
+    daemon_check = queue_subparsers.add_parser(
+        "daemon-check",
+        help="validate one protected coordinator role configuration",
+    )
+    _add_role_config_arguments(daemon_check)
+    _add_output_options(daemon_check)
+    daemon_check.set_defaults(handler=handle_daemon_check)
+
     daemon_init = queue_subparsers.add_parser(
         "daemon-init",
         help="initialize one protected coordinator deployment bundle",
     )
-    _add_config_argument(daemon_init)
+    _add_role_config_arguments(daemon_init)
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
 
@@ -185,15 +193,23 @@ def register_subparser(
         "daemon-serve",
         help="serve one initialized coordinator deployment bundle",
     )
-    _add_config_argument(daemon_serve)
+    _add_role_config_arguments(daemon_serve)
     _add_output_options(daemon_serve)
     daemon_serve.set_defaults(handler=handle_daemon_serve)
+
+    agent_check = queue_subparsers.add_parser(
+        "agent-check",
+        help="validate one protected outbound-agent role configuration",
+    )
+    _add_role_config_arguments(agent_check)
+    _add_output_options(agent_check)
+    agent_check.set_defaults(handler=handle_agent_check)
 
     agent_init = queue_subparsers.add_parser(
         "agent-init",
         help="initialize one protected outbound-agent root",
     )
-    _add_config_argument(agent_init)
+    _add_role_config_arguments(agent_init)
     _add_output_options(agent_init)
     agent_init.set_defaults(handler=handle_agent_init)
 
@@ -201,7 +217,7 @@ def register_subparser(
         "agent-serve",
         help="serve one initialized outbound-agent root",
     )
-    _add_config_argument(agent_serve)
+    _add_role_config_arguments(agent_serve)
     _add_output_options(agent_serve)
     agent_serve.set_defaults(handler=handle_agent_serve)
 
@@ -458,6 +474,23 @@ def handle_drive_slurm_foreground(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def handle_daemon_check(namespace: argparse.Namespace) -> int:
+    """Validate one coordinator role without initializing its roots."""
+
+    from loom.queue.deployment import load_coordinator_service_config
+
+    try:
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {"operation": "check", "deployment_root": str(service.daemon.deployment_root)},
+    )
+
+
 def handle_daemon_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete coordinator deployment bundle."""
 
@@ -465,7 +498,9 @@ def handle_daemon_init(namespace: argparse.Namespace) -> int:
     from loom.queue.deployment import load_coordinator_service_config
 
     try:
-        service = load_coordinator_service_config(namespace.config)
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
         LocalDaemon.initialize_deployment(service.daemon)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -493,7 +528,9 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     from loom.queue.deployment import load_coordinator_service_config
 
     try:
-        service = load_coordinator_service_config(namespace.config)
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
@@ -502,7 +539,9 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
 
     def load_replacement():  # type: ignore[no-untyped-def]
         nonlocal pending_service
-        pending_service = load_coordinator_service_config(service.source_path)
+        pending_service = load_coordinator_service_config(
+            service.source_path, env_file=service.environment_path
+        )
         return pending_service.daemon
 
     def prepare_role_reload(replacement):  # type: ignore[no-untyped-def]
@@ -579,6 +618,23 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def handle_agent_check(namespace: argparse.Namespace) -> int:
+    """Validate one outbound agent role without initializing its root."""
+
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {"operation": "agent-check", "agent_root": str(service.client.agent_root)},
+    )
+
+
 def handle_agent_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete outbound-agent role root."""
 
@@ -586,7 +642,9 @@ def handle_agent_init(namespace: argparse.Namespace) -> int:
     from loom.queue.deployment import load_outbound_agent_service_config
 
     try:
-        service = load_outbound_agent_service_config(namespace.config)
+        service = load_outbound_agent_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
         LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -623,7 +681,9 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
     try:
         for handled_signal in handled_signals:
             signal.signal(handled_signal, request_stop)
-        service = load_outbound_agent_service_config(namespace.config)
+        service = load_outbound_agent_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
         _emit_daemon_payload(
             namespace,
             {
@@ -636,7 +696,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
             service,
             stop=stop,
             trusted_config_loader=lambda: load_outbound_agent_service_config(
-                service.source_path
+                service.source_path, env_file=service.environment_path
             ),
         )
     except QueueError as exc:
@@ -1144,6 +1204,17 @@ def _add_config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("config", metavar="CONFIG", help="queue config path")
 
 
+def _add_role_config_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_config_argument(parser)
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="owner-protected dotenv file used only for this role configuration",
+    )
+
+
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -1173,6 +1244,7 @@ __all__ = [
     "build_queue_preflight_result",
     "build_queue_status_result",
     "handle_agent_init",
+    "handle_agent_check",
     "handle_agent_serve",
     "handle_cancel",
     "handle_drain_foreground",
@@ -1184,6 +1256,7 @@ __all__ = [
     "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
+    "handle_daemon_check",
     "handle_daemon_serve",
     "handle_daemon_status",
     "handle_daemon_operation",

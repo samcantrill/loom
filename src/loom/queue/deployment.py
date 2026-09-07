@@ -7,10 +7,13 @@ from dataclasses import dataclass
 import hashlib
 from importlib import import_module
 import json
+import math
 import os
 from pathlib import Path
+import re
 import stat
 from threading import Event
+from types import MappingProxyType
 from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
@@ -62,6 +65,7 @@ class CoordinatorServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
+    environment_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +85,7 @@ class OutboundAgentServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
+    environment_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +96,12 @@ class RunInspectionClientConfig:
     source_path: Path
 
 
-def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfig:
-    source, payload, _ = _load_protected_config(path)
+def load_coordinator_service_config(
+    path: str | Path, *, env_file: str | Path | None = None
+) -> CoordinatorServiceConfig:
+    source, environment_path, payload, _ = _load_protected_config(
+        path, env_file=env_file
+    )
     _required_allowed(
         payload,
         {
@@ -113,6 +122,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
+    payload = _normalize_coordinator_payload(payload)
     fingerprint = _canonical_fingerprint(_coordinator_immutable_projection(payload))
     active_fingerprint = _canonical_fingerprint(_coordinator_active_projection(payload))
     base = source.parent
@@ -166,14 +176,16 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         slurm_profiles=cast(Any, slurm_profiles),
     )
     return CoordinatorServiceConfig(
-        daemon, server, source, fingerprint, active_fingerprint
+        daemon, server, source, fingerprint, active_fingerprint, environment_path
     )
 
 
 def load_outbound_agent_service_config(
-    path: str | Path,
+    path: str | Path, *, env_file: str | Path | None = None
 ) -> OutboundAgentServiceConfig:
-    source, payload, _ = _load_protected_config(path)
+    source, environment_path, payload, _ = _load_protected_config(
+        path, env_file=env_file
+    )
     _required_allowed(
         payload,
         {
@@ -192,6 +204,7 @@ def load_outbound_agent_service_config(
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
+    payload = _normalize_outbound_agent_payload(payload)
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     active_fingerprint = _canonical_fingerprint(_outbound_active_projection(payload))
     base = source.parent
@@ -249,13 +262,14 @@ def load_outbound_agent_service_config(
         source,
         fingerprint,
         active_fingerprint,
+        environment_path,
     )
 
 
 def load_run_inspection_client_config(path: str | Path) -> RunInspectionClientConfig:
     """Load the strict protected v1 remote inspection client configuration."""
 
-    source, payload, _fingerprint = _load_protected_config(path)
+    source, _environment_path, payload, _fingerprint = _load_protected_config(path)
     _exact(
         payload,
         {
@@ -490,24 +504,28 @@ def _open_outbound_agent(
 
 
 def _load_protected_config(
-    path: str | Path,
-) -> tuple[Path, Mapping[str, object], str]:
-    source = Path(path).resolve()
-    if not source.is_file():
-        raise QueueConfigError("deployment config is unavailable")
-    details = source.stat()
-    if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
-        raise QueueConfigError("deployment config must be owner-protected")
+    path: str | Path, *, env_file: str | Path | None = None
+) -> tuple[Path, Path | None, Mapping[str, object], str]:
+    source = _protected_input_path(path, label="deployment config")
+    environment_path, environment = _read_explicit_environment(env_file)
     try:
-        from weave.load import load_config
+        from weave import compose_config
     except ModuleNotFoundError as exc:
         raise QueueConfigError(
             "deployment YAML loading requires Loom's weave dependency"
         ) from exc
     try:
-        loaded, _source = load_config(source, kind="base", order=0)
+        composed = compose_config(source, environment=environment)
     except Exception as exc:  # noqa: BLE001
         raise QueueConfigError("deployment config is invalid") from exc
+    for artifact in composed.source_artifacts:
+        if artifact.kind in {"base", "include"}:
+            _protected_input_path(
+                artifact.path,
+                label="deployment config source",
+                require_owner_only=artifact.kind == "base",
+            )
+    loaded = composed.resolved
     if not isinstance(loaded, Mapping):
         raise QueueConfigError("deployment config must be a mapping")
     plain = thaw_plain_data(cast(Mapping[str, PlainData], loaded), path="deployment")
@@ -518,9 +536,109 @@ def _load_protected_config(
     ).encode("utf-8")
     return (
         source,
+        environment_path,
         cast(Mapping[str, object], plain),
         hashlib.sha256(encoded).hexdigest(),
     )
+
+
+_ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _protected_input_path(
+    path: str | Path, *, label: str, require_owner_only: bool = True
+) -> Path:
+    source = Path(path).resolve()
+    if not source.is_file():
+        raise QueueConfigError(f"{label} is unavailable")
+    details = source.stat()
+    prohibited_mode = 0o077 if require_owner_only else 0o022
+    if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & prohibited_mode:
+        raise QueueConfigError(f"{label} must be owner-protected")
+    return source
+
+
+def _read_explicit_environment(
+    env_file: str | Path | None,
+) -> tuple[Path | None, Mapping[str, str]]:
+    if env_file is None:
+        return None, MappingProxyType({})
+    source = _protected_input_path(env_file, label="deployment environment")
+    try:
+        from dotenv.parser import parse_stream
+
+        with source.open(encoding="utf-8") as stream:
+            bindings = tuple(parse_stream(stream))
+    except (ModuleNotFoundError, OSError, UnicodeError) as exc:
+        raise QueueConfigError("deployment environment is invalid") from exc
+    values: dict[str, str] = {}
+    for binding in bindings:
+        if binding.key is None:
+            if binding.error:
+                raise QueueConfigError("deployment environment is invalid")
+            continue
+        if (
+            binding.error
+            or binding.value is None
+            or _ENVIRONMENT_KEY.fullmatch(binding.key) is None
+            or binding.key in values
+        ):
+            raise QueueConfigError("deployment environment is invalid")
+        values[binding.key] = binding.value
+    return source, MappingProxyType(values)
+
+
+def _normalize_coordinator_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """Normalize role-owned numeric values before identity projections."""
+
+    normalized = dict(payload)
+    normalized["poll_interval_seconds"] = _positive_number(
+        payload, "poll_interval_seconds"
+    )
+    normalized["max_accepted_time_step_seconds"] = _positive_number(
+        payload, "max_accepted_time_step_seconds"
+    )
+    normalized["embedded_profile"] = _normalize_resident_profile(
+        _mapping(payload, "embedded_profile"), "embedded_profile"
+    )
+    server = payload.get("agent_server")
+    if server is not None:
+        normalized["agent_server"] = _normalize_agent_server(
+            _mapping_value(server, "agent_server")
+        )
+    return normalized
+
+
+def _normalize_outbound_agent_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """Normalize outbound role values before identity projections."""
+
+    normalized = dict(payload)
+    normalized["reconnect_seconds"] = _positive_number(payload, "reconnect_seconds")
+    normalized["resident_profiles"] = [
+        _normalize_resident_profile(
+            _mapping_value(value, f"resident_profiles[{index}]"),
+            f"resident_profiles[{index}]",
+        )
+        for index, value in enumerate(_sequence(payload, "resident_profiles"))
+    ]
+    return normalized
+
+
+def _normalize_resident_profile(
+    profile: Mapping[str, object], label: str
+) -> Mapping[str, object]:
+    normalized = dict(profile)
+    normalized["cpu_capacity"] = _positive_int(profile, "cpu_capacity")
+    normalized["memory_capacity_bytes"] = _non_negative_int(
+        profile, "memory_capacity_bytes"
+    )
+    return normalized
+
+
+def _normalize_agent_server(server: Mapping[str, object]) -> Mapping[str, object]:
+    normalized = dict(server)
+    normalized["port"] = _non_negative_int(server, "port")
+    return normalized
 
 
 def _canonical_fingerprint(value: Mapping[str, object]) -> str:
@@ -1074,6 +1192,8 @@ def _executable_path(data: Mapping[str, object], field: str, base: Path) -> Path
 
 def _positive_int(data: Mapping[str, object], field: str) -> int:
     value = data.get(field)
+    if isinstance(value, str) and value.isdecimal():
+        value = int(value)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise QueueConfigError(f"{field} must be a positive integer")
     return value
@@ -1081,6 +1201,8 @@ def _positive_int(data: Mapping[str, object], field: str) -> int:
 
 def _non_negative_int(data: Mapping[str, object], field: str) -> int:
     value = data.get(field)
+    if isinstance(value, str) and value.isdecimal():
+        value = int(value)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise QueueConfigError(f"{field} must be a non-negative integer")
     return value
@@ -1088,7 +1210,17 @@ def _non_negative_int(data: Mapping[str, object], field: str) -> int:
 
 def _positive_number(data: Mapping[str, object], field: str) -> float:
     value = data.get(field)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError as exc:
+            raise QueueConfigError(f"{field} must be positive") from exc
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
         raise QueueConfigError(f"{field} must be positive")
     return float(value)
 
