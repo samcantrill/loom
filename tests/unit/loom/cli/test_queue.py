@@ -734,3 +734,29 @@ def test_explicit_role_io_probe_preserves_existing_files(tmp_path: Path) -> None
     for root in roots:
         assert [item.name for item in root.iterdir()] == ["keep"]
         assert (root / "keep").read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.parametrize("command", ("agent-check", "daemon-check"))
+def test_role_gpu_probe_cli_reports_cpu_inapplicability(
+    tmp_path: Path, command: str
+) -> None:
+    path = (
+        _outbound_agent_service_config(tmp_path)
+        if command == "agent-check"
+        else _coordinator_service_config(tmp_path)
+    )
+    if command == "daemon-check":
+        payload = json.loads(path.read_text())
+        payload["local_agent"] = None
+        path.write_text(json.dumps(payload))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", command, str(path), "--probe-gpu", "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 0 and stderr.getvalue() == ""
+    checks = json.loads(stdout.getvalue())["result"]["checks"]
+    check = next(item for item in checks if item["check_id"] == "resources.gpu_compute")
+    assert check["status"] == "SKIP"
+    assert check["details"]["applicability"] == "inapplicable"

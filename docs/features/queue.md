@@ -905,6 +905,60 @@ unlimited capacity. Legacy profile-only capacity remains readable and receives a
 warning that host limits and GPU selection were not discovered. Neither resource
 enumeration nor an unrequested GPU compute check proves that a kernel ran.
 
+### Optional GPU compute qualification
+
+For an agent that selects GPUs and declares `torch` in its readiness imports or
+required distributions, `--probe-gpu` runs a fixed tiny Torch computation on each
+selected device, sequentially for each resident profile. It uses that profile's
+Python, cwd and explicit environment, plus the active GPU provider's exact device
+binding. It does not install Torch or select an environment manager.
+
+Run the command after initialization and before serving:
+
+```sh
+loom queue agent-init agent.yaml --env-file agent.env
+loom queue agent-check agent.yaml --env-file agent.env --probe-gpu --format json
+loom queue agent-serve agent.yaml --env-file agent.env
+```
+
+For an embedded local agent, use `daemon-init`, `daemon-check --probe-gpu` and
+`daemon-serve` with the coordinator files. During maintenance, settle existing
+work and stop the owning service before probing. Draining a running service is
+insufficient: it still holds the agent's lock. Checks never start a supervisor,
+register an agent, or submit a job to obtain probe ownership.
+
+Only a `PASS` for `resources.gpu_compute` proves that the assigned computation
+and cleanup completed. `SKIP` with `busy/deferred` means the agent is running,
+has retained work, or its provider declined capacity; retry after that condition
+is resolved. CPU-only agents and pure coordinators report `inapplicable` without
+NVIDIA discovery or Torch imports. An unrequested probe reports `SKIP`. A requested
+GPU probe fails if the root is uninitialized, the declared Torch runtime is
+absent, readiness/bindings fail, or computation or cleanup fails. A fresh root is
+not initialized by checking it. The overall report can remain successful when
+GPU compute is skipped; inspect the individual finding when compute qualification
+is required.
+
+Unlike default inspection, this explicit probe persists diagnostic ownership in
+the existing agent journal. Findings include a probe ID for correlation. It uses
+no coordinator assignment, execution grant, training result, or separate database.
+
+| Last durable fact | Meaning on interruption or restart |
+| --- | --- |
+| `reserved` | Exact provider claim persisted before activation; retain capacity. |
+| `launch_intent` | The child may have started; retain capacity. |
+| `contained` | The owned process group is gone, but provider release is not durably complete; retain capacity. |
+| `released` | Process containment and provider release both succeeded and completion was persisted; capacity is available. |
+
+A failed computation still releases its claim when containment and provider
+release are positively established. Uncertain activation, launch, cleanup or
+release leaves the claim held and stops further probes. Rechecking defers;
+restart restores the retained claim and suppresses new execution eligibility.
+The probe is never automatically replayed. Preserve the journal and compatible
+provider/launch binding for verified recovery. A recorded PID, a missing parent,
+or elapsed time cannot prove containment after a crash; there is no automatic
+PID-based cleanup or force-clear probe command. Successful probes retain their
+completion row for ownership inspection.
+
 ### Observed software identity and restart
 
 The role loader derives the existing project, environment and executor

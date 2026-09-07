@@ -550,11 +550,14 @@ def run_role_preflight(
     role: str,
     env_file: str | Path | None = None,
     probe_io: bool = False,
+    probe_gpu: bool = False,
 ) -> "PreflightResult":
     """Inspect one role and aggregate its applicable installation findings.
 
     Default inspection creates no deployment/run/claim state. Explicit IO probes
     touch only private temporary members beneath named, existing execution roots.
+    Explicit GPU probes require initialized idle ownership and persist diagnostic
+    claims until process containment and provider release are established.
     Connection and scientific checks remain with their actual owning operations.
     """
     import os
@@ -605,6 +608,7 @@ def run_role_preflight(
             coordinator = load_coordinator_service_config(
                 config_path, env_file=env_file, _allow_unready=True
             )
+            gpu_configuration = coordinator
             agent = coordinator.local_agent
             profiles = () if agent is None else (agent.profile,)
             agent_root = None if agent is None else agent.agent_root
@@ -618,6 +622,7 @@ def run_role_preflight(
             outbound = load_outbound_agent_service_config(
                 config_path, env_file=env_file, _allow_unready=True
             )
+            gpu_configuration = outbound
             profiles = outbound.client.resident_profiles
             agent_root = outbound.client.agent_root
             roots = () if agent_root is None else (agent_root,)
@@ -772,15 +777,6 @@ def run_role_preflight(
             applicability="unrequested active probe",
         )
     add(
-        "resources.gpu_compute",
-        Group.RESOURCES,
-        Status.SKIP,
-        "GPU enumeration does not establish compute qualification.",
-        owner="agent GPU provider",
-        repair="Use the explicit ownership-aware GPU probe for compute evidence.",
-        applicability="unrequested active probe",
-    )
-    add(
         "scientific.inputs",
         Group.PIPELINE,
         Status.SKIP,
@@ -813,6 +809,20 @@ def run_role_preflight(
             else "Observed installation or private binding differs from initialized ownership.",
             owner="resident supervisor",
             repair="Preserve retained work; settle it before deliberately qualifying a new profile/deployment.",
+        )
+    if probe_gpu and not any(check.status is Status.FAIL for check in checks):
+        from ._gpu_probe import run_role_gpu_probes
+
+        checks.extend(run_role_gpu_probes(gpu_configuration))
+    else:
+        add(
+            "resources.gpu_compute",
+            Group.RESOURCES,
+            Status.SKIP,
+            "GPU enumeration does not establish compute qualification.",
+            owner="agent GPU provider",
+            repair="Repair failed checks, then use --probe-gpu after init and before serve.",
+            applicability="blocked by failed readiness" if probe_gpu else "unrequested active probe",
         )
     return PreflightResult(
         tuple(checks), tuple(dict.fromkeys(item.group for item in checks))

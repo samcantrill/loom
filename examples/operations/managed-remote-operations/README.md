@@ -42,3 +42,13 @@ loom queue daemon-operation-wait \
 
 Use the embedded lifecycle for one machine, or the SLURM journey for an
 explicit ready-stage route.
+
+
+Optional GPU qualification is a maintenance operation. After initializing a GPU
+agent with a declared Torch runtime, and before starting its owning service, run
+`loom queue agent-check agent.yaml --probe-gpu`.
+Use the role files produced or copied for your deployment. A running or retained
+agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
+cleanup. The existing agent journal retains any uncertain claim across restart.
+The CPU journey does not provide physical GPU evidence. See the
+[GPU qualification lifecycle](../../../docs/features/queue.md#optional-gpu-compute-qualification).

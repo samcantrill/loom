@@ -179,6 +179,7 @@ def register_subparser(
     )
     _add_role_config_arguments(daemon_check)
     daemon_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
+    daemon_check.add_argument("--probe-gpu", action="store_true", help="run an owned GPU test on an initialized, stopped local agent")
     _add_output_options(daemon_check)
     daemon_check.set_defaults(handler=handle_daemon_check)
 
@@ -204,6 +205,7 @@ def register_subparser(
     )
     _add_role_config_arguments(agent_check)
     agent_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
+    agent_check.add_argument("--probe-gpu", action="store_true", help="run an owned GPU test on an initialized, stopped agent")
     _add_output_options(agent_check)
     agent_check.set_defaults(handler=handle_agent_check)
 
@@ -625,6 +627,7 @@ def _handle_role_check(namespace: argparse.Namespace, role: str) -> int:
         role=role,
         env_file=namespace.env_file,
         probe_io=namespace.probe_io,
+        probe_gpu=namespace.probe_gpu,
     )
     ok = result.status is not PreflightStatus.FAIL
     payload = result.to_dict()

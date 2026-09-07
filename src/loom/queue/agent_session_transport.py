@@ -3196,7 +3196,8 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("contained assignment claim is unavailable")
         assignment = commands[0].assignment
         if (
-            assignment.assignment_id != assignment_id
+            not isinstance(assignment, ManagedAssignment)
+            or assignment.assignment_id != assignment_id
             or assignment.session_id != session_id
             or any(command.assignment != assignment for command in commands)
         ):

@@ -390,6 +390,7 @@ def test_regular_file_tree_replay_rejects_extra_companion(tmp_path) -> None:
 
 def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) -> None:
     provider, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     del provider
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
@@ -505,6 +506,7 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
 
 def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = replace(command.claim.atoms[0], amount=ExactQuantity(4))
     path = tmp_path / "coordinator.sqlite"
     assignments = (
@@ -548,6 +550,7 @@ def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> 
 
 def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim_atom = replace(capacity, amount=ExactQuantity(1))
     claim = replace(command.claim, atoms=(claim_atom,))
@@ -632,6 +635,7 @@ def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
     tmp_path,
 ) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim = replace(
         command.claim,
@@ -702,6 +706,7 @@ def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
 
 def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim = replace(
         command.claim,
@@ -758,6 +763,7 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     assignment = _assignment()
     provider, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     journal.persist_request(assignment, {"request": "durable"})
     journal.prepare_composite(assignment, (command,), {"cpu": provider})
     journal.accept(assignment.assignment_id)
@@ -788,6 +794,7 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
 
 def test_decision_receipt_is_bounded_and_rejects_secret_material(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
@@ -813,6 +820,7 @@ def test_decision_receipt_is_bounded_and_rejects_secret_material(tmp_path) -> No
 
 def test_coordinator_rejects_stale_stage_work_and_wrong_candidate(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     store = SQLiteStageWorkStore(path)
@@ -841,6 +849,7 @@ def test_coordinator_rejects_stale_stage_work_and_wrong_candidate(tmp_path) -> N
 
 def test_event_replay_after_commit_can_be_acknowledged_exactly_once(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)

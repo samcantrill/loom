@@ -38,3 +38,13 @@ copied project and its installed Python environment. It is not a remote-agent,
 TLS, SLURM, content-relay, or process-manager installation example. For those
 advanced routes, see `managed-remote-operations` and
 `managed-ready-stage-slurm`.
+
+
+Optional GPU qualification is a maintenance operation. After initializing a GPU
+agent with a declared Torch runtime, and before starting its owning service, run
+`loom queue daemon-check coordinator-service.yaml --probe-gpu`.
+Use the role files produced or copied for your deployment. A running or retained
+agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
+cleanup. The existing agent journal retains any uncertain claim across restart.
+The CPU journey does not provide physical GPU evidence. See the
+[GPU qualification lifecycle](../../../docs/features/queue.md#optional-gpu-compute-qualification).

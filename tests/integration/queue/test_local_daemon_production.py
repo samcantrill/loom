@@ -1580,6 +1580,7 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
         config.agent_journal, _allow_initialize=False
     ).retained_claim_commands()
     assert len(retained) == 1
+    assert isinstance(retained[0].assignment, ManagedAssignment)
     assert retained[0].assignment.run_uri == run_uri
     assert _running_supervisor_identity(config) == (supervisor_id, process_id)
 
@@ -2213,6 +2214,7 @@ def test_terminal_settlement_exempts_only_guarded_recovery_retention(
         assignment_id="retained-unknown",
         agent_id=config.machine_id,
     )
+    assert isinstance(command.assignment, ManagedAssignment)
     _coordinator_assignment(
         config,
         command.assignment.assignment_id,

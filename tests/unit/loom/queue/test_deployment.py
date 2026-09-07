@@ -18,6 +18,7 @@ from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
 from loom.queue._remote_stage_execution import GpuDeviceDescriptor
 from loom.queue.deployment import (
     _open_outbound_agent,
+    CoordinatorServiceConfig,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
     load_run_inspection_client_config,
@@ -1218,6 +1219,406 @@ def test_run_inspection_client_config_is_protected_exact_and_path_bound(
     source.chmod(0o644)
     with pytest.raises(QueueConfigError, match="owner-protected"):
         load_run_inspection_client_config(source)
+
+
+_CONTROLLED_TORCH = """
+import os
+from pathlib import Path
+__version__ = "0.0.0"
+class Value:
+    def __init__(self, value): self.value = value
+    def __mul__(self, value): return Value(self.value * value)
+    def sum(self): return self
+    def item(self): return self.value if os.environ.get("PROBE_FAIL") != "1" else -1
+def ones(shape, *, device):
+    if device != "cuda" or os.environ.get("CUDA_VISIBLE_DEVICES") not in {"GPU-a", "GPU-b"}:
+        raise RuntimeError("missing exact provider binding")
+    with Path(os.environ["PROBE_MARKER"]).open("a") as stream:
+        stream.write(os.environ["CUDA_VISIBLE_DEVICES"] + "\\n")
+    return Value(shape[0])
+class cuda:
+    @staticmethod
+    def device_count(): return 1 if os.environ.get("CUDA_VISIBLE_DEVICES") else 0
+    @staticmethod
+    def synchronize(): pass
+"""
+
+
+def _gpu_probe_configuration(
+    tmp_path,
+    monkeypatch,
+    role,
+    *,
+    initialize=True,
+    failed_compute=False,
+    declared_torch=True,
+):
+    """Real role setup with a controlled CUDA interface; no physical GPU claim."""
+    observed = LocalGpuInventory(
+        tuple(
+            LocalGpuDevice(
+                f"GPU-{name}",
+                f"GPU-{name}",
+                host_index=index,
+                model="fixture",
+                vram_bytes=1024,
+            )
+            for index, name in enumerate(("a", "b"))
+        )
+    )
+    monkeypatch.setattr(
+        NvidiaSmiGpuInventoryProvider, "discover", lambda _self: observed
+    )
+    (tmp_path / "torch.py").write_text(_CONTROLLED_TORCH)
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    agent_path = tmp_path / "agent.yaml"
+    payload = json.loads(agent_path.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "0-1"},
+    }
+    profile = payload["resident_profiles"][0]
+    profile["readiness"] = {
+        "imports": ["loom", "torch"],
+        "import_roots": {"torch": "."},
+        "source_roots": ["torch.py"],
+    }
+    if not declared_torch:
+        profile["readiness"] = {"imports": ["loom"]}
+    profile["environment"] = {
+        "PROBE_MARKER": str(tmp_path / "gpu-calls"),
+        "PROBE_FAIL": "1" if failed_compute else "0",
+    }
+    _write_protected(agent_path, payload)
+    if role == "coordinator":
+        config = load_coordinator_service_config(source)
+        if initialize:
+            LocalDaemon.initialize_deployment(config.daemon)
+        root = config.daemon.agent_root
+    else:
+        config = load_outbound_agent_service_config(source)
+        if initialize:
+            LocalDaemonAgentHttpClient.initialize_agent_root(config.client)
+        root = config.client.agent_root
+    assert root is not None
+    return source, root, config
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.parametrize("failed_compute", (False, True))
+def test_gpu_probe_runs_fixed_script_with_owned_binding_and_releases(
+    tmp_path, monkeypatch, role, failed_compute
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, failed_compute=failed_compute
+    )
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    plain = run_role_preflight(source, role=role)
+    assert (
+        next(
+            check for check in plain.checks if check.check_id == "resources.gpu_compute"
+        ).status
+        == "SKIP"
+    )
+    assert not (tmp_path / "gpu-calls").exists()
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 2, report.to_dict()
+    assert all(
+        check.status == ("FAIL" if failed_compute else "PASS") for check in checks
+    ), report.to_dict()
+    assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-a", "GPU-b"]
+    assert journal.retained_claim_commands() == ()
+    with sqlite3.connect(journal.path) as connection:
+        assert connection.execute("SELECT count(*) FROM assignments").fetchone()[0] == 0
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",),
+            ("released",),
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_requires_initialized_root_without_creating_it(
+    tmp_path, monkeypatch, role
+):
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, initialize=False
+    )
+    before = {
+        str(path.relative_to(tmp_path)): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert check.status == "FAIL", report.to_dict()
+    assert not root.exists()
+    assert not (tmp_path / "gpu-calls").exists()
+    assert {
+        str(path.relative_to(tmp_path)): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_defers_while_existing_role_lock_is_held(tmp_path, monkeypatch, role):
+    from loom.queue.local_daemon import _acquire_lock
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(tmp_path, monkeypatch, role)
+    with _acquire_lock(root):
+        report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        check.status == "SKIP" and check.details["applicability"] == "busy/deferred"
+    ), report.to_dict()
+    assert not (tmp_path / "gpu-calls").exists()
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_retains_uncertain_cleanup_and_defers_recheck(
+    tmp_path, monkeypatch, role
+):
+    import loom.queue._gpu_probe as gpu_probe
+    from loom.queue._managed_local import ObserveRequest, SQLiteAgentJournal
+    from loom.queue._resident_probe import ResidentProbeResult
+
+    source, root, config = _gpu_probe_configuration(tmp_path, monkeypatch, role)
+    calls = []
+
+    def uncertain(*args, **kwargs):
+        calls.append(kwargs["device_environment"])
+        return ResidentProbeResult(None, "resident probe cleanup failed", False)
+
+    monkeypatch.setattr(gpu_probe, "run_resident_probe", uncertain)
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 1 and checks[0].status == "FAIL", report.to_dict()
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    retained = journal.retained_claim_commands()
+    assert len(retained) == 1 and len(calls) == 1
+    if isinstance(config, CoordinatorServiceConfig):
+        providers = config.daemon.agent_resource_providers
+        assert providers is not None
+    else:
+        factory = config.client.agent_resource_provider_factory
+        assert factory is not None
+        providers = factory(
+            retained[0].assignment.agent_id, config.client.capacity_profile
+        )
+    provider = next(item for item in providers if item.descriptor.kind == "gpu")
+    provider.restore_capacity_holding(retained[0])
+    observed = provider.observe(
+        ObserveRequest(retained[0].assignment.agent_id, "maintenance", "restart")
+    )
+    assert {atom.local_capacity_key for atom in observed.atoms}.isdisjoint(
+        {atom.local_capacity_key for atom in retained[0].claim.atoms}
+    )
+    again = run_role_preflight(source, role=role, probe_gpu=True)
+    deferred = next(
+        check for check in again.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        deferred.status == "SKIP"
+        and deferred.details["applicability"] == "busy/deferred"
+    ), again.to_dict()
+    assert len(calls) == 1 and journal.retained_claim_commands() == retained
+
+    if isinstance(config, CoordinatorServiceConfig):
+        from loom.queue._agent_process_supervisor import (
+            AgentProcessSupervisorClient,
+            SupervisorLaunchConfiguration,
+        )
+        from loom.queue.local_daemon import _open_root
+
+        try:
+            with pytest.raises(QueueServiceError, match="retained daemon owner state"):
+                LocalDaemon(config.daemon).start()
+            assert journal.retained_claim_commands() == retained
+            assert len(calls) == 1 and not (tmp_path / "gpu-calls").exists()
+        finally:
+            assert config.daemon.resident_worker_launch_profile is not None
+            supervisor = AgentProcessSupervisorClient(
+                root,
+                SupervisorLaunchConfiguration(
+                    _open_root(root, role="local-agent"),
+                    (config.daemon.resident_worker_launch_profile,),
+                ),
+            )
+            supervisor.shutdown_for_test()
+    else:
+        from loom.queue.agent_sessions import AgentOffer, AgentProviderDescriptor
+
+        client = _open_outbound_agent(config.client)
+        try:
+            assert client.resume_retained_work() == ()
+            offer = AgentOffer(
+                "maintenance-session",
+                "epoch",
+                "config",
+                "inventory",
+                "availability",
+                1,
+                0,
+                60,
+                tuple(
+                    AgentProviderDescriptor(item.descriptor, item.claim_contracts)
+                    for item in providers
+                ),
+            )
+            with pytest.raises(
+                QueueConflictError, match="retained remote work cannot advertise"
+            ):
+                client.publish_offer(offer, idempotency_key="probe-restart-offer")
+            with pytest.raises(QueueConflictError, match="retained work"):
+                client.shutdown_clean()
+            assert journal.retained_claim_commands() == retained
+            assert len(calls) == 1 and not (tmp_path / "gpu-calls").exists()
+        finally:
+            # The controlled runner created no process; the test owns that fact.
+            journal.mark_probe_contained(retained[0].assignment.assignment_id)
+            assert journal.release_probe(
+                retained[0].assignment.assignment_id, {"gpu": provider}
+            )
+            client.shutdown_clean()
+            client.close()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_requested_gpu_probe_requires_declared_runtime(tmp_path, monkeypatch, role):
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, declared_torch=False
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert check.status == "FAIL" and "declared Torch" in check.message, (
+        report.to_dict()
+    )
+    assert not (tmp_path / "gpu-calls").exists()
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+
+
+@pytest.mark.parametrize("outcome", ("DECLINED", "INDETERMINATE"))
+def test_gpu_probe_provider_activation_outcome_prevents_launch(
+    tmp_path, monkeypatch, outcome
+):
+    from loom.queue._managed_local import (
+        ClaimOutcome,
+        ClaimResult,
+        GpuResourceProvider,
+        SQLiteAgentJournal,
+    )
+
+    source, root, _ = _gpu_probe_configuration(tmp_path, monkeypatch, "agent")
+    monkeypatch.setattr(
+        GpuResourceProvider,
+        "activate",
+        lambda _self, command: ClaimResult(
+            ClaimOutcome[outcome], command.operation_id, command.claim.fingerprint
+        ),
+    )
+    report = run_role_preflight(source, role="agent", probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert not (tmp_path / "gpu-calls").exists()
+    retained = SQLiteAgentJournal(
+        root / "journal.sqlite", _allow_initialize=False
+    ).retained_claim_commands()
+    if outcome == "DECLINED":
+        assert all(
+            check.status == "SKIP" and check.details["applicability"] == "busy/deferred"
+            for check in checks
+        )
+        assert retained == ()
+    else:
+        assert len(checks) == 1 and checks[0].status == "FAIL"
+        assert len(retained) == 1
+        evidence = checks[0].details["evidence"]
+        assert isinstance(evidence, dict)
+        assert evidence["probe_id"] == retained[0].assignment.assignment_id
+
+
+def test_gpu_probe_launch_exception_preserves_diagnostic_identity(
+    tmp_path, monkeypatch
+):
+    import loom.queue._gpu_probe as gpu_probe
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(tmp_path, monkeypatch, "agent")
+
+    def failed_launch(*args, **kwargs):
+        raise OSError("private launch boundary failed")
+
+    monkeypatch.setattr(gpu_probe, "run_resident_probe", failed_launch)
+    report = run_role_preflight(source, role="agent", probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 1 and checks[0].status == "FAIL"
+    retained = SQLiteAgentJournal(
+        root / "journal.sqlite", _allow_initialize=False
+    ).retained_claim_commands()
+    assert len(retained) == 1
+    evidence = checks[0].details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["probe_id"] == retained[0].assignment.assignment_id
+    assert "private launch" not in json.dumps(report.to_dict())
+    assert not (tmp_path / "gpu-calls").exists()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_cpu_role_gpu_probe_is_inapplicable_without_nvidia_or_torch(
+    tmp_path, monkeypatch, role
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("CPU role must not discover GPUs")
+
+    monkeypatch.setattr(NvidiaSmiGpuInventoryProvider, "discover", forbidden)
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        check.status == "SKIP" and check.details["applicability"] == "inapplicable"
+    ), report.to_dict()
 
 
 def _coordinator_config(tmp_path: Path) -> Path:
