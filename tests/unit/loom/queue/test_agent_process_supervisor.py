@@ -103,6 +103,12 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
     workspace.mkdir()
     launch = _launch(supervisor, workspace)
     original_popen = subprocess.Popen
+    ready = workspace / "child-ready"
+    child_code = (
+        "import os, signal, time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(30)"
+    )
 
     def start_root(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
         return cast(
@@ -112,9 +118,8 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
                     sys.executable,
                     "-c",
                     (
-                        "import signal, subprocess, sys, time; "
-                        "subprocess.Popen([sys.executable, '-c', "
-                        "'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
+                        "import subprocess, sys, time; "
+                        f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
                         "time.sleep(30)"
                     ),
                 ],
@@ -126,8 +131,23 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
         "loom.queue._agent_process_supervisor.subprocess.Popen", start_root
     )
     supervisor.launch(launch)
+    deadline = monotonic() + 3
+    try:
+        while not ready.exists():
+            assert monotonic() < deadline
+            sleep(0.01)
+        child_fd = os.pidfd_open(int(ready.read_text()))
+        try:
+            import select
 
-    assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+            assert not select.select([child_fd], [], [], 0)[0]
+            assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+            assert select.select([child_fd], [], [], 0)[0]
+            assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+        finally:
+            os.close(child_fd)
+    finally:
+        supervisor.contain(launch)
 
 
 def test_clean_shutdown_accepts_an_exited_group_that_is_gone(
@@ -168,8 +188,8 @@ def test_clean_shutdown_contains_descendant_after_root_exits(tmp_path: Path) -> 
         "import subprocess, sys\n"
         "workspace = Path(sys.argv[sys.argv.index('--workspace') + 1])\n"
         "child = subprocess.Popen([sys.executable, '-c', "
-        "\"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "time.sleep(30)\"])\n"
+        '"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+        'time.sleep(30)"])\n'
         "(workspace / 'descendant.pid').write_text(str(child.pid))\n",
         encoding="utf-8",
     )
@@ -186,7 +206,9 @@ def test_clean_shutdown_contains_descendant_after_root_exits(tmp_path: Path) -> 
     from loom.queue._agent_process_supervisor import SupervisorLaunchConfiguration
 
     configuration = SupervisorLaunchConfiguration("agent-A", (profile,))
-    client = AgentProcessSupervisorService.initialize(agent, configuration=configuration)
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=configuration
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     launch = replace(_launch(client, workspace), profile=profile)
@@ -202,6 +224,10 @@ def test_clean_shutdown_contains_descendant_after_root_exits(tmp_path: Path) -> 
             assert monotonic() < deadline
             sleep(0.01)
         os.kill(descendant_pid, 0)
+
+        # Query has published root exit, but must still retain the creation-owned
+        # leader through request-stop and the final containment signal.
+        assert client.request_stop(launch).state is SupervisorLaunchState.EXITED
 
         client.shutdown_clean()
         with sqlite3.connect(agent / "supervisor" / "supervisor.sqlite") as conn:

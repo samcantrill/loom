@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import subprocess
 import inspect
 from collections.abc import Callable, Mapping, Sequence
@@ -49,6 +48,7 @@ from .assignments import (
 )
 from .errors import QueueServiceError
 from .models import QueueItem, QueueItemStatus
+from ._process_group import OwnedProcessGroup, require_group_wait_support
 
 LOCAL_ADAPTER_NAME = "local"
 
@@ -132,6 +132,7 @@ class SubprocessLocalProcessRunner:
         stdout_path: Path | None = None,
         stderr_path: Path | None = None,
     ) -> LocalProcess:
+        require_group_wait_support()
         process_env = None if env is None else {**os.environ, **dict(env)}
         stdout = None if stdout_path is None else stdout_path.open("ab")
         stderr = None if stderr_path is None else stderr_path.open("ab")
@@ -154,24 +155,18 @@ class SubprocessLocalProcessRunner:
 
 class _PopenLocalProcess:
     def __init__(self, popen: subprocess.Popen[bytes]) -> None:
-        self._popen = popen
+        self._group = OwnedProcessGroup(popen)
         self.pid = popen.pid
-        self.pgid = os.getpgid(popen.pid)
+        self.pgid = popen.pid
 
     def poll(self) -> int | None:
-        return self._popen.poll()
+        return self._group.poll()
 
     def terminate(self) -> None:
-        try:
-            os.killpg(self.pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
+        self._group.terminate()
 
     def kill(self) -> None:
-        try:
-            os.killpg(self.pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
+        self._group.kill()
 
 
 class LocalQueueDispatchAdapter:
