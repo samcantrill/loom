@@ -1,16 +1,15 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: Phases 1 and 2 merged; Phase 3 correction implemented, final gates pending
+Status: Phases 1 and 2 merged; Phase 3 reviewed and validated, remote merge pending
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 3 PR #280 cleanup-budget correction, fresh full gates and
-independent closure; Phase 2 PR #278 merged at `0c0dbf2`.
-Blockers: independent implementation review found a renewed managed-cleanup wait
-budget. The maintainer approved one additional bounded correction and verification;
-`6afbaef` implements it without resetting the original correction allowance.
-Affected-consumer tests pass 89 cases and selected-runtime tests pass all 13 cases.
+Current gate: Phase 3 PR #280 remote merge, then final integrated review.
+Blockers: none. Independent verification closes the authorized cleanup-budget
+correction at `6afbaef`. Refreshed combined tree `f1aaa9c` retains the exact phase
+delta and passes both full gates (3,024 summary passes), plus 26 focused cases
+including all 13 selected-runtime cases. Correction allowances are not reset.
 Positive CPU/RAM runtime-limit acceptance remains deferred to a compatible host.
 
 ## Current State
@@ -18,10 +17,10 @@ Positive CPU/RAM runtime-limit acceptance remains deferred to a compatible host.
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published merges verified; baseline and Phase 2 independently accepted; Phase 3 correction passes 89 affected-consumer and 13 live-runtime checks | Fresh Phase 3 full gates and independent closure pending | Retain exact-tree receipts for final integrated review |
+| Evidence | Baseline and all phase implementations independently reviewed; latest full gates pass 3,024 summary cases and 26 focused composition cases including 13 live-runtime cases | Phase 3 remote merge and final integrated review pending | Retain exact-tree receipts for final integrated review |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Scheduling-only policy and timeout kernel/init mechanism independently accepted; bounded correction locks signal-before-reap ownership | None within the recorded mechanism | Implement the exact phase-card contracts |
-| Implementation | Phases 1 and 2 merged; Phase 3 implemented in PR #280 with both existing managed group owners and the approved non-renewable cleanup deadline correction | Fresh full gates and independent correction verification pending | Close review finding, merge, then review the integrated develop tree |
+| Implementation | Phases 1 and 2 merged; Phase 3 approved in PR #280 after independent closure and fresh combined-tree gates | Remote merge and final integrated review pending | Merge, then review the integrated develop tree |
 
 ## Evidence And Scope
 
@@ -405,7 +404,7 @@ process-cleanup guarantee from either existing command runner.
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
 | FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented; smoke, independent review, and full gates passed |
-| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Existing stage and outer cleanup owners; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | implemented in PR #280; approved cleanup-budget correction awaiting final gates and independent closure |
+| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Existing stage and outer cleanup owners; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | independently reviewed and validated in PR #280; approved for merge |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
 
@@ -670,7 +669,7 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
 | Minimum timeout design justified | Independent removal-first review accepts selected-runtime init observation plus the managed group barrier only with unreaped-root PGID anchoring through the final signal and permanently observation-only processing after root reap; launcher exit remains insufficient and unresolved cleanup retains capacity | pass with identity-preserving signal/reap order locked |
-| Detailed phase traceability and startup readiness | Phases 1 and 2 merged with their required local evidence and independent reviews; FR-3 maps to the timeout card's existing-owner slices, acceptance matrix and approved review correction | pass for design; Phase 3 final gates and independent closure pending |
+| Detailed phase traceability and startup readiness | Phases 1 and 2 merged; FR-3 maps to the reviewed existing-owner mechanism, mutation-sensitive correction tests, real-runtime acceptance and fresh full gates | pass; remote Phase 3 merge and final integrated review pending |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
 | Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
@@ -688,7 +687,9 @@ Historical correction counts are not reset. Phase 3's existing-owner mechanism
 is implemented. Independent implementation review accepted its ownership and
 result-gating behavior but found the managed wait-budget renewal defect. The
 maintainer-authorized `6afbaef` correction passes 89 affected-consumer tests and
-13 live-runtime tests; fresh full gates and independent closure remain required.
+13 live-runtime tests, with independent closure. Refreshed source `f1aaa9c` passes
+both full gates and 26 focused composition cases; its phase delta is unchanged.
+Remote merge and the final integrated review are the remaining delivery steps.
 The implementation review gate must prove the selected foreground `--pid` plus
 init-shim topology, startup/TERM/KILL/interruption behavior, direct pidfd identity
 or unresolved-cleanup failure, and timeout-before-result admission. The managed

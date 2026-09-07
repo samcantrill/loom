@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: approved
 - Roadmap stage and phase: Stage 38, Phase 3
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p3-container-timeout-lifecycle`
@@ -13,9 +13,9 @@
 - Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
   accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
-- Blockers: none in the reviewed code. Independent verification closes the
-  approved cleanup-budget correction at `6afbaef`; fresh full gates remain
-  required before PR #280 may merge. The original 3/3 allowance remains consumed.
+- Blockers: none. Independent verification closes the approved cleanup-budget
+  correction at `6afbaef`; both full gates pass on refreshed source `f1aaa9c`.
+  PR #280 is approved for merge; the original 3/3 allowance remains consumed.
 
 ## Objective And Context
 
@@ -440,28 +440,29 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 - Material handoff anomaly: the executor returned no implementation after its
   capability clarification. The manager implemented the already reviewed scope
   directly; this did not reopen product contracts or introduce another executor.
-- Pre-submit: both full gates passed at earlier production/test revision `3fd6f65`.
-  The approved cleanup-budget correction changes source/tests, so fresh gates are
-  required before merge. PR #280 targets develop; original receipts are preserved.
+- Pre-submit: both full gates pass at refreshed production/test revision `f1aaa9c`:
+  2,863 default plus 161 config-extra passes, lint/types/builds, and 3,024 summary
+  passes with 18 opt-in skips. PR #280 targets develop; only roadmap docs changed
+  afterward. Manager scope, evidence, domain-neutrality and compatibility gate pass.
 - Independent implementation review: initial review at `ae81bbf` against
   `71d2452` accepted the ownership mechanism and frozen timeout-fact reader but
   found managed cleanup-budget renewal. The separately authorized verification
   of correction `8a5c723..6afbaef` closes that finding with no product blockers
-  or localized corrections. Fresh full gates and accurate PR receipts are the
-  remaining merge conditions; only roadmap docs changed after reviewed source.
+  or localized corrections. The byte-identical phase delta survives the reviewed
+  base refresh; both fresh combined-tree gates pass. No review condition remains.
 - Blocker corrections: 3/3 including capability/reporting clarification,
   pre-submit fixture type narrowing, and A-15's frozen timeout-metadata reader
   correction plus completion of real early-result coverage. No public values or
   schemas changed. The maintainer separately approves one additional bounded
   cleanup-budget correction and independent verification; no general budget reset.
 
-### Independent Review Blocker: Non-Renewable Cleanup Budget
+### Resolved Review Finding: Non-Renewable Cleanup Budget
 
 The supported resident `request_stop()` path can call `terminate()` before a
-later or repeated `contain()` call. `OwnedProcessGroup` preserves TERM and KILL
-state, but `contain()` creates a fresh `monotonic() + 4` deadline on each call.
-When post-reap group presence remains uncertain, each call can therefore wait
-another four seconds instead of consuming the remaining original budget.
+later or repeated `contain()` call. Before correction `6afbaef`, the group handle
+preserved TERM and KILL state, but `contain()` created a fresh `monotonic() + 4`
+deadline on each call. When post-reap group presence remained uncertain, each
+call could wait another four seconds instead of consuming the original budget.
 
 The reviewer's deterministic clock/syscall reproduction starts TERM at t=0,
 then calls `contain()` at t=3. That call sends KILL and reaps at t=3 but blocks
@@ -505,7 +506,7 @@ cases pass in 10.91 seconds (`build/cleanup-budget-container.xml`). Independent
 verification closes the original finding at `6afbaef`, confirming the absolute
 deadline, forced-KILL shortening, delayed/repeated calls, one-shot identity and
 reaping, conservative capacity retention and mutation-sensitive regression
-evidence. No additional code findings remain. Fresh full gates are still required.
+evidence. No additional code findings remain; the fresh gates below also pass.
 
 ### Published-Base Refresh
 
@@ -533,8 +534,10 @@ combined-tree gate. The original and concurrently owned develop checkouts remain
 untouched.
 
 All 26 focused composition checks passed in 75.62 seconds at `f1aaa9c` plus
-roadmap-only metadata (`build/refreshed-timeout-composition.xml`). Fresh
-`make validate-pr` and `make test-summary` remain required on this combined tree.
+roadmap-only metadata (`build/refreshed-timeout-composition.xml`). Both fresh full
+gates passed on this combined tree. Receipts and built distributions are copied
+to integration `build/stage-38-p3-f1aaa9c`; summary and composition XML checksums
+match their originals. No source/test changes follow this validated revision.
 
 ## Completion Record
 
@@ -542,10 +545,10 @@ roadmap-only metadata (`build/refreshed-timeout-composition.xml`). Fresh
 | --- | --- |
 | Reviewed mechanism and approved boundaries | Independent mechanism review accepted with signal/reap ordering; static-capability versus attempt-outcome reporting is clarified above using existing owners. Approved SIF and SingularityCE 3.10.4 verified; its path is recorded in `build/pid_namespace_lifecycle_probe.py`, checksum `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`. |
 | Implementation and changed paths | Timeout-only private foreground namespace supervision, existing executor outcome/result gate and capability messages; one private group handle shared by the existing legacy/resident owners. Public protocols, durable formats and `StageContext` values unchanged. Source-mirrored tests, opt-in lifecycle acceptance and reliability/test docs updated. |
-| Real process/runtime tests and validated revision | `3fd6f65`: `build/container-timeout-final.xml`, all 13 selected-runtime cases passed in 11.08 s; `build/timeout-metadata-correction.xml`, 49 related checks passed. Earlier `build/timeout-targeted.xml`: 273 passed, five unrelated optional skips, 238.04 s. Real ready TERM-resistant resident descendant, query/request-stop/shutdown, controlled PGID reuse and lost-ownership checks covered. Opt-in runtime flags and approved image are described below; no resource flags or host changes. |
-| Full local gates | `3fd6f65`: `make validate-pr` passed, including lint, zero type errors, 2,849 default passes, 161 config-extra passes, 18 opt-in skips, sdist/wheel builds (`build/timeout-validate-pr.log`). `make test-summary` passed: 3,010 passes, no failures/errors, 18 opt-in skips in 900.88 s (`build/test-summary.md`, per-suite XML/coverage and `build/timeout-test-summary.log`). All 13 timeout runtime hooks passed separately. Two existing monitor-test unawaited-coroutine warnings remain outside this change. |
-| PR, review, and merge | [#280](https://github.com/samcantrill/loom/pull/280) open against develop. Independent review of `ae81bbf` found the non-renewable-cleanup-budget blocker above; merge held pending authorized correction and verification. |
-| Residual risk and cleanup | Repeated managed containment can exceed its promised wait bound; capacity remains retained safely. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Worktree retained; final receipts copied and checksum-verified in integration `build/stage-38-p3-3fd6f65`. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |
+| Real process/runtime tests and validated revision | `f1aaa9c`: 26 composition cases pass, including all 13 selected-runtime cases and both coordinator compositions (`build/refreshed-timeout-composition.xml`). Earlier correction `6afbaef`: 89 affected-consumer passes, seven process-group checks, and five before-fix failures proving regression sensitivity. Earlier timeout/metadata receipts remain preserved under their exact revisions. No resource flags or host changes. |
+| Full local gates | `f1aaa9c`: `make validate-pr` passes lint, zero type errors, 2,863 default and 161 config-extra tests, 18 opt-in skips, and sdist/wheel builds (`build/refreshed-timeout-validate-pr.log`). `make test-summary` passes 3,024 tests with no failures/errors and 18 opt-in skips in 1,058.03 s (`build/test-summary.md`, per-suite XML/coverage and `build/refreshed-timeout-test-summary.log`). All 13 timeout runtime hooks pass separately. |
+| PR, review, and merge | [#280](https://github.com/samcantrill/loom/pull/280) approved against develop. Independent review and bounded correction verification are closed; the exact phase delta is retained after refresh to `43d02a1`; full gates pass. Remote merge pending. |
+| Residual risk and cleanup | Unsupported prerequisites fail explicitly; static diagnostics never certify execution-host readiness. Conservative post-reap group presence retains capacity and cannot authorize another signal. Original dirty checkout is preserved. Worktree retained until merge; final receipts and distributions copied and checksum-verified in integration `build/stage-38-p3-f1aaa9c`. |
 
 Pre-submit continuation: `make validate-pr` passed for production revision
 `090385a` (2,848 default passes; 161 config-extra passes, 17 opt-in skips), after
