@@ -178,6 +178,7 @@ def register_subparser(
         help="validate one protected coordinator role configuration",
     )
     _add_role_config_arguments(daemon_check)
+    daemon_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
     _add_output_options(daemon_check)
     daemon_check.set_defaults(handler=handle_daemon_check)
 
@@ -202,6 +203,7 @@ def register_subparser(
         help="validate one protected outbound-agent role configuration",
     )
     _add_role_config_arguments(agent_check)
+    agent_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
     _add_output_options(agent_check)
     agent_check.set_defaults(handler=handle_agent_check)
 
@@ -475,33 +477,9 @@ def handle_drive_slurm_foreground(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_check(namespace: argparse.Namespace) -> int:
-    """Validate one coordinator role without initializing its roots."""
+    """Report coordinator and optional local-agent readiness without initialization."""
 
-    from loom.queue.deployment import load_coordinator_service_config
-
-    try:
-        service = load_coordinator_service_config(
-            namespace.config, env_file=namespace.env_file
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(
-        namespace,
-        {
-            "operation": "check",
-            "deployment_root": str(service.daemon.deployment_root),
-            "effective_capacity": (
-                None
-                if service.effective_capacity is None
-                else service.effective_capacity.to_dict()
-            ),
-            "resident_readiness": (
-                None
-                if service.resident_readiness is None
-                else service.resident_readiness.to_dict()
-            ),
-        },
-    )
+    return _handle_role_check(namespace, "coordinator")
 
 
 def handle_daemon_init(namespace: argparse.Namespace) -> int:
@@ -632,33 +610,54 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
 
 
 def handle_agent_check(namespace: argparse.Namespace) -> int:
-    """Validate one outbound agent role without initializing its root."""
+    """Report outbound-agent readiness without initializing its root."""
 
-    from loom.queue.deployment import load_outbound_agent_service_config
+    return _handle_role_check(namespace, "agent")
 
-    try:
-        service = load_outbound_agent_service_config(
-            namespace.config, env_file=namespace.env_file
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(
-        namespace,
-        {
-            "operation": "agent-check",
-            "agent_root": str(service.client.agent_root),
-            "effective_capacity": (
-                None
-                if service.effective_capacity is None
-                else service.effective_capacity.to_dict()
-            ),
-            "resident_readiness": [
-                result.to_dict()
-                for profile in service.client.resident_profiles
-                if (result := profile.readiness_result) is not None
-            ],
-        },
+
+def _handle_role_check(namespace: argparse.Namespace, role: str) -> int:
+    from typing import cast
+    from loom.diagnostics.models import PreflightStatus
+    from loom.queue.preflight import run_role_preflight
+
+    result = run_role_preflight(
+        namespace.config,
+        role=role,
+        env_file=namespace.env_file,
+        probe_io=namespace.probe_io,
     )
+    ok = result.status is not PreflightStatus.FAIL
+    payload = result.to_dict()
+    payload["operation"] = "check" if role == "coordinator" else "agent-check"
+    capacity = next(
+        (check for check in result.checks if check.check_id == "resources.capacity"),
+        None,
+    )
+    payload["effective_capacity"] = (
+        None
+        if capacity is None
+        else cast("Mapping[str, PlainData]", capacity.details["evidence"]).get(
+            "effective_capacity"
+        )
+    )
+    if output_format_from_namespace(namespace) is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=LOCAL_DAEMON_SCHEMA_VERSION,
+                ok=ok,
+                warnings=[],
+                payload_name="result",
+                payload=payload,
+            )
+        )
+    else:
+        for check in result.checks:
+            sys.stdout.write(
+                f"{check.status.value:4}  {check.check_id}  {check.message}\n"
+            )
+            if check.status.value == "FAIL":
+                sys.stdout.write(f"      Repair: {check.details['repair']}\n")
+    return int(ExitCode.SUCCESS if ok else ExitCode.CONFIG)
 
 
 def handle_agent_init(namespace: argparse.Namespace) -> int:

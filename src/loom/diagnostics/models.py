@@ -39,6 +39,11 @@ class PreflightSeverity(StrEnum):
 
 class PreflightGroup(StrEnum):
     CONFIG = "config"
+    SERVICE = "service"
+    PYTHON = "python"
+    PACKAGES = "packages"
+    ENVIRONMENT = "environment"
+    IDENTITY = "identity"
     PIPELINE = "pipeline"
     SELECTORS = "selectors"
     RUNTIME = "runtime"

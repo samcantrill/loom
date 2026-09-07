@@ -659,3 +659,78 @@ def _clock(*values: str):
         return remaining.pop(0)
 
     return next_value
+
+
+def test_role_check_aggregates_findings_before_creating_deployment(
+    tmp_path: Path,
+) -> None:
+    path = _coordinator_service_config(tmp_path)
+    agent_path = tmp_path / "local-agent.yaml"
+    payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    payload["resident_profiles"][0]["readiness"] = {
+        "imports": ["does_not_exist"],
+        "required_environment": ["LOOM_TEST_UNSET"],
+    }
+    agent_path.write_text(json.dumps(payload), encoding="utf-8")
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", "daemon-check", str(path), "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    report = json.loads(stdout.getvalue())
+    assert code == 3 and report["ok"] is False
+    assert stderr.getvalue() == ""
+    checks = report["result"]["checks"]
+    assert {check["check_id"] for check in checks if check["status"] == "FAIL"} == {
+        "packages.required_imports",
+        "environment.worker",
+    }
+    assert (
+        next(check for check in checks if check["check_id"] == "filesystem.role_roots")[
+            "status"
+        ]
+        == "PASS"
+    )
+    assert set(report["result"]["groups"]) == {
+        "config",
+        "service",
+        "python",
+        "packages",
+        "environment",
+        "resources",
+        "filesystem",
+        "pipeline",
+        "identity",
+    }
+    assert all(
+        {"owner", "consequence", "repair", "applicability", "evidence"}
+        <= check["details"].keys()
+        for check in checks
+    )
+    assert not (tmp_path / "deployment").exists()
+    assert str(tmp_path) not in stdout.getvalue()
+
+
+def test_explicit_role_io_probe_preserves_existing_files(tmp_path: Path) -> None:
+    path = _coordinator_service_config(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["local_agent"] = None
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    roots = (tmp_path / "deployment", tmp_path / "runs")
+    for root in roots:
+        root.mkdir()
+        (root / "keep").write_text("existing", encoding="utf-8")
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", "daemon-check", str(path), "--probe-io", "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 0 and stderr.getvalue() == ""
+    checks = json.loads(stdout.getvalue())["result"]["checks"]
+    io_checks = [check for check in checks if check["check_id"] == "filesystem.io"]
+    assert len(io_checks) == 2 and all(check["status"] == "PASS" for check in io_checks)
+    for root in roots:
+        assert [item.name for item in root.iterdir()] == ["keep"]
+        assert (root / "keep").read_text(encoding="utf-8") == "existing"

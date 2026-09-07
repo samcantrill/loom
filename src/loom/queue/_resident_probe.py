@@ -10,7 +10,7 @@ from pathlib import Path
 import selectors
 import subprocess
 import tempfile
-from time import monotonic
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, cast
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -77,6 +77,8 @@ def run_resident_probe(
             {
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "TMPDIR": scratch,
+                "XDG_CACHE_HOME": scratch,
+                "XDG_CONFIG_HOME": scratch,
                 "CUDA_VISIBLE_DEVICES": "",
             }
         )
@@ -102,10 +104,10 @@ def run_resident_probe(
             return ResidentProbeResult(None, "resident probe could not start", True)
 
         group = OwnedProcessGroup(child)
-        stdout, stderr, timed_out, oversized = _drain_and_contain(
+        stdout, stderr, timed_out, oversized, contained = _drain_and_contain(
             child, group, float(timeout_seconds)
         )
-    if not group.contain():
+    if not contained:
         return ResidentProbeResult(None, "resident probe cleanup failed", False)
     if timed_out:
         return ResidentProbeResult(None, "resident probe timed out", True)
@@ -139,7 +141,7 @@ def run_resident_probe(
 
 def _drain_and_contain(
     process: subprocess.Popen[bytes], group: OwnedProcessGroup, timeout_seconds: float
-) -> tuple[bytes, bytes, bool, bool]:
+) -> tuple[bytes, bytes, bool, bool, bool]:
     """Drain both pipes under one budget, then contain before trusting EOF."""
     assert process.stdout is not None and process.stderr is not None
     selector = selectors.DefaultSelector()
@@ -149,13 +151,17 @@ def _drain_and_contain(
     deadline = monotonic() + timeout_seconds
     timed_out = False
     oversized = False
+    contained = False
     try:
-        while selector.get_map():
+        while True:
             remaining = deadline - monotonic()
             if remaining <= 0:
                 timed_out = True
                 break
-            for key, _ in selector.select(min(0.05, remaining)):
+            events = selector.select(min(0.05, remaining)) if selector.get_map() else ()
+            if not selector.get_map():
+                sleep(min(0.01, remaining))
+            for key, _ in events:
                 data = os.read(key.fd, 8192)
                 if not data:
                     selector.unregister(key.fileobj)
@@ -169,6 +175,35 @@ def _drain_and_contain(
         # Root exit is not pipe settlement: terminate the owned group before
         # draining a descendant that inherited either pipe.
         group.kill()
+        contained = group.contain()
+        if contained and not oversized:
+            # The root may have exited with more than one chunk still buffered.
+            # Containment proves EOF can be reached without a live writer.
+            for stream, name in (
+                (process.stdout, "stdout"),
+                (process.stderr, "stderr"),
+            ):
+                while True:
+                    chunk = os.read(stream.fileno(), 8192)
+                    if not chunk:
+                        break
+                    output[name].extend(chunk)
+                    if sum(len(value) for value in output.values()) > _MAX_OUTPUT_BYTES:
+                        oversized = True
+                        break
+                if oversized:
+                    break
     finally:
+        group.kill()
+        if not contained:
+            contained = group.contain()
         selector.close()
-    return bytes(output["stdout"]), bytes(output["stderr"]), timed_out, oversized
+        process.stdout.close()
+        process.stderr.close()
+    return (
+        bytes(output["stdout"]),
+        bytes(output["stderr"]),
+        timed_out,
+        oversized,
+        contained,
+    )

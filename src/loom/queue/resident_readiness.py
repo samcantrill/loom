@@ -1,85 +1,230 @@
-"""Bounded, non-mutating qualification for resident worker profiles.
+"""Observed installation requirements for managed resident workers.
 
-The profile process is the authority for installation facts.  Role files may
-declare the small set of imports, distributions, and local source roots that a
-project needs, but they never assert that those facts are installed.
+Qualification never provisions an environment. Its portable software descriptors
+cover the declared installation subset; launch paths remain private bindings.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
-from pathlib import Path
-import subprocess
-from time import monotonic, sleep
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, cast
 
-from loom.serialization import PlainData, freeze_plain_data
+from loom.diagnostics.models import (
+    PreflightCheckResult,
+    PreflightCheckStatus,
+    PreflightGroup,
+    PreflightSeverity,
+)
+from loom.serialization import PlainData
 
-from ._process_group import OwnedProcessGroup, require_group_wait_support
+from ._resident_probe import run_resident_probe
 
 if TYPE_CHECKING:
     from ._remote_stage_execution import ResidentExecutionProfile
 
 
-_PROBE_TIMEOUT_SECONDS = 5.0
-_PROBE_MAX_OUTPUT_BYTES = 64 * 1024
-_PROBE = r"""
-import hashlib, importlib, importlib.metadata, json, pathlib, platform, sys
-r = json.loads(sys.argv[1])
-out = {"python": {"implementation": platform.python_implementation(), "version": platform.python_version(), "abi": getattr(sys.implementation, "cache_tag", "")}, "imports": {}, "distributions": {}, "sources": {}}
-for name in r["imports"]:
-    try: module = importlib.import_module(name)
-    except Exception: print(json.dumps({"failure": "imports"})); sys.exit(0)
-    out["imports"][name] = getattr(module, "__version__", None)
-for name in r["distributions"]:
-    try: dist = importlib.metadata.distribution(name)
-    except Exception: print(json.dumps({"failure": "distributions"})); sys.exit(0)
-    out["distributions"][name] = dist.version
-for root_name in r["source_roots"]:
+_HANDSHAKE = r"""
+import json, platform, sys, sysconfig
+print(json.dumps({"protocol": "loom.resident-python.v1", "implementation": platform.python_implementation(), "version": list(sys.version_info[:3]), "abi": sysconfig.get_config_var("SOABI") or sys.implementation.cache_tag, "platform": sysconfig.get_platform()}))
+"""
+_INSTALLATION = r"""
+import contextlib, hashlib, importlib, importlib.metadata, json, os, pathlib, shutil, sys, urllib.parse
+request = json.loads(sys.argv[1])
+result = {"protocol": "loom.resident-installation.v1", "imports": {}, "distributions": {}, "sources": [], "environment": {}, "programs": {}, "lockfile": None}
+for name in request["imports"]:
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            module = importlib.import_module(name)
+        paths = list(getattr(module, "__path__", ()))
+        origin = getattr(module, "__file__", None)
+        if origin: paths.append(origin)
+        expected = request["import_roots"].get(name)
+        matches = expected is None or bool(paths) and all(pathlib.Path(path).resolve().is_relative_to(pathlib.Path(expected).resolve()) for path in paths)
+        version = getattr(module, "__version__", None)
+        result["imports"][name] = {"available": True, "origin_matches": matches, "version": version if isinstance(version, str) else None}
+    except Exception:
+        result["imports"][name] = {"available": False, "origin_matches": False, "version": None}
+for name in request["distributions"]:
+    try:
+        distribution = importlib.metadata.distribution(name)
+        origin = json.loads(distribution.read_text("direct_url.json") or "{}")
+        # Editable paths are private. Only immutable remote origins participate
+        # in portable software identity; selected source contents cover edits.
+        immutable = None
+        if "vcs_info" in origin:
+            parsed = urllib.parse.urlsplit(origin.get("url", ""))
+            immutable = {"url": urllib.parse.urlunsplit((parsed.scheme, parsed.hostname or "", parsed.path, "", "")), "commit": origin["vcs_info"].get("commit_id"), "vcs": origin["vcs_info"].get("vcs")}
+        elif origin.get("archive_info", {}).get("hashes"):
+            immutable = {"hashes": origin["archive_info"]["hashes"]}
+        result["distributions"][name] = {"version": distribution.version, "origin": immutable}
+    except Exception:
+        result["distributions"][name] = None
+for root_name in request["source_roots"]:
     root = pathlib.Path(root_name)
-    if not root.is_dir(): print(json.dumps({"failure": "sources"})); sys.exit(0)
+    if not root.is_dir():
+        result["sources"].append(None)
+        continue
     digest = hashlib.sha256()
-    for item in sorted(root.rglob("*")):
-        if not item.is_file() or any(part in {".git", ".venv", "__pycache__"} for part in item.parts): continue
-        relative = item.relative_to(root).as_posix().encode()
-        digest.update(relative + b"\0" + item.read_bytes())
-    out["sources"][root.name] = digest.hexdigest()
-print(json.dumps(out, sort_keys=True, separators=(",", ":")))
+    excluded = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "datasets", "caches", "runs", "build", "dist"}
+    for directory, names, files in os.walk(root):
+        names[:] = sorted(name for name in names if name not in excluded and not pathlib.Path(directory, name).is_symlink())
+        for name in sorted(files):
+            item = pathlib.Path(directory, name)
+            if item.is_symlink() or item.suffix in {".pyc", ".pyo"}: continue
+            relative = item.relative_to(root).as_posix().encode()
+            contents = item.read_bytes()
+            digest.update(len(relative).to_bytes(8, "big") + relative + len(contents).to_bytes(8, "big") + contents)
+    result["sources"].append(digest.hexdigest())
+for name in request["required_environment"]:
+    result["environment"][name] = bool(os.environ.get(name))
+for name in request["required_programs"]:
+    result["programs"][name] = shutil.which(name) is not None
+lockfile = pathlib.Path(request["lockfile"])
+if lockfile.is_file(): result["lockfile"] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 """
 
 
+def readiness_check(
+    check_id: str,
+    group: PreflightGroup,
+    status: PreflightCheckStatus,
+    message: str,
+    *,
+    owner: str,
+    consequence: str,
+    repair: str,
+    applicability: str = "required",
+    evidence: Mapping[str, PlainData] | None = None,
+) -> PreflightCheckResult:
+    """Construct a role finding using the existing diagnostics result contract."""
+
+    return PreflightCheckResult(
+        check_id,
+        group,
+        status,
+        PreflightSeverity.ERROR
+        if status is PreflightCheckStatus.FAIL
+        else (
+            PreflightSeverity.WARNING
+            if status is PreflightCheckStatus.WARN
+            else PreflightSeverity.INFO
+        ),
+        message,
+        {
+            "owner": owner,
+            "consequence": consequence,
+            "repair": repair,
+            "applicability": applicability,
+            "evidence": dict(evidence or {}),
+        },
+    )
+
+
 @dataclass(frozen=True, slots=True)
-class ResidentReadinessCheck:
-    """One redacted, stable qualification finding."""
+class ResidentReadinessRequirements:
+    """Finite installation requirements; versions are exact, Python may be a prefix.
 
-    check_id: str
-    status: str
-    message: str
-    details: Mapping[str, PlainData]
+    Source/import roots and the optional lockfile resolve against the project.
+    Import roots assert the expected location without adding absolute paths to
+    portable identity. Declared distributions alone require presence; entries in
+    distribution_versions additionally require an exact installed version.
+    """
 
-    def to_dict(self) -> dict[str, PlainData]:
-        return {
-            "check_id": self.check_id,
-            "status": self.status,
-            "message": self.message,
-            "details": dict(self.details),
+    imports: tuple[str, ...] = ("loom",)
+    distributions: tuple[str, ...] = ("loom",)
+    source_roots: tuple[str, ...] = ()
+    timeout_seconds: float = 5.0
+    python_version: str | None = None
+    python_implementation: str | None = None
+    python_abi: str | None = None
+    import_roots: Mapping[str, str] = field(default_factory=dict)
+    distribution_versions: Mapping[str, str] = field(default_factory=dict)
+    required_environment: tuple[str, ...] = ()
+    required_programs: tuple[str, ...] = ()
+    lockfile: str = "uv.lock"
+
+    def __post_init__(self) -> None:
+        for values in (
+            self.imports,
+            self.distributions,
+            self.source_roots,
+            self.required_environment,
+            self.required_programs,
+        ):
+            if any(not isinstance(item, str) or not item for item in values) or len(
+                values
+            ) != len(set(values)):
+                raise ValueError("resident readiness declarations are invalid")
+        for values in (self.import_roots, self.distribution_versions):
+            if any(
+                not isinstance(key, str)
+                or not key
+                or not isinstance(value, str)
+                or not value
+                for key, value in values.items()
+            ):
+                raise ValueError(
+                    "resident readiness compatibility requirements are invalid"
+                )
+        distributions = tuple(
+            re.sub(r"[-_.]+", "-", name).lower() for name in self.distributions
+        )
+        versions = {
+            re.sub(r"[-_.]+", "-", name).lower(): version
+            for name, version in self.distribution_versions.items()
         }
+        if len(distributions) != len(set(distributions)) or len(versions) != len(
+            self.distribution_versions
+        ):
+            raise ValueError("resident distribution declarations overlap")
+        object.__setattr__(self, "distributions", distributions)
+        object.__setattr__(self, "distribution_versions", versions)
+        if not set(self.import_roots).issubset(self.imports) or not set(
+            self.distribution_versions
+        ).issubset(self.distributions):
+            raise ValueError(
+                "compatibility requirements must name declared installation members"
+            )
+        if (
+            not isinstance(self.timeout_seconds, int | float)
+            or isinstance(self.timeout_seconds, bool)
+            or not 0 < self.timeout_seconds <= 30
+        ):
+            raise ValueError(
+                "resident readiness timeout must be positive and at most 30 seconds"
+            )
+        if self.python_version is not None and (
+            not isinstance(self.python_version, str)
+            or not 1 <= len(self.python_version.split(".")) <= 3
+            or any(not item.isdecimal() for item in self.python_version.split("."))
+        ):
+            raise ValueError("Python version must have one to three numeric components")
+        for value in (self.python_implementation, self.python_abi, self.lockfile):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError("resident readiness requirement is invalid")
+        object.__setattr__(self, "import_roots", dict(self.import_roots))
+        object.__setattr__(
+            self, "distribution_versions", dict(self.distribution_versions)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class ResidentReadinessResult:
-    """The ephemeral evidence used to qualify one profile operation."""
+    """Ephemeral findings and the observed portable software descriptor fields."""
 
-    checks: tuple[ResidentReadinessCheck, ...]
+    checks: tuple[PreflightCheckResult, ...]
     identity: str | None
+    fingerprints: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
-        return self.identity is not None and all(
-            item.status == "PASS" for item in self.checks
+        return self.identity is not None and not any(
+            check.status is PreflightCheckStatus.FAIL for check in self.checks
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -87,153 +232,281 @@ class ResidentReadinessResult:
             "ok": self.ok,
             "checks": [item.to_dict() for item in self.checks],
             "identity": self.identity,
+            "fingerprints": dict(self.fingerprints),
         }
 
 
-def qualify_resident_profile(
-    profile: "ResidentExecutionProfile",
-) -> ResidentReadinessResult:
-    """Probe the exact worker executable with its launch cwd and environment.
+def _digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
 
-    This creates only a contained temporary process.  It deliberately has no
-    assigned GPU binding and never imports project code beyond declared imports.
+
+def qualify_resident_profile(
+    profile: ResidentExecutionProfile,
+) -> ResidentReadinessResult:
+    """Observe the selected interpreter before loading any declared project import.
+
+    Both subprocesses reuse worker environment/containment. No training object,
+    cache, deployment, run or resource claim is created. Limits cover each probe;
+    cleanup uncertainty is a failure, never permission to release retained work.
     """
 
     requirements = profile.readiness_requirements
-    request = {
+    checks: list[PreflightCheckResult] = []
+
+    def add(
+        check_id: str,
+        group: PreflightGroup,
+        passed: bool,
+        message: str,
+        repair: str,
+        evidence: Mapping[str, PlainData] | None = None,
+    ) -> None:
+        checks.append(
+            readiness_check(
+                check_id,
+                group,
+                PreflightCheckStatus.PASS if passed else PreflightCheckStatus.FAIL,
+                message,
+                owner="resident profile",
+                consequence="New profile eligibility is withheld on failure; retained work keeps its owner.",
+                repair=repair,
+                evidence=evidence,
+            )
+        )
+
+    response = run_resident_probe(
+        profile.launch_profile,
+        _HANDSHAKE,
+        {},
+        timeout_seconds=requirements.timeout_seconds,
+    )
+    python = response.payload
+    valid = (
+        isinstance(python, Mapping)
+        and python.get("protocol") == "loom.resident-python.v1"
+    )
+    if valid:
+        assert python is not None
+        version = python.get("version")
+        valid = (
+            isinstance(version, list)
+            and len(version) == 3
+            and all(
+                isinstance(item, int) and not isinstance(item, bool) and item >= 0
+                for item in version
+            )
+        )
+        valid = valid and all(
+            isinstance(python.get(key), str) and python[key]
+            for key in ("implementation", "abi", "platform")
+        )
+    if response.failure or not valid:
+        add(
+            "python.interpreter",
+            PreflightGroup.PYTHON,
+            False,
+            response.failure
+            or "Selected executable did not return the Python handshake.",
+            "Select an installed compatible Python executable.",
+        )
+        checks.append(
+            readiness_check(
+                "packages.required_imports",
+                PreflightGroup.PACKAGES,
+                PreflightCheckStatus.SKIP,
+                "Package checks require the Python handshake.",
+                owner="resident profile",
+                consequence="Profile eligibility is blocked by python.interpreter.",
+                repair="Repair the selected interpreter first.",
+                applicability="blocked by python.interpreter",
+            )
+        )
+        return ResidentReadinessResult(tuple(checks), None)
+    assert python is not None
+    version = cast(list[int], python["version"])
+    compatible = tuple(version) >= (3, 12, 0)
+    if requirements.python_version is not None:
+        expected = [int(item) for item in requirements.python_version.split(".")]
+        compatible = compatible and version[: len(expected)] == expected
+    compatible = compatible and (
+        requirements.python_implementation is None
+        or python["implementation"] == requirements.python_implementation
+    )
+    compatible = compatible and (
+        requirements.python_abi is None or python["abi"] == requirements.python_abi
+    )
+    add(
+        "python.interpreter",
+        PreflightGroup.PYTHON,
+        compatible,
+        "Selected Python meets declared compatibility."
+        if compatible
+        else "Selected Python does not meet declared compatibility.",
+        "Select the declared Python implementation/version/ABI.",
+        python,
+    )
+    if not compatible:
+        checks.append(
+            readiness_check(
+                "packages.required_imports",
+                PreflightGroup.PACKAGES,
+                PreflightCheckStatus.SKIP,
+                "Imports require a compatible Python.",
+                owner="resident profile",
+                consequence="Profile eligibility is blocked.",
+                repair="Repair Python compatibility first.",
+                applicability="blocked by python.interpreter",
+            )
+        )
+        return ResidentReadinessResult(tuple(checks), None)
+    request: dict[str, PlainData] = {
         "imports": list(requirements.imports),
         "distributions": list(requirements.distributions),
+        "import_roots": {
+            name: str(profile.project_root / root)
+            for name, root in requirements.import_roots.items()
+        },
         "source_roots": [
-            str(profile.project_root / item) for item in requirements.source_roots
+            str(profile.project_root / root) for root in requirements.source_roots
         ],
+        "required_environment": list(requirements.required_environment),
+        "required_programs": list(requirements.required_programs),
+        "lockfile": str(profile.project_root / requirements.lockfile),
     }
-    environment = {
-        "PATH": str(profile.python_executable.parent),
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
-        "PYTHONNOUSERSITE": "1",
-        "PYTHONDONTWRITEBYTECODE": "1",
-        **dict(profile.environment),
-    }
-    try:
-        require_group_wait_support()
-        child = subprocess.Popen(
-            [
-                str(profile.python_executable),
-                "-c",
-                _PROBE,
-                json.dumps(request, separators=(",", ":")),
-            ],
-            cwd=profile.project_root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
-        group = OwnedProcessGroup(child)
-        deadline = monotonic() + requirements.timeout_seconds
-        while group.root_status() is None and monotonic() < deadline:
-            sleep(0.01)
-        if group.root_status() is None:
-            group.kill()
-            group.contain()
-            return _failed("python.interpreter", "resident Python probe timed out")
-        assert child.stdout is not None
-        output = child.stdout.read(_PROBE_MAX_OUTPUT_BYTES + 1)
-        # The probe root can exit before an imported library's helper.  Retain
-        # the unreaped leader as the group anchor and settle that owned tree.
-        group.kill()
-        if not group.contain():
-            return _failed("python.interpreter", "resident Python probe cleanup failed")
-    except OSError:
-        return _failed("python.interpreter", "resident Python probe could not start")
-    if group.returncode != 0:
-        return _failed("python.interpreter", "resident Python probe failed")
-    if len(output) > _PROBE_MAX_OUTPUT_BYTES:
-        return _failed(
-            "python.interpreter", "resident Python probe output exceeded its bound"
-        )
-    try:
-        observed = json.loads(output)
-        frozen = freeze_plain_data(observed, path="resident readiness")
-        if not isinstance(frozen, Mapping):
-            raise ValueError
-    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        return _failed(
-            "python.interpreter", "resident Python probe returned invalid evidence"
-        )
-    failure = observed.get("failure")
-    if failure == "imports" or failure == "distributions":
-        return _failed(
-            "packages.required_imports", "declared package or import is unavailable"
-        )
-    if failure == "sources":
-        return _failed("execution.source", "declared source root is unavailable")
-    if failure is not None:
-        return _failed(
-            "python.interpreter", "resident Python probe returned invalid evidence"
-        )
-    checks = [
-        ResidentReadinessCheck(
-            "python.interpreter",
-            "PASS",
-            "selected Python responded",
-            {
-                "implementation": observed["python"]["implementation"],
-                "version": observed["python"]["version"],
-            },
-        ),
-        ResidentReadinessCheck(
-            "packages.required_imports",
-            "PASS",
-            "declared imports resolved",
-            {"count": len(requirements.imports)},
-        ),
-    ]
-    identity = hashlib.sha256(
-        json.dumps(observed, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    return ResidentReadinessResult(tuple(checks), identity)
-
-
-def _failed(check_id: str, message: str) -> ResidentReadinessResult:
-    return ResidentReadinessResult(
-        (ResidentReadinessCheck(check_id, "FAIL", message, {}),), None
+    response = run_resident_probe(
+        profile.launch_profile,
+        _INSTALLATION,
+        request,
+        timeout_seconds=requirements.timeout_seconds,
     )
+    observed = response.payload
+    valid = (
+        observed is not None
+        and observed.get("protocol") == "loom.resident-installation.v1"
+        and all(
+            isinstance(observed.get(key), Mapping)
+            for key in ("imports", "distributions", "environment", "programs")
+        )
+        and isinstance(observed.get("sources"), list)
+    )
+    if response.failure or not valid:
+        add(
+            "packages.required_imports",
+            PreflightGroup.PACKAGES,
+            False,
+            response.failure or "Installation probe returned invalid evidence.",
+            "Repair the declared imports and their bounded probe behavior.",
+        )
+        return ResidentReadinessResult(tuple(checks), None)
+    assert observed is not None
+    imports = cast(Mapping[str, Mapping[str, object]], observed["imports"])
+    distributions = cast(
+        Mapping[str, Mapping[str, object] | None], observed["distributions"]
+    )
+    imports_ok = set(imports) == set(requirements.imports) and all(
+        isinstance(item, Mapping)
+        and item.get("available") is True
+        and item.get("origin_matches") is True
+        for item in imports.values()
+    )
+    distributions_ok = set(distributions) == set(requirements.distributions) and all(
+        isinstance(item, Mapping)
+        and isinstance(item.get("version"), str)
+        and (
+            name not in requirements.distribution_versions
+            or item["version"] == requirements.distribution_versions[name]
+        )
+        for name, item in distributions.items()
+    )
+    add(
+        "packages.required_imports",
+        PreflightGroup.PACKAGES,
+        imports_ok and distributions_ok,
+        "Declared imports, origins and distributions match."
+        if imports_ok and distributions_ok
+        else "A declared import, origin or distribution is missing or incompatible.",
+        "Install the declared project/package versions in the selected environment and correct import roots.",
+        {
+            "imports": len(requirements.imports),
+            "distributions": len(requirements.distributions),
+        },
+    )
+    environment_ok = observed["environment"] == {
+        name: True for name in requirements.required_environment
+    } and observed["programs"] == {
+        name: True for name in requirements.required_programs
+    }
+    add(
+        "environment.worker",
+        PreflightGroup.ENVIRONMENT,
+        environment_ok,
+        "Declared worker environment and programs are available."
+        if environment_ok
+        else "A required worker variable or program is unavailable.",
+        "Set explicit profile variables and PATH/program requirements; daemon variables are not inherited.",
+    )
+    sources = cast(list[object], observed["sources"])
+    sources_ok = len(sources) == len(requirements.source_roots) and all(
+        isinstance(item, str) and len(item) == 64 for item in sources
+    )
+    add(
+        "execution.source",
+        PreflightGroup.IDENTITY,
+        sources_ok,
+        "Declared source evidence is available."
+        if sources_ok
+        else "A declared source root is unavailable.",
+        "Install the declared source roots; dataset/cache/run roots are not source evidence.",
+        {"roots": len(sources), "lockfile_digest": observed.get("lockfile")},
+    )
+    if any(check.status is PreflightCheckStatus.FAIL for check in checks):
+        return ResidentReadinessResult(tuple(checks), None)
+    fingerprints = {
+        "project_fingerprint": _digest(
+            {"imports": imports, "sources": sorted(cast(list[str], sources))}
+        ),
+        "environment_fingerprint": _digest(
+            {"python": python, "distributions": distributions}
+        ),
+        "executor_fingerprint": _digest(
+            {
+                "worker": "loom.queue._resident_stage_worker",
+                "protocol": "resident-v3",
+                "python": python,
+            }
+        ),
+    }
+    identity = _digest(fingerprints)
+    add(
+        "execution.identity",
+        PreflightGroup.IDENTITY,
+        True,
+        "Observed software descriptor fields are qualified.",
+        "Requalify a new profile/deployment after retained work settles if this identity changes.",
+        {
+            "identity": identity,
+            "descriptor": {**profile.descriptor.to_dict(), **fingerprints},
+        },
+    )
+    return ResidentReadinessResult(tuple(checks), identity, fingerprints)
 
 
-@dataclass(frozen=True, slots=True)
-class ResidentReadinessRequirements:
-    """Finite project-supplied installation evidence for one profile."""
+def qualified_resident_profile(
+    profile: ResidentExecutionProfile,
+) -> ResidentExecutionProfile:
+    """Return a profile carrying one operation's observation and derived descriptor."""
 
-    imports: tuple[str, ...] = ()
-    distributions: tuple[str, ...] = ()
-    source_roots: tuple[str, ...] = ()
-    timeout_seconds: float = _PROBE_TIMEOUT_SECONDS
-
-    def __post_init__(self) -> None:
-        for values, label in (
-            (self.imports, "imports"),
-            (self.distributions, "distributions"),
-            (self.source_roots, "source_roots"),
-        ):
-            if len(values) != len(set(values)) or any(
-                not isinstance(item, str)
-                or not item
-                or item.startswith("/")
-                or ".." in Path(item).parts
-                for item in values
-            ):
-                raise ValueError(f"resident readiness {label} are invalid")
-        if len({Path(item).name for item in self.source_roots}) != len(
-            self.source_roots
-        ):
-            raise ValueError("resident readiness source roots are ambiguous")
-        if (
-            not isinstance(self.timeout_seconds, float | int)
-            or isinstance(self.timeout_seconds, bool)
-            or not 0 < self.timeout_seconds <= 30
-        ):
-            raise ValueError("resident readiness timeout is invalid")
-        object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
+    result = qualify_resident_profile(profile)
+    descriptor = profile.descriptor
+    if result.ok:
+        descriptor = replace(descriptor, **dict(result.fingerprints))
+    return replace(
+        profile,
+        descriptor=descriptor,
+        readiness_identity=result.identity,
+        readiness_result=result,
+    )
