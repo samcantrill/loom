@@ -25,6 +25,22 @@ from loom.pipeline.runtime.capabilities import ResourceCapability
 
 pytestmark = [pytest.mark.slow, pytest.mark.optional_dependency]
 
+_RESOURCE_LIMIT_PROBE = (
+    'i=0; while [ "$i" -lt 1000 ]; do i=$((i + 1)); done; '
+    "cgroup=$(awk -F: '$1 == \"0\" {print $3; exit}' /proc/self/cgroup) || "
+    "{ echo 'cannot read payload cgroup membership; use an image with awk and "
+    "readable /proc/self/cgroup' >&2; exit 1; }; "
+    'if [ -z "$cgroup" ]; then '
+    "echo 'payload cgroup-v2 membership is missing; use a compatible "
+    "unified-cgroup runtime session' >&2; exit 1; fi; "
+    'cat "/sys/fs/cgroup${cgroup}/cpu.max" || '
+    "{ echo 'cannot read payload cpu.max; use a session exposing payload "
+    "cgroup-v2 controls' >&2; exit 1; }; "
+    'cat "/sys/fs/cgroup${cgroup}/memory.max" || '
+    "{ echo 'cannot read payload memory.max; use a session exposing payload "
+    "cgroup-v2 controls' >&2; exit 1; }"
+)
+
 
 def test_real_docker_command_available() -> None:
     if os.environ.get("LOOM_RUN_DOCKER_ACCEPTANCE") != "1":
@@ -119,15 +135,7 @@ def test_real_apptainer_cpu_memory_limits_are_applied() -> None:
     generated = build_apptainer_exec_command(
         container_options=ContainerOptions(image=str(image_path), resources=resources),
         apptainer_options=ApptainerExecOptions(command=command),
-        worker_command=(
-            "sh",
-            "-c",
-            "i=0; while [ \"$i\" -lt 1000 ]; do i=$((i + 1)); done; "
-            "cgroup=$(awk -F: '$1 == \"0\" {print $3; exit}' /proc/self/cgroup); "
-            "test -n \"$cgroup\"; "
-            "cat \"/sys/fs/cgroup${cgroup}/cpu.max\"; "
-            "cat \"/sys/fs/cgroup${cgroup}/memory.max\"",
-        ),
+        worker_command=("sh", "-c", _RESOURCE_LIMIT_PROBE),
     )
 
     completed = subprocess.run(  # noqa: S603 - generated production argv.

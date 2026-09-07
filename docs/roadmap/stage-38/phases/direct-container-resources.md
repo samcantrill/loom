@@ -176,9 +176,12 @@ administration, or timeout implementation. Return exact validation and blockers.
 - Expanded planning: no new resource/public decision; independent implementation
   review remains required and live acceptance is explicitly not waived
 - Implementation and required offline validation: complete at `7b28cb3`
-- Independent correctness review: in progress; pre-submit, PR and merge held for
-  required live acceptance
-- Blocker corrections: 0/3
+- Independent correctness review: no offline runtime product blocker; one
+  localized acceptance-probe correction required. Pre-submit, PR and merge
+  remain held for fresh corrected-tree validation and required live acceptance.
+- Blocker corrections: 1/3; make membership lookup and both control reads fail
+  closed, with host-free executable-shell regressions. Full prior gate receipts
+  are stale for the corrected test tree until refreshed.
 
 ## Completion Record
 
