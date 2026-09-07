@@ -1,12 +1,14 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phases 1 and 2 merged; Phase 3 validated, independent review pending
+Status: Phases 1 and 2 merged; Phase 3 blocked by independent implementation review
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 3 — container-timeout-lifecycle
-Blockers: none; independent implementation review remains pending.
+Blockers: Phase 3 renews its managed cleanup observation budget on repeated
+containment calls. The 3/3 correction allowance is exhausted; one additional
+bounded correction requires maintainer direction. PR #280 remains unmerged.
 Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
 The maintainer authorized this specific correction and a fresh bounded independent
 verification, without resetting other budgets. Targeted checks pass 80 tests and
@@ -63,7 +65,7 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
 | 2 | direct-container-resources | merged | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
-| 3 | container-timeout-lifecycle | in_progress | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container timeout/result gate and existing legacy/resident managed group owners, tests/docs | Truthful deadlines and supported-process cleanup |
+| 3 | container-timeout-lifecycle | blocked | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | [#280](https://github.com/samcantrill/loom/pull/280) | Container timeout/result gate and existing legacy/resident managed group owners, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
 
@@ -89,8 +91,9 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
   fallback warnings. The separately approved `04443ed` correction adds visible
   mapping warnings for mixed explicit/implicit stages without inventing runtime
   limits. Fresh full gates and independent closure passed; PR #278 merged at `0c0dbf2`.
-  Phase 3's card now locks the independently reviewed mechanism and is ready
-  for its implementation/acceptance pass.
+  Phase 3's independently reviewed mechanism is implemented and its local gates
+  pass, but independent implementation review found a bounded-cleanup violation.
+  The phase card records the required correction and exhausted allowance.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
   adapter options, with `runtime` default and explicit `scheduling_only`. The
   selected-policy live smoke is required; positive hard-limit proof on a suitable
@@ -112,9 +115,15 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
   that same contract to both existing queue group owners: legacy `local.py` and
   resident `_agent_process_supervisor.py`. No new owner, public protocol or durable
   schema is approved. The manager completed implementation after an empty executor
-  handoff. Targeted acceptance passes 273 tests, including all 12 new selected-runtime
-  cases; five unrelated optional runtime hooks skip. Independent implementation
-  review and fresh full gates remain mandatory; exact evidence lives in the card.
+  handoff. Final production/test revision `3fd6f65` passes both full gates, with
+  3,010 summary passes and 13 separate live-runtime passes. Independent review
+  of PR #280 at `ae81bbf` found that repeated managed containment calls restart
+  the observation wait budget. Capacity remains retained safely, but synchronous
+  control calls can exceed the accepted bound. Use one absolute, non-renewable
+  cleanup deadline in the existing handle; after expiry, later calls must observe
+  immediately without another wait or signal/reap sequence. This correction is
+  not yet authorized because the phase's 3/3 allowance is exhausted. Exact
+  review and validation evidence lives in the card; merge is held.
 - Previously approved A-13 pre-grant retry correction: reproduce a transient pre-grant control-response
   failure, reuse the existing bounded assignment retry owner, and independently
   review cancellation/replay and exhausted-retry retention. No global retry,
@@ -146,7 +155,7 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
 | 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
-| 3 | pending | `3fd6f65`: timeout/result gate, legacy/resident identity-safe cleanup and frozen timeout-fact reader; 273 earlier targeted passes, 49 correction checks, 13 final live-runtime passes; both full gates passed, 3,010 summary passes / 18 opt-in skips | independent implementation review pending; supported runtime remains explicitly bounded | isolated phase worktree retained |
+| 3 | [#280](https://github.com/samcantrill/loom/pull/280) open, unmerged | `3fd6f65`: timeout/result gate, legacy/resident identity-safe cleanup and frozen timeout-fact reader; 273 earlier targeted passes, 49 correction checks, 13 final live-runtime passes; both full gates passed, 3,010 summary passes / 18 opt-in skips | independent review at `ae81bbf` blocks merge: repeated containment renews the cleanup wait budget; 3/3 corrections consumed, further bounded correction needs maintainer direction | isolated phase worktree retained; receipts copied to integration `build/stage-38-p3-3fd6f65` |
 
 Final integrated review must verify all selected changes on their merged
 develop revision, not just each PR in isolation. The overall stage is incomplete

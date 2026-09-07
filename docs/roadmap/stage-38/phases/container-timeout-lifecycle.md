@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 38, Phase 3
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p3-container-timeout-lifecycle`
@@ -13,8 +13,10 @@
 - Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
   accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
-- Blockers: none for the bounded reviewed mechanism; implementation and runtime
-  acceptance must still prove it before PR/merge
+- Blockers: independent implementation review found that repeated managed
+  containment calls renew the cleanup observation budget. The 3/3 correction
+  allowance is exhausted; one further bounded correction needs maintainer
+  direction. PR #280 is open and must not merge until correction and verification.
 
 ## Objective And Context
 
@@ -441,12 +443,47 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
   directly; this did not reopen product contracts or introduce another executor.
 - Pre-submit: both full gates passed at production/test revision `3fd6f65`;
   only roadmap metadata changed afterward. Manager scope, preserved contracts,
-  domain neutrality and current evidence checks passed. Independent implementation
-  review, PR and merge pending.
+  domain neutrality and current evidence checks passed. PR #280 targets develop.
+- Independent implementation review: completed against PR head `ae81bbf` and
+  base `71d2452`; not merge-eligible. One product blocker remains: the shared
+  managed handle renews its observation wait budget on every `contain()` call.
+  No other qualified findings were returned. The identity-order mechanism and
+  frozen timeout-fact reader were otherwise accepted.
 - Blocker corrections: 3/3 including capability/reporting clarification,
   pre-submit fixture type narrowing, and A-15's frozen timeout-metadata reader
   correction plus completion of real early-result coverage. No public values or
   schemas changed. Any further qualified blocker requires maintainer direction.
+
+### Independent Review Blocker: Non-Renewable Cleanup Budget
+
+The supported resident `request_stop()` path can call `terminate()` before a
+later or repeated `contain()` call. `OwnedProcessGroup` preserves TERM and KILL
+state, but `contain()` creates a fresh `monotonic() + 4` deadline on each call.
+When post-reap group presence remains uncertain, each call can therefore wait
+another four seconds instead of consuming the remaining original budget.
+
+The reviewer's deterministic clock/syscall reproduction starts TERM at t=0,
+then calls `contain()` at t=3. That call sends KILL and reaps at t=3 but blocks
+another 4.02 seconds; a second call blocks another 4.02 seconds without another
+signal or reap. The manager verified the fresh-deadline code and the accepted
+two-second TERM plus two-second KILL/observation contract. Current reuse coverage
+makes the group absent before `contain()`, so it does not cover repeated calls
+while conservative group presence persists.
+
+Capacity retention remains safe; the defect is repeated synchronous control
+blocking beyond the accepted cleanup bound. The proposed bounded remedy is one
+absolute, non-renewable cleanup/observation deadline owned by the existing
+handle, including its forced-kill path. Delayed calls consume only remaining
+time. After expiry, later calls perform an immediate settlement observation:
+return false while presence is uncertain, and true once absence is positively
+observed. Preserve one-shot signaling/reaping and prohibit post-reap signals.
+Add deterministic delayed-stop/repeated-containment coverage proving that waits,
+signals and reaping are not renewed. No new public contract or owner is needed.
+
+This remedy is proposed, not implemented or newly authorized. The exhausted
+correction allowance requires maintainer direction before a further bounded
+implementation and independent verification. Passing existing gates does not
+override the review hold.
 
 ## Completion Record
 
@@ -456,8 +493,8 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 | Implementation and changed paths | Timeout-only private foreground namespace supervision, existing executor outcome/result gate and capability messages; one private group handle shared by the existing legacy/resident owners. Public protocols, durable formats and `StageContext` values unchanged. Source-mirrored tests, opt-in lifecycle acceptance and reliability/test docs updated. |
 | Real process/runtime tests and validated revision | `3fd6f65`: `build/container-timeout-final.xml`, all 13 selected-runtime cases passed in 11.08 s; `build/timeout-metadata-correction.xml`, 49 related checks passed. Earlier `build/timeout-targeted.xml`: 273 passed, five unrelated optional skips, 238.04 s. Real ready TERM-resistant resident descendant, query/request-stop/shutdown, controlled PGID reuse and lost-ownership checks covered. Opt-in runtime flags and approved image are described below; no resource flags or host changes. |
 | Full local gates | `3fd6f65`: `make validate-pr` passed, including lint, zero type errors, 2,849 default passes, 161 config-extra passes, 18 opt-in skips, sdist/wheel builds (`build/timeout-validate-pr.log`). `make test-summary` passed: 3,010 passes, no failures/errors, 18 opt-in skips in 900.88 s (`build/test-summary.md`, per-suite XML/coverage and `build/timeout-test-summary.log`). All 13 timeout runtime hooks passed separately. Two existing monitor-test unawaited-coroutine warnings remain outside this change. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No outstanding capability decision. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Independent implementation review remains. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |
+| PR, review, and merge | [#280](https://github.com/samcantrill/loom/pull/280) open against develop. Independent review of `ae81bbf` found the non-renewable-cleanup-budget blocker above; merge held pending authorized correction and verification. |
+| Residual risk and cleanup | Repeated managed containment can exceed its promised wait bound; capacity remains retained safely. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Worktree retained; final receipts copied and checksum-verified in integration `build/stage-38-p3-3fd6f65`. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |
 
 Pre-submit continuation: `make validate-pr` passed for production revision
 `090385a` (2,848 default passes; 161 config-extra passes, 17 opt-in skips), after
@@ -470,4 +507,5 @@ also writes a valid success file before expiry through a shell worker-protocol
 fixture; the production executor/runner rejects it before reading. This closes
 the real early-result acceptance case in addition to the 12 earlier runtime cases.
 The final `make validate-pr` and 13-case live-runtime acceptance passed at
-`3fd6f65`, including this correction. Suite summary also passed; independent review remains.
+`3fd6f65`, including this correction. Suite summary also passed; independent review
+subsequently found the cleanup-budget blocker recorded above.
