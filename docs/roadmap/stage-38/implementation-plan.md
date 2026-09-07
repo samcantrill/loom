@@ -6,7 +6,7 @@ Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — stage-target-validation
-Blockers: none for Phase 1; independent review pending. Later phases require
+Blockers: none for Phase 1; independent review passed. Later phases require
 runtime acceptance prerequisites and the explicit timeout design gate.
 
 ## Summary
@@ -47,7 +47,7 @@ runtime acceptance prerequisites and the explicit timeout design gate.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | stage-target-validation | in_progress | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | pending | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
+| 1 | stage-target-validation | approved | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
 | 2 | direct-container-resources | pending | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct command mapping, capabilities/preflight, A-9 SLURM correction, tests/docs | Map CPU/memory requests without upstream GPU regression |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
@@ -74,7 +74,7 @@ runtime acceptance prerequisites and the explicit timeout design gate.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review pending | owned worktree retained |
+| 1 | #277 approved; merge pending | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | owned worktree retained |
 | 2 | pending | not started | host acceptance pending | not created |
 | 3 | pending | not started | design gate pending | not created |
 

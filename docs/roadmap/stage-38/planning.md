@@ -1,11 +1,11 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first-phase implementation and local validation complete; review pending
+Status: first-phase implementation, validation, and independent review passed
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 1 independent PR review; upstream audit independently accepted.
+Current gate: Phase 1 merge; upstream audit and implementation independently accepted.
 Blockers: no Phase 1 blocker; timeout design and runtime evidence remain open.
 
 ## Current State
@@ -16,7 +16,7 @@ Blockers: no Phase 1 blocker; timeout design and runtime evidence remain open.
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; 236 tests passed and independent audit accepted | A-9 and A-10 need later bounded corrections | Preserve retained upstream behavior |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 CLI guard and public regression implemented; A-11 corrected; both required local gates passed | Independent phase review pending; Phase 3 retains its explicit design gate | Review and merge only the ready validation phase |
+| Implementation | Phase 1 CLI guard and public regression implemented; A-11 corrected; both local gates and independent PR review passed | Remote merge pending; Phase 3 retains its explicit design gate | Merge the approved validation phase |
 
 ## Evidence And Scope
 
