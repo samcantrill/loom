@@ -511,12 +511,36 @@ timeout intent can be delegated to scheduler submission where possible
 controller may observe scheduler timeout facts after the attempt
 ```
 
-Containers:
+Apptainer/Singularity:
 
-```text
-timeout may wrap the container runtime command in a future adapter
-container runtime-specific stop behavior should be recorded
-```
+An enabled policy uses the built-in subprocess runner's foreground PID namespace
+(`--pid --no-init=false`). The currently verified path is Linux with pidfds and
+non-reaping child waits, running SingularityCE 3.10.4 (including the `-focal`
+build). Other runtimes, injected runners, and instance/join modes are not admitted
+for enabled timeouts. Static capability diagnostics describe this supported
+path; they do not probe a remote execution host. Unsupported selections fail with
+an actionable message and an `unsupported` attempt outcome.
+
+The deadline includes runtime admission and launch. Expiry remains the primary
+failure, followed by at most two seconds of TERM grace and two seconds of KILL
+and settlement observation. The runner observes a creation-linked namespace-init
+pidfd: launcher exit alone is insufficient. Cleanup uncertainty is additional
+failure context, never success. Timeout or uncertain cleanup rejects the worker
+result **before reading it**, even if the worker already wrote a success result.
+
+Managed local execution retains its enclosing process group. Both built-in queue
+owners retain the unreaped root as the identity anchor through their final group
+signal, then reap once and only observe group absence. Capacity remains held
+while settlement is uncertain. On the verified namespace path, init remains in
+that group through descendant teardown, including separate-session payloads.
+An exited root alone cannot release capacity; a reused numeric group can delay
+release but can never authorize a new signal. This is not protection against the
+death of the actual outer process owner or a hostile container payload.
+
+Without an enabled timeout, container invocation keeps its existing behavior:
+no forced namespace, runtime-version restriction, or added CPU/RAM limits.
+Timeouts are independent of `cpu_memory_enforcement: scheduling_only`; they do
+not require cgroup delegation or host service changes.
 
 Stage 17 records Docker process timeout fields when supplied by the command
 runner, but it does not add a user-facing timeout policy.

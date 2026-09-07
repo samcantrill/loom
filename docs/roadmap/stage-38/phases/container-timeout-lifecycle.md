@@ -387,11 +387,13 @@ Targeted implementation gate (expand only for changed adjacent owners):
       tests/contracts/test_executor_capabilities_contract.py \
       tests/contracts/test_reliability_contract.py \
       tests/unit/loom/queue/test_local_adapter.py \
+      tests/unit/loom/queue/test_process_group.py \
       tests/unit/loom/queue/test_agent_process_supervisor.py \
       tests/unit/loom/queue/test_resident_stage_worker.py \
       tests/integration/queue/test_agent_session_transport.py \
       tests/contracts/test_stage_worker_contract.py \
       tests/container_acceptance/test_real_container_runtimes.py \
+      tests/container_acceptance/test_apptainer_timeout_lifecycle.py \
       tests/package/test_import_boundaries.py
 
 Final commands:
@@ -429,9 +431,12 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
   `0786e55` locks group identity through the final signal
 - Manager startup: kernel/runtime receipts, 161 baseline passes, exact source
   owners and repeated resident identity-order path verified; ready for one executor
-- Implementation: ready to resume after the repository-resolved capability
-  clarification above; no source/test changes yet. Static supported capability,
-  launch prerequisites and actual attempt outcome stay distinct.
+- Implementation: manager-owned implementation complete; targeted gate passed
+  273 tests with five unrelated optional-runtime skips. Static supported
+  capability, launch prerequisites and actual attempt outcome stay distinct.
+- Material handoff anomaly: the executor returned no implementation after its
+  capability clarification. The manager implemented the already reviewed scope
+  directly; this did not reopen product contracts or introduce another executor.
 - Pre-submit gate, independent implementation review, PR and merge: pending
 - Blocker corrections: 1/3; bounded capability/reporting clarification, using
   existing public values and attempt metadata only
@@ -441,7 +446,7 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 | Item | Result |
 | --- | --- |
 | Reviewed mechanism and approved boundaries | Independent mechanism review accepted with signal/reap ordering; static-capability versus attempt-outcome reporting is clarified above using existing owners. Approved SIF and SingularityCE 3.10.4 verified; its path is recorded in `build/pid_namespace_lifecycle_probe.py`, checksum `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`. |
-| Implementation and changed paths | No production or test changes. This phase card records the stop only. |
-| Real process/runtime tests and validated revision | Implementation checks not run yet. Reuse the 161-test baseline at `855a4f6` and the separate mechanism receipts; none is final acceptance. |
+| Implementation and changed paths | Timeout-only private foreground namespace supervision, existing executor outcome/result gate and capability messages; one private group handle shared by the existing legacy/resident owners. Public protocols, durable formats and `StageContext` values unchanged. Source-mirrored tests, opt-in lifecycle acceptance and reliability/test docs updated. |
+| Real process/runtime tests and validated revision | `build/timeout-targeted.xml`: 273 passed, five unrelated optional skips, 238.04 s. Includes all 12 new selected-runtime cases, real ready TERM-resistant resident descendant, query/request-stop/shutdown, controlled PGID reuse and lost-ownership checks. Run with `LOOM_RUN_APPTAINER_TIMEOUT_ACCEPTANCE=1`, `LOOM_APPTAINER_COMMAND=singularity` and the previously approved `LOOM_APPTAINER_RESOURCE_IMAGE`; no resource flags or host changes. Full gates pending. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No outstanding capability decision; resume the same bounded executor. Unsupported prerequisites fail explicitly, and static diagnostics never claim observed host enforcement. All implementation, runtime and independent review gates remain. |
+| Residual risk and cleanup | No outstanding capability decision. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Required full gates and independent implementation review remain. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |

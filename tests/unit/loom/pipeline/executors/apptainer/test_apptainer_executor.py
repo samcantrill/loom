@@ -37,6 +37,7 @@ from loom.pipeline.planning import (
     plan_pipeline,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.reliability import ReliabilityPolicy, TimeoutPolicy
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
@@ -249,6 +250,90 @@ def _worker_failure(run_uri: str) -> StageWorkerResult:
     )
 
 
+@pytest.mark.parametrize(
+    "timed_out,error",
+    [
+        (True, "container execution deadline exceeded; cleanup unresolved"),
+        (False, "namespace init identity unavailable; cleanup unresolved"),
+    ],
+)
+def test_timeout_and_cleanup_failure_reject_early_success_before_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timed_out: bool,
+    error: str,
+) -> None:
+    from dataclasses import replace
+    from loom.pipeline.executors.apptainer import SubprocessApptainerExecRunner
+
+    store, run_uri, request = _request(tmp_path)
+    request = replace(
+        request,
+        resolved_runtime=replace(
+            request.resolved_runtime,
+            reliability=ReliabilityPolicy(
+                timeout=TimeoutPolicy(enabled=True, duration_seconds=0.1)
+            ),
+        ),
+    )
+    store.write_stage_worker_result(
+        run_uri, "build", _worker_success(run_uri).to_dict(), attempt=1
+    )
+
+    def run(self, command, *, timeout_seconds):  # noqa: ANN001, ANN201
+        assert timeout_seconds == 0.1
+        assert command.argv[2:4] == ("--pid", "--no-init=false")
+        return ApptainerCommandResult(
+            command=command.argv[0],
+            argv=command.argv,
+            redacted_argv=command.redacted_argv,
+            returncode=124 if timed_out else 127,
+            timed_out=timed_out,
+            error=error,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def no_read(**kwargs):  # noqa: ANN003, ANN202
+        pytest.fail("unsettled/timed-out attempts must not read worker results")
+
+    monkeypatch.setattr(SubprocessApptainerExecRunner, "run", run)
+    monkeypatch.setattr(
+        "loom.pipeline.executors.apptainer.executor._read_worker_result", no_read
+    )
+    result = ApptainerExecutor(run_store=store).execute(request)
+    assert result.status is StageStatus.FAILED
+    assert not result.outputs
+    assert result.failure is not None and error in result.failure.message
+    fact = result.executor_metadata["reliability_timeout"]
+    assert fact["outcome"] == ("timed_out" if timed_out else "enforced")
+
+
+def test_timeout_refuses_injected_runner_before_launch(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    store, _, request = _request(tmp_path)
+    request = replace(
+        request,
+        resolved_runtime=replace(
+            request.resolved_runtime,
+            reliability=ReliabilityPolicy(
+                timeout=TimeoutPolicy(enabled=True, duration_seconds=1)
+            ),
+        ),
+    )
+    runner = RecordingApptainerRunner()
+    result = ApptainerExecutor(
+        run_store=store, apptainer_command_runner=runner
+    ).execute(request)
+    assert result.status is StageStatus.FAILED
+    assert runner.calls == []
+    assert (
+        result.failure is not None
+        and "built-in subprocess runner" in result.failure.message
+    )
+    assert result.executor_metadata["reliability_timeout"]["outcome"] == "unsupported"
+
+
 def test_apptainer_executor_reads_successful_worker_result(tmp_path: Path) -> None:
     store, run_uri, request = _request(tmp_path)
 
@@ -426,9 +511,9 @@ def test_apptainer_executor_projects_validated_gpu_visibility_without_persisting
         )
 
     runner = RecordingApptainerRunner(callback=write_result)
-    result = ApptainerExecutor(run_store=store, apptainer_command_runner=runner).execute(
-        request
-    )
+    result = ApptainerExecutor(
+        run_store=store, apptainer_command_runner=runner
+    ).execute(request)
 
     assert result.status == StageStatus.SUCCEEDED
     assert "--nv" in runner.calls[0].argv
@@ -457,9 +542,9 @@ def test_apptainer_executor_rejects_invalid_managed_gpu_visibility(
     store, _run_uri, request = _request(tmp_path, resources=resources)
     runner = RecordingApptainerRunner()
 
-    result = ApptainerExecutor(run_store=store, apptainer_command_runner=runner).execute(
-        request
-    )
+    result = ApptainerExecutor(
+        run_store=store, apptainer_command_runner=runner
+    ).execute(request)
 
     assert result.status == StageStatus.FAILED
     assert runner.calls == []
@@ -555,9 +640,7 @@ def test_apptainer_executor_missing_result_is_failure(tmp_path: Path) -> None:
 def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     tmp_path: Path,
 ) -> None:
-    resources = ResourceRequest(
-        entries={"cpu": ResourceEntry(kind="cpu", amount=2)}
-    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
     store, _run_uri, request = _request(tmp_path, resources=resources)
 
     result = ApptainerExecutor(
@@ -577,9 +660,7 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
 def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
     tmp_path: Path,
 ) -> None:
-    resources = ResourceRequest(
-        entries={"cpu": ResourceEntry(kind="cpu", amount=2)}
-    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
     store, _run_uri, request = _request(
         tmp_path,
         resources=resources,

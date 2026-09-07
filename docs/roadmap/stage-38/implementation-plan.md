@@ -1,12 +1,12 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phases 1 and 2 merged; Phase 3 reviewed implementation ready
+Status: Phases 1 and 2 merged; Phase 3 implemented, full gates and review pending
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 3 — container-timeout-lifecycle
-Blockers: none at startup; implementation/runtime evidence remains pending.
+Blockers: none; full gates and independent implementation review remain pending.
 Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
 The maintainer authorized this specific correction and a fresh bounded independent
 verification, without resetting other budgets. Targeted checks pass 80 tests and
@@ -111,8 +111,10 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
   one reap, then observation-only settlement. Manager source verification applies
   that same contract to both existing queue group owners: legacy `local.py` and
   resident `_agent_process_supervisor.py`. No new owner, public protocol or durable
-  schema is approved. The phase card is ready for one executor; implementation
-  review, runtime acceptance and fresh full gates remain mandatory.
+  schema is approved. The manager completed implementation after an empty executor
+  handoff. Targeted acceptance passes 273 tests, including all 12 new selected-runtime
+  cases; five unrelated optional runtime hooks skip. Independent implementation
+  review and fresh full gates remain mandatory; exact evidence lives in the card.
 - Previously approved A-13 pre-grant retry correction: reproduce a transient pre-grant control-response
   failure, reuse the existing bounded assignment retry owner, and independently
   review cancellation/replay and exhausted-retry retention. No global retry,
