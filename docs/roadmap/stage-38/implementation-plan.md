@@ -1,15 +1,15 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: amended Phase 2 implementation in progress; independent startup review passed
+Status: amended Phase 2 implemented and validated; independent correctness review in progress
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 2 — direct-container-resources
-Blockers: approved amendments need implementation; the retry candidate still needs acceptance
-and fresh full gates. The independently reviewed scheduling-only policy still
-needs implementation and its own live acceptance. Positive runtime-limit
-proof remains deferred to a compatible host. Phase 3 retains its timeout design gate.
+Blockers: independent implementation review and PR/merge gates remain. Both full
+local gates and the selected-policy SIF smoke passed at the `8702e06` product
+tree. Positive runtime-limit proof remains deferred to a compatible host.
+Phase 3 retains its timeout design gate.
 
 ## Summary
 
@@ -78,7 +78,9 @@ proof remains deferred to a compatible host. Phase 3 retains its timeout design 
   candidate does not resolve the observed coordinator lock delays. The approved
   scheduling-only policy design passed independent review. The separately approved
   passive-wait correction has measured cause-backed evidence; independent
-  combined startup review passed with no findings. Implementation may proceed.
+  combined startup review passed with no findings. The amendments are implemented
+  at `8702e06`; fresh full gates and the scheduling-only live smoke passed.
+  Independent implementation review is in progress.
   Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
@@ -99,7 +101,7 @@ proof remains deferred to a compatible host. Phase 3 retains its timeout design 
   deterministic failure mode is documented in planning.md.
 - Independent amendment review: no policy-design blocker; manager corrected
   FQ/DQ traceability and the earlier A-13 authority label. Combined startup has
-  since passed; merge readiness remains gated by implementation and validation.
+  since passed; merge readiness remains gated by independent implementation review.
   Existing profile composition preserves the
   proposed option payload and resource demand in a read-only diagnostic; this
   is not a policy implementation receipt.
@@ -112,14 +114,15 @@ proof remains deferred to a compatible host. Phase 3 retains its timeout design 
   0.112 seconds. Both three-case diagnostic runs passed; this is cause evidence,
   not a full gate receipt. Remove only their reconciliation wakeups, preserving
   the service loop and mutation wakeups. Independent startup review passed with
-  no findings; implementation review, regression coverage, and full gates remain.
+  no findings; regression coverage and both full gates now pass at `8702e06`.
+  Independent implementation review remains.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | no PR; merge held | resource mapping/two corrections reviewed through `9ebd227`; third retry candidate remains WIP; combined amendment startup independently passed without findings | 3/3 historical corrections consumed; one additional bounded amendment approved; implementation, candidate acceptance/full gates and scheduling-only live smoke outstanding; positive hard-limit proof deferred | worktree and branch retained; diagnostic fixture supervisors stopped; approved SIF available |
+| 2 | no PR; review in progress | amendments implemented at `8702e06`; `make validate-pr` passed; summary 2,978 passed / 5 optional skips; scheduling-only SIF smoke 1 passed | independent implementation review and PR/merge pending; 3/3 historical corrections plus one expressly approved bounded amendment; positive hard-limit proof deferred | worktree and branch retained; approved SIF available |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged

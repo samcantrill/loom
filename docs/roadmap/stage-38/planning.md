@@ -1,23 +1,23 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; combined amendment startup independently passed; implementation in progress
+Status: first phase merged; amended Phase 2 implemented and validated; independent correctness review in progress
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: implement approved passive status waits and scheduling-only policy, then validate and review.
-Blockers: coordinator correction review/implementation and full validation; runtime-limit
-acceptance lacks a compatible session; the later timeout design gate remains.
+Current gate: independently review the validated amendments, then perform PR/merge gates.
+Blockers: independent implementation review; positive runtime-limit acceptance
+is deferred to a compatible host; the later timeout design gate remains.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
+| Evidence | Published develop verified; initial audit accepted; amended product tree `8702e06` passes both full gates and selected-policy SIF smoke | A-10 remains design-gated; independent amendment review outstanding | Review the passing product tree |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Implement the bounded amendment |
-| Implementation | Phase 1 and A-11 merged; resource implementation/two corrections reviewed; third retry candidate is WIP | Additional coordinator correction and scheduling-only policy are in implementation; fresh full gates remain | One bounded amendment executor after passed startup review; preserve historical correction count |
+| Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Review the implemented amendment |
+| Implementation | Phase 1 and A-11 merged; amended Phase 2 implemented; summary 2,978 passed / 5 optional skips, SIF smoke 1 passed | Independent implementation review and PR/merge remain | Preserve historical correction count and deferred hard-limit limitation |
 
 ## Evidence And Scope
 
@@ -155,15 +155,16 @@ cause-backed measurements; do not infer resolution from the earlier passes.
 The candidate changes only the existing pre-grant retry call, its two loopback
 outcomes (eventual success and durable cancellation without launch), and queue
 documentation. Focused Ruff and whole-tree Pyright pass. Rejection/exhaustion
-coverage, final independent acceptance, and fresh full gates remain outstanding.
+coverage and full gates subsequently passed at `8702e06`; final independent
+acceptance remains outstanding.
 Both supervisors from the failed instrumented fixture were verified stopped;
 temporary diagnostics now use the repository's supervisor-cleanup fixture.
 
 The three historical correction passes remain consumed. The additional bounded
 amendment below is now explicitly approved and supplies new cause-backed evidence.
 It does not remove serialization, extend deadlines, or weaken regression tests.
-The current retry candidate remains work in progress until its remaining safety
-coverage, independent acceptance and full gates pass.
+The retained retry candidate now has safety coverage and passing full gates with
+the implemented passive-wait amendment; independent acceptance remains required.
 
 #### Approved Coordinator-Responsiveness Amendment
 
@@ -395,7 +396,7 @@ process-cleanup guarantee from either existing command runner.
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
-| FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | policy amendment approved; not implemented; full gates blocked |
+| FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented; both full gates and selected-policy smoke passed; independent correctness review pending |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
@@ -488,7 +489,7 @@ unresolved cleanup evidence.
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
 | DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
-| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy and combined startup independently accepted; implementation in progress |
+| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented and validated; independent correctness review in progress |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
 
 ## Expanded Design Review
@@ -545,13 +546,13 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
-| Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings; implementation/live smoke and fresh gates remain | pass for amended implementation |
+| Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
+| Phase 2 implementation validation | `8702e06` product tree: both full gates passed, summary 2,978 passed / 5 optional skips, scheduling-only SIF smoke 1 passed | pass; independent review pending |
 
 Gate result: Phase 1 merged; scheduling-only policy design approved and independently
-reviewed. Coordinator amendment is approved and measured; Phase 2 awaits its
-implementation, final candidate review, fresh passing
-validation and selected-policy live acceptance. This approval does not reset its
-historical correction budget. Phase 3 remains
+reviewed. Coordinator and policy amendments are implemented and validated; Phase 2
+awaits independent implementation review and PR/merge. This approval does not reset
+its historical correction budget. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals

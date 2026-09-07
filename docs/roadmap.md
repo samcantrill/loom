@@ -2964,10 +2964,9 @@ Phase execution plans:
 ## v38 - Selective Container Port And Correctness Review
 
 Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
-CPU/RAM policy design independently reviewed, not yet implemented. A pre-grant retry
-candidate remains held for full validation. A separately approved responsiveness
-amendment has identified reader-driven lock reacquisition; the selected passive-wait
-correction and combined startup passed independent review; implementation is in progress.
+CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
+reconciliation wakeups. Both full local gates and the scheduling-only SIF smoke pass;
+independent implementation review is in progress before PR/merge.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,

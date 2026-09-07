@@ -12,15 +12,17 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: amendment implementation, candidate review/full gates, scheduling-only live smoke
+- Blockers: independent implementation review and PR/merge gates
 
 ## Objective And Context
 
 Implement amended FR-2 while preserving FR-4. Direct CPU/memory mapping and A-9
 are already implemented. The maintainer now approves explicit scheduling-only
 CPU/RAM execution on a host where settings cannot change, while preserving the
-existing runtime-limit default and full resource intent. The new policy is not
-implemented. Timeouts and process-ownership redesign are Phase 3 work.
+existing runtime-limit default and full resource intent. The new policy is
+implemented at `8702e06`, with both full gates and the selected-policy SIF smoke
+passing; independent correctness review remains. Timeouts and process-ownership
+redesign are Phase 3 work.
 
 ## Current Source And Harness
 
@@ -290,17 +292,17 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
 - Expanded planning: scheduling-only policy design independently accepted;
   manager corrected minor traceability/authority wording. The separately approved
   passive-wait correction and combined startup passed independent review without
-  findings. Both amendments remain unimplemented; one amendment executor may
-  proceed. No general correction-budget reset is inferred.
+  findings. Both amendments are implemented at `8702e06`. No general
+  correction-budget reset is inferred.
 - Live acceptance: approved image available; runtime-limit attempt failed for
-  missing D-Bus session. Scheduling-only implementation/smoke pending; positive
+  missing D-Bus session. Scheduling-only SIF smoke passed (one test); positive
   runtime-limit proof deferred separately, never counted as passing.
-- Implementation: resource mapping complete through `9ebd227`; third pre-grant
-  retry candidate remains work in progress and is not merge-ready.
+- Implementation: resource mapping and approved amendments complete at `8702e06`,
+  including retained pre-grant retry safety coverage. Both full gates passed.
 - Independent correctness review: passed for the resource implementation,
   `ff42b6d` acceptance-probe correction, and `9ebd227` A-12 test synchronization.
-  These receipts do not approve the third retry candidate. Current full
-  validation and live acceptance fail the pre-submit gate; no PR or merge.
+  These receipts do not approve the later amendments. Fresh independent review
+  now covers those amendments and the retained retry candidate; no PR or merge yet.
 - Blocker corrections: 3/3. First, fail closed on missing cgroup membership and
   control reads; four executable-shell regressions pass and independent
   correction review accepted `ff42b6d`. Second, the refreshed summary exposed
@@ -316,8 +318,8 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
   exhausted. Cancellation replay passes without launch. The original
   uninstrumented trigger's entire causal history remains unproven. The additional
   approved amendment now identifies reader-driven lock reacquisition using new
-  measurements; final rejection/exhaustion coverage, independent acceptance and
-  full gates remain.
+  measurements. Rejection/exhaustion coverage and full gates now pass; independent
+  implementation acceptance remains.
 
 ## Completion Record
 
@@ -326,7 +328,7 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
 | Implementation and changed paths | Implemented the bounded passive-wait correction by removing reader wakeups from `LocalDaemon._wait` and `wait_admission`; mutation and periodic service wake owners remain unchanged. Retained pre-grant control replay/rejection and bounded exhaustion coverage. Added `ApptainerExecOptions.cpu_memory_enforcement` (`runtime` default or `scheduling_only`), command-level canonical validation with conditional CPU/RAM flags, emitted-flag-aware missing-result remedies, selected-policy provenance/capability/preflight evidence, and a scheduling-only live hook. Changed `src/loom/{queue/local_daemon.py,pipeline/executors/apptainer/{commands.py,executor.py},pipeline/runtime/capabilities.py,diagnostics/preflight.py}`, focused queue/container/profile/capability/preflight tests, `tests/container_acceptance/test_real_container_runtimes.py`, and `docs/features/{queue.md,container-executors.md}`. |
 | Current validation and revision | Implementation commit `8702e06`. Focused queue lane, focused container/capability/profile/preflight lanes, changed-file Ruff, and targeted Pyright passed. `make validate-pr` passed: Ruff, Pyright, default 2,821 passed / 138 deselected, config-extra 157 passed / 5 skipped / 2,824 deselected, and package build. `make test-summary` passed: 2,978 passed, 5 optional skips; receipt `build/test-summary.md`. The later generic-doc example was checked by diff; it does not change executable behavior. |
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
-| Real runtime evidence / unavailable checks | Approved shell SIF checksum matched planning evidence. Scheduling-only production-command smoke passed against `/nas/home/can134/work/containers/loom-resource-smoke.sif`: 1 passed, receipt `build/container-scheduling-only-local-sif.xml`; it retained CPU/RAM intent and omitted direct flags. The runtime-limit hook remains a real rootless D-Bus prerequisite failure at `build/container-resource-acceptance-local-sif.xml`; positive hard-limit proof remains deferred to a compatible approved host. |
+| Real runtime evidence / unavailable checks | Approved local shell SIF checksum matched planning evidence. Scheduling-only production-command smoke passed: 1 passed, receipt `build/container-scheduling-only-local-sif.xml`; it retained CPU/RAM intent and omitted direct flags. The runtime-limit hook remains a real rootless D-Bus prerequisite failure at `build/container-resource-acceptance-local-sif.xml`; positive hard-limit proof remains deferred to a compatible approved host. |
 | Amendment review and routing check | Independent policy-design and combined amendment startup reviews passed without findings. Passive waits remain the measured, approved correction; deterministic nonterminal observer tests confirm neither path wakes reconciliation while existing queue integration, cancellation replay, retry, and production-daemon coverage pass. |
-| PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. The third candidate is WIP, requires final review and fresh full gates, and does not resolve the coordinator-responsiveness failure. No PR opened or branch pushed. |
+| PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. Independent correctness review of the completed amendments and retained retry candidate is in progress against the passing product tree. No PR opened or branch pushed. |
 | Residual risk and cleanup | Three historical corrections remain consumed; this is the one approved passive-wait amendment, with no broader coordinator remedy. Positive runtime CPU/RAM enforcement remains unproven on this host because rootless cgroups lack a user D-Bus session; scheduling-only smoke is not enforcement evidence. Independent implementation review and normal PR/merge gates remain manager-owned. Keep the worktree; published develop remains `43b911f`. |
