@@ -1,22 +1,23 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; resource phase offline implementation in correctness review
+Status: first phase merged; resource phase blocked at validation and live acceptance
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 2 independent correctness review; live acceptance remains open.
-Blockers: runtime acceptance prerequisites and timeout design remain open.
+Current gate: Phase 2 review passed; current full validation is not passing.
+Blockers: A-13 managed-agent integration stall, live acceptance prerequisites,
+and the later timeout design gate.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published develop verified; isolated locked Python 3.12 environment; 236 tests passed and independent audit accepted | A-9 and A-10 need later bounded corrections | Preserve retained upstream behavior |
+| Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 and A-11 merged through PR #277; Phase 2 offline implementation committed at `7b28cb3`, targeted tests and both local gates passed | Independent Phase 2 review and runtime acceptance remain open; Phase 3 retains its design gate | Review the committed implementation; retain the mandatory live check |
+| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227` | Latest default gate: 2,810 passed, one upstream transport integration timeout; live acceptance unavailable | Resolve the separate A-13 investigation scope and provide a suitable image/session; no Phase 2 PR or merge |
 
 ## Evidence And Scope
 
@@ -90,6 +91,19 @@ Weave revision `6a99a4d7e6f008748c0761e6ab1c359d62aacbbd`.
 | A-10 confirmed defect / missing coverage | Legacy `local.py` starts a process group but `inspect` releases assignment/scalar leases after immediate-root `poll`; an inherited-group child can still be alive | Conflicts with Stage 23 descendant ownership. Requires a bounded legacy process-group settlement observation and real root-first-exit regression, separate from the validation guard. Resolve its composition within the timeout design gate before changing lifecycle behavior. |
 | A-11 confirmed validation defect, corrected | The unchanged upstream `test_slurm_ready_stage.py:_exercise_mixed_route_run` compared entire submission records around rejected registration while live `reconcile_once` could refresh `scheduler_observed_at` through `slurm_submissions.observe` | Initial full gate: 2,793 passed, one failure solely from a one-second timestamp refresh. A bounded test-only correction holds the existing daemon `_cycle_lock` across the before/request/after no-mutation assertion. Complete record comparisons and concurrent-registration coverage remain; no production queue change. All 15 affected integration tests and both fresh gates passed. Independent phase review includes this correction. |
 | A-12 confirmed validation defect | The unchanged upstream `test_retirement_secret_rejects_before_mutation_and_is_redacted` compares whole database snapshots while background `reconcile_once` samples clock health and commits `accepted_time_high_water` under `_cycle_lock`. The invalid-secret retirement path verifies the secret before mutation and does not sample the clock. | The corrected-resource summary gate had 2,967 passes and one failure solely from a one-second high-water change. Hold the existing cycle lock across the test's before/rejection/after assertion; retain complete snapshot equality and successful-retirement/redaction assertions. No production queue change. This bounded gate correction is included in Phase 2 validation and independent review. |
+| A-13 unresolved upstream validation failure, not a confirmed resource regression | At `9ebd227`, unchanged `test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly` timed out waiting 30 seconds for submitted work; 2,810 other default tests passed. Retained coordinator state is `BOUND`, agent journal `request_durable`, no transfer authorization or supervisor launch, and no worker process ID. A fresh isolated exact-test run passed in 15.40 seconds. | Root cause is not established; the isolated pass does not clear the failed full gate. Both fixture supervisors were confirmed stopped. Resource code and production queue/transport code have no overlapping changes. Hold the phase and present a separate bounded transport/pre-launch investigation rather than weakening deadlines or changing recovery policy inside the resource port. |
+
+### Proposed A-13 Follow-up Scope
+
+Instrument only the existing synthetic loopback fixture's delivery-to-grant
+path: RPC operation names, timings and outcomes, coordinator lock waits, and
+durable pre-launch transitions. Do not record request payloads or secrets.
+Reproduce the stall before selecting a fix, distinguishing a stalled request
+from the intentional conservative retention of indeterminate pre-launch work.
+Any required transport/recovery behavior change needs its own bounded design
+and regression review. No timeout increase, automatic restart, lease release,
+or production queue change is assumed. This proposal awaits maintainer direction;
+the resource phase has not silently expanded into a transport implementation.
 
 ### Historical Brief Reconciliation
 
@@ -164,7 +178,7 @@ process-cleanup guarantee from either existing command runner.
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
-| FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | offline implementation validated; review and live acceptance pending |
+| FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | implementation reviewed; full-gate and live acceptance blocked |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
@@ -280,9 +294,10 @@ Final commands for each implementation phase are `make validate-pr` and
 Approved ordering is audit, validation guard, CPU/memory mapping (including
 A-9), lifecycle-safe timeouts, then integrated review. The compact manifest
 links three phase cards. Phase 1 is merged after independent review and both
-required gates. Phase 2 has committed its offline implementation and passed both
-local gates on that published base; independent review and required live
-acceptance remain open.
+required gates. Phase 2 has committed and independently reviewed its offline
+implementation and both localized test corrections. Its latest full gate fails
+on A-13; earlier passing receipts cannot replace fresh corrected-tree validation.
+Required live acceptance also remains unavailable.
 Phase 3's card explicitly forbids execution until its lifecycle design is
 reviewed, including the separately identified legacy A-10 correction. This
 staged readiness follows the maintainer's explicit instruction that earlier
@@ -300,8 +315,9 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 
-Gate result: ready to implement Phase 1. Phase 3 remains unapproved for product
-execution pending its expanded design review; this is not a complete-stage gate.
+Gate result: Phase 1 merged; Phase 2 blocked pending the A-13 investigation
+decision, fresh passing validation and live acceptance. Phase 3 remains
+unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals
 

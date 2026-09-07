@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
@@ -12,7 +12,7 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: live acceptance image/session pending; offline implementation is ready
+- Blockers: A-13 upstream integration-gate investigation; live acceptance image/session
 
 ## Objective And Context
 
@@ -173,12 +173,13 @@ administration, or timeout implementation. Return exact validation and blockers.
 
 - Manager preparation: complete; predecessor remote merge, fresh published base,
   source/targeted-lane refresh, ownership, approval, and private discretion verified
-- Expanded planning: no new resource/public decision; independent implementation
-  review remains required and live acceptance is explicitly not waived
-- Implementation and required offline validation: complete at `7b28cb3`
-- Independent correctness review: no offline runtime product blocker; one
-  localized acceptance-probe correction required. Pre-submit, PR and merge
-  remain held for fresh corrected-tree validation and required live acceptance.
+- Expanded planning: resource/public decisions remain unchanged; the proposed
+  separate A-13 investigation is in planning.md. Live acceptance is not waived.
+- Implementation: complete; current source/test revision `9ebd227`
+- Independent correctness review: passed for the resource implementation,
+  `ff42b6d` acceptance-probe correction, and `9ebd227` A-12 test synchronization.
+  No remaining review finding; current full validation and live acceptance fail
+  the pre-submit gate, so no PR or merge is authorized.
 - Blocker corrections: 2/3. First, fail closed on missing cgroup membership and
   control reads; four executable-shell regressions pass and independent
   correction review accepted `ff42b6d`. Second, the refreshed summary exposed
@@ -186,14 +187,17 @@ administration, or timeout implementation. Return exact validation and blockers.
   no-retirement-mutation assertion. Hold the existing cycle lock only around
   before/rejection/after, preserving full equality and production behavior.
   `make validate-pr` passed at `ff42b6d`; its summary had 2,967 passes and this
-  one failure. Both gates require refresh after the second test-only correction.
+  one failure. At `9ebd227`, the affected session/probe lane passed 48 tests,
+  but the refreshed default gate exposed A-13. No third correction is attempted
+  without a concrete cause/remedy and a separate scope decision if required.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Offline implementation complete: direct Apptainer/Singularity CPU and exact-byte memory flags; resource-intent revalidation and actionable resource-command failure; truthful capability/preflight projection with runtime-intent override and authored-intent fallback; scheduler-owned SLURM composition/preflight; A-9 complete-value grammar check; opt-in cgroup-v2 acceptance hook. Changed `src/loom/pipeline/executors/apptainer/{commands.py,executor.py}`, `src/loom/pipeline/{runtime/capabilities.py,executors/slurm/{container.py,rendering.py}}`, `src/loom/diagnostics/preflight.py`, related scoped tests, and `docs/features/container-executors.md`. |
-| Tests and validated revision | Targeted Phase 2 lane: 138 passed. Default opt-in resource hook: 1 skipped (expected opt-out). Explicit opt-in without `LOOM_APPTAINER_RESOURCE_IMAGE`: failed actionably as required. `make validate-pr` passed: Ruff, Pyright, 2,807 default tests, 157 config-extra tests (4 optional skips), and build. `make test-summary` passed: package 122, unit 1,976, contract 300, integration 340, e2e 69, config-extra 157 (4 optional skips), total 2,964 passed. The tested source/test tree is committed at `7b28cb3274c218eeca8fd1dbf212c524b56bf595`; subsequent receipt/roadmap edits do not change validation inputs. |
+| Current validation and revision | At `9ebd2275334d55b7a432fe18a944b63fd6892433`: affected session/probe tests 48 passed; Ruff and Pyright passed; `make validate-pr` failed in default tests with 2,810 passed and one A-13 managed-agent timeout. Later config-extra/build prerequisites and `make test-summary` were not run after that failure. The isolated exact A-13 test passed in 15.40 seconds (`build/phase2-transport-gate-repro.xml`); this is diagnostic evidence, not a replacement passing full gate. |
+| Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
 | Real runtime evidence / unavailable checks | No enforcement proof: default hook was opted out; explicit opt-in stopped because the maintainer has not supplied an approved local image and compatible delegated-cgroup runtime session. The hook reads the payload cgroup path from `/proc/self/cgroup` before inspecting `cpu.max` and `memory.max`; it performs no pull, build, download, or host administration. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Required live CPU/memory enforcement acceptance remains blocking for phase closure/merge. Phase status remains `in_progress`; independent correctness review, PR, merge, and cleanup are pending. |
+| PR, review, and merge | Implementation and both localized corrections independently accepted. No PR opened or branch pushed while pre-submit gates are blocked. |
+| Residual risk and cleanup | A-13 root cause unresolved; required live CPU/memory acceptance unavailable. Keep the committed worktree and branch for continuation. Both supervisors belonging to the failed A-13 fixture were confirmed stopped; no worker had launched. Original dirty checkout hashes rechecked unchanged; published develop remains `43b911f`. |

@@ -1,13 +1,14 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: implementation in progress
+Status: implementation blocked
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 2 — direct-container-resources
-Blockers: required resource acceptance needs a suitable image/runtime session;
-Phase 3 retains its explicit timeout design gate.
+Blockers: upstream managed-agent gate failure A-13 needs a separate investigation;
+required resource acceptance needs a suitable image/runtime session. Phase 3
+retains its explicit timeout design gate.
 
 ## Summary
 
@@ -48,7 +49,7 @@ Phase 3 retains its explicit timeout design gate.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
-| 2 | direct-container-resources | in_progress | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct command mapping, capabilities/preflight, A-9 SLURM correction, tests/docs | Map CPU/memory requests without upstream GPU regression |
+| 2 | direct-container-resources | blocked | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct command mapping, capabilities/preflight, A-9 SLURM correction, tests/docs | Map CPU/memory requests without upstream GPU regression |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
@@ -63,9 +64,9 @@ Phase 3 retains its explicit timeout design gate.
   verified separately from the confirmed legacy adapter containment gap.
 - First-phase startup: manager verified scope, source, tests, locked baseline,
   independent audit, phase packet, and approval; no blocker.
-- Implementation readiness: Phase 1 is merged; Phase 2 offline implementation
-  and both local gates are complete, with independent correctness review and
-  mandatory live acceptance remaining. Phase 3's card is a design-gated handoff,
+- Implementation readiness: Phase 1 is merged; Phase 2 implementation and its
+  localized corrections are independently reviewed, but the latest validation
+  gate fails on A-13 and mandatory live acceptance is unavailable. Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Accepted risks: host-dependent cgroup/runtime availability; original control
   checkout cannot be advanced by discarding or stashing its dirty contents.
@@ -77,7 +78,7 @@ Phase 3 retains its explicit timeout design gate.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | pending | offline implementation at `7b28cb3`; targeted 138 passed; both required local gates passed, 2,964 summary tests passed and 4 optional skips | independent review and required live enforcement acceptance pending | worktree and branch retained |
+| 2 | no PR; merge held | implementation and two test-only corrections reviewed through `9ebd227`; latest default gate 2,810 passed, one upstream integration failure; isolated failing test subsequently passed | A-13 remains unresolved; live enforcement acceptance unavailable; fresh full gates still required | committed worktree and branch retained |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged
