@@ -136,21 +136,23 @@ def _write_service_config(root: Path) -> Path:
                 "schema_version": 3,
                 "kind": "loom.local-agent-service",
                 "agent_root": "deployment/agent",
-                "resident_profiles": [{
-                    "descriptor": {
-                        "profile_id": "starter-local",
-                        "revision": "v1",
-                        "project_fingerprint": "managed-local-basic",
-                        "environment_fingerprint": "managed-local-basic",
-                        "executor_fingerprint": "local",
-                    },
-                    "project_root": str(HERE),
-                    "python_executable": str(resident_python),
-                    "cpu_capacity": 1,
-                    "memory_capacity_bytes": 0,
-                    "gpu_devices": [],
-                    "environment": {},
-                }],
+                "resident_profiles": [
+                    {
+                        "descriptor": {
+                            "profile_id": "starter-local",
+                            "revision": "v1",
+                            "project_fingerprint": "managed-local-basic",
+                            "environment_fingerprint": "managed-local-basic",
+                            "executor_fingerprint": "local",
+                        },
+                        "project_root": str(HERE),
+                        "python_executable": str(resident_python),
+                        "cpu_capacity": 1,
+                        "memory_capacity_bytes": 0,
+                        "gpu_devices": [],
+                        "environment": {},
+                    }
+                ],
             }
         ),
         encoding="utf-8",

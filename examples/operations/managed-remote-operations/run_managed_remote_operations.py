@@ -62,7 +62,9 @@ def main() -> None:
             "queue", "daemon-agent", "--endpoint", str(endpoint), "machine-B"
         )
         if detail["session_id"] != projection["session_id"]:
-            raise RuntimeError("agent detail did not preserve the discovered session fence")
+            raise RuntimeError(
+                "agent detail did not preserve the discovered session fence"
+            )
 
         drain = recorder.cli(
             "queue",
@@ -130,9 +132,10 @@ def main() -> None:
             "--timeout",
             "15",
         )
-        if resume["state"] not in {"pending_delivery", "applied"} or resumed[
-            "kind"
-        ] != "TERMINAL":
+        if (
+            resume["state"] not in {"pending_delivery", "applied"}
+            or resumed["kind"] != "TERMINAL"
+        ):
             raise RuntimeError("remote agent did not apply the guarded resume")
     finally:
         try:
@@ -185,8 +188,8 @@ def _coordinator_yaml(root: Path, checkout: Path, port: int, fingerprint: str) -
     return f"""
 schema_version: 3
 kind: loom.coordinator-service
-deployment_root: {_quoted(root / 'deployment')}
-run_store_root: {_quoted(root / 'runs')}
+deployment_root: {_quoted(root / "deployment")}
+run_store_root: {_quoted(root / "runs")}
 machine_id: local-machine
 poll_interval_seconds: 0.05
 max_accepted_time_step_seconds: 3600
@@ -216,9 +219,9 @@ agent_policy:
 agent_server:
   host: localhost
   port: {port}
-  certificate_path: {_quoted(root / 'tls' / 'server.crt')}
-  private_key_path: {_quoted(root / 'tls' / 'server.key')}
-  client_ca_path: {_quoted(root / 'tls' / 'ca.crt')}
+  certificate_path: {_quoted(root / "tls" / "server.crt")}
+  private_key_path: {_quoted(root / "tls" / "server.key")}
+  client_ca_path: {_quoted(root / "tls" / "ca.crt")}
   credential_fingerprints:
     {json.dumps(fingerprint)}: remote-agent-certificate
 """
@@ -228,11 +231,11 @@ def _agent_yaml(root: Path, checkout: Path, port: int) -> str:
     return f"""
 schema_version: 3
 kind: loom.outbound-agent-service
-agent_root: {_quoted(root / 'outbound-agent')}
+agent_root: {_quoted(root / "outbound-agent")}
 url: https://localhost:{port}
-server_ca_path: {_quoted(root / 'tls' / 'ca.crt')}
-certificate_path: {_quoted(root / 'tls' / 'agent.crt')}
-private_key_path: {_quoted(root / 'tls' / 'agent.key')}
+server_ca_path: {_quoted(root / "tls" / "ca.crt")}
+certificate_path: {_quoted(root / "tls" / "agent.crt")}
+private_key_path: {_quoted(root / "tls" / "agent.key")}
 reconnect_seconds: 0.05
 resident_profiles:
   - descriptor:

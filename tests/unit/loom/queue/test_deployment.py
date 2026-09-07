@@ -61,6 +61,22 @@ def test_coordinator_config_is_protected_exact_and_path_bound(tmp_path: Path) ->
         load_coordinator_service_config(source)
 
 
+def test_resident_profile_requires_observed_imports_before_role_use(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["readiness"] = {"imports": ["missing_resident_package"]}
+    _write_local_agent(source, payload)
+
+    with pytest.raises(QueueConfigError, match="packages.required_imports"):
+        load_coordinator_service_config(source)
+
+
 @pytest.mark.optional_dependency
 def test_explicit_environment_is_authoritative_and_binds_effective_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -361,7 +377,9 @@ def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:
         load_coordinator_service_config(source)
 
 
-def test_equivalent_local_agent_references_keep_effective_identity(tmp_path: Path) -> None:
+def test_equivalent_local_agent_references_keep_effective_identity(
+    tmp_path: Path,
+) -> None:
     source = _coordinator_config(tmp_path)
     first = load_coordinator_service_config(source)
     payload = json.loads(source.read_text())
@@ -448,7 +466,9 @@ def test_cpu_only_agent_resources_skip_nvidia_discovery(tmp_path: Path) -> None:
     assert service.client.capacity_profile.gpu_devices == ()
 
 
-def test_outbound_resource_identity_uses_effective_capacity_values(tmp_path: Path) -> None:
+def test_outbound_resource_identity_uses_effective_capacity_values(
+    tmp_path: Path,
+) -> None:
     source = _agent_config(tmp_path)
     payload = json.loads(source.read_text())
     payload["resources"] = {
@@ -671,9 +691,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "priority": 7,
         },
         "components": {
-            "planners": [
-                {"_target_": "loom.pipeline.runtime.CpuResourcePlanner"}
-            ],
+            "planners": [{"_target_": "loom.pipeline.runtime.CpuResourcePlanner"}],
             "hard_evaluators": [
                 {"_target_": "loom.scheduling.TargetConstraintEvaluator"}
             ],
@@ -692,9 +710,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
     agent_payload["providers"] = {
         "providers": [
             {
-                "_target_": (
-                    "tests.support.stage29_composition.ConfiguredCpuProvider"
-                ),
+                "_target_": ("tests.support.stage29_composition.ConfiguredCpuProvider"),
                 "capacity": 1,
                 "capacity_key": "local-machine:cpu",
             }
@@ -706,9 +722,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "partition": "cpu",
             "max_outstanding": 2,
             "runner": {
-                "_target_": (
-                    "loom.pipeline.executors.slurm.FakeSlurmCommandRunner"
-                ),
+                "_target_": ("loom.pipeline.executors.slurm.FakeSlurmCommandRunner"),
                 "unavailable_commands": [],
             },
             "command_adapter_fingerprint": "fake-slurm-v1",
@@ -770,9 +784,7 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
         (tls_root / name).write_text("test", encoding="utf-8")
     captured: dict[str, object] = {}
 
-    def fake_factory(
-        url: str, *, service_id: str, workspace_id: str, tls: object
-    ):  # type: ignore[no-untyped-def]
+    def fake_factory(url: str, *, service_id: str, workspace_id: str, tls: object):  # type: ignore[no-untyped-def]
         captured.update(
             {
                 "url": url,
@@ -798,9 +810,9 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
     assert captured["workspace_id"] == "workspace-1"
     tls = captured["tls"]
     assert getattr(tls, "ca_path") == (tmp_path / "tls/ca.crt").resolve()
-    assert getattr(tls, "certificate_path") == (
-        tmp_path / "tls/coordinator.crt"
-    ).resolve()
+    assert (
+        getattr(tls, "certificate_path") == (tmp_path / "tls/coordinator.crt").resolve()
+    )
     assert service.daemon.coordinator_authority_factory is not None
 
 

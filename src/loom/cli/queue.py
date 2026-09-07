@@ -495,6 +495,11 @@ def handle_daemon_check(namespace: argparse.Namespace) -> int:
                 if service.effective_capacity is None
                 else service.effective_capacity.to_dict()
             ),
+            "resident_readiness": (
+                None
+                if service.resident_readiness is None
+                else service.resident_readiness.to_dict()
+            ),
         },
     )
 
@@ -647,6 +652,11 @@ def handle_agent_check(namespace: argparse.Namespace) -> int:
                 if service.effective_capacity is None
                 else service.effective_capacity.to_dict()
             ),
+            "resident_readiness": [
+                result.to_dict()
+                for profile in service.client.resident_profiles
+                if (result := profile.readiness_result) is not None
+            ],
         },
     )
 

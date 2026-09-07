@@ -53,6 +53,11 @@ from .local_daemon import (
 )
 from .coordinator_authority import CoordinatorAuthorityFactory
 from .resources import EffectiveAgentCapacity
+from .resident_readiness import (
+    ResidentReadinessRequirements,
+    ResidentReadinessResult,
+    qualify_resident_profile,
+)
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3
@@ -69,6 +74,7 @@ class CoordinatorServiceConfig:
     active_fingerprint: str
     environment_path: Path | None = None
     effective_capacity: EffectiveAgentCapacity | None = None
+    resident_readiness: ResidentReadinessResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +222,12 @@ def load_coordinator_service_config(
         fingerprint,
         active_fingerprint,
         environment_path,
-        effective_capacity=None if local_agent is None else local_agent.effective_capacity,
+        effective_capacity=None
+        if local_agent is None
+        else local_agent.effective_capacity,
+        resident_readiness=None
+        if local_agent is None
+        else local_agent.profile.readiness_result,
     )
 
 
@@ -638,7 +649,9 @@ def _read_explicit_environment(
     return source, MappingProxyType(values)
 
 
-def _normalize_coordinator_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+def _normalize_coordinator_payload(
+    payload: Mapping[str, object],
+) -> Mapping[str, object]:
     """Normalize role-owned numeric values before identity projections."""
 
     normalized = dict(payload)
@@ -711,7 +724,9 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     )
 
 
-def _normalize_outbound_agent_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+def _normalize_outbound_agent_payload(
+    payload: Mapping[str, object],
+) -> Mapping[str, object]:
     """Normalize outbound role values before identity projections."""
 
     normalized = dict(payload)
@@ -1199,7 +1214,7 @@ def _header(
 def _resident_profile(
     value: Mapping[str, object], base: Path, label: str
 ) -> ResidentExecutionProfile:
-    _exact(
+    _required_allowed(
         value,
         {
             "descriptor",
@@ -1210,6 +1225,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
+        {"readiness"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1229,7 +1245,8 @@ def _resident_profile(
     environment = _mapping(value, "environment")
     if any(not isinstance(item, str) for item in environment.values()):
         raise QueueConfigError(f"{label}.environment values must be strings")
-    return ResidentExecutionProfile(
+    requirements = _resident_readiness_requirements(value.get("readiness"))
+    profile = ResidentExecutionProfile(
         _profile_descriptor(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
         _executable_path(value, "python_executable", base),
@@ -1237,7 +1254,52 @@ def _resident_profile(
         _non_negative_int(value, "memory_capacity_bytes"),
         tuple(devices),
         cast(Mapping[str, str], environment),
+        requirements,
     )
+    result = qualify_resident_profile(profile)
+    if not result.ok:
+        failed = next(item for item in result.checks if item.status == "FAIL")
+        raise QueueConfigError(
+            f"resident profile readiness failed ({failed.check_id}): {failed.message}"
+        )
+    return replace(profile, readiness_identity=result.identity, readiness_result=result)
+
+
+def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirements:
+    if value is None:
+        return ResidentReadinessRequirements()
+    readiness = _mapping_value(value, "resident readiness")
+    _required_allowed(
+        readiness,
+        set(),
+        {"imports", "distributions", "source_roots", "timeout_seconds"},
+        "resident readiness",
+    )
+    try:
+        return ResidentReadinessRequirements(
+            imports=(
+                ()
+                if "imports" not in readiness
+                else _strings(readiness, "imports", non_empty=True)
+            ),
+            distributions=(
+                ()
+                if "distributions" not in readiness
+                else _strings(readiness, "distributions")
+            ),
+            source_roots=(
+                ()
+                if "source_roots" not in readiness
+                else _strings(readiness, "source_roots")
+            ),
+            timeout_seconds=(
+                5.0
+                if "timeout_seconds" not in readiness
+                else _positive_number(readiness, "timeout_seconds")
+            ),
+        )
+    except ValueError as exc:
+        raise QueueConfigError("resident readiness requirements are invalid") from exc
 
 
 def _profile_descriptor(value: Mapping[str, object]) -> ResidentProfileDescriptor:

@@ -195,6 +195,18 @@ free resources or proof of every platform constraint. JSON output from
 `agent-check` and `daemon-check` includes `effective_capacity` for the selected
 agent resources. A `null` CPU or memory value means no supported bound was
 available; a `null` whole object means no agent-level resources were selected.
+Before `daemon-check`, `agent-check`, initialization, serving, or explicit
+reload offers a resident profile, Loom runs the selected worker Python with the
+same cwd and allowlisted environment used for workers. A profile may add a
+finite `readiness` mapping with `imports`, `distributions`, `source_roots`, and
+`timeout_seconds`; without declarations it verifies only the selected Python.
+The probe does not install packages, build a project, inherit daemon secrets, create a
+deployment, or claim a GPU. Its narrow identity includes the selected Python,
+declared installation facts, and declared source contents. It excludes absolute
+paths and unrelated files, while the private profile binding still prevents an
+initialized deployment from silently moving to another executable or project.
+Failures withhold only new offers and leave retained work with its original
+supervisor and descriptor.
 Optional `providers` contains the
 configured provider composition. These worker settings no longer belong in the
 coordinator's old `embedded_profile`/`embedded_agent` fields. Outbound documents
