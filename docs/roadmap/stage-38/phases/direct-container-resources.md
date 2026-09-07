@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
@@ -12,8 +12,8 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: two independent policy-diagnostic findings require bounded completion
-  correction, refreshed validation, and review verification before PR/merge
+- Blockers: mixed explicit/implicit-stage fallback warning remains after bounded
+  correction verification; reviewer reuse consumed; no PR/merge
 
 ## Objective And Context
 
@@ -22,7 +22,7 @@ are already implemented. The maintainer now approves explicit scheduling-only
 CPU/RAM execution on a host where settings cannot change, while preserving the
 existing runtime-limit default and full resource intent. The new policy is
 implemented at `8702e06`, with both full gates and the selected-policy SIF smoke
-passing; independent correctness review remains. Timeouts and process-ownership
+passing; the remaining mixed-stage warning finding holds merge. Timeouts and process-ownership
 redesign are Phase 3 work.
 
 ## Current Source And Harness
@@ -302,8 +302,9 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
   including retained pre-grant retry safety coverage. Both full gates passed.
 - Independent correctness review: passed for the resource implementation,
   `ff42b6d` acceptance-probe correction, and `9ebd227` A-12 test synchronization.
-  These receipts do not approve the later amendments. Fresh independent review
-  now covers those amendments and the retained retry candidate; no PR or merge yet.
+  Fresh independent review also accepted the passive-wait/retry boundary.
+  The policy has one remaining mixed-stage warning finding after its bounded
+  correction verification; no PR or merge.
 - Blocker corrections: 3/3. First, fail closed on missing cgroup membership and
   control reads; four executable-shell regressions pass and independent
   correction review accepted `ff42b6d`. Second, the refreshed summary exposed
@@ -335,12 +336,34 @@ fallback/override regressions, refresh full gates, and verify these two findings
 with the same reviewer. This is bounded completion of the accepted policy, not
 another coordinator remedy, new behavior agreement, or general budget reset.
 
+Correction `6b831e7` closes namespace selection and global-only, explicitly
+inherited, and stage-authored fallback warning cases. Its negative control had
+six expected failures before the fix; the focused correction lane passed 151
+tests and targeted Pyright/Ruff passed. Both full gates passed at `6b831e7`:
+2,988 summary passes and five optional skips. The latest SIF smoke passed one
+test. These passing checks do not cover or override the remaining review finding.
+
+The one bounded reviewer verification found a remaining supported case: with
+pipeline stages `train` and `eval`, run-level scheduling-only container memory,
+and an explicit nonempty train GPU request, eval inherits the memory fallback.
+Capability diagnostics inspect only explicit stage options, and the mapping
+check records eval memory as `not_enforced` but returns PASS/INFO. Overall
+preflight can therefore remain PASS without the required visible warning.
+
+Smallest next correction: make the existing mapping owner return WARN whenever
+any actual mapped CPU/RAM item is `not_enforced`, preserving FAIL precedence,
+SLURM ownership, and runtime-mode reporting. Add the mixed-stage regression,
+refresh relevant/full evidence, and independently verify closure. The bounded
+reviewer reuse is consumed; stop further product/review loops pending scoped
+authorization. Do not reset historical correction counts, relax the warning
+contract, or merge a known incomplete policy.
+
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Implemented the bounded passive-wait correction by removing reader wakeups from `LocalDaemon._wait` and `wait_admission`; mutation and periodic service wake owners remain unchanged. Retained pre-grant control replay/rejection and bounded exhaustion coverage. Added `ApptainerExecOptions.cpu_memory_enforcement` (`runtime` default or `scheduling_only`), command-level canonical validation with conditional CPU/RAM flags, emitted-flag-aware missing-result remedies, selected-policy provenance/capability/preflight evidence, and a scheduling-only live hook. Changed `src/loom/{queue/local_daemon.py,pipeline/executors/apptainer/{commands.py,executor.py},pipeline/runtime/capabilities.py,diagnostics/preflight.py}`, focused queue/container/profile/capability/preflight tests, `tests/container_acceptance/test_real_container_runtimes.py`, and `docs/features/{queue.md,container-executors.md}`. |
-| Current validation and revision | Implementation commit `8702e06`. Focused queue lane, focused container/capability/profile/preflight lanes, changed-file Ruff, and targeted Pyright passed. `make validate-pr` passed: Ruff, Pyright, default 2,821 passed / 138 deselected, config-extra 157 passed / 5 skipped / 2,824 deselected, and package build. `make test-summary` passed: 2,978 passed, 5 optional skips; receipt `build/test-summary.md`. The later generic-doc example was checked by diff; it does not change executable behavior. |
+| Current validation and revision | Product commit `6b831e7`: focused correction lane 151 passed, Ruff and targeted Pyright passed; `make validate-pr` passed (whole-tree Ruff/Pyright, default 2,831 passed / 138 deselected, config-extra 157 passed / 5 optional skips / 2,834 deselected, package build). `make test-summary` passed: 2,988 passed, five optional skips; receipt `build/test-summary.md`. Only roadmap metadata changed afterward. The mixed-stage warning gap remains a known uncovered review finding. |
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
-| Real runtime evidence / unavailable checks | Approved local shell SIF checksum matched planning evidence. Scheduling-only production-command smoke passed: 1 passed, receipt `build/container-scheduling-only-local-sif.xml`; it retained CPU/RAM intent and omitted direct flags. The runtime-limit hook remains a real rootless D-Bus prerequisite failure at `build/container-resource-acceptance-local-sif.xml`; positive hard-limit proof remains deferred to a compatible approved host. |
+| Real runtime evidence / unavailable checks | Approved local shell SIF checksum matched planning evidence. Scheduling-only production-command smoke passed at `6b831e7`: one passed, receipt `build/container-scheduling-only-6b831e7.xml`; it retained CPU/RAM intent and omitted direct flags. The runtime-limit hook remains a real rootless D-Bus prerequisite failure at `build/container-resource-acceptance-local-sif.xml`; positive hard-limit proof remains deferred to a compatible approved host. |
 | Amendment review and routing check | Independent policy-design and combined amendment startup reviews passed without findings. Passive waits remain the measured, approved correction; deterministic nonterminal observer tests confirm neither path wakes reconciliation while existing queue integration, cancellation replay, retry, and production-daemon coverage pass. |
-| PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. Independent correctness review of the completed amendments and retained retry candidate is in progress against the passing product tree. No PR opened or branch pushed. |
-| Residual risk and cleanup | Three historical corrections remain consumed; this is the one approved passive-wait amendment, with no broader coordinator remedy. Positive runtime CPU/RAM enforcement remains unproven on this host because rootless cgroups lack a user D-Bus session; scheduling-only smoke is not enforcement evidence. Independent implementation review and normal PR/merge gates remain manager-owned. Keep the worktree; published develop remains `43b911f`. |
+| PR, review, and merge | Resource mapping, first two localized corrections, and the passive-wait/retry boundary independently accepted. Namespace finding closed at `6b831e7`; mixed-stage fallback warning remains open after the bounded verification. No PR opened or branch pushed; further scoped correction/review authorization required. |
+| Residual risk and cleanup | Three historical corrections and the additional bounded amendment/review reuse remain consumed; the remaining warning correction needs scoped authority. Hard CPU/RAM enforcement remains unproven on this host; scheduling-only smoke is not enforcement evidence. Worktree retained with no PR or push. Latest receipts copied to integration `build/stage-38-p2-6b831e7`; earlier timing/hard-limit evidence retained in `build/stage-38-p2-8702e06`. Original dirty checkout hashes remain unchanged; published develop remains `43b911f`. |

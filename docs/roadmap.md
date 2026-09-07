@@ -2965,8 +2965,9 @@ Phase execution plans:
 
 Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
 CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
-reconciliation wakeups. Both full local gates and the scheduling-only SIF smoke pass;
-independent implementation review is in progress before PR/merge.
+reconciliation wakeups and passed independent review. The scheduling-only SIF smoke
+passes, but independent policy review still holds PR/merge for a missing visible
+warning on implicit stages inheriting container CPU/RAM intent.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,

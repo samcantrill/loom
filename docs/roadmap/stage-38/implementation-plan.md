@@ -1,14 +1,18 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: amended Phase 2 implemented and validated; independent correctness review in progress
+Status: Phase 2 held on remaining mixed-stage fallback-warning review finding
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 2 — direct-container-resources
-Blockers: independent implementation review and PR/merge gates remain. Both full
-local gates and the selected-policy SIF smoke passed at the `8702e06` product
-tree. Positive runtime-limit proof remains deferred to a compatible host.
+Blockers: the bounded correction verification closed namespace selection but
+found missing visible warnings for implicit stages inheriting container intent
+when another stage has explicit resource options. The bounded reviewer reuse is
+consumed; further correction/review needs scoped authorization. Fresh full gates
+passed at `6b831e7` (2,988 summary passes, five optional skips); the known reporting
+defect still holds merge. The latest SIF smoke also passed one test.
+Positive runtime-limit proof remains deferred to a compatible host.
 Phase 3 retains its timeout design gate.
 
 ## Summary
@@ -58,7 +62,7 @@ Phase 3 retains its timeout design gate.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
-| 2 | direct-container-resources | in_progress | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
+| 2 | direct-container-resources | blocked | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
@@ -80,7 +84,10 @@ Phase 3 retains its timeout design gate.
   passive-wait correction has measured cause-backed evidence; independent
   combined startup review passed with no findings. The amendments are implemented
   at `8702e06`; fresh full gates and the scheduling-only live smoke passed.
-  Independent implementation review is in progress.
+  Independent review accepted the queue correction but found policy-diagnostic
+  gaps. Bounded correction `6b831e7` closes namespace selection and explicit/global
+  fallback warnings, but mixed explicit/implicit stages still miss the warning.
+  No PR/merge until the remaining finding is corrected and independently verified.
   Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
@@ -115,14 +122,15 @@ Phase 3 retains its timeout design gate.
   not a full gate receipt. Remove only their reconciliation wakeups, preserving
   the service loop and mutation wakeups. Independent startup review passed with
   no findings; regression coverage and both full gates now pass at `8702e06`.
-  Independent implementation review remains.
+  Independent review accepted this queue correction; the separate mixed-stage
+  policy-warning finding remains open after bounded verification.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | no PR; review in progress | amendments implemented at `8702e06`; `make validate-pr` passed; summary 2,978 passed / 5 optional skips; scheduling-only SIF smoke 1 passed | independent implementation review and PR/merge pending; 3/3 historical corrections plus one expressly approved bounded amendment; positive hard-limit proof deferred | worktree and branch retained; approved SIF available |
+| 2 | no PR; merge held | `6b831e7`: 151 focused passes, both full gates passed, summary 2,988 passed / 5 optional skips, latest SIF smoke 1 passed | namespace finding closed; mixed-stage fallback warning still missing; bounded reviewer reuse consumed; scoped correction/review authorization required; hard-limit proof deferred | worktree/branch retained; receipts preserved in integration `build/stage-38-p2-6b831e7` |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged

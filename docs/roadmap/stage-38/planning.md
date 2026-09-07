@@ -1,23 +1,24 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; amended Phase 2 implemented and validated; independent correctness review in progress
+Status: first phase merged; Phase 2 held on remaining mixed-stage fallback-warning finding
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: independently review the validated amendments, then perform PR/merge gates.
-Blockers: independent implementation review; positive runtime-limit acceptance
-is deferred to a compatible host; the later timeout design gate remains.
+Current gate: obtain bounded correction/review authorization for the remaining warning case.
+Blockers: implicit-stage fallback can miss its visible no-enforcement warning;
+bounded reviewer reuse is consumed. Positive runtime-limit acceptance is deferred
+to a compatible host; the later timeout design gate remains.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published develop verified; initial audit accepted; amended product tree `8702e06` passes both full gates and selected-policy SIF smoke | A-10 remains design-gated; independent amendment review outstanding | Review the passing product tree |
+| Evidence | Published develop verified; initial audit accepted; amended product tree `8702e06` passes both full gates and selected-policy SIF smoke | A-10 remains design-gated; review found remaining implicit-stage warning gap at `6b831e7` | Preserve exact-tree receipts and hold PR/merge |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Review the implemented amendment |
-| Implementation | Phase 1 and A-11 merged; amended Phase 2 implemented; summary 2,978 passed / 5 optional skips, SIF smoke 1 passed | Independent implementation review and PR/merge remain | Preserve historical correction count and deferred hard-limit limitation |
+| Implementation | Phase 1 merged; queue correction independently accepted; `6b831e7` has 151 focused passes, both full gates passed (2,988 summary passes / 5 optional skips), latest SIF smoke 1 passed | Namespace finding closed; mixed explicit/implicit-stage fallback still misses warning after bounded reviewer verification | Hold PR/merge; seek scoped completion correction/review authority |
 
 ## Evidence And Scope
 
@@ -396,7 +397,7 @@ process-cleanup guarantee from either existing command runner.
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
-| FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented; both full gates and selected-policy smoke passed; independent correctness review pending |
+| FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented and smoke passed; implicit-stage fallback warning remains a review blocker |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
@@ -489,7 +490,7 @@ unresolved cleanup evidence.
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
 | DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
-| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented and validated; independent correctness review in progress |
+| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented; namespace review finding closed, implicit-stage warning finding open |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
 
 ## Expanded Design Review
@@ -547,12 +548,15 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
 | Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
-| Phase 2 implementation validation | `8702e06` product tree: both full gates passed, summary 2,978 passed / 5 optional skips, scheduling-only SIF smoke 1 passed | pass; independent review pending |
+| Phase 2 implementation validation | `6b831e7` product tree: both full gates passed, summary 2,988 passed / 5 optional skips, latest scheduling-only SIF smoke 1 passed | tests pass; known mixed-stage warning finding holds merge |
 
 Gate result: Phase 1 merged; scheduling-only policy design approved and independently
-reviewed. Coordinator and policy amendments are implemented and validated; Phase 2
-awaits independent implementation review and PR/merge. This approval does not reset
-its historical correction budget. Phase 3 remains
+reviewed. Coordinator amendment is independently accepted. Phase 2 policy review
+identified diagnostic gaps; `6b831e7` fixes namespace selection and explicit/global
+fallback warnings, but a mixed explicit/implicit-stage case remains. The phase
+card records its producer, consequence, smallest correction, and exhausted bounded
+reviewer reuse. PR/merge remains held pending scoped authority and final closure.
+Historical correction counts are not reset. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals
