@@ -14,13 +14,19 @@ from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisorService,
 )
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+from loom.queue._remote_stage_execution import GpuDeviceDescriptor
 from loom.queue.deployment import (
     _open_outbound_agent,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
     load_run_inspection_client_config,
 )
-from loom.queue.errors import QueueConfigError, QueueError, QueueServiceError
+from loom.queue.errors import (
+    QueueConfigError,
+    QueueConflictError,
+    QueueError,
+    QueueServiceError,
+)
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from tests.support.stage29_composition import (
@@ -59,7 +65,10 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
 ) -> None:
     source = _coordinator_config(tmp_path)
     payload = json.loads(source.read_text(encoding="utf-8"))
-    profile = payload["embedded_profile"]
+    agent_payload = _local_agent_payload(source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
     assert isinstance(profile, dict)
     profile["project_root"] = "${oc.env:LOOM_ROLE_PROJECT}"
     profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
@@ -71,7 +80,11 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
         "client_ca_path": "ca.crt",
         "credential_fingerprints": {"a" * 64: "test-credential"},
     }
+    local_reference = payload["local_agent"]
+    assert isinstance(local_reference, dict)
+    local_reference["env_file"] = "coordinator.env"
     _write_protected(source, payload)
+    _write_local_agent(source, agent_payload)
     environment = _write_protected_text(
         tmp_path / "coordinator.env",
         "# machine bindings\n"
@@ -85,6 +98,7 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
 
     first = load_coordinator_service_config(source, env_file=environment)
     assert first.environment_path == environment.resolve()
+    assert first.daemon.resident_worker_launch_profile is not None
     assert first.daemon.resident_worker_launch_profile.project_root == tmp_path
     assert first.daemon.cpu_capacity == 1
     assert first.agent_server is not None
@@ -111,6 +125,8 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
     changed_project = load_coordinator_service_config(source, env_file=environment)
     assert changed_project.immutable_fingerprint == first.immutable_fingerprint
     assert changed_project.active_fingerprint == first.active_fingerprint
+    assert changed_project.daemon.resident_worker_launch_profile is not None
+    assert first.daemon.resident_worker_launch_profile is not None
     assert (
         changed_project.daemon.resident_worker_launch_profile.fingerprint
         != first.daemon.resident_worker_launch_profile.fingerprint
@@ -160,13 +176,19 @@ def test_composed_source_closure_accepts_shared_readable_templates(
 ) -> None:
     source = _coordinator_config(tmp_path)
     payload = json.loads(source.read_text(encoding="utf-8"))
-    profile = payload["embedded_profile"]
+    agent_payload = _local_agent_payload(source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
     assert isinstance(profile, dict)
-    included = tmp_path / "profile.yaml"
-    included.write_text(json.dumps(profile), encoding="utf-8")
+    included = tmp_path / "local-agent.yaml"
+    included.write_text(
+        json.dumps({"config": "agent.yaml", "env_file": None}), encoding="utf-8"
+    )
     included.chmod(0o644)
-    payload["embedded_profile"] = {"_include_": "profile.yaml"}
+    payload["local_agent"] = {"_include_": "local-agent.yaml"}
     _write_protected(source, payload)
+    _write_local_agent(source, agent_payload)
 
     assert load_coordinator_service_config(source).daemon.cpu_capacity == 1
 
@@ -204,6 +226,7 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
     daemon = LocalDaemon(service.daemon)
     daemon.start()
     assert daemon._execution is not None  # noqa: SLF001
+    assert daemon._execution.supervisor is not None
     daemon._execution.supervisor.shutdown_for_test()  # noqa: SLF001
     daemon.stop()
     restarted = LocalDaemon(service.daemon)
@@ -218,6 +241,139 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
     binding.chmod(0o600)
     with pytest.raises(QueueServiceError, match="binding is invalid"):
         LocalDaemon(service.daemon).start()
+
+
+def test_pure_coordinator_initializes_and_waits_without_local_agent(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["local_agent"] = None
+    _write_protected(source, payload)
+
+    service = load_coordinator_service_config(source)
+    assert service.daemon.agent_root is None
+    assert service.daemon.resident_worker_launch_profile is None
+    LocalDaemon.initialize_deployment(service.daemon)
+    assert service.daemon.deployment_root is not None
+    assert not (service.daemon.deployment_root / "agent").exists()
+
+    daemon = LocalDaemon(service.daemon)
+    status = daemon.start()
+    try:
+        assert status.service_health == "healthy"
+        assert status.running_assignments == 0
+    finally:
+        daemon.stop()
+
+
+def test_local_agent_rejects_old_schema_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["schema_version"] = 2
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    constructed = False
+
+    def construct(*_args: object, **_kwargs: object) -> object:
+        nonlocal constructed
+        constructed = True
+        return object()
+
+    monkeypatch.setattr("loom.queue.deployment._trusted_target", construct)
+    with pytest.raises(QueueConfigError, match="schema version"):
+        load_coordinator_service_config(source)
+    assert not constructed
+    assert not (tmp_path / "deployment").exists()
+
+
+def test_local_provider_configuration_participates_in_reload_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    provider = {
+        "_target_": "tests.support.stage29_composition.ConfiguredCpuProvider",
+        "capacity": 1,
+        "capacity_key": "local-machine:cpu",
+    }
+    payload["providers"] = {"providers": [provider]}
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    provider["capacity"] = 2
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    agent_source = source.parent / "agent.yaml"
+    agent_source.write_text(json.dumps(payload, indent=4, sort_keys=True))
+    equivalent = load_coordinator_service_config(source)
+    assert equivalent.active_fingerprint == changed.active_fingerprint
+
+
+def test_local_gpu_binding_change_requires_explicit_reload(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    device = {
+        "descriptor": GpuDeviceDescriptor("gpu-a", "synthetic", 1024).to_dict(),
+        "binding_value": "0",
+    }
+    profile["gpu_devices"] = [device]
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(first.daemon)
+    assert first.daemon.deployment_root is not None
+    binding = first.daemon.deployment_root / "deployment-binding.json"
+    retained_binding = binding.read_bytes()
+
+    device["binding_value"] = "1"
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    with pytest.raises(QueueConflictError, match="changed without reload"):
+        LocalDaemon(changed.daemon).start()
+    assert binding.read_bytes() == retained_binding
+
+    daemon = LocalDaemon(first.daemon)
+    try:
+        assert daemon.start().service_health == "healthy"
+    finally:
+        if daemon._execution is not None and daemon._execution.supervisor is not None:
+            daemon._execution.supervisor.shutdown_for_test()
+        daemon.stop()
+
+
+def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    with pytest.raises(QueueServiceError, match="providers are invalid"):
+        load_coordinator_service_config(source)
+
+
+def test_equivalent_local_agent_references_keep_effective_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    first = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    for reference in ("./agent.yaml", str(tmp_path / "agent.yaml")):
+        payload["local_agent"]["config"] = reference
+        _write_protected(source, payload)
+        equivalent = load_coordinator_service_config(source)
+        assert equivalent.daemon.agent_root == first.daemon.agent_root
+        assert (
+            equivalent.daemon.resident_worker_launch_profile
+            == first.daemon.resident_worker_launch_profile
+        )
+        assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+        assert equivalent.active_fingerprint == first.active_fingerprint
 
 
 def test_outbound_agent_publication_is_atomic_and_config_bound(
@@ -286,11 +442,20 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     payload["run_store_root"] = "different-runs"
     alternate_python = second_root / "python"
     alternate_python.symlink_to(sys.executable)
-    payload["embedded_profile"]["project_root"] = str(second_root)
-    payload["embedded_profile"]["python_executable"] = str(alternate_python)
+    agent_payload = _local_agent_payload(first_source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["project_root"] = str(second_root)
+    profile["python_executable"] = str(alternate_python)
+    agent_payload["agent_root"] = "different-deployment/agent"
+    _write_local_agent(first_source, agent_payload)
     second_source = _write_protected(second_root / "coordinator.yaml", payload)
+    _write_local_agent(second_source, agent_payload)
     second = load_coordinator_service_config(second_source)
 
+    assert second.daemon.resident_worker_launch_profile is not None
     assert (
         second.daemon.resident_worker_launch_profile.python_executable
         == alternate_python.absolute()
@@ -298,7 +463,8 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     assert second.immutable_fingerprint == first.immutable_fingerprint
     assert second.active_fingerprint == first.active_fingerprint
 
-    payload["embedded_profile"]["cpu_capacity"] = 2
+    profile["cpu_capacity"] = 2
+    _write_local_agent(second_source, agent_payload)
     capacity_source = _write_protected(
         second_root / "coordinator-capacity.yaml", payload
     )
@@ -306,7 +472,10 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     assert capacity.immutable_fingerprint == first.immutable_fingerprint
     assert capacity.active_fingerprint != first.active_fingerprint
 
-    payload["embedded_profile"]["descriptor"]["revision"] = "v2"
+    descriptor = profile["descriptor"]
+    assert isinstance(descriptor, dict)
+    descriptor["revision"] = "v2"
+    _write_local_agent(second_source, agent_payload)
     identity_source = _write_protected(
         second_root / "coordinator-identity.yaml", payload
     )
@@ -418,7 +587,8 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "policy": {"_target_": "loom.scheduling.FifoSchedulingPolicy"},
         },
     }
-    payload["embedded_agent"] = {
+    agent_payload = _local_agent_payload(source)
+    agent_payload["providers"] = {
         "providers": [
             {
                 "_target_": (
@@ -459,6 +629,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
         }
     ]
 
+    _write_local_agent(source, agent_payload)
     service = load_coordinator_service_config(
         _write_protected(tmp_path / "coordinator-complete.yaml", payload)
     )
@@ -560,11 +731,6 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
             },
             "scheduling composition is invalid",
         ),
-        (
-            "embedded_agent",
-            {"providers": [{"_target_": "builtins.object"}]},
-            "providers are invalid",
-        ),
     ],
 )
 def test_protected_composition_rejects_targets_outside_existing_contracts(
@@ -603,17 +769,26 @@ def test_run_inspection_client_config_is_protected_exact_and_path_bound(
 
 
 def _coordinator_config(tmp_path: Path) -> Path:
+    _write_protected(
+        tmp_path / "agent.yaml",
+        {
+            "schema_version": 3,
+            "kind": "loom.local-agent-service",
+            "agent_root": "deployment/agent",
+            "resident_profiles": [_resident_profile(tmp_path, "local-profile")],
+        },
+    )
     return _write_protected(
         tmp_path / "coordinator.yaml",
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "loom.coordinator-service",
             "deployment_root": "deployment",
             "run_store_root": "runs",
             "machine_id": "local-machine",
             "poll_interval_seconds": 0.01,
             "max_accepted_time_step_seconds": 60,
-            "embedded_profile": _resident_profile(tmp_path, "local-profile"),
+            "local_agent": {"config": "agent.yaml", "env_file": None},
             "remote_profiles": [],
             "agent_policy": {
                 "revision": "policy-1",
@@ -630,7 +805,7 @@ def _agent_config(tmp_path: Path) -> Path:
     return _write_protected(
         tmp_path / "agent.yaml",
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "loom.outbound-agent-service",
             "agent_root": "remote-agent",
             "url": "https://localhost:8443",
@@ -666,6 +841,16 @@ def _resident_profile(tmp_path: Path, profile_id: str) -> dict[str, object]:
         "gpu_devices": [],
         "environment": {},
     }
+
+
+def _local_agent_payload(source: Path) -> dict[str, object]:
+    payload = json.loads((source.parent / "agent.yaml").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _write_local_agent(source: Path, payload: object) -> Path:
+    return _write_protected(source.parent / "agent.yaml", payload)
 
 
 def _write_protected(path: Path, payload: object) -> Path:

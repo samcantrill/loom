@@ -53,7 +53,7 @@ from .local_daemon import (
 from .coordinator_authority import CoordinatorAuthorityFactory
 
 
-DEPLOYMENT_CONFIG_SCHEMA_VERSION = 2
+DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3
 _OUTBOUND_OFFER_TTL_SECONDS = 30
 _OUTBOUND_POLL_WAIT_MS = 5_000
 
@@ -65,6 +65,18 @@ class CoordinatorServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
+    environment_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LocalAgentServiceConfig:
+    """The agent-owned portion of one embedded coordinator composition."""
+
+    agent_root: Path
+    profile: ResidentExecutionProfile
+    providers: tuple[object, ...] | None
+    provider_configuration: object
+    source_path: Path
     environment_path: Path | None = None
 
 
@@ -112,30 +124,37 @@ def load_coordinator_service_config(
             "machine_id",
             "poll_interval_seconds",
             "max_accepted_time_step_seconds",
-            "embedded_profile",
+            "local_agent",
             "remote_profiles",
             "agent_policy",
             "agent_server",
             "authority",
         },
-        {"scheduling", "embedded_agent", "slurm_profiles"},
+        {"scheduling", "slurm_profiles"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
     payload = _normalize_coordinator_payload(payload)
-    fingerprint = _canonical_fingerprint(_coordinator_immutable_projection(payload))
-    active_fingerprint = _canonical_fingerprint(_coordinator_active_projection(payload))
     base = source.parent
     root = _path(payload, "deployment_root", base)
-    embedded = _resident_profile(
-        _mapping(payload, "embedded_profile"), base, "embedded_profile"
+    local_agent = _local_agent_service(payload["local_agent"], base)
+    fingerprint = _canonical_fingerprint(
+        {
+            "coordinator": _coordinator_immutable_projection(payload),
+            "local_agent": _local_agent_immutable_projection(local_agent),
+        }
+    )
+    active_fingerprint = _canonical_fingerprint(
+        {
+            "coordinator": _coordinator_active_projection(payload),
+            "local_agent": _local_agent_active_projection(local_agent),
+        }
     )
     policy = _agent_policy(_mapping(payload, "agent_policy"))
     authority_factory = _coordinator_authority_factory(
         _mapping(payload, "authority"), base
     )
     scheduling, priority_resolver = _scheduling_composition(payload.get("scheduling"))
-    embedded_providers = _embedded_provider_composition(payload.get("embedded_agent"))
     slurm_profiles = _slurm_profile_composition(payload.get("slurm_profiles"))
     server_value = payload["agent_server"]
     server = (
@@ -150,18 +169,26 @@ def load_coordinator_service_config(
     )
     daemon = LocalDaemonConfig(
         coordinator_root=root / "coordinator",
-        agent_root=root / "agent",
+        agent_root=None if local_agent is None else local_agent.agent_root,
         run_store_root=_path(payload, "run_store_root", base),
-        resident_worker_launch_profile=embedded.launch_profile,
+        resident_worker_launch_profile=(
+            None if local_agent is None else local_agent.profile.launch_profile
+        ),
         deployment_root=root,
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
         machine_id=_string(payload, "machine_id"),
-        cpu_capacity=embedded.cpu_capacity,
-        memory_capacity_bytes=embedded.memory_capacity_bytes,
-        gpu_devices=tuple(
-            ConfiguredGpuDevice(item.descriptor, item.binding_value)
-            for item in embedded.gpu_devices
+        cpu_capacity=0 if local_agent is None else local_agent.profile.cpu_capacity,
+        memory_capacity_bytes=(
+            0 if local_agent is None else local_agent.profile.memory_capacity_bytes
+        ),
+        gpu_devices=(
+            ()
+            if local_agent is None
+            else tuple(
+                ConfiguredGpuDevice(item.descriptor, item.binding_value)
+                for item in local_agent.profile.gpu_devices
+            )
         ),
         poll_interval_seconds=_positive_number(payload, "poll_interval_seconds"),
         max_accepted_time_step_seconds=_positive_number(
@@ -172,7 +199,9 @@ def load_coordinator_service_config(
         coordinator_authority_factory=authority_factory,
         scheduling_components=scheduling,
         admission_priority_resolver=priority_resolver,
-        agent_resource_providers=cast(Any, embedded_providers),
+        agent_resource_providers=(
+            None if local_agent is None else cast(Any, local_agent.providers)
+        ),
         slurm_profiles=cast(Any, slurm_profiles),
     )
     return CoordinatorServiceConfig(
@@ -598,15 +627,55 @@ def _normalize_coordinator_payload(payload: Mapping[str, object]) -> Mapping[str
     normalized["max_accepted_time_step_seconds"] = _positive_number(
         payload, "max_accepted_time_step_seconds"
     )
-    normalized["embedded_profile"] = _normalize_resident_profile(
-        _mapping(payload, "embedded_profile"), "embedded_profile"
-    )
     server = payload.get("agent_server")
     if server is not None:
         normalized["agent_server"] = _normalize_agent_server(
             _mapping_value(server, "agent_server")
         )
     return normalized
+
+
+def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig | None:
+    """Load the optional protected agent role used by a local coordinator."""
+
+    if value is None:
+        return None
+    reference = _mapping_value(value, "local_agent")
+    _exact(reference, {"config", "env_file"}, "local_agent")
+    source = _path(reference, "config", base)
+    environment = (
+        None if reference["env_file"] is None else _path(reference, "env_file", base)
+    )
+    agent_source, environment_path, payload, _ = _load_protected_config(
+        source, env_file=environment
+    )
+    _required_allowed(
+        payload,
+        {"schema_version", "kind", "agent_root", "resident_profiles"},
+        {"providers"},
+        "local agent service config",
+    )
+    _header(payload, "loom.local-agent-service")
+    profiles = tuple(
+        _resident_profile(
+            _mapping_value(item, f"resident_profiles[{index}]"),
+            agent_source.parent,
+            f"resident_profiles[{index}]",
+        )
+        for index, item in enumerate(_sequence(payload, "resident_profiles"))
+    )
+    if len(profiles) != 1:
+        raise QueueConfigError("local agent service requires one resident profile")
+    provider_configuration = payload.get("providers")
+    providers = _embedded_provider_composition(provider_configuration)
+    return LocalAgentServiceConfig(
+        _path(payload, "agent_root", agent_source.parent),
+        profiles[0],
+        providers,
+        _without_paths(provider_configuration),
+        agent_source,
+        environment_path,
+    )
 
 
 def _normalize_outbound_agent_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -868,8 +937,6 @@ def _coordinator_immutable_projection(
 ) -> dict[str, object]:
     """Role-owned coordinator identity, deliberately excluding reloadable policy."""
 
-    embedded = _mapping(payload, "embedded_profile")
-    profile = _mapping(embedded, "descriptor")
     server = payload.get("agent_server")
     server_mapping = None if server is None else _mapping_value(server, "agent_server")
     server_identity = (
@@ -884,9 +951,6 @@ def _coordinator_immutable_projection(
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "machine_id": payload["machine_id"],
-        "embedded_profile": {
-            "descriptor": dict(profile),
-        },
         "agent_server": server_identity,
         "authority": _without_paths(_mapping(payload, "authority")),
     }
@@ -914,7 +978,6 @@ def _outbound_immutable_projection(
 
 
 def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
-    embedded = _mapping(payload, "embedded_profile")
     server = payload.get("agent_server")
     server_mapping = None if server is None else _mapping_value(server, "agent_server")
     server_credentials = (
@@ -930,20 +993,44 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
                 "max_accepted_time_step_seconds": payload[
                     "max_accepted_time_step_seconds"
                 ],
-                "embedded_capacity": {
-                    "cpu_capacity": embedded["cpu_capacity"],
-                    "memory_capacity_bytes": embedded["memory_capacity_bytes"],
-                    "gpu_devices": embedded["gpu_devices"],
-                },
                 "agent_policy": payload["agent_policy"],
                 "agent_server_credentials": server_credentials,
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),
-                "embedded_agent": payload.get("embedded_agent"),
                 "slurm_profiles": payload.get("slurm_profiles"),
             }
         ),
     )
+
+
+def _local_agent_immutable_projection(
+    local_agent: LocalAgentServiceConfig | None,
+) -> object:
+    if local_agent is None:
+        return None
+    return {"descriptor": local_agent.profile.descriptor.to_dict()}
+
+
+def _local_agent_active_projection(
+    local_agent: LocalAgentServiceConfig | None,
+) -> object:
+    if local_agent is None:
+        return None
+    profile = local_agent.profile
+    return {
+        "cpu_capacity": profile.cpu_capacity,
+        "memory_capacity_bytes": profile.memory_capacity_bytes,
+        "gpu_devices": [
+            {
+                "descriptor": item.descriptor.to_dict(),
+                "binding_digest": hashlib.sha256(
+                    item.binding_value.encode()
+                ).hexdigest(),
+            }
+            for item in profile.gpu_devices
+        ],
+        "providers": local_agent.provider_configuration,
+    }
 
 
 def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, object]:

@@ -496,6 +496,7 @@ def test_changed_scheduling_configuration_rejects_before_starting_supervisor(
     with pytest.raises(QueueConflictError, match="scheduling configuration changed"):
         LocalDaemon(replace(config, cpu_capacity=2)).start()
 
+    assert config.agent_root is not None
     assert _supervisor_process_ids(config.agent_root) == ()
 
 
@@ -509,6 +510,7 @@ def test_unavailable_local_owner_store_rejects_before_starting_supervisor(
     with pytest.raises(QueueServiceError, match="retained daemon owner state"):
         LocalDaemon(config).start()
 
+    assert config.agent_root is not None
     assert _supervisor_process_ids(config.agent_root) == ()
 
 
@@ -527,8 +529,10 @@ def test_failed_local_start_preserves_supervisor_with_retained_owner_work(
         with pytest.raises(QueueServiceError, match="retained daemon owner state"):
             LocalDaemon(config).start()
 
+        assert config.agent_root is not None
         process_ids = _supervisor_process_ids(config.agent_root)
         assert len(process_ids) == 1
+        assert config.agent_root is not None
         with sqlite3.connect(
             config.agent_root / "supervisor" / "supervisor.sqlite"
         ) as conn:
@@ -540,6 +544,8 @@ def test_failed_local_start_preserves_supervisor_with_retained_owner_work(
             )
     finally:
         _, agent_id = _owner_ids(config)
+        assert config.agent_root is not None
+        assert config.resident_worker_launch_profile is not None
         supervisor = AgentProcessSupervisorClient(
             config.agent_root,
             SupervisorLaunchConfiguration(
@@ -1237,6 +1243,7 @@ def test_completed_background_failure_replays_the_same_local_assignment(
     daemon.start()
     execution = daemon._execution
     assert execution is not None
+    assert execution.supervisor is not None
     original_query = execution.supervisor.query
     third_query_entered = Event()
     allow_recovery = Event()
@@ -1697,7 +1704,9 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     )
     execution = daemon._execution
     assert execution is not None
+    assert execution.supervisor is not None
     original_launch = execution.supervisor.launch
+    assert execution.supervisor is not None
     original_query = execution.supervisor.query
     launch_response_lost = False
 
@@ -1742,6 +1751,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     assert execution._is_exact_retained_unknown(  # noqa: SLF001
         assignment.assignment_id
     )
+    assert config.agent_root is not None
     workspace = _ResidentAssignmentWorkspace(
         config.agent_root, assignment.assignment_id
     )
@@ -1961,6 +1971,7 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         )
         assert len(assignments) == 1
         assert assignments[0]["state"] == "released"
+        assert config.agent_root is not None
         worker_result = SQLiteAgentJournal(
             config.agent_root / "journal.sqlite"
         ).read_result(cast(str, assignments[0]["assignment_id"]))
@@ -1975,6 +1986,7 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         run_store = LocalRunStore(run_root)
         assert run_store.read_artifact_index(run_uri) == {}
         assert run_store.read_stage_outputs(run_uri, "slow") is None
+        assert config.agent_root is not None
         with sqlite3.connect(
             config.agent_root / "supervisor" / "supervisor.sqlite"
         ) as conn:
@@ -2039,6 +2051,7 @@ def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
         ((assignment, _receipt),) = execution.coordinator.retained_assignments(
             agent_id=config.machine_id
         )
+        assert config.agent_root is not None
         workspace = _ResidentAssignmentWorkspace(
             config.agent_root, assignment.assignment_id
         )
@@ -2234,6 +2247,7 @@ def test_terminal_settlement_exempts_only_guarded_recovery_retention(
         )
     finally:
         execution.close()
+        assert execution.supervisor is not None
         execution.supervisor.shutdown_for_test()
 
 
@@ -2298,6 +2312,7 @@ def _owner_ids(config: LocalDaemonConfig) -> tuple[str, str]:
                 "SELECT value FROM root_metadata WHERE key = 'stable_id'"
             ).fetchone()[0]
         )
+    assert config.agent_root is not None
     with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
         agent_id = str(
             conn.execute(
@@ -2309,6 +2324,8 @@ def _owner_ids(config: LocalDaemonConfig) -> tuple[str, str]:
 
 def _execution(config: LocalDaemonConfig) -> LocalDaemonExecution:
     initialize_local_daemon_owner_stores(config)
+    assert config.agent_root is not None
+    assert config.resident_worker_launch_profile is not None
     AgentProcessSupervisorService.initialize(
         config.agent_root,
         configuration=SupervisorLaunchConfiguration(
@@ -2553,6 +2570,7 @@ def _wait_for_supervisor_launch_count(
     config: LocalDaemonConfig, *, expected: int
 ) -> None:
     deadline = time.monotonic() + 5
+    assert config.agent_root is not None
     database = config.agent_root / "supervisor" / "supervisor.sqlite"
     observed = 0
     while time.monotonic() < deadline:
@@ -2567,6 +2585,7 @@ def _wait_for_supervisor_launch_count(
 
 
 def _supervisor_launch_count(config: LocalDaemonConfig) -> int:
+    assert config.agent_root is not None
     with sqlite3.connect(
         config.agent_root / "supervisor" / "supervisor.sqlite"
     ) as conn:
@@ -2575,6 +2594,7 @@ def _supervisor_launch_count(config: LocalDaemonConfig) -> int:
 
 def _running_supervisor_identity(config: LocalDaemonConfig) -> tuple[str, int]:
     deadline = time.monotonic() + 5
+    assert config.agent_root is not None
     database = config.agent_root / "supervisor" / "supervisor.sqlite"
     while time.monotonic() < deadline:
         with sqlite3.connect(database) as conn:

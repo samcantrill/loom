@@ -1846,10 +1846,8 @@ class SQLiteCoordinatorAssignments:
         self.path = Path(path)
         self._allow_initialize = _allow_initialize
         self._capacity = {atom.key: atom for atom in capacity}
-        if not self._capacity or len(self._capacity) != len(tuple(capacity)):
-            raise ManagedLocalError(
-                "coordinator capacity atoms must be non-empty and unique"
-            )
+        if len(self._capacity) != len(tuple(capacity)):
+            raise ManagedLocalError("coordinator capacity atoms must be unique")
 
     def _initialize(self) -> None:
         """Create the current coordinator-assignment schema explicitly."""

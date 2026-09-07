@@ -156,11 +156,18 @@ def test_queue_role_check_uses_only_its_explicit_environment(
 ) -> None:
     config = _coordinator_service_config(tmp_path)
     payload = json.loads(config.read_text(encoding="utf-8"))
-    profile = payload["embedded_profile"]
+    agent_path = tmp_path / "local-agent.yaml"
+    agent_payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    profile = agent_payload["resident_profiles"][0]
     assert isinstance(profile, dict)
     profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    local_agent = payload["local_agent"]
+    assert isinstance(local_agent, dict)
+    local_agent["env_file"] = "coordinator.env"
     config.write_text(json.dumps(payload), encoding="utf-8")
     config.chmod(0o600)
+    agent_path.write_text(json.dumps(agent_payload), encoding="utf-8")
+    agent_path.chmod(0o600)
     environment = tmp_path / "coordinator.env"
     environment.write_text("LOOM_ROLE_CPU=1\n", encoding="utf-8")
     environment.chmod(0o600)
@@ -476,32 +483,47 @@ def _queue_config(tmp_path: Path) -> Path:
 
 
 def _coordinator_service_config(tmp_path: Path) -> Path:
+    agent_path = tmp_path / "local-agent.yaml"
+    agent_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "kind": "loom.local-agent-service",
+                "agent_root": "deployment/agent",
+                "resident_profiles": [
+                    {
+                        "descriptor": {
+                            "profile_id": "test-local",
+                            "revision": "v1",
+                            "project_fingerprint": "test-project",
+                            "environment_fingerprint": "test-environment",
+                            "executor_fingerprint": "test-executor",
+                        },
+                        "project_root": str(Path.cwd()),
+                        "python_executable": sys.executable,
+                        "cpu_capacity": 1,
+                        "memory_capacity_bytes": 0,
+                        "gpu_devices": [],
+                        "environment": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent_path.chmod(0o600)
     config_path = tmp_path / "coordinator.yaml"
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "loom.coordinator-service",
                 "deployment_root": "deployment",
                 "run_store_root": "runs",
                 "machine_id": "test-local",
                 "poll_interval_seconds": 0.01,
                 "max_accepted_time_step_seconds": 60,
-                "embedded_profile": {
-                    "descriptor": {
-                        "profile_id": "test-local",
-                        "revision": "v1",
-                        "project_fingerprint": "test-project",
-                        "environment_fingerprint": "test-environment",
-                        "executor_fingerprint": "test-executor",
-                    },
-                    "project_root": str(Path.cwd()),
-                    "python_executable": sys.executable,
-                    "cpu_capacity": 1,
-                    "memory_capacity_bytes": 0,
-                    "gpu_devices": [],
-                    "environment": {},
-                },
+                "local_agent": {"config": "local-agent.yaml", "env_file": None},
                 "remote_profiles": [],
                 "agent_policy": {
                     "revision": "policy-1",
@@ -523,7 +545,7 @@ def _outbound_agent_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "loom.outbound-agent-service",
                 "agent_root": "remote-agent",
                 "url": "https://localhost:8443",

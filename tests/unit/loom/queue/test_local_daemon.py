@@ -128,6 +128,7 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         daemon._coordinator_id = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'stable_id'"
         ).fetchone()[0]
+    assert config.agent_root is not None
     with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
         daemon._agent_id = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'stable_id'"
@@ -1200,6 +1201,7 @@ def test_scheduling_reload_rejects_changed_supervisor_launch_identity(
     config = _config(tmp_path)
     alternate_project = tmp_path / "alternate-project"
     alternate_project.mkdir()
+    assert config.resident_worker_launch_profile is not None
     replacement = replace(
         config,
         resident_worker_launch_profile=replace(
