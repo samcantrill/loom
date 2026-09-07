@@ -1,6 +1,6 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phase 2 held on remaining mixed-stage fallback-warning review finding
+Status: Phase 2 approved mixed-stage fallback-warning correction in progress
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -9,7 +9,8 @@ Current phase: 2 — direct-container-resources
 Blockers: the bounded correction verification closed namespace selection but
 found missing visible warnings for implicit stages inheriting container intent
 when another stage has explicit resource options. The bounded reviewer reuse is
-consumed; further correction/review needs scoped authorization. Fresh full gates
+consumed; the maintainer now authorizes this specific correction and a fresh
+bounded independent verification, without resetting other budgets. Fresh full gates
 passed at `6b831e7` (2,988 summary passes, five optional skips); the known reporting
 defect still holds merge. The latest SIF smoke also passed one test.
 Positive runtime-limit proof remains deferred to a compatible host.
@@ -62,7 +63,7 @@ Phase 3 retains its timeout design gate.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
-| 2 | direct-container-resources | blocked | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
+| 2 | direct-container-resources | in_progress | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate

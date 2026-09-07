@@ -2967,7 +2967,9 @@ Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit schedulin
 CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
 reconciliation wakeups and passed independent review. The scheduling-only SIF smoke
 passes, but independent policy review still holds PR/merge for a missing visible
-warning on implicit stages inheriting container CPU/RAM intent.
+warning on implicit stages inheriting container CPU/RAM intent. The maintainer
+approved the targeted reporting correction and fresh bounded verification;
+implementation is in progress, with no invented direct limits when unmapped.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,

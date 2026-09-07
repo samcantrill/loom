@@ -1,13 +1,14 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; Phase 2 held on remaining mixed-stage fallback-warning finding
+Status: first phase merged; Phase 2 approved mixed-stage warning correction in progress
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: obtain bounded correction/review authorization for the remaining warning case.
+Current gate: implement the approved bounded warning correction and independently verify it.
 Blockers: implicit-stage fallback can miss its visible no-enforcement warning;
-bounded reviewer reuse is consumed. Positive runtime-limit acceptance is deferred
+the maintainer approved its correction and one fresh bounded verification after
+the prior reviewer reuse was consumed. Positive runtime-limit acceptance is deferred
 to a compatible host; the later timeout design gate remains.
 
 ## Current State
@@ -555,7 +556,8 @@ reviewed. Coordinator amendment is independently accepted. Phase 2 policy review
 identified diagnostic gaps; `6b831e7` fixes namespace selection and explicit/global
 fallback warnings, but a mixed explicit/implicit-stage case remains. The phase
 card records its producer, consequence, smallest correction, and exhausted bounded
-reviewer reuse. PR/merge remains held pending scoped authority and final closure.
+reviewer reuse. The maintainer now approves this correction and a fresh bounded
+verification. PR/merge remains held pending final closure and fresh full gates.
 Historical correction counts are not reset. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 

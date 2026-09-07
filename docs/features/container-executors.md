@@ -73,8 +73,16 @@ namespaces are present. Direct `singularity` prefers `singularity`, falling back
 to `apptainer` only when the former is absent; preflight uses the same choice.
 Nonempty stage resource requests replace authored `container.resources` intent.
 When that authored fallback applies, capability/preflight warnings also identify
-its CPU/RAM as not enforced in scheduling-only mode. Observing this intent does
-not create a managed resource reservation.
+its CPU/RAM as not enforced in scheduling-only mode, including pipeline stages
+without an explicit `stage_options` entry. Mapping errors remain failures even
+when other stages only warn. These warnings are advisory by default; explicitly
+running preflight with `--strict` still treats warnings as a failed preflight.
+Observing this intent does not create a managed resource reservation.
+
+Loom does not invent CPU/RAM limits for absent requests or for requests left
+unmapped by `scheduling_only`. This does not remove inherited host/container
+controls or change managed admission, GPU behavior, or SLURM-owned allocations.
+Invalid resource declarations still fail validation.
 
 A project can make the choice composable without embedding a site image or
 host path in the profile. The existing `container` options still supply those

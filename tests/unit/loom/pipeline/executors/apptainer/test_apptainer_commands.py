@@ -118,7 +118,9 @@ def test_apptainer_exec_options_and_inputs_reject_invalid_shapes() -> None:
             ),
             worker_command=("python", "-V"),
         )
-    with pytest.raises(ApptainerOptionError, match="required host environment variable"):
+    with pytest.raises(
+        ApptainerOptionError, match="required host environment variable"
+    ):
         build_apptainer_exec_command(
             container_options=ContainerOptions(
                 image="analysis.sif",
@@ -170,6 +172,25 @@ def test_build_apptainer_exec_command_converts_exact_fractional_memory_units() -
     assert command.argv[command.argv.index("--memory") + 1] == "524288"
 
 
+@pytest.mark.parametrize("policy", ("runtime", "scheduling_only"))
+def test_absent_resource_intent_does_not_invent_cpu_memory_limits(policy: str) -> None:
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(image="analysis.sif"),
+        apptainer_options=ApptainerExecOptions.from_dict(
+            {"cpu_memory_enforcement": policy}
+        ),
+        worker_command=("python", "-V"),
+    )
+    assert command.argv == (
+        "apptainer",
+        "exec",
+        "--cleanenv",
+        "analysis.sif",
+        "python",
+        "-V",
+    )
+
+
 def test_scheduling_only_omits_limits_but_retains_and_validates_intent() -> None:
     resources = _resource_intent(
         cpu=ResourceEntry(kind="cpu", amount=2),
@@ -185,9 +206,12 @@ def test_scheduling_only_omits_limits_but_retains_and_validates_intent() -> None
     assert "--cpus" not in command.argv
     assert "--memory" not in command.argv
     assert command.metadata["apptainer_options"] == options.to_dict()
-    assert command.metadata["container"] == ContainerOptions(
-        image="analysis.sif", resources=resources
-    ).to_redacted_metadata()
+    assert (
+        command.metadata["container"]
+        == ContainerOptions(
+            image="analysis.sif", resources=resources
+        ).to_redacted_metadata()
+    )
     with pytest.raises(ApptainerOptionError, match="positive integer"):
         build_apptainer_exec_command(
             container_options=ContainerOptions(
@@ -337,7 +361,6 @@ def _resource_intent(
     return ContainerResourceIntent(
         entries=entries,
         capabilities={
-            kind: ResourceCapability(support_level="supported")
-            for kind in entries
+            kind: ResourceCapability(support_level="supported") for kind in entries
         },
     )

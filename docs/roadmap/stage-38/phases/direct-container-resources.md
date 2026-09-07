@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
@@ -13,7 +13,8 @@
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
 - Blockers: mixed explicit/implicit-stage fallback warning remains after bounded
-  correction verification; reviewer reuse consumed; no PR/merge
+  correction verification; newly approved bounded correction/review in progress;
+  no PR/merge until closure and fresh gates
 
 ## Objective And Context
 
@@ -283,6 +284,17 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
 
 ## Workflow State
 
+- Current scoped authority: maintainer approved the remaining mixed-stage warning
+  correction and one fresh independent verification. "No restrictions if unmapped"
+  means no invented direct CPU/RAM limits when intent is absent or the explicit
+  scheduling-only policy disables that mapping. Preserve canonical validation,
+  default runtime mapping, managed demand, GPU/SLURM ownership, inherited host
+  controls, and the explicit CLI strict-warning policy. Historical budgets are
+  not reset; broader product changes or unrelated blockers require direction.
+- Correction coverage: use the full-stage mapping owner for warning severity;
+  test implicit eval fallback beside GPU-only train, FAIL precedence for an
+  unrepresentable runtime-mode train request, and no-resource PASS/no invented flags.
+  Reuse runtime/SLURM mapping and CLI warning/strict tests; refresh both full gates.
 - Additional amendment authority: maintainer approved one bounded cause-backed
   coordinator-responsiveness correction and later scheduling-only implementation.
   Historical correction counts and validation gates remain unchanged. Measured
@@ -353,10 +365,10 @@ preflight can therefore remain PASS without the required visible warning.
 Smallest next correction: make the existing mapping owner return WARN whenever
 any actual mapped CPU/RAM item is `not_enforced`, preserving FAIL precedence,
 SLURM ownership, and runtime-mode reporting. Add the mixed-stage regression,
-refresh relevant/full evidence, and independently verify closure. The bounded
-reviewer reuse is consumed; stop further product/review loops pending scoped
-authorization. Do not reset historical correction counts, relax the warning
-contract, or merge a known incomplete policy.
+refresh relevant/full evidence, and independently verify closure. The maintainer
+now authorizes this correction and one fresh bounded independent verification;
+the earlier reviewer reuse remains consumed. Do not reset historical correction
+counts, relax the warning contract, or merge a known incomplete policy.
 
 | Item | Result |
 | --- | --- |

@@ -13,6 +13,7 @@ import pytest
 from loom.diagnostics import (
     PreflightCheckStatus,
     PreflightRequest,
+    PreflightSeverity,
     PreflightStatus,
     run_preflight,
 )
@@ -846,17 +847,114 @@ def test_apptainer_preflight_reports_scheduling_only_cpu_memory_as_not_enforced(
         )
     )
 
+    checks = {check.check_id: check for check in result.checks}
+    assert checks["resources.apptainer.mapping"].status is PreflightCheckStatus.WARN
     mapped = cast(
         list[dict[str, Any]],
-        {check.check_id: check for check in result.checks}[
-            "resources.apptainer.mapping"
-        ].details["mapped_resources"],
+        checks["resources.apptainer.mapping"].details["mapped_resources"],
     )
     assert [(item["resource_kind"], item["enforcement"]) for item in mapped] == [
         ("cpu", "not_enforced"),
         ("memory", "not_enforced"),
     ]
     assert all(item["runtime_argument"] is None for item in mapped)
+
+
+@pytest.mark.parametrize("unrepresentable_cpu", (False, True))
+def test_scheduling_only_implicit_stage_fallback_warns_unless_mapping_fails(
+    monkeypatch: pytest.MonkeyPatch, unrepresentable_cpu: bool
+) -> None:
+    import loom.pipeline
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        loom.pipeline,
+        "validate_pipeline_config",
+        lambda _config: _FakePipelineValidation(
+            spec=_FakeSpec(stage_names=("train", "eval")), stage_count=2
+        ),
+    )
+    train_entries: dict[str, Any] = {"gpu": {"kind": "gpu", "amount": 1}}
+    train_options: dict[str, Any] = {"resources": {"entries": train_entries}}
+    if unrepresentable_cpu:
+        train_entries["cpu"] = {"kind": "cpu", "amount": 1 << 63}
+        train_options["adapter_options"] = {
+            "apptainer": {"cpu_memory_enforcement": "runtime"}
+        }
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+                    "container": {
+                        "image": {"reference": "analysis.sif"},
+                        "resources": {
+                            "entries": {
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                }
+                            },
+                            "capabilities": {"memory": {"support_level": "supported"}},
+                        },
+                    },
+                },
+                "stage_options": {"train": train_options},
+            },
+        )
+    )
+    checks = {check.check_id: check for check in result.checks}
+    mapping = checks["resources.apptainer.mapping"]
+    assert mapping.details["mapped_resources"] == [
+        {
+            "stage_id": "eval",
+            "resource_kind": "memory",
+            "amount": 512,
+            "unit": "MiB",
+            "support_level": "supported",
+            "enforcement": "not_enforced",
+            "runtime_argument": None,
+        }
+    ]
+    if unrepresentable_cpu:
+        assert mapping.status is PreflightCheckStatus.FAIL
+        assert result.status is PreflightStatus.FAIL
+        assert "failed" in mapping.message
+        diagnostics = cast(list[dict[str, Any]], mapping.details["diagnostics"])
+        assert diagnostics[0]["code"] == "apptainer_cpu_memory_projection_invalid"
+        assert "unrepresentable" in diagnostics[0]["message"]
+    else:
+        assert checks["resources.capabilities"].status is PreflightCheckStatus.PASS
+        assert mapping.status is PreflightCheckStatus.WARN
+        assert mapping.severity is PreflightSeverity.WARNING
+        assert "not enforced" in mapping.message
+        assert result.status is PreflightStatus.WARN
+
+
+@pytest.mark.parametrize("policy", ("runtime", "scheduling_only"))
+def test_apptainer_preflight_without_cpu_memory_intent_has_no_mapping_warning(
+    monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    options = _apptainer_runtime_options()
+    cast(dict[str, Any], options["adapter_options"])["apptainer"] = {
+        "cpu_memory_enforcement": policy
+    }
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml", groups=("resources",), runtime_options=options
+        )
+    )
+    mapping = {check.check_id: check for check in result.checks}[
+        "resources.apptainer.mapping"
+    ]
+    assert mapping.status is PreflightCheckStatus.PASS
+    assert mapping.details["mapped_resources"] == []
+    assert result.status is PreflightStatus.PASS
 
 
 @pytest.mark.parametrize(

@@ -2984,17 +2984,27 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                 )
             )
 
-    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    if diagnostics:
+        status = PreflightCheckStatus.FAIL
+        message = "Apptainer resource mapping checks failed"
+    elif any(
+        cast(dict[str, PlainData], item)["enforcement"] == "not_enforced"
+        for item in mapped
+    ):
+        status = PreflightCheckStatus.WARN
+        message = (
+            "Apptainer CPU/memory requests are retained but not enforced by the "
+            "direct runtime for scheduling-only stages"
+        )
+    else:
+        status = PreflightCheckStatus.PASS
+        message = "Apptainer CPU and memory resource mapping is valid"
     return _result(
         "resources.apptainer.mapping",
         PreflightGroup.RESOURCES,
         status,
         _severity_for_status(status),
-        (
-            "Apptainer CPU and memory resource mapping is valid"
-            if status is PreflightCheckStatus.PASS
-            else "Apptainer resource mapping checks failed"
-        ),
+        message,
         {
             "target_count": len(targets),
             "mapped_resources": mapped,
