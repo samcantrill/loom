@@ -439,7 +439,8 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 - Material handoff anomaly: the executor returned no implementation after its
   capability clarification. The manager implemented the already reviewed scope
   directly; this did not reopen product contracts or introduce another executor.
-- Pre-submit gate, independent implementation review, PR and merge: pending
+- Pre-submit: `make validate-pr` passed at production/test revision `3fd6f65`;
+  suite-summary gate running. Independent implementation review, PR and merge pending.
 - Blocker corrections: 3/3 including capability/reporting clarification,
   pre-submit fixture type narrowing, and A-15's frozen timeout-metadata reader
   correction plus completion of real early-result coverage. No public values or
@@ -451,9 +452,10 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 | --- | --- |
 | Reviewed mechanism and approved boundaries | Independent mechanism review accepted with signal/reap ordering; static-capability versus attempt-outcome reporting is clarified above using existing owners. Approved SIF and SingularityCE 3.10.4 verified; its path is recorded in `build/pid_namespace_lifecycle_probe.py`, checksum `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`. |
 | Implementation and changed paths | Timeout-only private foreground namespace supervision, existing executor outcome/result gate and capability messages; one private group handle shared by the existing legacy/resident owners. Public protocols, durable formats and `StageContext` values unchanged. Source-mirrored tests, opt-in lifecycle acceptance and reliability/test docs updated. |
-| Real process/runtime tests and validated revision | `build/timeout-targeted.xml`: 273 passed, five unrelated optional skips, 238.04 s. Includes all 12 new selected-runtime cases, real ready TERM-resistant resident descendant, query/request-stop/shutdown, controlled PGID reuse and lost-ownership checks. Run with `LOOM_RUN_APPTAINER_TIMEOUT_ACCEPTANCE=1`, `LOOM_APPTAINER_COMMAND=singularity` and the previously approved `LOOM_APPTAINER_RESOURCE_IMAGE`; no resource flags or host changes. Full gates pending. |
+| Real process/runtime tests and validated revision | `3fd6f65`: `build/container-timeout-final.xml`, all 13 selected-runtime cases passed in 11.08 s; `build/timeout-metadata-correction.xml`, 49 related checks passed. Earlier `build/timeout-targeted.xml`: 273 passed, five unrelated optional skips, 238.04 s. Real ready TERM-resistant resident descendant, query/request-stop/shutdown, controlled PGID reuse and lost-ownership checks covered. Opt-in runtime flags and approved image are described below; no resource flags or host changes. |
+| Full local gates | `3fd6f65`: `make validate-pr` passed, including lint, zero type errors, 2,849 default passes, 161 config-extra passes, 18 opt-in skips, sdist/wheel builds (`build/timeout-validate-pr.log`). `make test-summary` pending. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No outstanding capability decision. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Required full gates and independent implementation review remain. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |
+| Residual risk and cleanup | No outstanding capability decision. Unsupported prerequisites fail explicitly; static diagnostics never claim observed host enforcement. Suite summary and independent implementation review remain. Transient test-fixture setup errors were corrected before final targeted acceptance; the two delayed fixture roots from an early setup failure exited under their own 30-second deadlines and were confirmed absent. |
 
 Pre-submit continuation: `make validate-pr` passed for production revision
 `090385a` (2,848 default passes; 161 config-extra passes, 17 opt-in skips), after
@@ -465,4 +467,5 @@ checks pass 49 tests (`build/timeout-metadata-correction.xml`). The real SIF now
 also writes a valid success file before expiry through a shell worker-protocol
 fixture; the production executor/runner rejects it before reading. This closes
 the real early-result acceptance case in addition to the 12 earlier runtime cases.
-Final full gates and independent review must include this correction.
+The final `make validate-pr` and 13-case live-runtime acceptance passed at
+`3fd6f65`, including this correction. Suite summary and independent review remain.

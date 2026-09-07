@@ -1,12 +1,12 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phases 1 and 2 merged; Phase 3 implemented, full gates and review pending
+Status: Phases 1 and 2 merged; Phase 3 implemented, suite summary and review pending
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 3 — container-timeout-lifecycle
-Blockers: none; full gates and independent implementation review remain pending.
+Blockers: none; suite-summary gate and independent implementation review remain pending.
 Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
 The maintainer authorized this specific correction and a fresh bounded independent
 verification, without resetting other budgets. Targeted checks pass 80 tests and
@@ -146,7 +146,7 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
 | 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
-| 3 | pending | design accepted at `0786e55`; namespace/group and non-reaping anchor probes, 161 baseline passes | implementation, runtime acceptance and independent implementation review pending | isolated phase worktree retained |
+| 3 | pending | `3fd6f65`: timeout/result gate, legacy/resident identity-safe cleanup and frozen timeout-fact reader; 273 earlier targeted passes, 49 correction checks, 13 final live-runtime passes; `make validate-pr` passed (2,849 default + 161 config-extra, 18 optional skips) | suite summary and independent implementation review pending; supported runtime remains explicitly bounded | isolated phase worktree retained |
 
 Final integrated review must verify all selected changes on their merged
 develop revision, not just each PR in isolation. The overall stage is incomplete
