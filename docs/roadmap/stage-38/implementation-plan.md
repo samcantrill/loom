@@ -1,6 +1,6 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phases 1 and 2 merged; Phase 3 retains its explicit design gate
+Status: Phases 1 and 2 merged; Phase 3 bounded design investigation in progress
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -63,7 +63,7 @@ Phase 3 retains its timeout design gate.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
 | 2 | direct-container-resources | merged | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
-| 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
+| 3 | container-timeout-lifecycle | in_progress | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
 
@@ -101,6 +101,12 @@ Phase 3 retains its timeout design gate.
   checkout cannot be advanced by discarding or stashing its dirty contents.
 - Revisit triggers: a materially broader lifecycle/public contract, unrelated
   upstream gate failure, source overlap, or unavailable required runtime proof.
+- Phase 3 preparation: isolated worktree at published `71d2452`, incorporating
+  PR #279 role-environment changes without modifying those owners. The approved
+  SIF now proves `--pid` availability. Fresh descendant probes show launcher KILL
+  can be observed before namespace init/child termination. The card owns exact
+  evidence and the bounded refinement of positive cleanup proof; product
+  implementation remains gated on design review and any broader-owner agreement.
 - Previously approved A-13 pre-grant retry correction: reproduce a transient pre-grant control-response
   failure, reuse the existing bounded assignment retry owner, and independently
   review cancellation/replay and exhausted-retry retention. No global retry,
@@ -132,7 +138,7 @@ Phase 3 retains its timeout design gate.
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
 | 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
-| 3 | pending | not started | design gate pending | not created |
+| 3 | pending | design investigation at `71d2452`; namespace availability and launcher-exit/settlement gap demonstrated | design review pending; no product implementation | isolated phase worktree retained |
 
 Final integrated review must verify all selected changes on their merged
 develop revision, not just each PR in isolation. The overall stage is incomplete

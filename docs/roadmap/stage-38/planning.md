@@ -1,6 +1,6 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: Phases 1 and 2 merged; Phase 3 remains design-gated
+Status: Phases 1 and 2 merged; Phase 3 design investigation in progress
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
@@ -478,13 +478,77 @@ unresolved cleanup evidence.
 - No changes to scientific fingerprints, run-root defaults, serialized worker
   schemas, remote submission, or public ownership enum are assumed.
 
+### Phase 3 Ownership Proposal — Not Approved
+
+The phase card's **Fresh Design Evidence** establishes that launcher exit can
+precede namespace settlement. It does not establish that namespace-init reaping
+or disappearance of an owned group containing that init is equally weak.
+[Linux v6.8 namespace teardown](https://raw.githubusercontent.com/torvalds/linux/v6.8/kernel/pid_namespace.c)
+waits for namespace processes before permitting init reaping; the corresponding
+[process exit path](https://raw.githubusercontent.com/torvalds/linux/v6.8/kernel/exit.c)
+retains process-group membership until task release. These are source-backed
+premises for a smaller composition candidate, not a universal runtime guarantee.
+
+The host runs Linux `6.8.0-138-generic`. A new bounded whole-group KILL probe over
+the approved SIF found `sinit` in the owned group, a payload child in its own
+session, and no live pinned descendants when group absence was observed
+(`build/pid-namespace-group-kill-probe.jsonl`). This is one mechanism observation,
+not final acceptance or proof of runtime group-membership continuity during
+startup and shutdown. That continuity is now the exact independent-review
+question: can the existing outer group supply namespace settlement through its
+init member, including destruction of an in-group observer?
+
+Version-specific runtime sources are
+[SingularityCE v3.10.4 starter](https://raw.githubusercontent.com/sylabs/singularity/v3.10.4/cmd/starter/c/starter.c)
+and [its process engine](https://raw.githubusercontent.com/sylabs/singularity/v3.10.4/internal/pkg/runtime/engine/singularity/process_linux.go).
+The inspected session/group changes there are instance-specific; the selected
+foreground exec path creates the PID namespace and init shim. Review must still
+check continuity and supported option/runtime variants rather than generalizing
+from those observations or silently expanding support claims.
+
+A private per-invocation subreaper established before runtime launch remains a
+candidate for direct timeout observation and owned reaping. It must not change
+caller-wide process state. If killed with the managed group, it cannot itself
+report cleanup; its death therefore needs the independently established outer
+barrier above. A detached retained owner and cross-owner handoff would be a
+materially broader fallback, not a proven necessity or approved implementation.
+Review must remove that machinery if existing owners and the kernel barrier
+suffice. No new public owner enum, required runner method, or durable schema is
+assumed.
+
+Legacy A-10's bounded candidate caches the built-in handle's root result while
+`poll()` stays nonterminal until its continuously owned group disappears. Existing
+adapter renewal and cancellation then remain active after root exit. This does
+not generally contain separate-session descendants; the container case needs the
+specific init-membership proof above. Exact design and remaining decisions belong
+in `phases/container-timeout-lifecycle.md`; no timeout code is authorized yet.
+
 ## Complexity Delta
+
+Current Phase 3 evidence is owned by the phase card's **Fresh Design Evidence**.
+Published `71d2452` includes the separate role-environment loading PR #279; the
+new phase preserves those owners and dependency updates. The approved shell SIF
+can use the runtime's PID namespace with `sinit`. A three-case bounded probe
+shows that forcibly killing the launcher can return before its namespace init
+and separate-session child exit. Eventual namespace cleanup is therefore not
+positive settlement evidence at root wait. Legacy A-10 still conflates those
+facts when releasing leases. Bounded phase refinement must establish the minimum
+live owner and proof; a broader owner or public/durable change needs its own
+maintainer agreement, not a silent relaxation of the accepted timeout outcome.
+
+Validation selection follows the affected command, worker-owner reconstruction,
+legacy release, result contract, and import boundaries. Existing targeted tests
+passed 161 cases with no skips at `855a4f6` (receipt:
+`build/timeout-owner-baseline.xml`). These are baseline compatibility evidence;
+the design probe is mechanism evidence,
+not the final required real-process/runtime acceptance matrix or full gates.
 
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
 | Detached validation projection | Generic traversal constructs stage-owned nested targets | Skip only outer path, which does not stop traversal | keep |
 | CPU/memory argv mapping plus explicit policy | Default mapping is implemented, but the available host rejects rootless limit setup | Erasing requests loses scheduler demand; implicit fallback violates intent | keep existing default; one adapter policy for approved scheduling-only execution |
 | Container lifecycle boundary | Launcher-only timeout does not prove descendant cleanup | Reuse existing immediate-child kill, which is insufficient | design required |
+| Private per-invocation child owner | Positive direct reaping after launcher exit needs a live owner established before launch | Namespace plus root wait fails the demonstrated KILL ordering | unapproved candidate; review existing outer-group/init settlement before requiring a detached owner or handoff |
 | New registry, daemon supervisor import, durable cleanup ledger | No demonstrated need for these particular mechanisms | Extend existing owner at its boundary | defer |
 
 ## Design Agreement
@@ -493,7 +557,7 @@ unresolved cleanup evidence.
 | --- | --- | --- | --- |
 | DQ-1 | FR-1 | CLI owns validation projection; source config and stage constructor semantics stay unchanged | locked |
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
-| DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
+| DQ-3 | FR-3, FR-4 | Review the private per-invocation owner and smaller outer-group/init settlement candidate, including loss of the helper during cancellation, before enabling timeouts | independent design review pending; a materially broader owner/handoff requires maintainer agreement |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
 | DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented; namespace and implicit-stage warning findings independently closed |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
@@ -530,11 +594,11 @@ Final commands for each implementation phase are `make validate-pr` and
 Approved ordering is audit, validation guard, CPU/memory mapping (including
 A-9), lifecycle-safe timeouts, then integrated review. The compact manifest
 links three phase cards. Phase 1 is merged after independent review and both
-required gates. Phase 2 has committed and independently reviewed its offline
-implementation and both localized test corrections. Its latest full gate fails
-on A-13; earlier passing receipts cannot replace fresh corrected-tree validation.
-The newly approved scheduling-only policy requires its own implementation and
-live acceptance; unavailable hard-limit proof remains explicit deferred evidence.
+required gates. Phase 2 is also merged after the separately authorized bounded
+corrections, fresh full gates, scheduling-only live acceptance, and independent
+closure. Its completion receipt is authoritative; the earlier failed gates in
+the audit are cause evidence, not current blockers. Positive hard-limit proof
+remains explicitly deferred to a compatible host.
 Phase 3's card explicitly forbids execution until its lifecycle design is
 reviewed, including the separately identified legacy A-10 correction. This
 staged readiness follows the maintainer's explicit instruction that earlier
@@ -549,7 +613,7 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
 | Minimum timeout design justified | Ownership investigation in progress | pending |
-| Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
+| Detailed phase traceability and startup readiness | Phases 1 and 2 merged with their required local evidence and independent reviews; FR-3 maps to the current design-gated timeout card | pass for Phases 1 and 2; Phase 3 pending |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
 | Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
