@@ -1133,7 +1133,6 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
                 "resident_profiles": payload["resident_profiles"],
-                "resources": payload.get("resources"),
                 "provider_factory": payload.get("provider_factory"),
             }
         ),

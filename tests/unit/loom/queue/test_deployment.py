@@ -446,6 +446,32 @@ def test_cpu_only_agent_resources_skip_nvidia_discovery(tmp_path: Path) -> None:
     assert service.client.capacity_profile.gpu_devices == ()
 
 
+def test_outbound_resource_identity_uses_effective_capacity_values(tmp_path: Path) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+
+    payload["resources"]["cpu_capacity"] = "01"
+    payload["resources"]["memory_capacity_bytes"] = "00"
+    _write_protected(source, payload)
+    equivalent = load_outbound_agent_service_config(source)
+    assert equivalent.client.resource_inventory == first.client.resource_inventory
+    assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+    assert equivalent.active_fingerprint == first.active_fingerprint
+
+    payload["resources"]["memory_capacity_bytes"] = "1"
+    _write_protected(source, payload)
+    changed = load_outbound_agent_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+
+
 def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     tmp_path: Path,
 ) -> None:
