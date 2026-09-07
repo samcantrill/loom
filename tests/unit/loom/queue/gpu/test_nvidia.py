@@ -19,6 +19,7 @@ from loom.queue.gpu.nvidia import (
     NvidiaSmiGpuInventoryProvider,
     resolve_nvidia_gpu_selection,
 )
+from loom.queue.gpu.occupancy import NvidiaSmiGpuProcessObserver
 
 
 DEVICE_ARGV = (
@@ -277,6 +278,61 @@ def test_topology_discovery_fails_closed_for_unusable_matrix(
     assert getattr(raised.value, "reason_code") == reason_code
 
 
+def test_process_observer_blocks_compute_graphics_and_combined_contexts() -> None:
+    runner = _ProcessRunner(
+        subprocess.CompletedProcess(
+            ("nvidia-smi",),
+            0,
+            """
+<nvidia_smi_log>
+  <gpu><uuid>GPU-a</uuid><processes /></gpu>
+  <gpu><uuid>GPU-b</uuid><processes><process_info><type>C</type><used_memory>N/A</used_memory></process_info></processes></gpu>
+  <gpu><uuid>GPU-c</uuid><processes><process_info><type>G</type></process_info></processes></gpu>
+  <gpu><uuid>GPU-d</uuid><processes><process_info><type>C+G</type></process_info></processes></gpu>
+</nvidia_smi_log>
+""",
+            "",
+        )
+    )
+
+    observations = NvidiaSmiGpuProcessObserver(
+        ("GPU-a", "GPU-b", "GPU-c", "GPU-d"), command_runner=runner
+    ).observe()
+
+    assert runner.argvs == [
+        (
+            "nvidia-smi",
+            "--query",
+            "--xml-format",
+            "--id=GPU-a,GPU-b,GPU-c,GPU-d",
+        )
+    ]
+    assert [(item.uuid, item.query_succeeded, item.has_gpu_process) for item in observations.values()] == [
+        ("GPU-a", True, False),
+        ("GPU-b", True, True),
+        ("GPU-c", True, True),
+        ("GPU-d", True, True),
+    ]
+
+
+def test_process_observer_withholds_missing_and_malformed_selected_evidence() -> None:
+    malformed = NvidiaSmiGpuProcessObserver(
+        ("GPU-a", "GPU-b"), command_runner=_ProcessRunner(_process_result("<not XML"))
+    ).observe()
+    missing = NvidiaSmiGpuProcessObserver(
+        ("GPU-a", "GPU-b"),
+        command_runner=_ProcessRunner(
+            _process_result("<nvidia_smi_log><gpu><uuid>GPU-a</uuid><processes /></gpu></nvidia_smi_log>")
+        ),
+    ).observe()
+
+    assert [item.reason_code for item in malformed.values()] == ["query_malformed", "query_malformed"]
+    assert [(item.uuid, item.reason_code) for item in missing.values()] == [
+        ("GPU-a", "available"),
+        ("GPU-b", "device_missing"),
+    ]
+
+
 def _result(stdout: str, *, returncode: int = 0) -> subprocess.CompletedProcess[str]:
     stdout = "\n".join(
         _device_row(line) for line in stdout.splitlines(keepends=False)
@@ -305,3 +361,20 @@ class _FakeRunner:
 class _UnavailableRunner:
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError(argv[0])
+
+
+def _process_result(stdout: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(("nvidia-smi",), 0, stdout, "")
+
+
+class _ProcessRunner:
+    def __init__(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.result = result
+        self.argvs: list[tuple[str, ...]] = []
+
+    def __call__(
+        self, argv: Sequence[str], timeout_seconds: float
+    ) -> subprocess.CompletedProcess[str]:
+        assert timeout_seconds == 2
+        self.argvs.append(tuple(argv))
+        return self.result

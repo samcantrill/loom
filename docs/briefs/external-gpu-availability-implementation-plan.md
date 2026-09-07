@@ -571,4 +571,4 @@ For the provider constructor use optional keyword `occupancy_monitor`; monitor m
 
 Run directly affected tests under the locked Python 3.12/dev setup and any necessary static checks. Make coherent commits for owned changes only. Update this packet's result line with paths, interfaces, and evidence after completion. Stop at a terminal handoff or a specific blocker needing a public-contract decision; do not open PRs or merge. The manager will review and integrate all required behaviour.
 
-Executor result: pending.
+Executor result: implemented `gpu/occupancy.py` (policy, UUID-keyed NVIDIA XML observer and serialized monotonic cache), `_managed_local.py` status/composition/provider filtering and forced preparation refresh; `GpuResourceProvider(..., occupancy_monitor=...)` exposes `refresh_occupancy(force=False)`. Focused evidence: `uv run --no-sync pytest tests/unit/loom/queue/gpu/test_nvidia.py tests/unit/loom/queue/test_gpu_resource_provider.py tests/unit/loom/queue/test_managed_local.py -q` (48 passed) and focused Ruff passed. No executor blocker.
