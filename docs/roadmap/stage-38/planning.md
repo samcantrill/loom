@@ -1,15 +1,16 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: Phases 1 and 2 merged; Phase 3 reviewed and validated, remote merge pending
+Status: complete — selected changes merged and final integrated review passed
 Roadmap stage: 38
-Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
+Baseline evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 3 PR #280 remote merge, then final integrated review.
+Current gate: complete; final integrated review at merged develop `468ac31`.
 Blockers: none. Independent verification closes the authorized cleanup-budget
 correction at `6afbaef`. Refreshed combined tree `f1aaa9c` retains the exact phase
 delta and passes both full gates (3,024 summary passes), plus 26 focused cases
-including all 13 selected-runtime cases. Correction allowances are not reset.
+including all 13 selected-runtime cases. PR #280 is merged and three post-merge
+combined resource/timeout checks pass. Correction allowances are not reset.
 Positive CPU/RAM runtime-limit acceptance remains deferred to a compatible host.
 
 ## Current State
@@ -17,10 +18,10 @@ Positive CPU/RAM runtime-limit acceptance remains deferred to a compatible host.
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Baseline and all phase implementations independently reviewed; latest full gates pass 3,024 summary cases and 26 focused composition cases including 13 live-runtime cases | Phase 3 remote merge and final integrated review pending | Retain exact-tree receipts for final integrated review |
+| Evidence | Baseline and all phase implementations independently reviewed; latest full gates pass 3,024 summary cases and 26 focused cases including 13 live-runtime cases; three post-merge combined checks pass | None within the approved scope | Retain exact-tree receipts in the integration checkout |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Scheduling-only policy and timeout kernel/init mechanism independently accepted; bounded correction locks signal-before-reap ownership | None within the recorded mechanism | Implement the exact phase-card contracts |
-| Implementation | Phases 1 and 2 merged; Phase 3 approved in PR #280 after independent closure and fresh combined-tree gates | Remote merge and final integrated review pending | Merge, then review the integrated develop tree |
+| Design | Scheduling-only policy and timeout kernel/init mechanism independently accepted; bounded correction locks signal-before-reap ownership | None within the recorded mechanism | Preserve the implemented contracts |
+| Implementation | All three phases merged; PR #280 at `468ac31` exactly matches the validated head; final integrated review passed and phase cleanup completed | None | Stage complete; manifest owns final delivery evidence |
 
 ## Evidence And Scope
 
@@ -404,9 +405,9 @@ process-cleanup guarantee from either existing command runner.
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
 | FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented; smoke, independent review, and full gates passed |
-| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Existing stage and outer cleanup owners; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | independently reviewed and validated in PR #280; approved for merge |
-| FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
-| FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
+| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Existing stage and outer cleanup owners; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | merged and independently accepted, PR #280; final integrated review passed |
+| FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | reviewed and validated on the integrated merged tree |
+| FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | complete; final manifest records proof and retained limitations |
 
 ## Functionality Agreement
 
@@ -659,7 +660,8 @@ remains explicitly deferred to a compatible host.
 Phase 3's lifecycle design, including the legacy A-10 correction, passed its
 required independent review before implementation. Its card now owns final
 implementation evidence and the separately approved cleanup-budget correction.
-The full objective remains incomplete until all accepted outcomes are achieved.
+All accepted outcomes are achieved; the manifest records final merged-tree review,
+preservation, retained validation receipts and scoped cleanup.
 
 ## Quality Gate
 
@@ -669,7 +671,7 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
 | Minimum timeout design justified | Independent removal-first review accepts selected-runtime init observation plus the managed group barrier only with unreaped-root PGID anchoring through the final signal and permanently observation-only processing after root reap; launcher exit remains insufficient and unresolved cleanup retains capacity | pass with identity-preserving signal/reap order locked |
-| Detailed phase traceability and startup readiness | Phases 1 and 2 merged; FR-3 maps to the reviewed existing-owner mechanism, mutation-sensitive correction tests, real-runtime acceptance and fresh full gates | pass; remote Phase 3 merge and final integrated review pending |
+| Detailed phase traceability and startup readiness | All phases merged; FR-3 maps to the reviewed existing-owner mechanism, mutation-sensitive correction tests, real-runtime acceptance and fresh full gates | pass; final integrated review and cleanup complete |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
 | Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
@@ -689,7 +691,9 @@ result-gating behavior but found the managed wait-budget renewal defect. The
 maintainer-authorized `6afbaef` correction passes 89 affected-consumer tests and
 13 live-runtime tests, with independent closure. Refreshed source `f1aaa9c` passes
 both full gates and 26 focused composition cases; its phase delta is unchanged.
-Remote merge and the final integrated review are the remaining delivery steps.
+PR #280 merged at `468ac31`, whose tree equals validated head `5141eb6`. Final
+integrated review and three post-merge resource/timeout checks pass. Phase cleanup
+is complete, with source, reports, packages and test logs retained safely.
 The implementation review gate must prove the selected foreground `--pid` plus
 init-shim topology, startup/TERM/KILL/interruption behavior, direct pidfd identity
 or unresolved-cleanup failure, and timeout-before-result admission. The managed

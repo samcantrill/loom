@@ -2,20 +2,20 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: Stage 38, Phase 3
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
-- Branch: `agent/stage-38-p3-container-timeout-lifecycle`
-- Worktree: `stage-38-p3-container-timeout-lifecycle` under the recorded root
+- Branch: `agent/stage-38-p3-container-timeout-lifecycle` (retired after merge)
+- Worktree: phase worktree removed; retained evidence/source in `stage-38-integration`
 - Base: `43d02a19c59fcee5151d8a42bcc9bdf0f4dffde5`; initial reviewed base `71d2452`
 - PR target: develop
 - PR title: `feat(execution): supervise container timeout cleanup`
 - Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
   accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
-- Blockers: none. Independent verification closes the approved cleanup-budget
-  correction at `6afbaef`; both full gates pass on refreshed source `f1aaa9c`.
-  PR #280 is approved for merge; the original 3/3 allowance remains consumed.
+- Blockers: none. PR #280 merged at `468ac31`; independent verification closes
+  the approved correction and both full gates pass on refreshed source `f1aaa9c`.
+  Final integrated review passes; the original 3/3 allowance remains consumed.
 
 ## Objective And Context
 
@@ -547,8 +547,8 @@ match their originals. No source/test changes follow this validated revision.
 | Implementation and changed paths | Timeout-only private foreground namespace supervision, existing executor outcome/result gate and capability messages; one private group handle shared by the existing legacy/resident owners. Public protocols, durable formats and `StageContext` values unchanged. Source-mirrored tests, opt-in lifecycle acceptance and reliability/test docs updated. |
 | Real process/runtime tests and validated revision | `f1aaa9c`: 26 composition cases pass, including all 13 selected-runtime cases and both coordinator compositions (`build/refreshed-timeout-composition.xml`). Earlier correction `6afbaef`: 89 affected-consumer passes, seven process-group checks, and five before-fix failures proving regression sensitivity. Earlier timeout/metadata receipts remain preserved under their exact revisions. No resource flags or host changes. |
 | Full local gates | `f1aaa9c`: `make validate-pr` passes lint, zero type errors, 2,863 default and 161 config-extra tests, 18 opt-in skips, and sdist/wheel builds (`build/refreshed-timeout-validate-pr.log`). `make test-summary` passes 3,024 tests with no failures/errors and 18 opt-in skips in 1,058.03 s (`build/test-summary.md`, per-suite XML/coverage and `build/refreshed-timeout-test-summary.log`). All 13 timeout runtime hooks pass separately. |
-| PR, review, and merge | [#280](https://github.com/samcantrill/loom/pull/280) approved against develop. Independent review and bounded correction verification are closed; the exact phase delta is retained after refresh to `43d02a1`; full gates pass. Remote merge pending. |
-| Residual risk and cleanup | Unsupported prerequisites fail explicitly; static diagnostics never certify execution-host readiness. Conservative post-reap group presence retains capacity and cannot authorize another signal. Original dirty checkout is preserved. Worktree retained until merge; final receipts and distributions copied and checksum-verified in integration `build/stage-38-p3-f1aaa9c`. |
+| PR, review, and merge | [#280](https://github.com/samcantrill/loom/pull/280) merged to develop at `468ac31d32106ee93198c26d4fe6f574f3648b9e`. Its complete tree equals validated head `5141eb6`; independent review/correction verification and both refreshed full gates pass. Final integrated review is recorded in the manifest; three post-merge combined resource/timeout live checks pass. |
+| Residual risk and cleanup | Unsupported prerequisites fail explicitly; static diagnostics never certify execution-host readiness. Conservative post-reap group presence retains capacity and cannot authorize another signal. Original dirty-checkout hashes and SIF checksum remain unchanged. Phase worktree and local/remote branches removed; reports, distributions and generated test logs preserved in integration `build/stage-38-p3-f1aaa9c`; post-merge receipt is `build/stage-38-integrated-smoke.jsonl`. |
 
 Pre-submit continuation: `make validate-pr` passed for production revision
 `090385a` (2,848 default passes; 161 config-extra passes, 17 opt-in skips), after
