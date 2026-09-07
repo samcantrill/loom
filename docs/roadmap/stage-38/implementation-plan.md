@@ -98,8 +98,9 @@ proof remains deferred to a compatible host. Phase 3 retains its timeout design 
   The original uninstrumented full-suite trigger remains unproven; a matching
   deterministic failure mode is documented in planning.md.
 - Independent amendment review: no policy-design blocker; manager corrected
-  FQ/DQ traceability and the earlier A-13 authority label. Overall execution and
-  merge readiness remain blocked. Existing profile composition preserves the
+  FQ/DQ traceability and the earlier A-13 authority label. Combined startup has
+  since passed; merge readiness remains gated by implementation and validation.
+  Existing profile composition preserves the
   proposed option payload and resource demand in a read-only diagnostic; this
   is not a policy implementation receipt.
 - Coordinator amendment authority: maintainer approves one bounded,

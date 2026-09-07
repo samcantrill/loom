@@ -17,7 +17,7 @@ acceptance lacks a compatible session; the later timeout design gate remains.
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Implement the bounded amendment |
-| Implementation | Phase 1 and A-11 merged; resource implementation/two corrections reviewed; third retry candidate is WIP | Additional coordinator correction and scheduling-only policy are approved but not implemented; fresh full gates remain | One bounded amendment executor after startup review; preserve historical correction count |
+| Implementation | Phase 1 and A-11 merged; resource implementation/two corrections reviewed; third retry candidate is WIP | Additional coordinator correction and scheduling-only policy are in implementation; fresh full gates remain | One bounded amendment executor after passed startup review; preserve historical correction count |
 
 ## Evidence And Scope
 
@@ -488,7 +488,7 @@ unresolved cleanup evidence.
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
 | DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
-| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy approved and independently reviewed; product startup blocked separately |
+| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy and combined startup independently accepted; implementation in progress |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
 
 ## Expanded Design Review
