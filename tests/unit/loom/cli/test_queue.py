@@ -21,6 +21,8 @@ from loom.queue import (
     load_queue_spec,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.resources import EffectiveAgentCapacity
+import loom.queue.resources as queue_resources
 
 
 pytestmark = pytest.mark.unit
@@ -73,6 +75,40 @@ def test_queue_preflight_skips_authority_when_no_authority_flags_are_supplied(
     assert exit_code == 0
     assert stderr.getvalue() == ""
     assert "SKIP queue.authority.connection" in stdout.getvalue()
+
+
+def test_agent_check_reports_unavailable_effective_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _outbound_agent_service_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    config_path.chmod(0o600)
+    monkeypatch.setattr(
+        queue_resources,
+        "observe_effective_agent_capacity",
+        lambda: EffectiveAgentCapacity(cpu_capacity=None, memory_capacity_bytes=None),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    exit_code = main(
+        ["queue", "agent-check", str(config_path), "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert stderr.getvalue() == ""
+    assert json.loads(stdout.getvalue())["result"]["effective_capacity"] == {
+        "cpu_capacity": None,
+        "memory_capacity_bytes": None,
+    }
 
 
 def test_queue_cancel_records_queue_local_cancellation(tmp_path: Path) -> None:

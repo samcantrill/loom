@@ -631,7 +631,15 @@ def handle_agent_check(namespace: argparse.Namespace) -> int:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(
         namespace,
-        {"operation": "agent-check", "agent_root": str(service.client.agent_root)},
+        {
+            "operation": "agent-check",
+            "agent_root": str(service.client.agent_root),
+            "effective_capacity": (
+                None
+                if service.effective_capacity is None
+                else service.effective_capacity.to_dict()
+            ),
+        },
     )
 
 

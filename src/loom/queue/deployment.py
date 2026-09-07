@@ -52,6 +52,7 @@ from .local_daemon import (
     LocalDaemonSchedulingComponents,
 )
 from .coordinator_authority import CoordinatorAuthorityFactory
+from .resources import EffectiveAgentCapacity
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3
@@ -98,6 +99,7 @@ class OutboundAgentServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
+    effective_capacity: EffectiveAgentCapacity | None = None
     environment_path: Path | None = None
 
 
@@ -247,7 +249,9 @@ def load_outbound_agent_service_config(
     )
     if not profiles:
         raise QueueConfigError("resident_profiles must not be empty")
-    resource_inventory = _agent_resource_inventory(payload.get("resources"))
+    resource_inventory, effective_capacity = _agent_resource_inventory(
+        payload.get("resources")
+    )
     active_fingerprint = _canonical_fingerprint(
         {
             "authored": _outbound_active_projection(payload),
@@ -299,6 +303,7 @@ def load_outbound_agent_service_config(
         source,
         fingerprint,
         active_fingerprint,
+        effective_capacity,
         environment_path,
     )
 
@@ -675,7 +680,9 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     if len(profiles) != 1:
         raise QueueConfigError("local agent service requires one resident profile")
     provider_configuration = payload.get("providers")
-    resource_inventory = _agent_resource_inventory(payload.get("resources"))
+    resource_inventory, _effective_capacity = _agent_resource_inventory(
+        payload.get("resources")
+    )
     profile = profiles[0]
     if resource_inventory is not None:
         profile = replace(
@@ -710,11 +717,13 @@ def _normalize_outbound_agent_payload(payload: Mapping[str, object]) -> Mapping[
     return normalized
 
 
-def _agent_resource_inventory(value: object) -> AgentResourceInventory | None:
+def _agent_resource_inventory(
+    value: object,
+) -> tuple[AgentResourceInventory | None, EffectiveAgentCapacity | None]:
     """Load one agent-owned capacity declaration and its selected NVIDIA cards."""
 
     if value is None:
-        return None
+        return None, None
     resources = _mapping_value(value, "agent resources")
     _exact(
         resources,
@@ -729,7 +738,10 @@ def _agent_resource_inventory(value: object) -> AgentResourceInventory | None:
         raise QueueConfigError("agent GPU resource provider is unsupported")
     devices: tuple[ResidentGpuDevice, ...] = ()
     if selection != "none":
-        from .gpu.nvidia import NvidiaSmiGpuInventoryProvider, resolve_nvidia_gpu_selection
+        from .gpu.nvidia import (
+            NvidiaSmiGpuInventoryProvider,
+            resolve_nvidia_gpu_selection,
+        )
 
         try:
             selected = resolve_nvidia_gpu_selection(
@@ -756,13 +768,13 @@ def _agent_resource_inventory(value: object) -> AgentResourceInventory | None:
     from .resources import require_effective_agent_capacity
 
     try:
-        require_effective_agent_capacity(
+        effective_capacity = require_effective_agent_capacity(
             cpu_capacity=inventory.cpu_capacity,
             memory_capacity_bytes=inventory.memory_capacity_bytes,
         )
     except QueueServiceError as exc:
         raise QueueConfigError("agent resources exceed effective capacity") from exc
-    return inventory
+    return inventory, effective_capacity
 
 
 def _resource_inventory_projection(

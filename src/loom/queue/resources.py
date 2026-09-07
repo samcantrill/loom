@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import math
 import os
 from pathlib import Path
 import resource
@@ -27,13 +28,30 @@ class EffectiveAgentCapacity:
     cpu_capacity: int | None
     memory_capacity_bytes: int | None
 
+    def to_dict(self) -> dict[str, PlainData]:
+        """Return the supported effective-limit evidence for role checks."""
+
+        return {
+            "cpu_capacity": self.cpu_capacity,
+            "memory_capacity_bytes": self.memory_capacity_bytes,
+        }
+
 
 def observe_effective_agent_capacity() -> EffectiveAgentCapacity:
-    """Observe affinity and supported address-space/cgroup limits without probing work."""
+    """Observe supported process allocation and host-memory limits.
 
-    cpu_capacity: int | None = None
+    CPU capacity is bounded by affinity and any finite cgroup-v2 CPU quota on
+    the process's cgroup or its ancestors. Memory capacity is the least finite
+    address-space, cgroup-v2, or host-memory limit. An unavailable source does
+    not imply a limit; it remains ``None`` when no supported finite limit is
+    available.
+    """
+
+    cpu_limits: list[int] = []
     try:
-        cpu_capacity = len(os.sched_getaffinity(0))
+        affinity = len(os.sched_getaffinity(0))
+        if affinity:
+            cpu_limits.append(affinity)
     except (AttributeError, OSError):
         pass
     memory_limits: list[int] = []
@@ -44,16 +62,106 @@ def observe_effective_agent_capacity() -> EffectiveAgentCapacity:
                 memory_limits.append(limit)
     except (ValueError, OSError):
         pass
-    try:
-        value = Path("/sys/fs/cgroup/memory.max").read_text(encoding="ascii").strip()
-        if value != "max" and value.isdecimal() and int(value) > 0:
-            memory_limits.append(int(value))
-    except OSError:
-        pass
+    cgroup_cpu, cgroup_memory = _cgroup_v2_limits()
+    if cgroup_cpu is not None:
+        cpu_limits.append(cgroup_cpu)
+    if cgroup_memory is not None:
+        memory_limits.append(cgroup_memory)
+    host_memory = _host_memory_limit()
+    if host_memory is not None:
+        memory_limits.append(host_memory)
     return EffectiveAgentCapacity(
-        cpu_capacity,
+        min(cpu_limits) if cpu_limits else None,
         min(memory_limits) if memory_limits else None,
     )
+
+
+def _cgroup_v2_limits(
+    *,
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    membership_path: Path = Path("/proc/self/cgroup"),
+) -> tuple[int | None, int | None]:
+    """Return finite cgroup-v2 CPU and memory limits for this process tree."""
+
+    try:
+        membership = membership_path.read_text(encoding="ascii")
+    except OSError:
+        return None, None
+    relative_path = _cgroup_v2_membership(membership)
+    if relative_path is None:
+        return None, None
+    current = cgroup_root.joinpath(*relative_path.parts[1:])
+    cpu_limits: list[int] = []
+    memory_limits: list[int] = []
+    while True:
+        cpu_limit = _cpu_max_limit(current / "cpu.max")
+        if cpu_limit is not None:
+            cpu_limits.append(cpu_limit)
+        memory_limit = _memory_max_limit(current / "memory.max")
+        if memory_limit is not None:
+            memory_limits.append(memory_limit)
+        if current == cgroup_root:
+            break
+        try:
+            current.relative_to(cgroup_root)
+        except ValueError:
+            return None, None
+        current = current.parent
+    return (
+        min(cpu_limits) if cpu_limits else None,
+        min(memory_limits) if memory_limits else None,
+    )
+
+
+def _cgroup_v2_membership(value: str) -> Path | None:
+    for line in value.splitlines():
+        hierarchy, separator, path = line.partition("::")
+        if hierarchy != "0" or not separator:
+            continue
+        candidate = Path(path)
+        if candidate.is_absolute() and ".." not in candidate.parts:
+            return candidate
+    return None
+
+
+def _cpu_max_limit(path: Path) -> int | None:
+    try:
+        quota, period = path.read_text(encoding="ascii").split()
+    except (OSError, ValueError):
+        return None
+    if quota == "max" or not quota.isdecimal() or not period.isdecimal():
+        return None
+    quota_value = int(quota)
+    period_value = int(period)
+    if quota_value <= 0 or period_value <= 0:
+        return None
+    return math.floor(quota_value / period_value)
+
+
+def _memory_max_limit(path: Path) -> int | None:
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    if value != "max" and value.isdecimal() and int(value) > 0:
+        return int(value)
+    return None
+
+
+def _host_memory_limit() -> int | None:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+    if (
+        isinstance(page_size, int)
+        and isinstance(page_count, int)
+        and page_size > 0
+        and page_count > 0
+    ):
+        return page_size * page_count
+    return None
 
 
 def require_effective_agent_capacity(
