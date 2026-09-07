@@ -1293,13 +1293,15 @@ def test_retirement_secret_rejects_before_mutation_and_is_redacted(
             idempotency_key="offer-secret-proof",
         )
         proof = _proof(session)
-        before = _sqlite_snapshot(config.control_database)
-        with pytest.raises(QueueServiceError, match="proof is invalid"):
-            _view(daemon).retire_clean(
-                replace(proof, retirement_secret="02" * 32),
-                idempotency_key="retire-wrong-secret",
-            )
-        assert _sqlite_snapshot(config.control_database) == before
+        # Background clock-health sampling is not a retirement mutation.
+        with daemon._cycle_lock:
+            before = _sqlite_snapshot(config.control_database)
+            with pytest.raises(QueueServiceError, match="proof is invalid"):
+                _view(daemon).retire_clean(
+                    replace(proof, retirement_secret="02" * 32),
+                    idempotency_key="retire-wrong-secret",
+                )
+            assert _sqlite_snapshot(config.control_database) == before
 
         _view(daemon).retire_clean(proof, idempotency_key="retire-right-secret")
         coordinator_state = "\n".join(_sqlite_snapshot(config.control_database))

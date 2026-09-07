@@ -2179,7 +2179,6 @@ class LocalDaemon:
                 return AdmissionWaitResult(
                     AdmissionWaitKind.TIMEOUT, admission, current
                 )
-            self._wake.set()
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
@@ -3190,7 +3189,6 @@ class LocalDaemon:
                 raise TimeoutError(
                     "managed local admission did not reach terminal state"
                 )
-            self._wake.set()
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
     def _cancellation_operation_id(self, admission_id: str) -> str | None:

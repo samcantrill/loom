@@ -38,6 +38,82 @@ allocation, then forwards the scheduler value through both
 Loom does not choose physical devices or persist their tokens. A zero or absent
 GPU request leaves container options and visibility untouched.
 
+## Direct CPU And Memory Limits
+
+For direct `apptainer` and `singularity` stage execution, a canonical `cpu`
+request maps to `--cpus` and a canonical `memory` request maps to `--memory` in
+exact bytes before the image reference. CPU requests are positive integer counts;
+memory uses `B`, `KiB`, `MiB`, `GiB`, or `TiB` and must convert to an exact
+positive byte count. Loom rejects invalid or runtime-unrepresentable values
+rather than rounding or launching without the requested limit.
+
+The direct compatible runtime path parses memory flags through a `float64`
+before producing its signed byte limit, so Loom also rejects byte counts that
+would be rounded by that parser. This follows
+[go-units `RAMInBytes`](https://github.com/docker/go-units/blob/v0.5.0/size.go#L101-L112)
+as called by [SingularityCE 3.10.4 memory-limit handling](https://github.com/sylabs/singularity/blob/v3.10.4/cmd/internal/cli/cgroups.go#L203-L214).
+
+The flags express a supported mapping, while enforcement remains best effort:
+the runtime needs compatible cgroups and delegated host/session configuration.
+When a resource-limited command exits before publishing its worker result, Loom
+preserves redacted command/runtime diagnostics and directs the operator to check
+them for unsupported flags and to use a compatible runtime/cgroup setup. That
+diagnostic does not attribute every container startup failure to resource limits.
+
+Set `adapter_options.apptainer.cpu_memory_enforcement` (or the matching
+`singularity` namespace) to `scheduling_only` when a site must retain CPU/memory
+requests for planning and provenance but cannot apply direct cgroup flags. This
+explicit policy validates the canonical requests and preserves them in metadata,
+but omits only `--cpus` and `--memory`; it reports CPU/RAM as not enforced.
+`runtime` remains the default and never retries a failed limited launch without
+its requested flags.
+
+Direct `apptainer` execution reads the `apptainer` namespace even when both
+namespaces are present. Direct `singularity` prefers `singularity`, falling back
+to `apptainer` only when the former is absent; preflight uses the same choice.
+Nonempty stage resource requests replace authored `container.resources` intent.
+When that authored fallback applies, capability/preflight warnings also identify
+its CPU/RAM as not enforced in scheduling-only mode, including pipeline stages
+without an explicit `stage_options` entry. Mapping errors remain failures even
+when other stages only warn. These warnings are advisory by default; explicitly
+running preflight with `--strict` still treats warnings as a failed preflight.
+Observing this intent does not create a managed resource reservation.
+
+Loom does not invent CPU/RAM limits for absent requests or for requests left
+unmapped by `scheduling_only`. This does not remove inherited host/container
+controls or change managed admission, GPU behavior, or SLURM-owned allocations.
+Invalid resource declarations still fail validation.
+
+A project can make the choice composable without embedding a site image or
+host path in the profile. The existing `container` options still supply those
+project-local details and resource requests remain ordinary stage runtime
+options:
+
+```yaml
+runtime_profiles:
+  scheduling-only-container:
+    executor: singularity
+    adapter_options:
+      singularity:
+        cpu_memory_enforcement: scheduling_only
+```
+
+Select the profile at launch with `loom run pipeline.yaml --profile
+scheduling-only-container`. An exact stage adapter override can restore
+`runtime` for that stage; it does not remove CPU or memory demand from the
+resolved runtime metadata.
+
+SLURM remains the CPU and memory enforcement owner for its container route, so
+its wrapped Apptainer command does not add direct `--cpus` or `--memory` flags.
+The opt-in real-runtime check requires an approved local image and suitable
+session; set `LOOM_RUN_APPTAINER_RESOURCE_ACCEPTANCE=1` and
+`LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/image.sif` to run it. A separate
+production-command scheduling-only smoke uses the same image with
+`LOOM_RUN_APPTAINER_SCHEDULING_ONLY_ACCEPTANCE=1`; it verifies a bounded shell
+payload, retained intent, and absent direct limit flags, but does not prove
+runtime enforcement. Neither check is part of the default suite and neither
+pulls or builds images.
+
 ## Deferred
 
 Managed external image-build services, image publishing, Kubernetes, and Docker

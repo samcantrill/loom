@@ -18,6 +18,7 @@ from typing import Any, cast
 import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
+import loom.queue.local_daemon as local_daemon_module
 from loom.queue import (
     AdmissionNotFoundError,
     AgentControl,
@@ -256,6 +257,43 @@ def test_admission_wait_observes_revision_without_status_history(
         daemon.wait_admission(
             "admission-1", expected_revision=changed.revision + 1, timeout=0
         )
+
+
+def test_nonterminal_admission_waits_are_passive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES ('admission-1', 'item-1', ?, 'file:///run', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'operation-1', 0, 1, NULL, NULL)",
+            (daemon._coordinator_id,),
+        )
+        conn.commit()
+    wake_calls: list[None] = []
+
+    def record_wake() -> None:
+        wake_calls.append(None)
+
+    def stop_after_observation(_seconds: float) -> None:
+        raise RuntimeError("stop after one nonterminal observation")
+
+    monkeypatch.setattr(daemon._wake, "set", record_wake)
+    monkeypatch.setattr(local_daemon_module.time, "sleep", stop_after_observation)
+    with pytest.raises(RuntimeError, match="stop after one"):
+        daemon.wait_admission(
+            "admission-1",
+            expected_revision=daemon._admission("admission-1").revision,  # noqa: SLF001
+            timeout=1,
+        )
+    with pytest.raises(RuntimeError, match="stop after one"):
+        daemon._wait("item-1", timeout_seconds=1)  # noqa: SLF001
+    assert wake_calls == []
 
 
 def test_admission_revision_is_targeted_and_noop_writes_are_isolated(

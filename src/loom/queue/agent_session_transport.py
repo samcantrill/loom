@@ -3836,7 +3836,11 @@ class LocalDaemonAgentHttpClient:
         execution_journal: SQLiteAgentJournal,
     ) -> Mapping[str, PlainData] | None:
         for _ in range(32):
-            control = self.poll_assignment_control(session.session_id)
+            control = self._assignment_call(
+                session.session_id,
+                assignment_id,
+                lambda: self.poll_assignment_control(session.session_id),
+            )
             if control is None:
                 return None
             if control.assignment_id != assignment_id:

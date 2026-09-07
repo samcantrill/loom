@@ -2918,27 +2918,60 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
     diagnostics: list[PlainData] = []
     mapped: list[PlainData] = []
     for target in targets:
-        resources = _resource_entries(target.resources)
+        scheduler_owned = _is_slurm_executor_name(target.selected_executor)
+        try:
+            if scheduler_owned:
+                resources = _resource_entries(target.resources)
+                projected: Mapping[str, str] = {}
+                apptainer_options = None
+            else:
+                resources = _apptainer_effective_resource_entries(target)
+                apptainer_options = _apptainer_options_from_adapter(
+                    target.adapter_options, executor_name=target.executor_name
+                )
+                projected = _projected_apptainer_cpu_memory_arguments(
+                    entries=resources,
+                    executor_name=target.executor_name,
+                    apptainer_options=apptainer_options,
+                )
+        except Exception as exc:  # noqa: BLE001 - command mapping owns conversion.
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_cpu_memory_projection_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
         for kind, entry in sorted(resources.items()):
             if kind in {"cpu", "memory"}:
-                mapped.append(
-                    {
-                        "stage_id": target.stage_id,
-                        "resource_kind": kind,
-                        "amount": cast(Any, entry).amount,
-                        "unit": cast(Any, entry).unit,
-                        "support_level": (
-                            "supported"
-                            if _is_slurm_executor_name(target.selected_executor)
-                            else "advisory"
-                        ),
-                        "enforcement": (
-                            "slurm_enforced"
-                            if _is_slurm_executor_name(target.selected_executor)
-                            else "external_or_best_effort"
-                        ),
-                    }
+                capability = _apptainer_resource_capability(
+                    kind, executor_name=target.selected_executor
                 )
+                detail: dict[str, PlainData] = {
+                    "stage_id": target.stage_id,
+                    "resource_kind": kind,
+                    "amount": cast(Any, entry).amount,
+                    "unit": cast(Any, entry).unit,
+                    "support_level": cast(Any, capability).support_level.value,
+                    "enforcement": (
+                        "slurm_enforced"
+                        if scheduler_owned
+                        else (
+                            "not_enforced"
+                            if getattr(
+                                apptainer_options,
+                                "cpu_memory_enforcement",
+                                "runtime",
+                            )
+                            == "scheduling_only"
+                            else cast(Any, capability).enforcement.value
+                        )
+                    ),
+                }
+                if not scheduler_owned:
+                    detail["runtime_argument"] = projected.get(kind)
+                mapped.append(detail)
                 continue
             if kind == "gpu":
                 continue
@@ -2951,17 +2984,27 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                 )
             )
 
-    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    if diagnostics:
+        status = PreflightCheckStatus.FAIL
+        message = "Apptainer resource mapping checks failed"
+    elif any(
+        cast(dict[str, PlainData], item)["enforcement"] == "not_enforced"
+        for item in mapped
+    ):
+        status = PreflightCheckStatus.WARN
+        message = (
+            "Apptainer CPU/memory requests are retained but not enforced by the "
+            "direct runtime for scheduling-only stages"
+        )
+    else:
+        status = PreflightCheckStatus.PASS
+        message = "Apptainer CPU and memory resource mapping is valid"
     return _result(
         "resources.apptainer.mapping",
         PreflightGroup.RESOURCES,
         status,
         _severity_for_status(status),
-        (
-            "Apptainer CPU and memory resource mapping is valid"
-            if status is PreflightCheckStatus.PASS
-            else "Apptainer resource mapping checks failed"
-        ),
+        message,
         {
             "target_count": len(targets),
             "mapped_resources": mapped,
@@ -4454,7 +4497,6 @@ def _apptainer_raw_targets(
     ):
         return ()
     stage_ids = _apptainer_stage_ids(context, options)
-    executor_name = _apptainer_executor_name_for_options(options)
     selected_executor = str(getattr(options, "executor", None) or "apptainer")
     if not stage_ids:
         adapter_options = cast(Mapping[str, object], options.adapter_options)
@@ -4465,7 +4507,7 @@ def _apptainer_raw_targets(
                 resources=None,
                 executor_name=_apptainer_executor_name_for_adapter(
                     adapter_options,
-                    fallback=executor_name,
+                    fallback=selected_executor,
                 ),
                 selected_executor=selected_executor,
             ),
@@ -4485,7 +4527,7 @@ def _apptainer_raw_targets(
                 cast(
                     Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options
                 ),
-                fallback=executor_name,
+                fallback=selected_executor,
             ),
             selected_executor=selected_executor,
         )
@@ -4626,21 +4668,16 @@ def _adapter_options_set_command(raw_options: object | None) -> bool:
     return isinstance(raw_options, Mapping) and "command" in raw_options
 
 
-def _apptainer_executor_name_for_options(options: object) -> str:
-    executor = getattr(options, "executor", None)
-    if executor in _APPTAINER_EXECUTORS:
-        return cast(str, executor)
-    return "apptainer"
-
-
 def _apptainer_executor_name_for_adapter(
     adapter_options: Mapping[str, object],
     *,
     fallback: str,
 ) -> str:
+    if fallback in _APPTAINER_EXECUTORS:
+        return fallback
     if "singularity" in adapter_options:
         return "singularity"
-    return fallback if fallback in _APPTAINER_EXECUTORS else "apptainer"
+    return "apptainer"
 
 
 def _apptainer_image_from_adapter(
@@ -4751,6 +4788,74 @@ def _projected_apptainer_gpu_flag(
     return _apptainer_gpu_flag(
         project_apptainer_gpu_options(apptainer_options, cast(Any, resources))
     )
+
+
+def _projected_apptainer_cpu_memory_arguments(
+    *,
+    entries: Mapping[str, object],
+    executor_name: str,
+    apptainer_options: object | None = None,
+) -> Mapping[str, str]:
+    """Use the production command builder to inspect direct limit conversion."""
+
+    from loom.pipeline.executors.apptainer import build_apptainer_exec_command
+    from loom.pipeline.executors.containers import (
+        ContainerOptions,
+        ContainerResourceIntent,
+    )
+    from loom.pipeline.resources import ResourceEntry, ResourceRequest
+
+    selected = {
+        kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
+    }
+    if not selected:
+        return {}
+    descriptor = _executor_descriptor(executor_name)
+    intent = ContainerResourceIntent.from_runtime(
+        ResourceRequest(
+            entries={
+                kind: cast(ResourceEntry, entry) for kind, entry in selected.items()
+            }
+        ),
+        {kind: descriptor.capability_for(kind) for kind in selected},
+    )
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(image="preflight.sif", resources=intent),
+        apptainer_options=cast(Any, apptainer_options),
+        worker_command=("loom-preflight",),
+    )
+    argv = command.argv
+    projected: dict[str, str] = {}
+    for kind, flag in (("cpu", "--cpus"), ("memory", "--memory")):
+        if flag in argv:
+            projected[kind] = argv[argv.index(flag) + 1]
+    return projected
+
+
+def _apptainer_effective_resource_entries(
+    target: _ApptainerPreflightRawTarget,
+) -> Mapping[str, object]:
+    """Mirror direct execution's runtime-resource override and intent fallback."""
+
+    runtime_entries = _resource_entries(target.resources)
+    if runtime_entries:
+        return runtime_entries
+    container = _apptainer_container_from_adapter(
+        target.adapter_options,
+        allow_target_resolution=_is_slurm_executor_name(target.selected_executor),
+    )
+    intent = getattr(container, "resources", None)
+    return _resource_entries(intent)
+
+
+def _apptainer_resource_capability(kind: str, *, executor_name: str) -> Any:
+    return _executor_descriptor(executor_name).capability_for(kind)
+
+
+def _executor_descriptor(executor_name: str) -> Any:
+    from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
+
+    return DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve(executor_name)
 
 
 def _resource_amount(resource: object | None) -> float:

@@ -94,18 +94,25 @@ def _spec() -> PipelineSpec:
     )
 
 
-def _request(*, executor: str = "apptainer", gpu: bool = False) -> RunRequest:
-    stage_options = (
-        {
-            "build": {
-                "resources": {
-                    "entries": {"gpu": {"kind": "gpu", "amount": 1}}
-                }
+def _request(
+    *,
+    executor: str = "apptainer",
+    gpu: bool = False,
+    cpu_memory: bool = False,
+    cpu_memory_enforcement: str = "runtime",
+    singularity_policy: str | None = None,
+) -> RunRequest:
+    entries: dict[str, object] = {}
+    if gpu:
+        entries["gpu"] = {"kind": "gpu", "amount": 1}
+    if cpu_memory:
+        entries.update(
+            {
+                "cpu": {"kind": "cpu", "amount": 2},
+                "memory": {"kind": "memory", "amount": 512, "unit": "MiB"},
             }
-        }
-        if gpu
-        else {}
-    )
+        )
+    stage_options = {"build": {"resources": {"entries": entries}}} if entries else {}
     return RunRequest(
         pipeline=_spec(),
         options={
@@ -115,7 +122,15 @@ def _request(*, executor: str = "apptainer", gpu: bool = False) -> RunRequest:
                     "image": {"reference": "analysis.sif"},
                     "environment": {"variables": {"TOKEN": "secret"}},
                 },
-                "apptainer": {"cleanenv": True},
+                "apptainer": {
+                    "cleanenv": True,
+                    "cpu_memory_enforcement": cpu_memory_enforcement,
+                },
+                **(
+                    {"singularity": {"cpu_memory_enforcement": singularity_policy}}
+                    if singularity_policy is not None
+                    else {}
+                ),
             },
             "stage_options": stage_options,
         },
@@ -224,4 +239,103 @@ def test_apptainer_gpu_request_reaches_clean_container_without_durable_token(
         assert result.status == RunStatus.SUCCEEDED
         assert "--nv" in command.argv
         assert "CUDA_VISIBLE_DEVICES=allocated-device" in command.argv
-        assert "allocated-device" not in repr(result.stage_results["build"].executor_metadata)
+    assert "allocated-device" not in repr(
+        result.stage_results["build"].executor_metadata
+    )
+
+
+def test_apptainer_cpu_memory_request_reaches_generated_command(tmp_path: Path) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        apptainer_runner = InProcessApptainerRunner(store)
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=ApptainerExecutor(
+                run_store=store,
+                apptainer_command_runner=apptainer_runner,
+            ),
+        ).run(_request(cpu_memory=True))
+
+    command = apptainer_runner.calls[0]
+    assert result.status == RunStatus.SUCCEEDED
+    assert command.argv[command.argv.index("--cpus") + 1] == "2"
+    assert command.argv[command.argv.index("--memory") + 1] == "536870912"
+    assert command.argv.index("--memory") < command.argv.index("analysis.sif")
+
+
+@pytest.mark.parametrize("executor", ("apptainer", "singularity"))
+def test_direct_execution_retains_selected_policy_with_both_namespaces(
+    tmp_path: Path, executor: str
+) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs", authority_config=service.config()
+        )
+        runner = InProcessApptainerRunner(store)
+        selected = (
+            SingularityExecutor if executor == "singularity" else ApptainerExecutor
+        )
+        result = PipelineRunner(
+            run_store=store,
+            executor=selected(run_store=store, apptainer_command_runner=runner),
+        ).run(
+            _request(
+                executor=executor,
+                cpu_memory=True,
+                cpu_memory_enforcement="runtime",
+                singularity_policy="scheduling_only",
+            )
+        )
+    assert result.status is RunStatus.SUCCEEDED
+    command = runner.calls[0]
+    assert ("--cpus" in command.argv) is (executor == "apptainer")
+    assert ("--memory" in command.argv) is (executor == "apptainer")
+
+
+@pytest.mark.parametrize("executor", ("apptainer", "singularity"))
+def test_scheduling_only_retains_effective_resources_without_direct_flags(
+    tmp_path: Path, executor: str
+) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        runner = InProcessApptainerRunner(store)
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=(
+                SingularityExecutor(run_store=store, apptainer_command_runner=runner)
+                if executor == "singularity"
+                else ApptainerExecutor(run_store=store, apptainer_command_runner=runner)
+            ),
+        ).run(
+            _request(
+                executor=executor,
+                cpu_memory=True,
+                cpu_memory_enforcement="scheduling_only",
+            )
+        )
+
+    command = runner.calls[0]
+    assert result.status is RunStatus.SUCCEEDED
+    assert "--cpus" not in command.argv
+    assert "--memory" not in command.argv
+    metadata = cast(dict[str, object], result.stage_results["build"].executor_metadata)
+    container = cast(dict[str, object], metadata["container"])
+    resources = cast(dict[str, object], container["resources"])
+    assert set(cast(dict[str, object], resources["entries"])) == {"cpu", "memory"}
+    assert metadata["apptainer_options"] == {
+        "cleanenv": True,
+        "command": executor,
+        "cpu_memory_enforcement": "scheduling_only",
+        "fakeroot": False,
+        "no_home": False,
+        "nv": False,
+        "rocm": False,
+    }

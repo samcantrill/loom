@@ -273,6 +273,58 @@ def test_runtime_profile_container_build_shorthand_preserves_namespace_contract(
     }
 
 
+def test_scheduling_only_profile_and_exact_stage_override_preserve_resources() -> None:
+    options = merge_run_options(
+        base={
+            "profile": "scheduling-only",
+            "adapter_options": {
+                "container": {"image": {"reference": "analysis.sif"}}
+            },
+        },
+        profiles={
+            "scheduling-only": {
+                "executor": "singularity",
+                "adapter_options": {
+                    "singularity": {"cpu_memory_enforcement": "scheduling_only"}
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        explicit={
+            "stage_options": {
+                "train": {
+                    "adapter_options": {
+                        "singularity": {"cpu_memory_enforcement": "runtime"}
+                    }
+                }
+            }
+        },
+        known_stage_ids={"train"},
+    )
+
+    resolved = resolve_run_runtime(options, stage_ids={"train"})["train"]
+    assert resolved.adapter_options["singularity"] == {
+        "cpu_memory_enforcement": "runtime"
+    }
+    assert cast(ResourceRequest, resolved.resources).entries == {
+        "cpu": ResourceEntry(kind="cpu", amount=2),
+        "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),
+    }
+
+
 def test_merge_run_options_replaces_container_build_namespace_as_a_whole() -> None:
     result = merge_run_options(
         base={

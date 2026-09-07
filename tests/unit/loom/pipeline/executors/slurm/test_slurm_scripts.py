@@ -139,6 +139,7 @@ def test_afterok_gpu_script_validates_allocation_visibility_and_projects_contain
         ("0", 78),
         ("0,0", 78),
         ("0,", 78),
+        ("GPU-abc,MIG-device-7\nextra", 78),
         ("-foo,0", 78),
         (".foo,0", 78),
         ("/foo,0", 78),

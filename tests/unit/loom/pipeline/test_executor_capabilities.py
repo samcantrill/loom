@@ -186,6 +186,18 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert apptainer_descriptor.details["containerized"] is True
     assert apptainer_descriptor.details["apptainer_cli"] is True
     assert apptainer_descriptor.details["singularity_compatible"] is False
+    assert {
+        kind: capability.to_dict()["support_level"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
+        ).items()
+    } == {"cpu": "supported", "memory": "supported", "gpu": "supported"}
+    assert {
+        kind: capability.to_dict()["enforcement"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
+        ).items()
+    } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "best_effort"}
     singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
     assert singularity_descriptor.details["singularity_compatible"] is True
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
@@ -324,6 +336,107 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
         ("memory", "resource.supported", "info", "best_effort"),
     ]
     assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
+
+
+def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="apptainer",
+            adapter_options={
+                "container": {"image": {"reference": "analysis.sif"}},
+                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+            },
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(
+                                kind="memory", amount=512, unit="MiB"
+                            ),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [
+        (item["resource_kind"], item["severity"], item["enforcement"])
+        for item in diagnostics
+    ] == [
+        ("cpu", "warning", "not_enforced"),
+        ("memory", "warning", "not_enforced"),
+    ]
+
+
+@pytest.mark.parametrize("scope", ("global", "inherited", "stage"))
+def test_scheduling_only_capabilities_include_authored_container_fallback(
+    scope: str,
+) -> None:
+    container = {
+        "image": {"reference": "analysis.sif"},
+        "resources": {
+            "entries": {"memory": {"kind": "memory", "amount": 512, "unit": "MiB"}},
+            "capabilities": {"memory": {"support_level": "supported"}},
+        },
+    }
+    adapters: dict[str, Any] = {
+        "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+        "container": container,
+    }
+    stages: dict[str, Any] = {} if scope == "global" else {"train": {}}
+    if scope == "stage":
+        adapters.pop("container")
+        stages["train"] = {"adapter_options": {"container": container}}
+    result = validate_executor_capabilities(
+        {"executor": "apptainer", "adapter_options": adapters, "stage_options": stages}
+    )
+    assert len(result.diagnostics) == 1
+    diagnostic = cast(CapabilityDiagnostic, result.diagnostics[0])
+    assert diagnostic.resource_kind == "memory"
+    assert diagnostic.enforcement is ResourceEnforcementExpectation.NOT_ENFORCED
+    assert diagnostic.severity is CapabilitySeverity.WARNING
+    assert diagnostic.stage_id == (None if scope == "global" else "train")
+    source = "RunOptions.stage_options['train']" if scope == "stage" else "RunOptions"
+    assert (
+        diagnostic.path
+        == f"{source}.adapter_options['container'].resources.entries['memory']"
+    )
+
+
+def test_nonempty_runtime_resources_replace_container_fallback_in_capabilities() -> (
+    None
+):
+    result = validate_executor_capabilities(
+        {
+            "executor": "apptainer",
+            "adapter_options": {
+                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+                "container": {
+                    "image": {"reference": "analysis.sif"},
+                    "resources": {
+                        "entries": {
+                            "memory": {"kind": "memory", "amount": 512, "unit": "MiB"}
+                        },
+                        "capabilities": {"memory": {"support_level": "supported"}},
+                    },
+                },
+            },
+            "stage_options": {
+                "train": {
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
+                }
+            },
+        }
+    )
+    diagnostics = cast(tuple[CapabilityDiagnostic, ...], result.diagnostics)
+    assert [item.resource_kind for item in diagnostics] == ["cpu"]
+    assert (
+        diagnostics[0].path
+        == "RunOptions.stage_options['train'].resources.entries['cpu']"
+    )
 
 
 def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
