@@ -6,7 +6,8 @@ Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — stage-target-validation
-Blockers: none for Phase 1; Phase 3 requires its explicit design gate.
+Blockers: fresh Phase 1 gates pending after bounded A-11 test correction;
+Phase 3 requires its explicit design gate.
 
 ## Summary
 
@@ -73,7 +74,7 @@ Blockers: none for Phase 1; Phase 3 requires its explicit design gate.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | baseline only; no implementation | pending review | owned worktree retained |
+| 1 | pending | CLI guard implemented; 24 targeted tests passed; A-11 test correction and all 15 affected integration tests passed; fresh gates pending | independent review pending | owned worktree retained |
 | 2 | pending | not started | host acceptance pending | not created |
 | 3 | pending | not started | design gate pending | not created |
 
