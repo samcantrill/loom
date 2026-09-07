@@ -390,7 +390,17 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
   `0786e55` locks group identity through the final signal
 - Manager startup: kernel/runtime receipts, 161 baseline passes, exact source
   owners and repeated resident identity-order path verified; ready for one executor
-- Implementation: not started
+- Implementation: blocked before source changes. The only existing public
+  timeout capability is the static `ExecutorDescriptor.timeout_support` for an
+  executor name. `apptainer` and `singularity` are currently `unsupported`
+  (`src/loom/pipeline/runtime/capabilities.py`), while the approved mechanism
+  permits enforcement only for the built-in Linux runner after `--pid` and
+  runtime-init admission. Marking the descriptor `enforced` would advertise
+  unsupported platforms, runners, and modes; retaining `unsupported` would
+  make a configured, accepted timeout path report an untruthful capability.
+  The phase does not select the required conditional public capability or
+  diagnostic contract. No source, test, schema, or runtime behavior was
+  changed.
 - Pre-submit gate, independent implementation review, PR and merge: pending
 - Blocker corrections: 0/3
 
@@ -398,8 +408,8 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 
 | Item | Result |
 | --- | --- |
-| Reviewed mechanism and approved boundaries | pending |
-| Implementation and changed paths | not started |
-| Real process/runtime tests and validated revision | pending |
+| Reviewed mechanism and approved boundaries | Existing design evidence and runtime prerequisite verified; execution stopped on the unresolved public capability advertisement decision. The approved fixture is `/nas/home/can134/work/containers/loom-resource-smoke.sif`, SHA-256 `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`; `/usr/bin/singularity` reports 3.10.4. |
+| Implementation and changed paths | No production or test changes. This phase card records the stop only. |
+| Real process/runtime tests and validated revision | Not run: the required enabled-path assertion and capability diagnostics cannot be selected truthfully until the public capability contract is decided. Baseline remains the manager receipt `build/timeout-owner-baseline.xml` at `ccf03e9`. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked. Smallest missing decision: define how the existing public executor capability/diagnostic surface represents timeout enforcement conditional on Linux, the built-in subprocess runner, `--pid`, and the runtime init shim, including whether unsupported configurations are rejected at setup or described as unavailable. This must not broaden enforcement to arbitrary Apptainer/Singularity runners or modes. |
