@@ -6,8 +6,9 @@ Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 2 — direct-container-resources
-Blockers: upstream managed-agent gate failure A-13 needs a separate investigation;
-required resource acceptance needs a suitable image/runtime session. Phase 3
+Blockers: A-13 exposes coordinator-wide lock delays requiring a separately
+reviewed responsiveness amendment; the retry candidate still needs acceptance
+and fresh full gates. Resource acceptance needs a suitable image/runtime session. Phase 3
 retains its explicit timeout design gate.
 
 ## Summary
@@ -64,21 +65,28 @@ retains its explicit timeout design gate.
   verified separately from the confirmed legacy adapter containment gap.
 - First-phase startup: manager verified scope, source, tests, locked baseline,
   independent audit, phase packet, and approval; no blocker.
-- Implementation readiness: Phase 1 is merged; Phase 2 implementation and its
-  localized corrections are independently reviewed, but the latest validation
-  gate fails on A-13 and mandatory live acceptance is unavailable. Phase 3's card is a design-gated handoff,
+- Implementation readiness: Phase 1 is merged; Phase 2 resource mapping and
+  its first two corrections are independently reviewed. The third retry
+  candidate does not resolve the observed coordinator lock delays, and mandatory
+  live acceptance is unavailable. Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Accepted risks: host-dependent cgroup/runtime availability; original control
   checkout cannot be advanced by discarding or stashing its dirty contents.
 - Revisit triggers: a materially broader lifecycle/public contract, unrelated
   upstream gate failure, source overlap, or unavailable required runtime proof.
+- Approved A-13 amendment: reproduce a transient pre-grant control-response
+  failure, reuse the existing bounded assignment retry owner, and independently
+  review cancellation/replay and exhausted-retry retention. No global retry,
+  automatic restart adoption, deadline extension, or capacity-release redesign.
+  The original uninstrumented full-suite trigger remains unproven; a matching
+  deterministic failure mode is documented in planning.md.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | no PR; merge held | implementation and two test-only corrections reviewed through `9ebd227`; latest default gate 2,810 passed, one upstream integration failure; isolated failing test subsequently passed | A-13 remains unresolved; live enforcement acceptance unavailable; fresh full gates still required | committed worktree and branch retained |
+| 2 | no PR; merge held | resource mapping/two corrections reviewed through `9ebd227`; third retry candidate retained as WIP; its instrumented trace proves retry progress but exposes coordinator lock delays beyond the completion deadline | responsiveness amendment required; 3/3 correction passes consumed; candidate acceptance/full gates and live enforcement proof outstanding | worktree and branch retained; diagnostic fixture supervisors stopped |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged

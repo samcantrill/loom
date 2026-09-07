@@ -5,8 +5,8 @@ Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 2 review passed; current full validation is not passing.
-Blockers: A-13 managed-agent integration stall, live acceptance prerequisites,
+Current gate: resource mapping reviewed; A-13 candidate is not merge-ready.
+Blockers: coordinator responsiveness amendment, live acceptance prerequisites,
 and the later timeout design gate.
 
 ## Current State
@@ -17,7 +17,7 @@ and the later timeout design gate.
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227` | Latest default gate: 2,810 passed, one upstream transport integration timeout; live acceptance unavailable | Resolve the separate A-13 investigation scope and provide a suitable image/session; no Phase 2 PR or merge |
+| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227`; third retry candidate retained as work in progress | Instrumented failures now show coordinator control/renewal calls blocked on the reconciliation lock; live acceptance unavailable | Approve a separately reviewed coordinator-responsiveness amendment and provide a suitable image/session; no Phase 2 PR or merge |
 
 ## Evidence And Scope
 
@@ -93,7 +93,7 @@ Weave revision `6a99a4d7e6f008748c0761e6ab1c359d62aacbbd`.
 | A-12 confirmed validation defect | The unchanged upstream `test_retirement_secret_rejects_before_mutation_and_is_redacted` compares whole database snapshots while background `reconcile_once` samples clock health and commits `accepted_time_high_water` under `_cycle_lock`. The invalid-secret retirement path verifies the secret before mutation and does not sample the clock. | The corrected-resource summary gate had 2,967 passes and one failure solely from a one-second high-water change. Hold the existing cycle lock across the test's before/rejection/after assertion; retain complete snapshot equality and successful-retirement/redaction assertions. No production queue change. This bounded gate correction is included in Phase 2 validation and independent review. |
 | A-13 unresolved upstream validation failure, not a confirmed resource regression | At `9ebd227`, unchanged `test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly` timed out waiting 30 seconds for submitted work; 2,810 other default tests passed. Retained coordinator state is `BOUND`, agent journal `request_durable`, no transfer authorization or supervisor launch, and no worker process ID. A fresh isolated exact-test run passed in 15.40 seconds. | Root cause is not established; the isolated pass does not clear the failed full gate. Both fixture supervisors were confirmed stopped. Resource code and production queue/transport code have no overlapping changes. Hold the phase and present a separate bounded transport/pre-launch investigation rather than weakening deadlines or changing recovery policy inside the resource port. |
 
-### Proposed A-13 Follow-up Scope
+### Approved A-13 Follow-up Scope
 
 Instrument only the existing synthetic loopback fixture's delivery-to-grant
 path: RPC operation names, timings and outcomes, coordinator lock waits, and
@@ -102,8 +102,70 @@ Reproduce the stall before selecting a fix, distinguishing a stalled request
 from the intentional conservative retention of indeterminate pre-launch work.
 Any required transport/recovery behavior change needs its own bounded design
 and regression review. No timeout increase, automatic restart, lease release,
-or production queue change is assumed. This proposal awaits maintainer direction;
-the resource phase has not silently expanded into a transport implementation.
+or production queue change is assumed. The maintainer approved this bounded
+investigation and a cause-backed, independently reviewed correction. Request
+help for missing runtime prerequisites or a materially broader recovery design;
+the resource phase has not expanded into an unrestricted transport rewrite.
+
+#### A-13 Reproduction And Bounded Correction
+
+Eight temporary instrumented repeats passed; the original intermittent trigger
+is not established. A real loopback test that fails one server response after
+the first `assignment_control` dispatch reproduces the failure deterministically:
+the client raises `_IndeterminateAgentProtocolError` from the pre-grant control
+poll and exits `execute_one`; the original 30-second completion assertion fails.
+The retained state matches the initial failure: coordinator `BOUND`, agent
+`request_durable`, no transfer authorization, no supervisor launch. Evidence:
+`build/transport-diagnostic-control-loss.xml` and temporary synthetic-only
+`build/transport_diagnostic.py`. This proves a supported failure mode, not the
+initiating cause of the earlier uninstrumented full-suite timeout.
+
+Smallest correction: the existing `_cancel_pregrant_if_requested` owner should
+use `_assignment_call` for its control poll, as adjacent pre-launch operations
+already do. Preserve the existing retry bound, coordinator-epoch reconciliation,
+durable control/ack replay, non-retryable conflicts, and fail-closed retention
+after exhaustion. Do not add restart adoption, release claims, change deadlines,
+or widen retries globally. Add a real loopback regression for transient pre-grant
+response failure and proportionate rejection/exhaustion safety evidence. This
+consumes the third scoped correction; independent correctness review and
+fresh full gates remain mandatory. Live resource acceptance is still separate.
+
+#### Remaining Coordinator Responsiveness Blocker
+
+The retry candidate is not a complete resolution. In
+`build/transport-diagnostic-retry-repeats.xml`, five instrumented cases passed
+before one failed its 30-second completion wait. That failing trace shows renewal
+and session-control calls each taking their 10-second HTTP timeout, before the
+assignment was saved at approximately 34.94 seconds from fixture start. At the
+20-second snapshot both server handlers were waiting for `_cycle_lock` in the
+session/offer serialization decorators; the reconciliation thread held that lock
+while reading the per-run SQLite authority.
+
+The injected pre-grant control failure then retried successfully: authorization,
+grant, launch, and result/release completed at approximately 37.97 seconds,
+after the test deadline. This separates a working retry path from a coordinator
+responsiveness failure; server TLS EOF/BAD_LENGTH messages followed already
+timed-out clients and are not established as the initiating cause. One later
+six-case run with additional cycle timing passed
+(`build/transport-diagnostic-cycle-contention.xml`), so neither a single slow
+authority operation nor repeated-cycle lock starvation is yet established as
+the precise lock-delay mechanism. Do not infer resolution from those passes.
+
+The candidate changes only the existing pre-grant retry call, its two loopback
+outcomes (eventual success and durable cancellation without launch), and queue
+documentation. Focused Ruff and whole-tree Pyright pass. Rejection/exhaustion
+coverage, final independent acceptance, and fresh full gates remain outstanding.
+Both supervisors from the failed instrumented fixture were verified stopped;
+temporary diagnostics now use the repository's supervisor-cleanup fixture.
+
+The three inclusive correction passes are consumed. Request a separate bounded
+coordinator-responsiveness amendment before more product changes: distinguish
+lock hold time from acquisition starvation, reproduce that mechanism, and review
+the smallest correction while preserving replacement fencing, scheduling
+atomicity, and physical resource ownership. Do not remove serialization, extend
+deadlines, or weaken the regression to obtain a passing gate. Approval for that
+cross-owner amendment and an approved image/runtime session have been requested;
+the current retry candidate is work in progress, not a completed Phase 2.
 
 ### Historical Brief Reconciliation
 
@@ -315,8 +377,8 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 
-Gate result: Phase 1 merged; Phase 2 blocked pending the A-13 investigation
-decision, fresh passing validation and live acceptance. Phase 3 remains
+Gate result: Phase 1 merged; Phase 2 blocked pending the coordinator-responsiveness
+amendment, final candidate review, fresh passing validation and live acceptance. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals

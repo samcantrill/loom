@@ -269,8 +269,9 @@ def test_agent_listener_prepares_tls_rotation_before_atomic_install(
         daemon.stop()
 
 
-def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("cancel_before_grant", (False, True))
+def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_before_grant: bool
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -374,6 +375,26 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         "complete_offer_renewal",
         lose_first_renewal_response,
     )
+    original_dispatch = agent_session_transport._dispatch
+    lost_control_response = Event()
+
+    def lose_delivered_control_response(
+        view: object, operation: str, value: Mapping[str, object]
+    ) -> Mapping[str, PlainData]:
+        result = original_dispatch(view, operation, value)
+        if (
+            operation == "assignment_control"
+            and isinstance(result, Mapping)
+            and (result.get("control") is not None) is cancel_before_grant
+            and not lost_control_response.is_set()
+        ):
+            lost_control_response.set()
+            raise ConnectionError("simulated lost pre-grant control response")
+        return result
+
+    monkeypatch.setattr(
+        agent_session_transport, "_dispatch", lose_delivered_control_response
+    )
     service = OutboundAgentServiceConfig(
         client_config,
         OutboundAgentRegistrationConfig(
@@ -436,12 +457,70 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
-        coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
-        assert (
-            coordinator.wait("idle-renewal-item", timeout_seconds=30).state
-            is LocalDaemonAdmissionState.SUCCEEDED
+        first_pregrant_poll = Event()
+        release_pregrant_poll = Event()
+        original_pregrant_poll = (
+            LocalDaemonAgentHttpClient._cancel_pregrant_if_requested
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        pregrant_polls = 0
+
+        def pause_after_first_pregrant_poll(
+            client: LocalDaemonAgentHttpClient, *args: Any, **kwargs: Any
+        ) -> Mapping[str, PlainData] | None:
+            nonlocal pregrant_polls
+            result = original_pregrant_poll(client, *args, **kwargs)
+            pregrant_polls += 1
+            if cancel_before_grant and pregrant_polls == 1:
+                first_pregrant_poll.set()
+                assert release_pregrant_poll.wait(10)
+            return result
+
+        monkeypatch.setattr(
+            LocalDaemonAgentHttpClient,
+            "_cancel_pregrant_if_requested",
+            pause_after_first_pregrant_poll,
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
+        if cancel_before_grant:
+            assert first_pregrant_poll.wait(10)
+            coordinator.cancel("idle-renewal-item")
+            deadline = monotonic() + 10
+            control = None
+            while monotonic() < deadline:
+                with sqlite3.connect(daemon_config.control_database) as conn:
+                    control = conn.execute(
+                        "SELECT result_code, acknowledged, state "
+                        "FROM remote_assignment_controls"
+                    ).fetchone()
+                if control is not None:
+                    break
+                sleep(0.02)
+            assert control is not None
+            release_pregrant_poll.set()
+            assert (
+                coordinator.wait("idle-renewal-item", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            assert authority.open_run(run_uri).status is RunStatus.CANCELLED
+            with sqlite3.connect(daemon_config.control_database) as conn:
+                control = conn.execute(
+                    "SELECT result_code, acknowledged, state "
+                    "FROM remote_assignment_controls"
+                ).fetchone()
+            assert control == ("never_started", 1, "applied")
+            with sqlite3.connect(
+                cast(Path, client_config.agent_root)
+                / "supervisor"
+                / "supervisor.sqlite"
+            ) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+        else:
+            assert (
+                coordinator.wait("idle-renewal-item", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert lost_control_response.is_set()
         # One composition at most per client incarnation, never one
         # reconstruction per offer. Additional transport reconnects are valid.
         assert 1 <= provider_factory.calls <= client_incarnations
@@ -925,7 +1004,9 @@ def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
         python_executable=Path(sys.executable),
     )
     replacement = replace(base, resident_profiles=(profile,))
-    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
+    client = LocalDaemonAgentHttpClient(
+        base, trusted_config_loader=lambda: replacement
+    )
     try:
         registration = AgentRegistration(
             idempotency_key="register-local-control",
@@ -1044,9 +1125,7 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
     )
     replacement = replace(base, active_configuration_fingerprint="2" * 64)
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
-    client = LocalDaemonAgentHttpClient(
-        base, trusted_config_loader=lambda: replacement
-    )
+    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
     registration = AgentRegistration(
         idempotency_key="register-crash-reload",
         coordinator_id="coordinator-a",

@@ -2963,8 +2963,8 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
 ## v38 - Selective Container Port And Correctness Review
 
-Status: Phase 1 merged; Phase 2 implemented and independently reviewed but held
-for an upstream integration-gate investigation and live resource acceptance.
+Status: Phase 1 merged; Phase 2 resource mapping reviewed, with a pre-grant retry
+candidate held for coordinator responsiveness review and live resource acceptance.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,

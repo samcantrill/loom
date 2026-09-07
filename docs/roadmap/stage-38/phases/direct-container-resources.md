@@ -12,7 +12,7 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: A-13 upstream integration-gate investigation; live acceptance image/session
+- Blockers: coordinator-responsiveness amendment; candidate review/full gates; live image/session
 
 ## Objective And Context
 
@@ -50,6 +50,11 @@ and a test-only SLURM race. Use Python 3.12 and this worktree's locked environme
 In scope: deterministic CPU/memory argv conversion, actionable unsupported
 mapping/runtime failures, truthful capability/preflight/docs, a real-runtime
 acceptance hook over existing test infrastructure, and the bounded A-9 correction.
+The approved A-13 amendment also covers the reproduced pre-grant control-response
+retry omission in `queue/agent_session_transport.py`, focused transport tests,
+and its existing queue contract documentation. Reuse the established bounded
+assignment retry owner; preserve control replay, rejection, and exhausted-retry
+retention. No global transport recovery or ownership redesign is included.
 Out of scope: changing resource semantic validators, GPU allocation, fractional
 CPU scheduling, new registries/config namespaces, timeouts, container builds or
 downloads without explicit authority, and host system administration.
@@ -173,14 +178,16 @@ administration, or timeout implementation. Return exact validation and blockers.
 
 - Manager preparation: complete; predecessor remote merge, fresh published base,
   source/targeted-lane refresh, ownership, approval, and private discretion verified
-- Expanded planning: resource/public decisions remain unchanged; the proposed
-  separate A-13 investigation is in planning.md. Live acceptance is not waived.
-- Implementation: complete; current source/test revision `9ebd227`
+- Expanded planning: bounded A-13 retry work was approved; newly observed
+  coordinator lock delays require the separate amendment described in planning.md.
+  Live acceptance is not waived.
+- Implementation: resource mapping complete through `9ebd227`; third pre-grant
+  retry candidate remains work in progress and is not merge-ready.
 - Independent correctness review: passed for the resource implementation,
   `ff42b6d` acceptance-probe correction, and `9ebd227` A-12 test synchronization.
-  No remaining review finding; current full validation and live acceptance fail
-  the pre-submit gate, so no PR or merge is authorized.
-- Blocker corrections: 2/3. First, fail closed on missing cgroup membership and
+  These receipts do not approve the third retry candidate. Current full
+  validation and live acceptance fail the pre-submit gate; no PR or merge.
+- Blocker corrections: 3/3. First, fail closed on missing cgroup membership and
   control reads; four executable-shell regressions pass and independent
   correction review accepted `ff42b6d`. Second, the refreshed summary exposed
   upstream A-12: background accepted-time sampling races a whole-database
@@ -188,16 +195,22 @@ administration, or timeout implementation. Return exact validation and blockers.
   before/rejection/after, preserving full equality and production behavior.
   `make validate-pr` passed at `ff42b6d`; its summary had 2,967 passes and this
   one failure. At `9ebd227`, the affected session/probe lane passed 48 tests,
-  but the refreshed default gate exposed A-13. No third correction is attempted
-  without a concrete cause/remedy and a separate scope decision if required.
+  but the refreshed default gate exposed A-13. The third candidate routes the
+  pre-grant control poll through the existing assignment retry owner. A failure
+  trace shows that retry succeeding, but prior renewal/control calls waited for
+  the coordinator's reconciliation lock until the overall test deadline was
+  exhausted. Cancellation replay passes without launch. The original
+  uninstrumented trigger and precise lock-delay mechanism remain unproven.
+  Stop further product corrections pending the responsiveness amendment; final
+  rejection/exhaustion coverage, independent acceptance and full gates remain.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Offline implementation complete: direct Apptainer/Singularity CPU and exact-byte memory flags; resource-intent revalidation and actionable resource-command failure; truthful capability/preflight projection with runtime-intent override and authored-intent fallback; scheduler-owned SLURM composition/preflight; A-9 complete-value grammar check; opt-in cgroup-v2 acceptance hook. Changed `src/loom/pipeline/executors/apptainer/{commands.py,executor.py}`, `src/loom/pipeline/{runtime/capabilities.py,executors/slurm/{container.py,rendering.py}}`, `src/loom/diagnostics/preflight.py`, related scoped tests, and `docs/features/container-executors.md`. |
-| Current validation and revision | At `9ebd2275334d55b7a432fe18a944b63fd6892433`: affected session/probe tests 48 passed; Ruff and Pyright passed; `make validate-pr` failed in default tests with 2,810 passed and one A-13 managed-agent timeout. Later config-extra/build prerequisites and `make test-summary` were not run after that failure. The isolated exact A-13 test passed in 15.40 seconds (`build/phase2-transport-gate-repro.xml`); this is diagnostic evidence, not a replacement passing full gate. |
+| Current validation and revision | WIP retry candidate: focused Ruff and whole-tree Pyright pass. Refiner's two-case loopback run had success-case timeout and cancellation pass. Manager's instrumented retry run had five passes and one timeout; its failure trace proves successful retry and eventual release after coordinator lock delays exhausted the test deadline. Additional cycle-timing run: six passed. These are diagnostic receipts, not passing full gates. Last full `make validate-pr` at `9ebd227` had 2,810 passes and one A-13 timeout; no fresh full gates for the candidate. |
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
 | Real runtime evidence / unavailable checks | No enforcement proof: default hook was opted out; explicit opt-in stopped because the maintainer has not supplied an approved local image and compatible delegated-cgroup runtime session. The hook reads the payload cgroup path from `/proc/self/cgroup` before inspecting `cpu.max` and `memory.max`; it performs no pull, build, download, or host administration. |
-| PR, review, and merge | Implementation and both localized corrections independently accepted. No PR opened or branch pushed while pre-submit gates are blocked. |
-| Residual risk and cleanup | A-13 root cause unresolved; required live CPU/memory acceptance unavailable. Keep the committed worktree and branch for continuation. Both supervisors belonging to the failed A-13 fixture were confirmed stopped; no worker had launched. Original dirty checkout hashes rechecked unchanged; published develop remains `43b911f`. |
+| PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. The third candidate is WIP, requires final review and fresh full gates, and does not resolve the coordinator-responsiveness failure. No PR opened or branch pushed. |
+| Residual risk and cleanup | Three correction passes consumed; separate responsiveness amendment and approved live image/session requested. Keep the candidate and worktree for continuation. Original failed fixture had no worker; a later instrumented fixture completed work after the test deadline. Both supervisors of that later failed fixture were verified stopped. Original dirty checkout remains preserved; published develop remains `43b911f`. |
