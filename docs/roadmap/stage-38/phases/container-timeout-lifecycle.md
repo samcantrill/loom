@@ -13,10 +13,9 @@
 - Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
   accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
-- Blockers: independent implementation review found that repeated managed
-  containment calls renew the cleanup observation budget. The maintainer approves
-  one additional bounded correction and independent verification; the original
-  3/3 allowance remains consumed. PR #280 must not merge until closure.
+- Blockers: none in the reviewed code. Independent verification closes the
+  approved cleanup-budget correction at `6afbaef`; fresh full gates remain
+  required before PR #280 may merge. The original 3/3 allowance remains consumed.
 
 ## Objective And Context
 
@@ -444,11 +443,12 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 - Pre-submit: both full gates passed at earlier production/test revision `3fd6f65`.
   The approved cleanup-budget correction changes source/tests, so fresh gates are
   required before merge. PR #280 targets develop; original receipts are preserved.
-- Independent implementation review: completed against PR head `ae81bbf` and
-  base `71d2452`; not merge-eligible. One product blocker remains: the shared
-  managed handle renews its observation wait budget on every `contain()` call.
-  No other qualified findings were returned. The identity-order mechanism and
-  frozen timeout-fact reader were otherwise accepted.
+- Independent implementation review: initial review at `ae81bbf` against
+  `71d2452` accepted the ownership mechanism and frozen timeout-fact reader but
+  found managed cleanup-budget renewal. The separately authorized verification
+  of correction `8a5c723..6afbaef` closes that finding with no product blockers
+  or localized corrections. Fresh full gates and accurate PR receipts are the
+  remaining merge conditions; only roadmap docs changed after reviewed source.
 - Blocker corrections: 3/3 including capability/reporting clarification,
   pre-submit fixture type narrowing, and A-15's frozen timeout-metadata reader
   correction plus completion of real early-result coverage. No public values or
@@ -501,8 +501,11 @@ TERM cleanup, root-first polling, immediate KILL and early forced escalation,
 repeated uncertainty without waits/signals/reaps, and eventual positive absence.
 At production/test revision `6afbaef`, all 89 affected-consumer checks pass in
 206.23 seconds (`build/cleanup-budget-targeted.xml`) and all 13 selected-runtime
-cases pass in 10.91 seconds (`build/cleanup-budget-container.xml`). Fresh full
-gates and independent correction closure remain pending.
+cases pass in 10.91 seconds (`build/cleanup-budget-container.xml`). Independent
+verification closes the original finding at `6afbaef`, confirming the absolute
+deadline, forced-KILL shortening, delayed/repeated calls, one-shot identity and
+reaping, conservative capacity retention and mutation-sensitive regression
+evidence. No additional code findings remain. Fresh full gates are still required.
 
 ## Completion Record
 
