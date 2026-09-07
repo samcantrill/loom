@@ -2963,16 +2963,22 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
 ## v38 - Selective Container Port And Correctness Review
 
-Status: approved selective-port outcome; Phase 1 implementation ready after an
-independent upstream audit. Later container lifecycle implementation remains
-subject to its explicit design review.
+Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
+CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
+reconciliation wakeups and passed independent review. The scheduling-only SIF smoke
+passes. The approved `04443ed` reporting correction warns for implicit stages
+inheriting unenforced CPU/RAM intent and preserves no invented direct limits
+when unmapped. Both fresh full gates and independent verification passed;
+Phase 2 is ready for PR/merge checks.
+Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,
 serialization, or managed-execution contracts. The ordered increments are:
 
 1. Keep stage-owned target graphs inert during generic CLI target validation.
-2. Map supported direct-container CPU/memory requests, with truthful runtime
-   enforcement claims and a bounded malformed-allocation grammar correction.
+2. Preserve resource requests with an explicit choice of runtime CPU/memory
+   limits or scheduling-only execution, truthful diagnostics, separate live
+   acceptance, and a bounded malformed-allocation grammar correction.
 3. Establish reviewed, tested timeout cleanup and containment ownership before
    enabling direct-container deadlines; resolve the confirmed legacy queue
    root-exit/descendant-release gap at its actual owner.

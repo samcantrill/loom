@@ -731,14 +731,14 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
 
 
 def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
-    advisory = ResourceCapability(
-        support_level=ResourceSupportLevel.ADVISORY,
+    mapped = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
         enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
-        severity=CapabilitySeverity.WARNING,
+        severity=CapabilitySeverity.INFO,
         details={
             "reason": (
-                "direct Apptainer execution can expose runtime flags, but scheduler "
-                "allocation and platform enforcement are outside the direct executor"
+                "direct Apptainer execution maps this resource to runtime flags; "
+                "cgroup delegation and platform enforcement remain host-dependent"
             )
         },
     )
@@ -756,8 +756,8 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
     return ExecutorDescriptor(
         name=name,
         resource_capabilities={
-            "cpu": advisory,
-            "memory": advisory,
+            "cpu": mapped,
+            "memory": mapped,
             "gpu": gpu,
         },
         adapter_namespaces=(
@@ -992,16 +992,48 @@ def _resource_capability_diagnostics(
     descriptor: ExecutorDescriptor,
 ) -> list[CapabilityDiagnostic]:
     diagnostics: list[CapabilityDiagnostic] = []
-    for stage_id, stage_options in cast(
-        Mapping[str, StageRuntimeOptions],
-        options.stage_options,
-    ).items():
+    stage_options_by_id: dict[str | None, StageRuntimeOptions] = {
+        stage_id: stage_options
+        for stage_id, stage_options in cast(
+            Mapping[str, StageRuntimeOptions], options.stage_options
+        ).items()
+    }
+    direct_apptainer = descriptor.name in {"apptainer", "singularity"}
+    if direct_apptainer and not stage_options_by_id:
+        stage_options_by_id[None] = StageRuntimeOptions()
+    for stage_id, stage_options in stage_options_by_id.items():
         resources = cast(ResourceRequest, stage_options.resources)
-        for kind in resources.entries:
+        kinds = tuple(resources.entries)
+        stage_path = f"RunOptions.stage_options[{stage_id!r}]"
+        resource_path = f"{stage_path}.resources"
+        if direct_apptainer and not kinds:
+            authored_at_stage = "container" in stage_options.adapter_options
+            container = stage_options.adapter_options.get(
+                "container", options.adapter_options.get("container")
+            )
+            kinds = _container_cpu_memory_kinds(container)
+            source = stage_path if authored_at_stage else "RunOptions"
+            resource_path = f"{source}.adapter_options['container'].resources"
+        for kind in kinds:
             capability = descriptor.capability_for(kind)
+            if _is_scheduling_only_apptainer_cpu_memory(
+                options, stage_options, descriptor, kind
+            ):
+                capability = ResourceCapability(
+                    support_level=cast(ResourceSupportLevel, capability.support_level),
+                    enforcement=ResourceEnforcementExpectation.NOT_ENFORCED,
+                    severity=CapabilitySeverity.WARNING,
+                    details={
+                        "reason": (
+                            "direct CPU/memory runtime flags are disabled; requests "
+                            "remain scheduling and accounting intent"
+                        ),
+                        "cpu_memory_enforcement": "scheduling_only",
+                    },
+                )
             diagnostics.append(
                 CapabilityDiagnostic(
-                    path=f"RunOptions.stage_options[{stage_id!r}].resources.entries[{kind!r}]",
+                    path=f"{resource_path}.entries[{kind!r}]",
                     severity=cast(CapabilitySeverity, capability.severity),
                     code=_resource_diagnostic_code(
                         cast(ResourceSupportLevel, capability.support_level)
@@ -1022,6 +1054,47 @@ def _resource_capability_diagnostics(
                 )
             )
     return diagnostics
+
+
+def _container_cpu_memory_kinds(container: object) -> tuple[str, ...]:
+    """Inspect authored fallback kinds; the command mapper owns validity."""
+
+    if not isinstance(container, Mapping):
+        return ()
+    resources = container.get("resources")
+    if not isinstance(resources, Mapping):
+        return ()
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        return ()
+    return tuple(kind for kind in ("cpu", "memory") if kind in entries)
+
+
+def _is_scheduling_only_apptainer_cpu_memory(
+    options: RunOptions,
+    stage_options: StageRuntimeOptions,
+    descriptor: ExecutorDescriptor,
+    kind: str,
+) -> bool:
+    """Resolve the direct adapter policy for CPU/RAM diagnostics only."""
+
+    if descriptor.name not in {"apptainer", "singularity"} or kind not in {
+        "cpu",
+        "memory",
+    }:
+        return False
+    adapter_options = dict(cast(Mapping[str, object], options.adapter_options))
+    adapter_options.update(cast(Mapping[str, object], stage_options.adapter_options))
+    raw = (
+        adapter_options.get("singularity", adapter_options.get("apptainer"))
+        if descriptor.name == "singularity"
+        else adapter_options.get("apptainer")
+    )
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+
+    return (
+        ApptainerExecOptions.from_dict(raw).cpu_memory_enforcement == "scheduling_only"
+    )
 
 
 def _resource_diagnostic_code(support_level: ResourceSupportLevel) -> str:

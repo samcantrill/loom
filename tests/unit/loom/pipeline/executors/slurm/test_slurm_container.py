@@ -8,9 +8,12 @@ import pytest
 
 from loom.pipeline.executors.containers import (
     ContainerBuildResult,
+    ContainerOptions,
+    ContainerResourceIntent,
     FakeContainerBuilder,
     LocalContainerBuildService,
 )
+from loom.pipeline.runtime.capabilities import ResourceCapability
 from loom.pipeline.executors.slurm import (
     SlurmCommandArgv,
     resolve_slurm_container_target,
@@ -125,6 +128,28 @@ def test_slurm_gpu_wrapper_derives_nv_and_rejects_authored_visibility() -> None:
             },
             resources=resources,
         )
+
+
+def test_slurm_container_wrapper_keeps_cpu_memory_limits_with_scheduler() -> None:
+    command = SlurmCommandArgv(launcher_argv=("loom",), command_args=("--version",))
+    intent = ContainerResourceIntent(
+        entries={
+            "cpu": ResourceEntry(kind="cpu", amount=2),
+            "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),
+        },
+        capabilities={
+            kind: ResourceCapability(support_level="supported")
+            for kind in ("cpu", "memory")
+        },
+    )
+
+    wrapped = wrap_slurm_command_with_apptainer(
+        command,
+        container_options=ContainerOptions(image="analysis.sif", resources=intent),
+    )
+
+    assert "--cpus" not in wrapped.argv
+    assert "--memory" not in wrapped.argv
 
 
 def test_resolve_slurm_container_target_rejects_missing_or_wrong_targets() -> None:

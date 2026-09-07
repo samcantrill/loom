@@ -727,7 +727,11 @@ reconciliation for their retained assignment/session/fence. Critical agent
 events have stable IDs and monotonic per-assignment sequence; acknowledgements
 cover only durably persisted contiguous evidence. Timeout, disconnect, caller
 cancellation, or 5xx after send is indeterminate and retries the same operation
-identity/digest rather than assuming rollback.
+identity/digest rather than assuming rollback. This includes the pre-grant
+assignment-control poll: a lost control response retries through the assignment
+reconciliation boundary, so an exact durable cancellation and its acknowledgement
+replay before any grant or launch. Conflicts remain definitive, and exhausted
+retries retain the pre-grant assignment rather than releasing or starting it.
 
 Per-run authority remains a separate service/API owner. A narrow authenticated
 coordinator principal is the only Stage 29 role allowed to invoke its expected-
@@ -988,7 +992,10 @@ loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --ti
 
 Each admission carries its own monotonic `revision`. A Python client can wait
 against that exact value; changes to another admission and no-op reconciliation
-do not complete the wait:
+do not complete the wait. Nonterminal admission and legacy queue-item waits are
+passive observations: they retain their polling cadence and result semantics but
+do not wake a reconciliation cycle. Periodic service work and durable mutations
+remain the reconciliation wake owners:
 
 ```python
 admission = client.admission(admission_id).admission

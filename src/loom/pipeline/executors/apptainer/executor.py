@@ -247,6 +247,7 @@ class ApptainerExecutor:
             process_exit_code=process_exit_code,
             process_signal=process_signal,
             finished_at=finished_at,
+            resource_limits_requested=_has_direct_resource_limits(prepared.command),
         )
         if isinstance(worker_result, ExecutionFailure):
             return _failed_result(
@@ -583,6 +584,12 @@ def _authority_config(run_store: RunStore) -> AuthorityConfig | None:
     return None
 
 
+def _has_direct_resource_limits(command: ApptainerExecCommand) -> bool:
+    """Whether this direct command included CPU or memory runtime flags."""
+
+    return any(flag in command.argv for flag in ("--cpus", "--memory"))
+
+
 def _read_worker_result(
     *,
     run_store: RunStore,
@@ -592,6 +599,7 @@ def _read_worker_result(
     process_exit_code: int | None,
     process_signal: int | None,
     finished_at: str,
+    resource_limits_requested: bool = False,
 ) -> StageWorkerResult | ExecutionFailure:
     try:
         raw_result = run_store.read_stage_worker_result(
@@ -611,15 +619,27 @@ def _read_worker_result(
             details={"read_error": str(exc) or type(exc).__name__},
         )
     if raw_result is None:
+        details: dict[str, PlainData] = {"result": "missing"}
+        message = f"{executor_name} worker result is missing"
+        if resource_limits_requested and process_exit_code not in {None, 0}:
+            message = (
+                f"{executor_name} worker result is missing after a resource-limited "
+                "container command failed; inspect the runtime stderr and redacted "
+                "command metadata for unsupported --cpus/--memory options, then use "
+                "a compatible runtime with delegated cgroups"
+            )
+            details["resource_limit_remedy"] = (
+                "inspect runtime diagnostics and use a compatible runtime/cgroup setup"
+            )
         return _failure(
             request=request,
             executor_name=executor_name,
             failed_at=finished_at,
-            message=f"{executor_name} worker result is missing",
+            message=message,
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"result": "missing"},
+            details=details,
         )
     try:
         worker_result = StageWorkerResult.from_dict(raw_result)
@@ -863,6 +883,7 @@ def _process_metadata(
         "executor": executor_name,
         "command": cast(list[PlainData], list(_redacted_argv(command))),
         "selected_command": command.argv[0],
+        "apptainer_options": command.metadata["apptainer_options"],
         "worker_command": cast(list[PlainData], list(worker_command)),
         "container": container.to_redacted_metadata(),
         "path_parity": cast(
