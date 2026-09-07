@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from loom.pipeline.execution.resource_admission import ResourceLimitReconciliationStatus
 from loom.pipeline.stores import WorkspaceIdentity
 from loom.queue import QueueServiceError, normalize_queue_spec
 from loom.queue.resources import (
+    EffectiveAgentCapacity,
+    require_effective_agent_capacity,
     reconcile_managed_pool_limits,
     require_managed_pool_limits,
+)
+import loom.queue.resources as queue_resources
+from loom.queue._remote_stage_execution import (
+    AgentResourceInventory,
+    GpuDeviceDescriptor,
+    ResidentGpuDevice,
 )
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -84,6 +94,113 @@ def test_reconcile_managed_pool_limits_rejects_zero_resource_expectations() -> N
 
     with pytest.raises(QueueServiceError, match="must be positive"):
         reconcile_managed_pool_limits(spec, store, workspace_id="workspace-1")
+
+
+def test_agent_inventory_is_one_capacity_domain_with_observed_gpu_bindings() -> None:
+    inventory = AgentResourceInventory(
+        cpu_capacity=32,
+        memory_capacity_bytes=128 * 1024**3,
+        gpu_devices=tuple(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor(f"GPU-{index}", "test", 80 * 1024**3),
+                f"GPU-{index}",
+            )
+            for index in range(8)
+        ),
+    )
+
+    atoms = inventory.capacity_atoms("agent-a")
+
+    assert sum(atom.amount.numerator for atom in atoms if atom.owner_resource_kind == "cpu") == 32
+    assert sum(atom.amount.numerator for atom in atoms if atom.owner_resource_kind == "memory") == 128 * 1024**3
+    assert [atom.local_capacity_key for atom in atoms if atom.owner_resource_kind == "gpu"] == [
+        f"agent-a:GPU-{index}" for index in range(8)
+    ]
+
+
+def test_effective_capacity_rejects_only_proven_overcommit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        queue_resources,
+        "observe_effective_agent_capacity",
+        lambda: EffectiveAgentCapacity(cpu_capacity=4, memory_capacity_bytes=1024),
+    )
+
+    assert require_effective_agent_capacity(cpu_capacity=4, memory_capacity_bytes=1024)
+    with pytest.raises(QueueServiceError, match="CPU"):
+        require_effective_agent_capacity(cpu_capacity=5, memory_capacity_bytes=0)
+    with pytest.raises(QueueServiceError, match="memory"):
+        require_effective_agent_capacity(cpu_capacity=1, memory_capacity_bytes=1025)
+
+
+@pytest.mark.parametrize("ancestor_cpu,ancestor_memory", [(4, 4 * 1024**3), (1, 512)])
+def test_cgroup_v2_limits_follow_process_membership_and_ancestors(
+    tmp_path: Path,
+    ancestor_cpu: int,
+    ancestor_memory: int,
+) -> None:
+    cgroup_root = tmp_path / "cgroup"
+    leaf = cgroup_root / "service" / "agent"
+    leaf.mkdir(parents=True)
+    membership = tmp_path / "self.cgroup"
+    membership.write_text("0::/service/agent\n", encoding="ascii")
+    (cgroup_root / "cpu.max").write_text("max 100000\n", encoding="ascii")
+    (cgroup_root / "memory.max").write_text("max\n", encoding="ascii")
+    (cgroup_root / "service" / "cpu.max").write_text(
+        f"{ancestor_cpu * 100000} 100000\n", encoding="ascii"
+    )
+    (cgroup_root / "service" / "memory.max").write_text(
+        f"{ancestor_memory}\n", encoding="ascii"
+    )
+    (leaf / "cpu.max").write_text("200000 100000\n", encoding="ascii")
+    (leaf / "memory.max").write_text(f"{1024**3}\n", encoding="ascii")
+
+    assert queue_resources._cgroup_v2_limits(  # noqa: SLF001
+        cgroup_root=cgroup_root, membership_path=membership
+    ) == (min(2, ancestor_cpu), min(1024**3, ancestor_memory))
+
+
+def test_effective_capacity_uses_cgroup_quota_and_preserves_unavailable_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        queue_resources.os, "sched_getaffinity", lambda _pid: set(range(16))
+    )
+    monkeypatch.setattr(
+        queue_resources.resource,
+        "getrlimit",
+        lambda _limit: (queue_resources.resource.RLIM_INFINITY,) * 2,
+    )
+    monkeypatch.setattr(
+        queue_resources,
+        "_cgroup_v2_limits",
+        lambda: (2, 1024**3),
+    )
+    monkeypatch.setattr(queue_resources, "_host_memory_limit", lambda: 128 * 1024**3)
+
+    observed = queue_resources.observe_effective_agent_capacity()
+
+    assert observed == EffectiveAgentCapacity(
+        cpu_capacity=2, memory_capacity_bytes=1024**3
+    )
+    with pytest.raises(QueueServiceError, match="CPU"):
+        require_effective_agent_capacity(cpu_capacity=8, memory_capacity_bytes=0)
+    with pytest.raises(QueueServiceError, match="memory"):
+        require_effective_agent_capacity(
+            cpu_capacity=1, memory_capacity_bytes=4 * 1024**3
+        )
+
+    monkeypatch.setattr(queue_resources.os, "sched_getaffinity", lambda _pid: set())
+    monkeypatch.setattr(queue_resources, "_cgroup_v2_limits", lambda: (None, None))
+    monkeypatch.setattr(queue_resources, "_host_memory_limit", lambda: None)
+
+    unavailable = queue_resources.observe_effective_agent_capacity()
+
+    assert unavailable.to_dict() == {
+        "cpu_capacity": None,
+        "memory_capacity_bytes": None,
+    }
 
 
 def _store() -> InMemoryWorkspaceCoordinationStore:

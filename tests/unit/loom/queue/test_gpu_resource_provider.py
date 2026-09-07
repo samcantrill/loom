@@ -111,3 +111,57 @@ def test_gpu_provider_rejects_retained_claim_after_private_mapping_drift() -> No
     assert previous.descriptor != replacement.descriptor
     with pytest.raises(ManagedLocalError, match="provider descriptor conflicts"):
         replacement.restore_capacity_holding(retained)
+
+
+def test_eight_selected_gpus_yield_disjoint_claims_and_the_ninth_waits() -> None:
+    planner = GpuResourcePlanner()
+    atoms = tuple(
+        CapacityAtom("gpu", f"GPU-{index}", ExactQuantity(1), "count", ExactQuantity(1))
+        for index in range(8)
+    )
+    provider = GpuResourceProvider(
+        planner.claim_contracts,
+        atoms,
+        bindings={atom.local_capacity_key: atom.local_capacity_key for atom in atoms},
+    )
+    commands = tuple(
+        ClaimCommand(
+            ManagedAssignment(
+                f"assignment-{index}",
+                "run-1",
+                f"work-{index}",
+                "train",
+                1,
+                f"attempt-{index}",
+                "agent-1",
+                "session-1",
+                "offer-1",
+                f"claim-{index}",
+            ),
+            f"prepare-{index}",
+            ResourceClaim("gpu", planner.claim_contracts[0], (atom,), 1),
+            provider.descriptor,
+        )
+        for index, atom in enumerate(atoms)
+    )
+
+    for command in commands:
+        assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
+        assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
+    assert {
+        provider.worker_environment(command)["CUDA_VISIBLE_DEVICES"]
+        for command in commands
+    } == {f"GPU-{index}" for index in range(8)}
+
+    ninth = ClaimCommand(
+        ManagedAssignment(
+            "assignment-9", "run-1", "work-9", "train", 1, "attempt-9", "agent-1", "session-1", "offer-1", "claim-9"
+        ),
+        "prepare-9",
+        ResourceClaim("gpu", planner.claim_contracts[0], (atoms[0],), 1),
+        provider.descriptor,
+    )
+    assert provider.prepare(ninth).outcome is ClaimOutcome.DECLINED
+
+    for command in commands:
+        assert provider.release(command).outcome is ClaimOutcome.RELEASED

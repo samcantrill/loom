@@ -21,6 +21,8 @@ from loom.queue import (
     load_queue_spec,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.resources import EffectiveAgentCapacity
+import loom.queue.resources as queue_resources
 
 
 pytestmark = pytest.mark.unit
@@ -73,6 +75,49 @@ def test_queue_preflight_skips_authority_when_no_authority_flags_are_supplied(
     assert exit_code == 0
     assert stderr.getvalue() == ""
     assert "SKIP queue.authority.connection" in stdout.getvalue()
+
+
+@pytest.mark.parametrize("command", ["agent-check", "daemon-check"])
+def test_role_check_reports_unavailable_effective_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    config_path = (
+        _outbound_agent_service_config(tmp_path)
+        if command == "agent-check"
+        else _coordinator_service_config(tmp_path)
+    )
+    agent_path = (
+        config_path if command == "agent-check" else tmp_path / "local-agent.yaml"
+    )
+    payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    agent_path.write_text(json.dumps(payload), encoding="utf-8")
+    agent_path.chmod(0o600)
+    monkeypatch.setattr(
+        queue_resources,
+        "observe_effective_agent_capacity",
+        lambda: EffectiveAgentCapacity(cpu_capacity=None, memory_capacity_bytes=None),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    exit_code = main(
+        ["queue", command, str(config_path), "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert stderr.getvalue() == ""
+    assert json.loads(stdout.getvalue())["result"]["effective_capacity"] == {
+        "cpu_capacity": None,
+        "memory_capacity_bytes": None,
+    }
+    assert not (tmp_path / "deployment").exists()
 
 
 def test_queue_cancel_records_queue_local_cancellation(tmp_path: Path) -> None:

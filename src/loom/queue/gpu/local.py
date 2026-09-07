@@ -37,10 +37,13 @@ from ..models import QueueDefinition, QueuePool, QueuePoolMode, validate_queue_i
 
 @dataclass(frozen=True, slots=True)
 class LocalGpuDevice:
-    """One trusted local GPU identity and its process-local binding value."""
+    """One trusted local GPU identity, binding, and optional physical evidence."""
 
     device_id: str
     binding_value: str
+    host_index: int | None = None
+    model: str | None = None
+    vram_bytes: int | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("device_id", "binding_value"):
@@ -53,6 +56,24 @@ class LocalGpuDevice:
             raise QueueServiceError(
                 "local GPU binding_value must not contain the CUDA list separator"
             )
+        if self.host_index is not None and (
+            isinstance(self.host_index, bool)
+            or not isinstance(self.host_index, int)
+            or self.host_index < 0
+        ):
+            raise QueueServiceError("local GPU host_index must be a non-negative integer")
+        if self.model is not None and (
+            not isinstance(self.model, str)
+            or not self.model
+            or "\0" in self.model
+        ):
+            raise QueueServiceError("local GPU model must be a non-empty safe string")
+        if self.vram_bytes is not None and (
+            isinstance(self.vram_bytes, bool)
+            or not isinstance(self.vram_bytes, int)
+            or self.vram_bytes <= 0
+        ):
+            raise QueueServiceError("local GPU VRAM must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)

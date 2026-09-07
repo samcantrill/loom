@@ -9,16 +9,21 @@ import pytest
 
 from loom.queue import QueueServiceError
 from loom.queue.gpu import (
+    LocalGpuDevice,
+    LocalGpuInventory,
     LocalGpuInventoryProvider,
     LocalGpuPoolLayout,
     plan_local_gpu_pool,
 )
-from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
+from loom.queue.gpu.nvidia import (
+    NvidiaSmiGpuInventoryProvider,
+    resolve_nvidia_gpu_selection,
+)
 
 
 DEVICE_ARGV = (
     "nvidia-smi",
-    "--query-gpu=index,uuid,pci.bus_id",
+    "--query-gpu=index,uuid,name,memory.total,pci.bus_id",
     "--format=csv,noheader,nounits",
 )
 TOPOLOGY_ARGV = ("nvidia-smi", "topo", "-m")
@@ -34,9 +39,12 @@ def test_device_discovery_uses_fixed_argv_uuid_identity_and_no_topology() -> Non
 
     assert isinstance(provider, LocalGpuInventoryProvider)
     assert runner.argvs == [DEVICE_ARGV]
-    assert [(item.device_id, item.binding_value) for item in inventory.devices] == [
-        ("GPU-a", "GPU-a"),
-        ("GPU-b", "GPU-b"),
+    assert [
+        (item.device_id, item.binding_value, item.host_index, item.model, item.vram_bytes)
+        for item in inventory.devices
+    ] == [
+        ("GPU-a", "GPU-a", 0, "test-model", 1024 * 1024**2),
+        ("GPU-b", "GPU-b", 1, "test-model", 1024 * 1024**2),
     ]
     assert inventory.links == ()
 
@@ -140,7 +148,9 @@ def test_topology_normalizes_natural_enumeration_permutations() -> None:
         permuted, LocalGpuPoolLayout.grouped(2, grouping="topology")
     )
 
-    assert permuted == first
+    # Stable UUID/topology planning remains deterministic, but a host index
+    # renumbering is retained as distinct inventory evidence for reconciliation.
+    assert permuted != first
     assert permuted_plan.fingerprint == first_plan.fingerprint
     assert permuted_plan.operator_summary()["groups"] == first_plan.operator_summary()["groups"]
 
@@ -194,6 +204,34 @@ def test_command_absence_and_nonzero_exit_are_safe_typed_failures() -> None:
     assert "operator-only stderr" not in str(nonzero_error.value)
 
 
+def test_selection_resolves_indices_to_stable_uuid_identities() -> None:
+    inventory = LocalGpuInventory(
+        (
+            LocalGpuDevice("GPU-a", "GPU-a", host_index=0, model="a", vram_bytes=1),
+            LocalGpuDevice("GPU-b", "GPU-b", host_index=2, model="b", vram_bytes=1),
+            LocalGpuDevice("GPU-c", "GPU-c", host_index=5, model="c", vram_bytes=1),
+        )
+    )
+
+    assert [
+        item.device_id for item in resolve_nvidia_gpu_selection("0,2,5", inventory)
+    ] == ["GPU-a", "GPU-b", "GPU-c"]
+    assert [
+        item.device_id for item in resolve_nvidia_gpu_selection("GPU-c,GPU-a", inventory)
+    ] == ["GPU-c", "GPU-a"]
+    assert resolve_nvidia_gpu_selection("none", inventory) == ()
+
+
+@pytest.mark.parametrize("selection", ("", "2-0", "0,0", "0-2,2", "1", "0,GPU-a"))
+def test_selection_rejects_ambiguous_or_unknown_devices(selection: str) -> None:
+    inventory = LocalGpuInventory(
+        (LocalGpuDevice("GPU-a", "GPU-a", host_index=0, model="a", vram_bytes=1),)
+    )
+
+    with pytest.raises(QueueServiceError):
+        resolve_nvidia_gpu_selection(selection, inventory)
+
+
 @pytest.mark.parametrize(
     ("topology", "reason_code"),
     [
@@ -240,7 +278,18 @@ def test_topology_discovery_fails_closed_for_unusable_matrix(
 
 
 def _result(stdout: str, *, returncode: int = 0) -> subprocess.CompletedProcess[str]:
+    stdout = "\n".join(
+        _device_row(line) for line in stdout.splitlines(keepends=False)
+    ) + ("\n" if stdout.endswith("\n") else "")
     return subprocess.CompletedProcess(("nvidia-smi",), returncode, stdout, "")
+
+
+def _device_row(line: str) -> str:
+    parts = line.split(",")
+    if len(parts) == 3 and parts[0].strip().isdecimal():
+        index, uuid, pci = parts
+        return f"{index},{uuid},test-model,1024,{pci}"
+    return line
 
 
 class _FakeRunner:

@@ -20,7 +20,7 @@ from .local import LocalGpuDevice, LocalGpuInventory, LocalGpuLink
 
 _DEVICE_QUERY_ARGV = (
     "nvidia-smi",
-    "--query-gpu=index,uuid,pci.bus_id",
+    "--query-gpu=index,uuid,name,memory.total,pci.bus_id",
     "--format=csv,noheader,nounits",
 )
 _TOPOLOGY_ARGV = ("nvidia-smi", "topo", "-m")
@@ -79,7 +79,13 @@ class NvidiaSmiGpuInventoryProvider:
 
         observations = _parse_devices(self._run(_DEVICE_QUERY_ARGV))
         devices = tuple(
-            LocalGpuDevice(device_id=observation.uuid, binding_value=observation.uuid)
+            LocalGpuDevice(
+                device_id=observation.uuid,
+                binding_value=observation.uuid,
+                host_index=observation.index,
+                model=observation.model,
+                vram_bytes=observation.vram_bytes,
+            )
             for observation in observations
         )
         if not self.include_topology:
@@ -118,6 +124,62 @@ class NvidiaSmiGpuInventoryProvider:
         return result.stdout
 
 
+def resolve_nvidia_gpu_selection(
+    selection: str, inventory: LocalGpuInventory
+) -> tuple[LocalGpuDevice, ...]:
+    """Resolve a trusted NVIDIA allowlist to stable discovered device identities.
+
+    ``none`` is an explicit CPU-only selection and therefore returns no devices.
+    Numeric values select current host indices, while UUID values select stable
+    physical identities.  Callers retain the returned UUID-backed devices with
+    their role binding; this function never substitutes a changed index mapping.
+    """
+
+    if not isinstance(selection, str) or not selection:
+        raise QueueServiceError("NVIDIA GPU selection must not be empty")
+    devices = tuple(inventory.devices)
+    by_index = {device.host_index: device for device in devices}
+    by_uuid = {device.device_id: device for device in devices}
+    if len(by_index) != len(devices) or None in by_index:
+        raise QueueServiceError("NVIDIA inventory is missing host index evidence")
+    if selection == "none":
+        return ()
+    values = selection.split(",")
+    if any(not value for value in values):
+        raise QueueServiceError("NVIDIA GPU selection contains an empty value")
+    if all(_GPU_UUID.fullmatch(value) for value in values):
+        if len(set(values)) != len(values):
+            raise QueueServiceError("NVIDIA GPU selection contains duplicate devices")
+        unknown = [value for value in values if value not in by_uuid]
+        if unknown:
+            raise QueueServiceError("NVIDIA GPU selection names an unknown device")
+        return tuple(by_uuid[value] for value in values)
+    if any(_GPU_UUID.fullmatch(value) for value in values):
+        raise QueueServiceError("NVIDIA GPU selection cannot mix indices and UUIDs")
+    indices: list[int] = []
+    for value in values:
+        if "-" in value:
+            bounds = value.split("-")
+            if len(bounds) != 2 or not all(bound.isdecimal() for bound in bounds):
+                raise QueueServiceError("NVIDIA GPU selection range is invalid")
+            start, end = (int(bound) for bound in bounds)
+            if start > end:
+                raise QueueServiceError("NVIDIA GPU selection range is reversed")
+            indices.extend(range(start, end + 1))
+        elif value.isdecimal():
+            indices.append(int(value))
+        else:
+            raise QueueServiceError("NVIDIA GPU selection is invalid")
+    if len(indices) > 4096:
+        raise QueueServiceError("NVIDIA GPU selection is too large")
+    if len(set(indices)) != len(indices):
+        raise QueueServiceError("NVIDIA GPU selection contains duplicate devices")
+    unknown = [index for index in indices if index not in by_index]
+    if unknown:
+        raise QueueServiceError("NVIDIA GPU selection names an unknown device")
+    return tuple(by_index[index] for index in indices)
+
+
 def _parse_devices(stdout: str) -> tuple["_DeviceObservation", ...]:
     try:
         rows = list(csv.reader(stdout.splitlines()))
@@ -132,14 +194,18 @@ def _parse_devices(stdout: str) -> tuple["_DeviceObservation", ...]:
     for row in rows:
         if not row or not any(value.strip() for value in row):
             continue
-        if len(row) != 3:
+        if len(row) != 5:
             raise _NvidiaSmiDiscoveryError(
                 "nvidia_smi.device_rows_malformed", "nvidia-smi", "invalid_output"
             )
-        index_text, uuid, pci_bus_id = (value.strip() for value in row)
+        index_text, uuid, model, memory_mib_text, pci_bus_id = (
+            value.strip() for value in row
+        )
         if (
             not index_text.isdecimal()
             or not _GPU_UUID.fullmatch(uuid)
+            or not model
+            or not memory_mib_text.isdecimal()
             or not pci_bus_id
             or any(character.isspace() or character == "\0" for character in pci_bus_id)
         ):
@@ -147,6 +213,11 @@ def _parse_devices(stdout: str) -> tuple["_DeviceObservation", ...]:
                 "nvidia_smi.device_rows_malformed", "nvidia-smi", "invalid_output"
             )
         index = int(index_text)
+        vram_bytes = int(memory_mib_text) * 1024**2
+        if vram_bytes <= 0:
+            raise _NvidiaSmiDiscoveryError(
+                "nvidia_smi.device_rows_malformed", "nvidia-smi", "invalid_output"
+            )
         if (
             index in seen_indices
             or uuid in seen_uuids
@@ -156,7 +227,13 @@ def _parse_devices(stdout: str) -> tuple["_DeviceObservation", ...]:
                 "nvidia_smi.device_rows_duplicate", "nvidia-smi", "invalid_output"
             )
         try:
-            LocalGpuDevice(device_id=uuid, binding_value=uuid)
+            LocalGpuDevice(
+                device_id=uuid,
+                binding_value=uuid,
+                host_index=index,
+                model=model,
+                vram_bytes=vram_bytes,
+            )
         except QueueServiceError:
             raise _NvidiaSmiDiscoveryError(
                 "nvidia_smi.device_rows_malformed", "nvidia-smi", "invalid_output"
@@ -164,7 +241,7 @@ def _parse_devices(stdout: str) -> tuple["_DeviceObservation", ...]:
         seen_indices.add(index)
         seen_uuids.add(uuid)
         seen_pci_bus_ids.add(pci_bus_id)
-        observations.append(_DeviceObservation(index, uuid, pci_bus_id))
+        observations.append(_DeviceObservation(index, uuid, model, vram_bytes, pci_bus_id))
     if not observations:
         raise _NvidiaSmiDiscoveryError(
             "nvidia_smi.inventory_empty", "nvidia-smi", "invalid_output"
@@ -251,4 +328,6 @@ def _topology_error(reason_code: str) -> _NvidiaSmiDiscoveryError:
 class _DeviceObservation:
     index: int
     uuid: str
+    model: str
+    vram_bytes: int
     pci_bus_id: str
