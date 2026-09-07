@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: Stage 38, Phase 1
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p1-stage-target-validation`
@@ -168,8 +168,8 @@ checks, changed paths, and any bounded blocker to the manager.
 - Independent review: passed at PR head `140775dbbd4b29ca0d844f6ce776c7d7a7432897`;
   no blockers or corrections, including A-11 test-only synchronization
 - Blocker corrections: 1/3 (A-11 test-only synchronization; manager-owned)
-- PR and merge: [PR #277](https://github.com/samcantrill/loom/pull/277), approved;
-  remote merge pending
+- PR and merge: [PR #277](https://github.com/samcantrill/loom/pull/277), squash
+  merged to develop at `133505b12d3e0bea53a42533ec240ff4f1b3562b`
 
 ## Completion Record
 
@@ -179,8 +179,8 @@ checks, changed paths, and any bounded blocker to the manager.
 | Tests added or updated | Real public CLI marker regression (baseline failed at 7 targets versus expected 4), invalid outer and generic targets, projection non-mutation and orchestration. Targeted CLI: 24 passed. Corrected SLURM integration file: 15 passed. |
 | Validated revision/tree state and evidence | `74f117c1ca34e73ae28c60ac689569a18bfa9f5d`: `make validate-pr` passed (Ruff, Pyright, default 2,794 passed, config-extra 157 passed / 3 opt-in runtime skips, build); `make test-summary` passed (package 122, unit 1,964, contract 300, integration 339, E2E 69, config-extra 157 / 3 skips), evidence `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None; only roadmap evidence/receipts updated. |
-| PR, review, and merge | PR #277 targets develop; independent correctness review passed with no findings; remote merge pending. |
-| Residual risk and cleanup | owned worktree retained; original dirty checkout preserved |
+| PR, review, and merge | PR #277 independently approved with no findings; remotely merged to develop at `133505b12d3e0bea53a42533ec240ff4f1b3562b`. Merged tree is identical to the reviewed head plus approved roadmap receipts. |
+| Residual risk and cleanup | Phase worktree and local/remote branch removed. Generated `build` test evidence and `dist` packages retained in `stage-38-integration` under the recorded worktree root. Original dirty checkout preserved. |
 
 The first full gate exposed A-11 (one timestamp race; 2,793 other tests passed).
 The correction used the existing cycle lock without weakening record equality,

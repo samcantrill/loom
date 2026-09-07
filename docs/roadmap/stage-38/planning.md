@@ -1,12 +1,12 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first-phase implementation, validation, and independent review passed
+Status: first phase merged; resource phase startup preparation
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 1 merge; upstream audit and implementation independently accepted.
-Blockers: no Phase 1 blocker; timeout design and runtime evidence remain open.
+Current gate: Phase 2 startup; upstream audit and Phase 1 independently accepted.
+Blockers: runtime acceptance prerequisites and timeout design remain open.
 
 ## Current State
 
@@ -16,7 +16,7 @@ Blockers: no Phase 1 blocker; timeout design and runtime evidence remain open.
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; 236 tests passed and independent audit accepted | A-9 and A-10 need later bounded corrections | Preserve retained upstream behavior |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 CLI guard and public regression implemented; A-11 corrected; both local gates and independent PR review passed | Remote merge pending; Phase 3 retains its explicit design gate | Merge the approved validation phase |
+| Implementation | Phase 1 and A-11 merged through PR #277 after both local gates and independent correctness review | Resource acceptance prerequisites open; Phase 3 retains its design gate | Prepare resource implementation from merged develop |
 
 ## Evidence And Scope
 
@@ -28,6 +28,13 @@ The selected worktree root is `/nas/home/can134/work/loom-worktrees`; current
 audit/first-phase tree is `stage-38-p1-stage-target-validation`, branch
 `agent/stage-38-p1-stage-target-validation`. The older Stage 81 worktree remains
 untouched and is not repurposed.
+
+Phase 1 merged at `133505b12d3e0bea53a42533ec240ff4f1b3562b`; its temporary
+worktree and local/remote branch are removed. The clean, detached
+`stage-38-integration` worktree owns post-merge metadata and retains generated
+Phase 1 test reports/packages. It avoids advancing the dirty control checkout
+by discarding, stashing, or moving any original work. Original preservation
+hashes were rechecked unchanged before merge.
 
 Preservation receipts, SHA-256 at intake:
 
@@ -155,7 +162,7 @@ process-cleanup guarantee from either existing command runner.
 
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
-| FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | approved intent |
+| FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
 | FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | approved intent |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
