@@ -232,6 +232,42 @@ silently use launcher-only cleanup on unavailable OS identity primitives.
 
 ## Scope
 
+### Capability And Attempt Reporting — Repository-Resolved
+
+`ExecutorDescriptor` is import-light metadata for an executor name, not a probe
+of a particular runner instance or machine. Existing subprocess metadata already
+advertises `ENFORCED` independently of its injectable runner, while
+`executors/_reliability.py` and execution reliability writers separately record
+each attempt's actual timeout outcome. Reuse that distinction; do not add a
+conditional enum, descriptor API, schema, registry or discovery protocol.
+
+- Set the built-in Apptainer/Singularity descriptor to `ENFORCED` as capability
+  of its supported, admitted timeout path. Use existing descriptor/diagnostic
+  details and user-facing messages to state prerequisites: the built-in Linux
+  runner, the evidenced foreground runtime mode, PID namespace and init shim.
+  Static validation says this path can enforce policy; it does not certify the
+  submission host, execution host, arbitrary injected runner or selected image.
+- Keep launch admission authoritative. Known unsupported platform, runner or
+  mode selections with an enabled timeout fail actionably before worker launch.
+  Runtime/topology failure or inability to prove cleanup after launching is a
+  failed attempt with bounded cleanup, not an ignored timeout or success. Do not
+  promise that static preflight proves facts observable only during execution.
+- Reuse `timeout_policy_from_request`, `timeout_metadata`, and
+  `metadata_with_timeout`. Pre-admission refusal records `UNSUPPORTED` with its
+  reason and a failed attempt; an admitted policy records `ENFORCED`, or
+  `TIMED_OUT` when the deadline fires. Cleanup uncertainty remains separately
+  explained in existing failure details and never permits output admission.
+  Descriptor capability is not itself an attempt enforcement receipt.
+- Absent/disabled policy adds no timeout, PID-namespace requirement, runtime
+  version check or new restriction. Existing custom-runner behavior without a
+  timeout remains supported. GPU, resource mapping/scheduling-only, SLURM-owned
+  limits and unrelated executor descriptors remain unchanged.
+
+This clarifies the already approved fail-on-unavailable-boundary behavior at
+existing owners. It does not broaden supported timeout modes or authorize a new
+public capability model. Cover the truthful static message, admitted execution
+receipt, unsupported no-launch failure, and disabled/no-policy compatibility.
+
 Approved outcome: configured deadlines, bounded graceful termination and
 escalation, observation and owned reaping, primary timeout plus cleanup context,
 and no success admission or physical release based on an exited launcher alone.
@@ -347,6 +383,9 @@ Targeted implementation gate (expand only for changed adjacent owners):
     uv run pytest tests/unit/loom/pipeline/executors/apptainer \
       tests/unit/loom/pipeline/execution/test_stage_worker.py \
       tests/unit/loom/pipeline/test_context.py \
+      tests/unit/loom/pipeline/test_executor_capabilities.py \
+      tests/contracts/test_executor_capabilities_contract.py \
+      tests/contracts/test_reliability_contract.py \
       tests/unit/loom/queue/test_local_adapter.py \
       tests/unit/loom/queue/test_agent_process_supervisor.py \
       tests/unit/loom/queue/test_resident_stage_worker.py \
@@ -390,26 +429,19 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
   `0786e55` locks group identity through the final signal
 - Manager startup: kernel/runtime receipts, 161 baseline passes, exact source
   owners and repeated resident identity-order path verified; ready for one executor
-- Implementation: blocked before source changes. The only existing public
-  timeout capability is the static `ExecutorDescriptor.timeout_support` for an
-  executor name. `apptainer` and `singularity` are currently `unsupported`
-  (`src/loom/pipeline/runtime/capabilities.py`), while the approved mechanism
-  permits enforcement only for the built-in Linux runner after `--pid` and
-  runtime-init admission. Marking the descriptor `enforced` would advertise
-  unsupported platforms, runners, and modes; retaining `unsupported` would
-  make a configured, accepted timeout path report an untruthful capability.
-  The phase does not select the required conditional public capability or
-  diagnostic contract. No source, test, schema, or runtime behavior was
-  changed.
+- Implementation: ready to resume after the repository-resolved capability
+  clarification above; no source/test changes yet. Static supported capability,
+  launch prerequisites and actual attempt outcome stay distinct.
 - Pre-submit gate, independent implementation review, PR and merge: pending
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3; bounded capability/reporting clarification, using
+  existing public values and attempt metadata only
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Reviewed mechanism and approved boundaries | Existing design evidence and runtime prerequisite verified; execution stopped on the unresolved public capability advertisement decision. The approved fixture is `/nas/home/can134/work/containers/loom-resource-smoke.sif`, SHA-256 `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`; `/usr/bin/singularity` reports 3.10.4. |
+| Reviewed mechanism and approved boundaries | Independent mechanism review accepted with signal/reap ordering; static-capability versus attempt-outcome reporting is clarified above using existing owners. Approved SIF and SingularityCE 3.10.4 verified; its path is recorded in `build/pid_namespace_lifecycle_probe.py`, checksum `2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`. |
 | Implementation and changed paths | No production or test changes. This phase card records the stop only. |
-| Real process/runtime tests and validated revision | Not run: the required enabled-path assertion and capability diagnostics cannot be selected truthfully until the public capability contract is decided. Baseline remains the manager receipt `build/timeout-owner-baseline.xml` at `ccf03e9`. |
+| Real process/runtime tests and validated revision | Implementation checks not run yet. Reuse the 161-test baseline at `855a4f6` and the separate mechanism receipts; none is final acceptance. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Blocked. Smallest missing decision: define how the existing public executor capability/diagnostic surface represents timeout enforcement conditional on Linux, the built-in subprocess runner, `--pid`, and the runtime init shim, including whether unsupported configurations are rejected at setup or described as unavailable. This must not broaden enforcement to arbitrary Apptainer/Singularity runners or modes. |
+| Residual risk and cleanup | No outstanding capability decision; resume the same bounded executor. Unsupported prerequisites fail explicitly, and static diagnostics never claim observed host enforcement. All implementation, runtime and independent review gates remain. |
