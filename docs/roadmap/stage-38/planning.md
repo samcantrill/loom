@@ -502,13 +502,27 @@ descendant was live when the group became absent. Launcher exit alone remains
 insufficient; after the built-in owner has reaped its root, absence of this
 continuously owned group is the accepted namespace-settlement barrier.
 
-PGID reuse cannot turn that observation into premature release: reuse before the
-check is conservative and keeps the owner nonterminal, while an observed absence
-means the old group, including its namespace init, has already been detached. The
-claim depends on verified init membership and the selected runtime mode; it must
-not be generalized to `--no-init`, instance/join paths, another runtime/version,
-or a path that changes the init's group. Startup/runtime rejection before those
-facts are established is a failed attempt, not supported timeout enforcement.
+PGID reuse cannot turn group observation into premature release: reuse before a
+post-reap check is conservative and keeps the owner nonterminal, while an
+observed absence means the old group, including its namespace init, has already
+been detached. It can, however, make a later `killpg` unsafe. The built-in handle
+must therefore retain its creation-owned leader as an unreaped identity anchor:
+observe and cache root status through a creation-linked non-reaping child wait
+(`waitid(..., WNOWAIT)` on the selected Linux path), perform at most the one
+bounded TERM/grace/KILL sequence while that leader still reserves the PID/PGID,
+then reap the root exactly once and permanently close group signaling. After
+reaping, group checks are settlement observation only; a still-present or reused
+numeric group remains nonterminal/unresolved and retains leases but is never
+signaled. Failure to retain that anchor also fails closed without signaling or
+release. This ordering applies whether cancellation/ownership loss starts cleanup
+or the root exits first; a root-first exit starts containment of the remaining
+owned group before root reaping.
+
+The settlement claim still depends on verified init membership and the selected
+runtime mode; it must not be generalized to `--no-init`, instance/join paths,
+another runtime/version, or a path that changes the init's group.
+Startup/runtime rejection before those facts are established is a failed
+attempt, not supported timeout enforcement.
 
 Direct execution has a separate, smaller proof. The built-in runner owns and
 reaps its created launcher and may claim namespace settlement only after it has
@@ -523,14 +537,16 @@ capacity to release, and managed callers independently retain capacity through
 their outer group barrier.
 
 Legacy A-10 is therefore an existing-owner correction: cache the built-in root
-return code while `poll()` remains nonterminal as long as the continuously owned
-group exists, and keep group cancellation effective after root exit. Existing
-adapter renewal and release ordering then remain authoritative. Clean interruption
-must run the same bounded cleanup; abrupt loss of the actual outer owner makes no
-settlement claim and does not justify a detached replacement. Remove the proposed
-subreaper/helper, handshake, retained supervisor, new owner value, and durable
-state. Any later requirement to survive actual outer-owner loss is a materially
-broader ownership choice requiring maintainer agreement.
+return code without reaping it, keep group cancellation effective after root exit
+while that root anchors the PGID, and prohibit every group signal after the root
+is reaped. `poll()` remains nonterminal until post-reap observation confirms
+group absence. Existing adapter renewal and release ordering then remain
+authoritative. Clean interruption must run the same bounded cleanup; abrupt loss
+of the actual outer owner makes no settlement claim and does not justify a
+detached replacement. Remove the proposed subreaper/helper, handshake, retained
+supervisor, new owner value, and durable state. Any later requirement to survive
+actual outer-owner loss is a materially broader ownership choice requiring
+maintainer agreement.
 
 ## Complexity Delta
 
@@ -565,7 +581,7 @@ not the final required real-process/runtime acceptance matrix or full gates.
 | --- | --- | --- | --- |
 | DQ-1 | FR-1 | CLI owns validation projection; source config and stage constructor semantics stay unchanged | locked |
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
-| DQ-3 | FR-3, FR-4 | Use the selected runtime's PID namespace/init with existing owners: identity-safe init observation for direct execution, and reaped-root plus confirmed owned-group absence for managed settlement; unresolved direct cleanup is failure and cannot admit output | design approved for implementation; any detached/retained owner, handshake, new owner value, public/durable handoff, or actual outer-owner-loss guarantee requires maintainer agreement |
+| DQ-3 | FR-3, FR-4 | Use the selected runtime's PID namespace/init with existing owners: identity-safe init observation for direct execution; for managed cleanup, cache root status without reaping, signal the group only while the unreaped root anchors its PID/PGID, then reap once, close signaling permanently, and require group absence before release; unresolved cleanup cannot admit output or release capacity | design approved for implementation with the identity-preserving signal/reap order; any post-reap group signal, detached/retained owner, handshake, new owner value, public/durable handoff, or actual outer-owner-loss guarantee is outside the accepted mechanism and broader ownership requires maintainer agreement |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
 | DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented; namespace and implicit-stage warning findings independently closed |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
@@ -581,11 +597,14 @@ review accepts the bounded existing-owner mechanism on the cited source and
 runtime evidence: the selected runtime/init and kernel ordering make managed
 group absence a settlement barrier, while direct execution either observes a
 creation-linked init identity or truthfully reports cleanup unresolved. It
-rejects the unneeded subreaper/helper and any detached supervisor or handshake.
-This is not universal runtime support and does not approve survival of actual
-outer-owner loss. A new ownership framework or materially broader public contract
-must be presented to the maintainer separately, as required by the approved
-draft.
+also requires the managed built-in handle to keep its leader unreaped through
+the final group signal, then make all post-reap processing observation-only;
+the earlier conservative-reuse argument alone was insufficient for signaling
+safety. It rejects the unneeded subreaper/helper and any detached supervisor or
+handshake. This is not universal runtime support and does not approve survival
+of actual outer-owner loss. A new ownership framework or materially broader
+public contract must be presented to the maintainer separately, as required by
+the approved draft.
 
 ## Examples And Validation
 
@@ -627,7 +646,7 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Behavior and scope authorized | Maintainer-supplied selective-port objective | pass |
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
-| Minimum timeout design justified | Independent removal-first review accepts selected-runtime init observation plus the existing managed group barrier; launcher exit remains insufficient and unresolved direct cleanup remains failure | pass |
+| Minimum timeout design justified | Independent removal-first review accepts selected-runtime init observation plus the managed group barrier only with unreaped-root PGID anchoring through the final signal and permanently observation-only processing after root reap; launcher exit remains insufficient and unresolved cleanup retains capacity | pass with identity-preserving signal/reap order locked |
 | Detailed phase traceability and startup readiness | Phases 1 and 2 merged with their required local evidence and independent reviews; FR-3 maps to the timeout card's bounded existing-owner slices and acceptance matrix | pass for design; Phase 3 implementation evidence pending |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
@@ -646,12 +665,15 @@ Historical correction counts are not reset. Phase 3 remains
 unimplemented, but its bounded existing-owner mechanism is approved for execution.
 The implementation review gate must prove the selected foreground `--pid` plus
 init-shim topology, startup/TERM/KILL/interruption behavior, direct pidfd identity
-or unresolved-cleanup failure, managed root-first group settlement with retained
-leases, and timeout-before-result admission. A failed topology/identity check is
-an actionable unsupported attempt, not launcher-only success. Any detached or
-retained owner, cross-owner handshake, new public/durable surface, or guarantee
-after actual outer-owner loss stops for maintainer agreement and a new design
-review.
+or unresolved-cleanup failure, and timeout-before-result admission. The managed
+root-first case must prove root status is observed without reap, every group
+signal occurs while that creation-owned leader still anchors the PGID, root reap
+closes signaling exactly once, post-reap group checks cannot signal even when the
+numeric PGID remains present/reappears, and leases remain held until confirmed
+absence. A failed topology/identity check is an actionable unsupported attempt,
+not launcher-only success. Any post-reap group signal, detached or retained
+owner, cross-owner handshake, new public/durable surface, or guarantee after
+actual outer-owner loss stops for maintainer agreement and a new design review.
 
 ## Decisions And Deferrals
 
