@@ -499,8 +499,10 @@ the corrected process-group suite passes all seven tests
 (`build/cleanup-budget-after.xml`). The cases cover delayed and already-expired
 TERM cleanup, root-first polling, immediate KILL and early forced escalation,
 repeated uncertainty without waits/signals/reaps, and eventual positive absence.
-Affected-consumer, live-runtime and full-gate validation plus independent closure
-remain pending for this correction.
+At production/test revision `6afbaef`, all 89 affected-consumer checks pass in
+206.23 seconds (`build/cleanup-budget-targeted.xml`) and all 13 selected-runtime
+cases pass in 10.91 seconds (`build/cleanup-budget-container.xml`). Fresh full
+gates and independent correction closure remain pending.
 
 ## Completion Record
 
