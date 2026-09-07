@@ -2,14 +2,15 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 38, Phase 3
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p3-container-timeout-lifecycle`
-- Worktree/base: create from current develop after Phase 2 merge
+- Worktree: `stage-38-p3-container-timeout-lifecycle` under the recorded root
+- Base: `71d24525c21a57be4cf5db8ad325d28254273e3c`
 - PR target: develop
 - PR title: `feat(execution): supervise container timeout cleanup`
-- Dependencies: prior merges; explicit expanded lifecycle design review
+- Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; explicit expanded lifecycle design review
 - Workflow path: expanded, cross-process ownership and cleanup proof
 - Blockers: not ready for execution; lifecycle mechanism review required
 
@@ -61,7 +62,9 @@ The inspected host exposes SingularityCE 3.10.4 and cgroups v2. Its CLI exposes
 proof of permitted namespaces, delegated cgroups, or actual container cleanup.
 A bounded unprivileged user/PID-namespace probe failed while writing its UID map;
 that does not establish whether the installed setuid runtime can create a PID
-namespace. No actual image has been selected or executed for this stage.
+namespace. The maintainer-approved shell SIF from Phase 2 is now available;
+its checksum matches the recorded `2ee9ccf7...99e`. No new image or host setting
+is required for the bounded design probes below.
 
 The [Linux PID namespace contract](https://man7.org/linux/man-pages/man7/pid_namespaces.7.html)
 provides a possible boundary: namespace-init termination causes the kernel to
@@ -82,6 +85,55 @@ selecting the mechanism. Do not solve this by relabelling ordinary workers as
 `OUTER_BOUNDARY` without establishing their actual owner, or by adding another
 general supervisor protocol. If the existing owners cannot compose with a
 bounded change, present the required broader ownership design separately.
+
+### Fresh Design Evidence
+
+The refreshed base adds PR #279 queue-role environment loading and dependency
+updates, not container command or process containment changes. Preserve that
+merged work and the concurrent optional-agent phase; no deployment edits here.
+The new phase worktree is clean apart from this planning work; its locked Python
+3.12 environment was created with `uv sync --locked --all-groups`.
+
+An actual `singularity exec --cleanenv --pid` launch over the approved SIF
+succeeded and reported `sinit` as PID 1. The runtime supports this namespace on
+the current host even though the earlier generic unprivileged namespace probe
+failed. CPU/RAM cgroup enforcement remains a separate, deferred capability.
+
+Bounded design probe `build/pid_namespace_lifecycle_probe.py` and receipt
+`build/pid-namespace-lifecycle-probe.jsonl` exercise a shell worker and an ordinary
+child that starts its own session and ignores TERM. No GPU or resource-limit
+flags are used. Readiness precedes signaling; each observed descendant is pinned
+with a pidfd for identity-safe liveness checks and fixture cleanup.
+
+| Trigger | Live descendants when launcher exit was observed | After bounded observation |
+| --- | --- | --- |
+| Worker exits first | none | none |
+| TERM to launcher | none | none |
+| KILL to launcher | namespace init and the separate-session child | none |
+
+These three probes passed without timeout escalation and settled within about
+0.009 seconds, but that observed latency is not a contract. The KILL case proves
+that launcher exit is insufficient positive settlement evidence even when the
+runtime's namespace backstop eventually works. The launcher and `sinit` retained
+the caller's host process group; the child had its own group/session inside the
+container. Some setuid runtime `/proc/<pid>/ns/pid` links were unreadable; payload
+namespace links, process ancestry, and pinned pidfd observations remained
+available. Do not require unrestricted namespace-link access as a hidden premise.
+
+Independent bounded source discovery confirms legacy `LocalProcess.poll()`
+currently returns only the built-in `Popen.poll()` root status. `inspect()` then
+releases leases and stops renewal, and `cancel()` skips signaling when that root
+has exited. The established injected-runner protocol has no separate settlement
+method. Resolve A-10 at existing owners without silently adding a required method
+or adopting processes by PID. A stronger built-in terminal observation remains a
+candidate; it must preserve the root result separately and remain cancellable.
+
+Next design question: which smallest live owner can positively observe the
+namespace/descendants after root exit, including startup and interruption, while
+remaining inside enclosing managed cancellation? Namespace flags plus root wait
+are now demonstrably insufficient. A new supervision process or public/durable
+contract must be justified and explicitly presented if the existing owners cannot
+provide this proof; do not enable timeouts while that choice is unresolved.
 
 ## Scope
 
@@ -183,7 +235,8 @@ and return implementation/validation evidence without PR/merge or delegation.
 
 ## Workflow State
 
-- Manager preparation: initial ownership evidence recorded
+- Manager preparation: refreshed base and predecessor merge verified; isolated
+  phase worktree prepared; locked environment and fresh runtime evidence recorded
 - Expanded planning/design review: required, pending
 - Implementation: not started
 - Pre-submit gate, independent implementation review, PR and merge: pending
