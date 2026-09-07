@@ -112,6 +112,15 @@ Real acceptance must use the generated production command and inspect applied
 limits where the host permits it; CLI version/help is not enforcement proof.
 The absent prerequisite path must fail clearly without claiming success.
 
+Read-only host evidence during Phase 1: SingularityCE `3.10.4-focal`, cgroups
+v2, no user systemd bus socket, and `systemctl --user is-system-running` failed
+to connect to the bus. The [runtime requirements](https://docs.sylabs.io/guides/3.10/user-guide/cgroups.html)
+include delegated unified cgroups and compatible systemd configuration for
+non-root enforcement. These observations identify an acceptance prerequisite
+gap, not an actual container enforcement result. The maintainer must supply an
+approved local image and a suitable runtime session/host for that check; do not
+silently create images, alter host administration, or waive the required check.
+
 Final commands:
 
     make validate-pr

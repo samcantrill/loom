@@ -12,7 +12,7 @@
 - PR title: `fix(cli): preserve stage-owned data during target validation`
 - Dependencies: independent upstream audit accepted; no predecessor PR
 - Workflow path: bounded implementation; independently reviewed as required
-- Blockers: none in code; fresh final gates required after A-11 correction
+- Blockers: none; independent PR review pending
 
 ## Objective And Context
 
@@ -162,9 +162,9 @@ checks, changed paths, and any bounded blocker to the manager.
 - Manager preparation: complete; source, locked baseline, 236-test receipt,
   independent audit dispositions, scope, and executor packet verified
 - Expanded planning: no new first-phase product decision
-- Implementation: complete; final validation and independent review pending
-- Pre-submit gate: fresh gates pending after A-11 correction; all 15 affected
-  SLURM integration tests passed, retaining the complete no-mutation assertions
+- Implementation: complete; independent review pending
+- Pre-submit gate: passed; scope, ownership, source/tests, docs, and fresh
+  `make validate-pr` / `make test-summary` receipts verified
 - Independent review: pending
 - Blocker corrections: 1/3 (A-11 test-only synchronization; manager-owned)
 - PR and merge: pending
@@ -173,12 +173,18 @@ checks, changed paths, and any bounded blocker to the manager.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Generic checker receives a new top-level mapping without `pipeline`; pipeline checker retains outer construction. CLI source, unit/E2E tests, README and CLI docs changed. |
-| Tests added or updated | Real public CLI marker regression (baseline failed at 7 targets versus expected 4), invalid outer and generic targets, projection non-mutation and orchestration. Targeted tests: 24 passed. |
-| Validated revision/tree state and evidence | Source revision `252b8a6`: targeted 24 passed; fresh `make validate-pr` failed on A-11 after Ruff/Pyright passed and 2,793 default tests passed. Concurrent `make test-summary` passed all six suites. Prior interrupted executor gate receipts were unavailable after processes ended. |
-| Validation-relevant changes after evidence | A-11 test-only synchronization applied; all 15 affected integration tests passed in 17.93 seconds. Both fresh gates required. |
+| Implementation and changed paths | Generic checker receives a new top-level mapping without `pipeline`; pipeline checker retains outer construction. CLI source, unit/E2E tests, README and CLI docs changed. A-11 changes only the existing integration test's synchronization. |
+| Tests added or updated | Real public CLI marker regression (baseline failed at 7 targets versus expected 4), invalid outer and generic targets, projection non-mutation and orchestration. Targeted CLI: 24 passed. Corrected SLURM integration file: 15 passed. |
+| Validated revision/tree state and evidence | `74f117c1ca34e73ae28c60ac689569a18bfa9f5d`: `make validate-pr` passed (Ruff, Pyright, default 2,794 passed, config-extra 157 passed / 3 opt-in runtime skips, build); `make test-summary` passed (package 122, unit 1,964, contract 300, integration 339, E2E 69, config-extra 157 / 3 skips), evidence `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None; only roadmap evidence/receipts updated. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | owned worktree retained; original dirty checkout preserved |
+
+The first full gate exposed A-11 (one timestamp race; 2,793 other tests passed).
+The correction used the existing cycle lock without weakening record equality,
+and both required gates then passed. Earlier interrupted validation had lost
+receipts; its remaining owned supervisor was positively quiescent and shut down
+through its existing clean-shutdown API. No old receipt was reused as a pass.
 
 The full `pipeline` mapping is excluded from generic construction, rather than
 recursively editing three named subtrees. `PipelineSpec`/`StageSpec` reject

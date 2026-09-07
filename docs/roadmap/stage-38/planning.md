@@ -1,12 +1,12 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first-phase implementation complete; validation correction in progress
+Status: first-phase implementation and local validation complete; review pending
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 1 local validation; upstream audit independently accepted.
-Blockers: Phase 1 gate exposed A-11 test race; timeout design and runtime evidence remain open.
+Current gate: Phase 1 independent PR review; upstream audit independently accepted.
+Blockers: no Phase 1 blocker; timeout design and runtime evidence remain open.
 
 ## Current State
 
@@ -16,7 +16,7 @@ Blockers: Phase 1 gate exposed A-11 test race; timeout design and runtime eviden
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; 236 tests passed and independent audit accepted | A-9 and A-10 need later bounded corrections | Preserve retained upstream behavior |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 CLI guard and public regression implemented; 24 targeted tests passed | Full gate exposed A-11; Phase 3 retains its explicit design gate | Correct the bounded test race, rerun gates, independently review |
+| Implementation | Phase 1 CLI guard and public regression implemented; A-11 corrected; both required local gates passed | Independent phase review pending; Phase 3 retains its explicit design gate | Review and merge only the ready validation phase |
 
 ## Evidence And Scope
 
@@ -81,7 +81,7 @@ Weave revision `6a99a4d7e6f008748c0761e6ab1c359d62aacbbd`.
 | A-8 missing capability | `_with_runtime_resources` provides typed container intent, but `build_apptainer_exec_command` emits no CPU/memory flags | Add mappings at the existing command boundary with truthful host-dependent enforcement claims. |
 | A-9 confirmed defect | AFTEROK `_gpu_allocation_lines` parses the environment with line-oriented Bash `read`; a valid first line followed by a newline is accepted, although Python rejects the complete value | A malformed allocation environment reaches the stage and is forwarded to container variables. Reject the invalid complete value before `read`, retain redaction, and extend the executable grammar test during the resource phase. |
 | A-10 confirmed defect / missing coverage | Legacy `local.py` starts a process group but `inspect` releases assignment/scalar leases after immediate-root `poll`; an inherited-group child can still be alive | Conflicts with Stage 23 descendant ownership. Requires a bounded legacy process-group settlement observation and real root-first-exit regression, separate from the validation guard. Resolve its composition within the timeout design gate before changing lifecycle behavior. |
-| A-11 confirmed validation defect | The unchanged upstream `test_slurm_ready_stage.py:_exercise_mixed_route_run` compares entire submission records around rejected registration while live `reconcile_once` can refresh `scheduler_observed_at` through `slurm_submissions.observe` | Full Phase 1 gate: 2,793 passed, one failure solely from a one-second timestamp refresh. A bounded test-only correction will hold the existing daemon `_cycle_lock` across the before/request/after no-mutation assertion. Keep complete record comparisons and concurrent-registration coverage; no production queue change. Independent phase review must include this correction. |
+| A-11 confirmed validation defect, corrected | The unchanged upstream `test_slurm_ready_stage.py:_exercise_mixed_route_run` compared entire submission records around rejected registration while live `reconcile_once` could refresh `scheduler_observed_at` through `slurm_submissions.observe` | Initial full gate: 2,793 passed, one failure solely from a one-second timestamp refresh. A bounded test-only correction holds the existing daemon `_cycle_lock` across the before/request/after no-mutation assertion. Complete record comparisons and concurrent-registration coverage remain; no production queue change. All 15 affected integration tests and both fresh gates passed. Independent phase review includes this correction. |
 
 ### Historical Brief Reconciliation
 
