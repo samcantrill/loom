@@ -537,6 +537,12 @@ An exited root alone cannot release capacity; a reused numeric group can delay
 release but can never authorize a new signal. This is not protection against the
 death of the actual outer process owner or a hostile container payload.
 
+Managed cleanup has one shared deadline: at most two seconds of TERM grace and
+two additional seconds of settlement observation. Forced KILL may shorten this
+budget, never extend it. Delayed or repeated containment calls consume only the
+remaining time. After expiry they check settlement without waiting again;
+uncertain group presence still retains capacity until absence is observed.
+
 Without an enabled timeout, container invocation keeps its existing behavior:
 no forced namespace, runtime-version restriction, or added CPU/RAM limits.
 Timeouts are independent of `cpu_memory_enforcement: scheduling_only`; they do

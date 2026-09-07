@@ -33,6 +33,7 @@ class OwnedProcessGroup:
         self.returncode: int | None = None
         self._lock = RLock()
         self._term_deadline: float | None = None
+        self._cleanup_deadline: float | None = None
         self._kill_sent = False
         self._reaped = False
         self._settled = False
@@ -63,11 +64,19 @@ class OwnedProcessGroup:
             if self._term_deadline is None and not self._kill_sent:
                 if self._signal(signal.SIGTERM):
                     self._term_deadline = monotonic() + 2
+                    self._cleanup_deadline = self._term_deadline + 2
 
     def kill(self) -> None:
         with self._lock:
             if not self._kill_sent:
                 self._kill_sent = self._signal(signal.SIGKILL)
+                if self._kill_sent:
+                    deadline = monotonic() + 2
+                    self._cleanup_deadline = (
+                        deadline
+                        if self._cleanup_deadline is None
+                        else min(self._cleanup_deadline, deadline)
+                    )
 
     def _signal(self, signum: signal.Signals) -> bool:
         if self._reaped or self._ownership_lost:
@@ -126,14 +135,16 @@ class OwnedProcessGroup:
             return self.returncode if self._advance_cleanup() else None
 
     def contain(self) -> bool:
-        """Attempt one bounded cleanup; repeated calls only observe after reap."""
+        """Consume the shared cleanup budget; never renew it on later calls."""
         with self._lock:
             if self.settled():
                 return True
             self.terminate()
-            deadline = monotonic() + 4
             while not self._advance_cleanup():
-                if self._ownership_lost or monotonic() >= deadline:
+                if self._ownership_lost or self._cleanup_deadline is None:
                     return False
-                sleep(0.02)
+                remaining = self._cleanup_deadline - monotonic()
+                if remaining <= 0:
+                    return False
+                sleep(min(0.02, remaining))
             return True

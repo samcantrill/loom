@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 38, Phase 3
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p3-container-timeout-lifecycle`
@@ -14,9 +14,9 @@
   accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
 - Blockers: independent implementation review found that repeated managed
-  containment calls renew the cleanup observation budget. The 3/3 correction
-  allowance is exhausted; one further bounded correction needs maintainer
-  direction. PR #280 is open and must not merge until correction and verification.
+  containment calls renew the cleanup observation budget. The maintainer approves
+  one additional bounded correction and independent verification; the original
+  3/3 allowance remains consumed. PR #280 must not merge until closure.
 
 ## Objective And Context
 
@@ -441,9 +441,9 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 - Material handoff anomaly: the executor returned no implementation after its
   capability clarification. The manager implemented the already reviewed scope
   directly; this did not reopen product contracts or introduce another executor.
-- Pre-submit: both full gates passed at production/test revision `3fd6f65`;
-  only roadmap metadata changed afterward. Manager scope, preserved contracts,
-  domain neutrality and current evidence checks passed. PR #280 targets develop.
+- Pre-submit: both full gates passed at earlier production/test revision `3fd6f65`.
+  The approved cleanup-budget correction changes source/tests, so fresh gates are
+  required before merge. PR #280 targets develop; original receipts are preserved.
 - Independent implementation review: completed against PR head `ae81bbf` and
   base `71d2452`; not merge-eligible. One product blocker remains: the shared
   managed handle renews its observation wait budget on every `contain()` call.
@@ -452,7 +452,8 @@ to maintain the creation-linked ownership proof. Do not weaken the accepted gate
 - Blocker corrections: 3/3 including capability/reporting clarification,
   pre-submit fixture type narrowing, and A-15's frozen timeout-metadata reader
   correction plus completion of real early-result coverage. No public values or
-  schemas changed. Any further qualified blocker requires maintainer direction.
+  schemas changed. The maintainer separately approves one additional bounded
+  cleanup-budget correction and independent verification; no general budget reset.
 
 ### Independent Review Blocker: Non-Renewable Cleanup Budget
 
@@ -480,10 +481,26 @@ observed. Preserve one-shot signaling/reaping and prohibit post-reap signals.
 Add deterministic delayed-stop/repeated-containment coverage proving that waits,
 signals and reaping are not renewed. No new public contract or owner is needed.
 
-This remedy is proposed, not implemented or newly authorized. The exhausted
-correction allowance requires maintainer direction before a further bounded
-implementation and independent verification. Passing existing gates does not
-override the review hold.
+The maintainer approves this one additional bounded correction and independent
+verification. Manager-local implementation is limited to the existing shared
+handle and its regression coverage, with no new executor or ownership mechanism.
+Passing earlier gates does not override the review hold: rerun the process-group,
+legacy adapter, resident supervisor/worker and agent-session transport checks,
+then the 13 selected-runtime cases and both required full gates. Expand selection
+only if these checks reveal a newly affected contract. Independent verification
+must close the original finding before merge. No general correction budget resets.
+
+The correction now stores the absolute cleanup deadline alongside existing TERM
+state. Successful forced KILL caps the remaining budget at two seconds and cannot
+extend an existing deadline. `contain()` sleeps only within the remaining budget;
+after expiry it returns without renewing waits. Five deterministic regressions
+failed against the old implementation (`build/cleanup-budget-before.xml`) and
+the corrected process-group suite passes all seven tests
+(`build/cleanup-budget-after.xml`). The cases cover delayed and already-expired
+TERM cleanup, root-first polling, immediate KILL and early forced escalation,
+repeated uncertainty without waits/signals/reaps, and eventual positive absence.
+Affected-consumer, live-runtime and full-gate validation plus independent closure
+remain pending for this correction.
 
 ## Completion Record
 
