@@ -68,6 +68,7 @@ class CoordinatorServiceConfig:
     immutable_fingerprint: str
     active_fingerprint: str
     environment_path: Path | None = None
+    effective_capacity: EffectiveAgentCapacity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +81,7 @@ class LocalAgentServiceConfig:
     provider_configuration: object
     source_path: Path
     environment_path: Path | None = None
+    effective_capacity: EffectiveAgentCapacity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +101,8 @@ class OutboundAgentServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
-    effective_capacity: EffectiveAgentCapacity | None = None
     environment_path: Path | None = None
+    effective_capacity: EffectiveAgentCapacity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +210,13 @@ def load_coordinator_service_config(
         slurm_profiles=cast(Any, slurm_profiles),
     )
     return CoordinatorServiceConfig(
-        daemon, server, source, fingerprint, active_fingerprint, environment_path
+        daemon,
+        server,
+        source,
+        fingerprint,
+        active_fingerprint,
+        environment_path,
+        effective_capacity=None if local_agent is None else local_agent.effective_capacity,
     )
 
 
@@ -303,8 +311,8 @@ def load_outbound_agent_service_config(
         source,
         fingerprint,
         active_fingerprint,
-        effective_capacity,
         environment_path,
+        effective_capacity=effective_capacity,
     )
 
 
@@ -680,7 +688,7 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     if len(profiles) != 1:
         raise QueueConfigError("local agent service requires one resident profile")
     provider_configuration = payload.get("providers")
-    resource_inventory, _effective_capacity = _agent_resource_inventory(
+    resource_inventory, effective_capacity = _agent_resource_inventory(
         payload.get("resources")
     )
     profile = profiles[0]
@@ -699,6 +707,7 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
         _without_paths(provider_configuration),
         agent_source,
         environment_path,
+        effective_capacity=effective_capacity,
     )
 
 

@@ -122,6 +122,7 @@ from loom.queue.agent_sessions import (
 )
 from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
 from loom.scheduling import (
+    ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
@@ -1432,6 +1433,125 @@ def test_agent_resource_inventory_overrides_profile_capacity_as_one_domain(
     assert config.capacity_profile.descriptor == first.descriptor
 
 
+@pytest.mark.parametrize("cpu,memory,accepted", ((8, 8, 8), (4, 8, 4), (8, 4, 4)))
+def test_shared_inventory_prepares_competing_profile_claims(
+    tmp_path: Path, cpu: int, memory: int, accepted: int
+) -> None:
+    profiles = tuple(
+        ResidentExecutionProfile(
+            ResidentProfileDescriptor(name, "1", name, "environment", "executor"),
+            tmp_path,
+            Path(sys.executable),
+            cpu_capacity=index + 1,
+        )
+        for index, name in enumerate(("first", "second"))
+    )
+    inventory = AgentResourceInventory(
+        cpu,
+        memory,
+        tuple(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor(f"GPU-{index}", "synthetic", 1024), f"GPU-{index}"
+            )
+            for index in range(8)
+        ),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        profiles,
+        resource_inventory=inventory,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    session = AgentSession(
+        "session",
+        "coordinator",
+        "epoch",
+        "agent",
+        client.agent_root_id,
+        "policy",
+        "config",
+        "inventory",
+        "availability",
+        (),
+        ("default",),
+        AgentSessionState.ACTIVE,
+    )
+    held: list[tuple[ManagedAssignment, tuple[ClaimCommand, ...]]] = []
+    try:
+        providers, journal = client._runtime_owners(session)
+        capacity = {
+            atom.local_capacity_key: atom
+            for atom in config.capacity_profile.capacity_atoms("agent")
+        }
+        for index in range(accepted + 1):
+            profile = profiles[index % len(profiles)]
+            assert client._profile_for_descriptor(profile.descriptor) == profile
+            current, current_journal = client._runtime_owners(session)
+            assignment = ManagedAssignment(
+                f"assignment-{index}",
+                f"run-{index}",
+                f"work-{index}",
+                profile.descriptor.profile_id,
+                1,
+                f"attempt-{index}",
+                "agent",
+                session.session_id,
+                f"offer-{index}",
+                f"claim-{index}",
+            )
+            selected = (
+                replace(capacity["agent:cpu"], amount=ExactQuantity(1)),
+                replace(capacity["agent:memory"], amount=ExactQuantity(1)),
+                capacity[f"agent:GPU-{index % 8}"],
+            )
+            commands = tuple(
+                ClaimCommand(
+                    assignment,
+                    f"prepare-{index}-{atom.owner_resource_kind}",
+                    ResourceClaim(
+                        atom.owner_resource_kind,
+                        providers[atom.owner_resource_kind].claim_contracts[0],
+                        (atom,),
+                        1,
+                    ),
+                    providers[atom.owner_resource_kind].descriptor,
+                )
+                for atom in selected
+            )
+            current_journal.persist_request(
+                assignment, {"profile": profile.descriptor.to_dict()}
+            )
+            state = current_journal.prepare_composite(assignment, commands, current)
+            if index < accepted:
+                assert state is AssignmentState.PREPARED
+                held.append((assignment, commands))
+            else:
+                assert state is AssignmentState.DECLINED
+                journal.release_declined(assignment.assignment_id, "after-decline")
+        held_gpus = [
+            atom.local_capacity_key
+            for _, commands in held
+            for command in commands
+            if command.claim.resource_kind == "gpu"
+            for atom in command.claim.atoms
+        ]
+        assert len(set(held_gpus)) == accepted
+        assert {item.stage_name for item, _ in held} == {"first", "second"}
+        for assignment, commands in held:
+            journal.abort_pregrant(assignment.assignment_id, commands, providers)
+            journal.release_declined(assignment.assignment_id, "after-abort")
+        assert journal.retained_claim_commands() == ()
+    finally:
+        if client._supervisor is not None:
+            client._supervisor.shutdown_for_test()
+        client.close()
+
+
 def _prepare_remote_producer_run(
     store: LocalRunStore,
     *,
@@ -1439,6 +1559,7 @@ def _prepare_remote_producer_run(
     machine_id: str,
     value: int,
     requirement: ExecutionRequirement | None = None,
+    resource_entries: Mapping[str, object] | None = None,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1454,7 +1575,10 @@ def _prepare_remote_producer_run(
                 },
                 "config": {"value": value},
                 "resources": {
-                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                    "entries": (
+                        resource_entries if resource_entries is not None else
+                        {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                    )
                 },
                 "placement": {"target": machine_id},
                 "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
@@ -2356,16 +2480,20 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
 
 
 @pytest.mark.parametrize(
-    "restart_barrier",
+    ("restart_barrier", "shared_inventory"),
     (
-        "before_supervisor_accept",
-        "after_supervisor_accept",
-        "before_result_commit",
-        "before_coordinator_release",
+        ("before_supervisor_accept", False),
+        ("after_supervisor_accept", False),
+        ("before_result_commit", False),
+        ("before_coordinator_release", False),
+        ("after_supervisor_accept", True),
     ),
 )
 def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart_barrier: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restart_barrier: str,
+    shared_inventory: bool,
 ) -> None:
     """A fresh application joins one exact operation across every crash barrier."""
 
@@ -2386,6 +2514,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 "agent-a",
                 ("default",),
                 capabilities,
+                gpu_devices=(
+                    (GpuDeviceDescriptor("GPU-shared", "synthetic", 1024),)
+                    if shared_inventory
+                    else ()
+                ),
             ),
         )
     )
@@ -2396,6 +2529,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         machine_id="agent-a",
         value=42,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
+        resource_entries=(
+            {
+                "cpu": {"kind": "cpu", "amount": 1, "unit": "count"},
+                "memory": {"kind": "memory", "amount": 128, "unit": "B"},
+                "gpu": {
+                    "kind": "gpu",
+                    "amount": 1,
+                    "unit": "count",
+                    "attributes": {"allocation_mode": "exclusive"},
+                },
+            }
+            if shared_inventory
+            else None
+        ),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -2434,6 +2581,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         credentials["agent"].with_suffix(".key"),
         _fresh_remote_agent_root(tmp_path),
         (profile,),
+        resource_inventory=(
+            AgentResourceInventory(
+                cpu_capacity=2,
+                memory_capacity_bytes=1024,
+                gpu_devices=(
+                    ResidentGpuDevice(
+                        GpuDeviceDescriptor("GPU-shared", "synthetic", 1024),
+                        "GPU-shared",
+                    ),
+                ),
+            )
+            if shared_inventory
+            else None
+        ),
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
@@ -2453,17 +2614,29 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 capabilities,
             )
         )
+        capacity = remote_config.capacity_profile
+        descriptors, atoms, live_claims = agent._offer_provider_snapshot(
+            session_id=session.session_id,
+            availability_revision=session.availability_revision,
+            capacity_profile=capacity,
+        )
         offer = AgentOffer(
             session.session_id,
             session.coordinator_epoch,
             session.config_revision,
             session.inventory_revision,
             session.availability_revision,
-            1,
-            0,
+            capacity.cpu_capacity,
+            capacity.memory_capacity_bytes,
             30,
-            _resident_provider_descriptors(profile, session.agent_id),
+            descriptors,
+            gpu_devices=tuple(item.descriptor for item in capacity.gpu_devices),
             resident_profiles=(descriptor,),
+            capacity_atoms=atoms,
+            gpu_atoms=tuple(
+                atom for atom in atoms if atom.owner_resource_kind == "gpu"
+            ),
+            reflected_claim_ids=live_claims,
         )
         agent.publish_offer(offer, idempotency_key="offer-restart")
         supervisor = agent._supervisor  # noqa: SLF001 - causal service boundary
@@ -2507,6 +2680,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
             with pytest.raises(RuntimeError, match="application restart"):
                 execution.result(timeout=20)
+        if shared_inventory:
+            assert agent._execution_journal is not None
+            assert {
+                command.claim.resource_kind
+                for command in agent._execution_journal.retained_claim_commands()
+            } == {"cpu", "memory", "gpu"}
         supervisor_id = supervisor.supervisor_id
         agent.close()
         replacement = LocalDaemonAgentHttpClient(remote_config)

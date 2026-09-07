@@ -27,6 +27,8 @@ from loom.queue.errors import (
     QueueError,
     QueueServiceError,
 )
+from loom.queue.gpu.local import LocalGpuDevice, LocalGpuInventory
+from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from tests.support.stage29_composition import (
@@ -470,6 +472,61 @@ def test_outbound_resource_identity_uses_effective_capacity_values(tmp_path: Pat
     changed = load_outbound_agent_service_config(source)
     assert changed.immutable_fingerprint == first.immutable_fingerprint
     assert changed.active_fingerprint != first.active_fingerprint
+
+
+@pytest.mark.parametrize("selection,requires_reload", (("0", True), ("GPU-a", False)))
+def test_selected_gpu_restart_distinguishes_index_from_uuid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: str,
+    requires_reload: bool,
+) -> None:
+    observed = LocalGpuInventory(
+        (
+            LocalGpuDevice("GPU-a", "GPU-a", host_index=0, model="a", vram_bytes=1024),
+            LocalGpuDevice("GPU-b", "GPU-b", host_index=1, model="b", vram_bytes=1024),
+        )
+    )
+    monkeypatch.setattr(
+        NvidiaSmiGpuInventoryProvider, "discover", lambda _self: observed
+    )
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": selection},
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(first.client)
+    client = _open_outbound_agent(first.client)
+    try:
+        root_id = client.agent_root_id
+        client.shutdown_clean()
+    finally:
+        client.close()
+
+    observed = LocalGpuInventory(
+        (
+            LocalGpuDevice("GPU-b", "GPU-b", host_index=0, model="b", vram_bytes=1024),
+            LocalGpuDevice("GPU-a", "GPU-a", host_index=1, model="a", vram_bytes=1024),
+        )
+    )
+    changed = load_outbound_agent_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    if requires_reload:
+        assert changed.active_fingerprint != first.active_fingerprint
+        with pytest.raises(QueueServiceError, match="changed without reload"):
+            _open_outbound_agent(changed.client)
+    else:
+        assert changed.active_fingerprint == first.active_fingerprint
+        restarted = _open_outbound_agent(changed.client)
+        try:
+            assert restarted.agent_root_id == root_id
+            restarted.shutdown_clean()
+        finally:
+            restarted.close()
 
 
 def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(

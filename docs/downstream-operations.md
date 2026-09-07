@@ -172,9 +172,13 @@ local_agent:
 ```
 
 The referenced document has `kind: loom.local-agent-service`, an `agent_root`,
-and exactly one `resident_profiles` entry. Profiles own their `descriptor`,
-`project_root`, `python_executable`, and `environment`; optional agent-level
-`resources` owns the shared CPU/memory capacity and GPU allowlist. It has
+and exactly one `resident_profiles` entry. Every profile still requires
+`descriptor`, `project_root`, `python_executable`, `environment`, `cpu_capacity`,
+`memory_capacity_bytes`, and `gpu_devices`. Without agent-level `resources`,
+the profile capacity declarations must agree. An agent-level `resources` block
+overrides those capacity fields for shared resource accounting; executable
+profiles still choose the installed Python, project, environment, and software
+descriptor. The shared block owns CPU/memory capacity and the GPU allowlist. It has
 `cpu_capacity`, `memory_capacity_bytes`, and `gpu: {provider: nvidia, devices:
 "none" | "0,2" | "0-7" | "GPU-..."}`. Empty, duplicate, overlapping,
 reversed, mixed index/UUID, and unknown selections are rejected. `none` is
@@ -182,7 +186,16 @@ CPU-only and does not run NVIDIA discovery. NVIDIA selections resolve host
 indices to UUIDs with model and physical VRAM observations; a changed index
 resolution changes the active resource identity and requires explicit reload.
 Profiles sharing an agent use this one provider domain, so they cannot advertise
-or claim the same physical card twice. Optional `providers` contains the
+or claim the same physical card twice. Resource checks bound CPU capacity by
+process affinity and readable cgroup-v2 quotas, and memory by address-space,
+host-memory and readable cgroup-v2 limits. Cgroup observation follows the process
+membership and its ancestors under `/sys/fs/cgroup`; other mount layouts and
+cgroup v1 are not observed. These are supported capacity bounds, not current
+free resources or proof of every platform constraint. JSON output from
+`agent-check` and `daemon-check` includes `effective_capacity` for the selected
+agent resources. A `null` CPU or memory value means no supported bound was
+available; a `null` whole object means no agent-level resources were selected.
+Optional `providers` contains the
 configured provider composition. These worker settings no longer belong in the
 coordinator's old `embedded_profile`/`embedded_agent` fields. Outbound documents
 retain `kind: loom.outbound-agent-service`, their resident profile declarations,

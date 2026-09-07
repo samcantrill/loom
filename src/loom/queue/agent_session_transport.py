@@ -3173,7 +3173,7 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError(
                 "contained assignment has no exact resident profile"
             )
-        providers, execution_journal = self._runtime_owners(session, profile)
+        providers, execution_journal = self._runtime_owners(session)
         commands = execution_journal.assignment_claim_commands(assignment_id)
         if not commands:
             raise QueueConflictError("contained assignment claim is unavailable")
@@ -3250,7 +3250,7 @@ class LocalDaemonAgentHttpClient:
         self._require_journal().retain_assignment_reference(
             session_id, request.assignment_id
         )
-        providers, execution_journal = self._runtime_owners(session, profile)
+        providers, execution_journal = self._runtime_owners(session)
         assignment = ManagedAssignment(
             assignment_id=request.assignment_id,
             run_uri=f"loom-agent:{request.assignment_id}",
@@ -3620,7 +3620,7 @@ class LocalDaemonAgentHttpClient:
                 offer_id=request.offer_id,
                 claim_id=request.claim_id,
             )
-            providers, _ = self._runtime_owners(session, profile)
+            providers, _ = self._runtime_owners(session)
             commands = execution_journal.assignment_claim_commands(assignment_id)
             launch_json = workspace.supervisor_launch_json()
             if launch_json is None:
@@ -4086,8 +4086,9 @@ class LocalDaemonAgentHttpClient:
                 sleep(0.05)
 
     def _runtime_owners(
-        self, session: AgentSession, profile: ResidentExecutionProfile
+        self, session: AgentSession
     ) -> tuple[dict[str, AgentResourceProvider], SQLiteAgentJournal]:
+        profile = self._config.capacity_profile
         journal = self._execution_journal
         if journal is None:
             raise QueueServiceError("remote execution journal is required")

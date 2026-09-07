@@ -171,7 +171,7 @@ def require_effective_agent_capacity(
 
     observed = observe_effective_agent_capacity()
     if observed.cpu_capacity is not None and cpu_capacity > observed.cpu_capacity:
-        raise QueueServiceError("configured CPU capacity exceeds effective affinity")
+        raise QueueServiceError("configured CPU capacity exceeds effective allocation")
     if (
         memory_capacity_bytes
         and observed.memory_capacity_bytes is not None

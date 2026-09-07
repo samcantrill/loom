@@ -134,8 +134,11 @@ def test_effective_capacity_rejects_only_proven_overcommit(
         require_effective_agent_capacity(cpu_capacity=1, memory_capacity_bytes=1025)
 
 
+@pytest.mark.parametrize("ancestor_cpu,ancestor_memory", [(4, 4 * 1024**3), (1, 512)])
 def test_cgroup_v2_limits_follow_process_membership_and_ancestors(
     tmp_path: Path,
+    ancestor_cpu: int,
+    ancestor_memory: int,
 ) -> None:
     cgroup_root = tmp_path / "cgroup"
     leaf = cgroup_root / "service" / "agent"
@@ -145,17 +148,17 @@ def test_cgroup_v2_limits_follow_process_membership_and_ancestors(
     (cgroup_root / "cpu.max").write_text("max 100000\n", encoding="ascii")
     (cgroup_root / "memory.max").write_text("max\n", encoding="ascii")
     (cgroup_root / "service" / "cpu.max").write_text(
-        "400000 100000\n", encoding="ascii"
+        f"{ancestor_cpu * 100000} 100000\n", encoding="ascii"
     )
     (cgroup_root / "service" / "memory.max").write_text(
-        f"{4 * 1024**3}\n", encoding="ascii"
+        f"{ancestor_memory}\n", encoding="ascii"
     )
     (leaf / "cpu.max").write_text("200000 100000\n", encoding="ascii")
     (leaf / "memory.max").write_text(f"{1024**3}\n", encoding="ascii")
 
     assert queue_resources._cgroup_v2_limits(  # noqa: SLF001
         cgroup_root=cgroup_root, membership_path=membership
-    ) == (2, 1024**3)
+    ) == (min(2, ancestor_cpu), min(1024**3, ancestor_memory))
 
 
 def test_effective_capacity_uses_cgroup_quota_and_preserves_unavailable_evidence(
