@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import sys
 
@@ -29,6 +30,7 @@ from loom.queue.errors import (
 )
 from loom.queue.gpu.local import LocalGpuDevice, LocalGpuInventory
 from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
+from loom.queue.preflight import run_role_preflight
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from tests.support.stage29_composition import (
@@ -75,6 +77,315 @@ def test_resident_profile_requires_observed_imports_before_role_use(
 
     with pytest.raises(QueueConfigError, match="packages.required_imports"):
         load_coordinator_service_config(source)
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_observed_source_drift_rejects_startup_without_rebinding_initialized_root(
+    tmp_path: Path, role: str
+) -> None:
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    agent_source = tmp_path / "agent.yaml"
+    payload = json.loads(agent_source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {"source_roots": ["source"]}
+    _write_protected(agent_source, payload)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    module = selected / "module.py"
+    module.write_text("value = 1\n")
+    if role == "coordinator":
+        original = load_coordinator_service_config(source)
+        LocalDaemon.initialize_deployment(original.daemon)
+        root = original.daemon.deployment_root
+    else:
+        original = load_outbound_agent_service_config(source)
+        LocalDaemonAgentHttpClient.initialize_agent_root(original.client)
+        root = original.client.agent_root
+    assert root is not None
+
+    def snapshot() -> dict[str, str]:
+        return {
+            str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    retained = snapshot()
+    module.write_text("value = 2\n")
+    report = run_role_preflight(source, role=role)
+    assert (
+        next(
+            check
+            for check in report.checks
+            if check.check_id == "execution.retained_binding"
+        ).status
+        == "FAIL"
+    )
+    if role == "coordinator":
+        changed = load_coordinator_service_config(source)
+        assert changed.immutable_fingerprint != original.immutable_fingerprint
+        with pytest.raises(QueueError, match="deployment binding is invalid"):
+            LocalDaemon(changed.daemon).start()
+    else:
+        changed = load_outbound_agent_service_config(source)
+        assert changed.immutable_fingerprint != original.immutable_fingerprint
+        with pytest.raises(QueueError, match="agent binding is invalid"):
+            LocalDaemonAgentHttpClient(changed.client)
+    assert snapshot() == retained
+
+
+def test_local_readiness_reload_withholds_ready_work_until_compatible_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from shutil import copyfile
+    from loom.queue import (
+        CoordinatorSchedulingReload,
+        LocalDaemonAdmissionRequest,
+        LocalDaemonPrincipal,
+        LocalDaemonRole,
+        prepare_managed_local_run,
+    )
+
+    example = (
+        Path(__file__).resolve().parents[4] / "examples/operations/managed-local-basic"
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    for name in ("stages.py", "pipeline.yaml"):
+        copyfile(example / name, project / name)
+    source = _coordinator_config(tmp_path)
+    coordinator_payload = json.loads(source.read_text())
+    coordinator_payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload"],
+        "agent_ids": [],
+        "pools": [],
+    }
+    _write_protected(source, coordinator_payload)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    profile["project_root"] = str(project)
+    profile["readiness"] = {"source_roots": ["."], "imports": ["loom", "stages"]}
+    _write_local_agent(source, payload)
+    service = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(service.daemon)
+    prepared = prepare_managed_local_run(
+        source, project / "pipeline.yaml", "readiness-run"
+    )
+    daemon = LocalDaemon(
+        service.daemon,
+        trusted_scheduling_loader=lambda: (
+            load_coordinator_service_config(source).daemon
+        ),
+    )
+    monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+    started = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal(f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR)
+    )
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        admission = client.submit(
+            LocalDaemonAdmissionRequest("readiness-run", prepared.run_uri)
+        )
+        code = project / "stages.py"
+        original = code.read_text()
+        code.write_text(original + "\n# changed declared worker source\n")
+        rejected = operator.reload_scheduling(
+            CoordinatorSchedulingReload(
+                "readiness-reload",
+                started.scheduling_epoch,
+                "check changed installation",
+            )
+        )
+        assert rejected["code"] == "reload_rejected"
+        daemon.reconcile_once()
+        assert daemon.status().running_assignments == 0
+        assert daemon.status().service_diagnostic == "resident_profile_unready"
+        execution = daemon._execution
+        assert execution is not None and execution.journal is not None
+        assert execution.stage_work_store.ready_window()
+        assert (
+            execution.coordinator.retained_assignments(
+                agent_id=service.daemon.machine_id
+            )
+            == ()
+        )
+        assert (
+            daemon.config.resident_worker_launch_profile
+            == service.daemon.resident_worker_launch_profile
+        )
+        code.write_text(original)
+        daemon.stop()
+        daemon = LocalDaemon(load_coordinator_service_config(source).daemon)
+        monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+        restarted = daemon.start()
+        assert restarted.coordinator_id == started.coordinator_id
+        daemon.reconcile_once()
+        execution = daemon._execution
+        assert execution is not None
+        assert execution.coordinator.retained_assignments(
+            agent_id=service.daemon.machine_id
+        )
+        assert admission.run_uri == prepared.run_uri
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("failure", ("source", "import"))
+def test_outbound_readiness_failure_preserves_claim_and_blocks_resume(
+    tmp_path: Path, failure: str
+) -> None:
+    from loom.queue._managed_local import (
+        AssignmentState,
+        ClaimCommand,
+        ManagedAssignment,
+        ObserveRequest,
+    )
+    from loom.queue.agent_sessions import (
+        AgentControl,
+        AgentControlKind,
+        AgentRegistration,
+        AgentSession,
+        AgentSessionState,
+    )
+    from loom.scheduling import ResourceClaim
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {"source_roots": ["source"]}
+    _write_protected(source, payload)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    code = selected / "module.py"
+    code.write_text("value = 1\n")
+    service = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    client = _open_outbound_agent(
+        service.client,
+        trusted_config_loader=lambda: load_outbound_agent_service_config(source).client,
+    )
+    control_journal = client._require_journal()
+    registration = AgentRegistration(
+        "readiness-registration",
+        "coordinator",
+        "epoch",
+        client.agent_root_id,
+        "config",
+        "inventory",
+        "available",
+        ("default",),
+    )
+    intent = control_journal.persist_registration_intent(registration)
+    session = AgentSession(
+        "session",
+        "coordinator",
+        "epoch",
+        "agent",
+        client.agent_root_id,
+        "policy",
+        "config",
+        "inventory",
+        "available",
+        ("python",),
+        ("default",),
+        AgentSessionState.ACTIVE,
+    )
+    control_journal.persist_session(intent.idempotency_key, intent.value(), session)
+    providers, journal = client._runtime_owners(session)
+    assignment = ManagedAssignment(
+        "readiness-retained",
+        "retained-run",
+        "work",
+        "stage",
+        1,
+        "attempt",
+        "agent",
+        "session",
+        "offer",
+        "claim",
+    )
+    cpu = providers["cpu"]
+    atom = cpu.observe(ObserveRequest("agent", "session", "before")).atoms[0]
+    command = ClaimCommand(
+        assignment,
+        "prepare-retained",
+        ResourceClaim("cpu", cpu.claim_contracts[0], (atom,), 1),
+        cpu.descriptor,
+    )
+    journal.persist_request(
+        assignment,
+        {"profile": service.client.resident_profiles[0].descriptor.to_dict()},
+    )
+    assert (
+        journal.prepare_composite(assignment, (command,), providers)
+        is AssignmentState.PREPARED
+    )
+    retained = journal.retained_claim_commands()
+    original_profiles = dict(client._profiles)
+
+    def apply(kind: AgentControlKind, operation: str):
+        current = client.active_session()
+        assert current is not None
+        control = AgentControl(
+            operation,
+            kind,
+            "agent",
+            current.session_id,
+            current.config_revision,
+            None,
+            False,
+            "recheck installation",
+        )
+        assert control_journal.prepare_control(control) is None
+        effect = client._apply_agent_control(control)
+        control_journal.record_control_effect(control, effect)
+        return effect
+
+    released = False
+    try:
+        if failure == "source":
+            code.write_text("value = 2\n")
+        else:
+            changed = json.loads(source.read_text())
+            changed["resident_profiles"][0]["readiness"]["imports"] = [
+                "missing_readiness_package"
+            ]
+            _write_protected(source, changed)
+        assert (
+            apply(AgentControlKind.RELOAD, "readiness-reload").code == "reload_rejected"
+        )
+        assert journal.retained_claim_commands() == retained
+        assert client._profiles == original_profiles
+        assert client._config == service.client
+        assert not cpu.observe(ObserveRequest("agent", "session", "after")).atoms
+        assert control_journal.availability_drained()
+        assert (
+            apply(AgentControlKind.RESUME, "readiness-live-resume").code
+            == "retained_work"
+        )
+        journal.abort_pregrant(assignment.assignment_id, (command,), providers)
+        journal.release_declined(assignment.assignment_id, "test-settled")
+        released = True
+        assert (
+            apply(AgentControlKind.RESUME, "readiness-idle-resume").code
+            == "reload_rejected"
+        )
+        assert control_journal.availability_drained()
+        code.write_text("value = 1\n")
+        _write_protected(source, payload)
+        assert apply(AgentControlKind.RESUME, "readiness-restored").code == "applied"
+        assert not control_journal.availability_drained()
+    finally:
+        if not released:
+            journal.abort_pregrant(assignment.assignment_id, (command,), providers)
+            journal.release_declined(assignment.assignment_id, "test-cleanup")
+        client.shutdown_clean()
+        client.close()
 
 
 @pytest.mark.optional_dependency
@@ -561,8 +872,8 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     payload = json.loads(first_source.read_text(encoding="utf-8"))
     payload["deployment_root"] = "different-deployment"
     payload["run_store_root"] = "different-runs"
-    alternate_python = second_root / "python"
-    alternate_python.symlink_to(sys.executable)
+    (second_root / "environment").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    alternate_python = second_root / "environment" / "bin" / Path(sys.executable).name
     agent_payload = _local_agent_payload(first_source)
     profiles = agent_payload["resident_profiles"]
     assert isinstance(profiles, list)
@@ -604,6 +915,34 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     assert identity.immutable_fingerprint != first.immutable_fingerprint
 
 
+def test_outbound_qualification_spelling_does_not_change_observed_binding(
+    tmp_path: Path,
+) -> None:
+    source = _agent_config(tmp_path)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    (selected / "module.py").write_text("value = 1\n")
+    payload = json.loads(source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {
+        "source_roots": ["source"],
+        "timeout_seconds": 5,
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+    payload["resident_profiles"][0]["readiness"] = {
+        "source_roots": [str(selected)],
+        "timeout_seconds": "5",
+    }
+    _write_protected(source, payload)
+    equivalent = load_outbound_agent_service_config(source)
+    assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+    assert equivalent.active_fingerprint == first.active_fingerprint
+    assert (
+        equivalent.client.resident_profiles[0].launch_profile
+        == first.client.resident_profiles[0].launch_profile
+    )
+
+
 def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     tmp_path: Path,
 ) -> None:
@@ -620,8 +959,8 @@ def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     )
     alternate_project = tmp_path / "alternate-project"
     alternate_project.mkdir()
-    alternate_python = tmp_path / "alternate-python"
-    alternate_python.symlink_to(sys.executable)
+    (tmp_path / "environment").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    alternate_python = tmp_path / "environment" / "bin" / Path(sys.executable).name
     payload["resident_profiles"][0]["project_root"] = str(alternate_project)
     payload["resident_profiles"][0]["python_executable"] = str(alternate_python)
     moved = load_outbound_agent_service_config(

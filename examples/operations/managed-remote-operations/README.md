@@ -9,11 +9,17 @@ uv run python examples/operations/managed-remote-operations/run_managed_remote_o
 ```
 
 The script generates a one-use CA and server/agent certificates, writes
-owner-protected schema-v2 configs, initializes both role roots, and starts the
+owner-protected schema-v3 configs, checks the selected agent installation and
+copies its observed portable descriptor into the coordinator's `remote_profiles`.
+It then initializes both role roots and starts the
 real `daemon-serve` and `agent-serve` commands. It discovers the authenticated
 agent with bounded list/detail commands, copies the returned session and config
 revision fences into guarded drain/resume requests, and reads each durable
 operation through detail and wait.
+
+The coordinator has `local_agent: null`; this journey uses the separate outbound
+agent. Its selected Python must already contain Loom. No environment is created
+or installed by the check or either service.
 
 The generated credentials are for this localhost journey only. The example
 stops both services with their supported interrupt path and fails if either

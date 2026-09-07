@@ -1273,6 +1273,7 @@ class LocalDaemonExecution:
                 )
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
+        self.local_profile_ready = True
         self._slurm_observed_operations: set[str] = set()
         # A run reconciliation cycle may only project and reserve work.  The
         # existing managed-local saga remains the durable result owner, but it
@@ -1854,7 +1855,11 @@ class LocalDaemonExecution:
                 ):
                     exhausted_admissions.add(record.admission_id)
             remote_targets = self._remote_candidates()
-            local_candidate = self._candidate() if self.agent_id is not None else None
+            local_candidate = (
+                self._candidate()
+                if self.agent_id is not None and self.local_profile_ready
+                else None
+            )
             excluded_work: set[str] = set()
             attempted_slurm: set[str] = set()
             while True:
@@ -3446,6 +3451,7 @@ class LocalDaemonExecution:
         self.coordinator = plan.coordinator
         self._authority_for_run = plan.authority_for_run
         self.config = replacement
+        self.local_profile_ready = True
 
     def _referenced_component_descriptors(
         self,

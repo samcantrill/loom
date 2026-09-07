@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any, cast
 
 
 OPERATIONS_ROOT = Path(__file__).resolve().parents[1]
@@ -33,16 +34,22 @@ def main() -> None:
     coordinator_config = root / "coordinator.yaml"
     agent_config = root / "agent.yaml"
     checkout = Path(__file__).resolve().parents[3]
+    write_protected(agent_config, _agent_yaml(root, checkout, port))
+    readiness = recorder.cli("queue", "agent-check", str(agent_config))
+    descriptor = next(
+        check["details"]["evidence"]["descriptor"]
+        for check in cast(list[dict[str, Any]], readiness["checks"])
+        if check["check_id"] == "execution.identity"
+    )
     write_protected(
         coordinator_config,
         _coordinator_yaml(
             root,
-            checkout,
+            descriptor,
             port,
             certificate_fingerprint(credentials["agent"].with_suffix(".crt")),
         ),
     )
-    write_protected(agent_config, _agent_yaml(root, checkout, port))
     recorder.cli("queue", "daemon-init", str(coordinator_config))
     recorder.cli("queue", "agent-init", str(agent_config))
 
@@ -184,7 +191,9 @@ def _available_agent(
     return None
 
 
-def _coordinator_yaml(root: Path, checkout: Path, port: int, fingerprint: str) -> str:
+def _coordinator_yaml(
+    root: Path, descriptor: dict[str, object], port: int, fingerprint: str
+) -> str:
     return f"""
 schema_version: 3
 kind: loom.coordinator-service
@@ -196,12 +205,7 @@ max_accepted_time_step_seconds: 3600
 authority:
   kind: embedded
 local_agent: null
-remote_profiles:
-  - profile_id: remote-default
-    revision: v1
-    project_fingerprint: example-project-v1
-    environment_fingerprint: example-environment-v1
-    executor_fingerprint: local-executor-v1
+remote_profiles: {json.dumps([descriptor])}
 agent_policy:
   revision: policy-1
   agents:
@@ -241,15 +245,14 @@ resident_profiles:
   - descriptor:
       profile_id: remote-default
       revision: v1
-      project_fingerprint: example-project-v1
-      environment_fingerprint: example-environment-v1
-      executor_fingerprint: local-executor-v1
     project_root: {_quoted(checkout)}
-    python_executable: {_quoted(Path(sys.executable))}
+    python_executable: {json.dumps(str(Path(sys.executable).absolute()))}
     cpu_capacity: 1
     memory_capacity_bytes: 0
     gpu_devices: []
     environment: {{}}
+    readiness:
+      source_roots: [src/loom]
 registration:
   config_revision: remote-config-v1
   inventory_revision: remote-inventory-v1

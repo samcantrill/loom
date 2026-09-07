@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 import sys
 
@@ -86,6 +87,52 @@ def test_profile_probe_timeout_is_a_stable_failure(tmp_path: Path) -> None:
     assert not result.ok
     assert result.checks[0].check_id == "python.interpreter"
     assert result.checks[0].message == "resident probe timed out"
+
+
+def test_declared_flat_source_file_excludes_neighboring_project_files(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "stage.py"
+    source.write_text("value = 1\n")
+    profile = _profile(
+        tmp_path, ResidentReadinessRequirements(source_roots=("stage.py",))
+    )
+    first = qualify_resident_profile(profile)
+    assert first.ok
+    (tmp_path / "README.md").write_text("operator notes\n")
+    unchanged = qualify_resident_profile(profile)
+    assert unchanged.identity == first.identity
+    source.write_text("value = 2\n")
+    changed = qualify_resident_profile(profile)
+    assert changed.ok and changed.identity != first.identity
+
+
+def test_local_vcs_install_origin_is_private_and_portable(tmp_path: Path) -> None:
+    metadata = tmp_path / "sample-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: sample\nVersion: 1.0\n"
+    )
+    (tmp_path / "sample.py").write_text("value = 1\n")
+    origin = metadata / "direct_url.json"
+    requirement = ResidentReadinessRequirements(
+        imports=("sample",), distributions=("sample",)
+    )
+    identities = []
+    for local_path in (tmp_path / "first", tmp_path / "second"):
+        origin.write_text(
+            json.dumps(
+                {
+                    "url": local_path.as_uri(),
+                    "vcs_info": {"vcs": "git", "commit_id": "a" * 40},
+                }
+            )
+        )
+        result = qualify_resident_profile(_profile(tmp_path, requirement))
+        assert result.ok
+        assert str(local_path) not in str(result.to_dict())
+        identities.append(result.identity)
+    assert identities[0] == identities[1]
 
 
 def test_incompatible_python_blocks_imports_before_project_side_effects(

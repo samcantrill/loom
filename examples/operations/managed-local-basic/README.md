@@ -7,8 +7,10 @@ This directory is a copyable single-machine starter. Edit `stages.py` and
 python run_managed_local_basic.py
 ```
 
-The runner writes one protected local-only coordinator configuration for its
-fresh output root, initializes it once with `loom queue daemon-init`, and calls
+The runner writes protected schema-v3 coordinator and referenced local-agent
+configurations for its fresh output root. The agent selects the runner's installed
+Python and copied project directory; role loading checks that installation and
+derives its software descriptor. It initializes once with `loom queue daemon-init` and calls
 `prepare_managed_local_run` for `starter-run`. Preparation persists the normal
 run evidence and embedded authority, but never starts the daemon or submits
 work. Repeating preparation is an exact no-write replay; change the run name

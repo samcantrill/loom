@@ -4,6 +4,7 @@ import errno
 import os
 from pathlib import Path
 import sys
+import tempfile
 from time import monotonic, sleep
 
 import pytest
@@ -13,6 +14,24 @@ from loom.queue._resident_probe import run_resident_probe
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_probe_reports_scratch_cleanup_failure_after_containing_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cleanup = tempfile.TemporaryDirectory.cleanup
+
+    def fail_cleanup(directory: tempfile.TemporaryDirectory[str]) -> None:
+        cleanup(directory)
+        raise OSError("private scratch detail")
+
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "cleanup", fail_cleanup)
+    result = run_resident_probe(
+        _profile(tmp_path), "print('{}')", {}, timeout_seconds=2
+    )
+    assert result.contained
+    assert result.payload is None
+    assert result.failure == "resident probe scratch creation or cleanup failed"
 
 
 def _profile(tmp_path: Path, **environment: str) -> ResidentWorkerLaunchProfile:

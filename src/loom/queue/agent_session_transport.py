@@ -2582,6 +2582,23 @@ class LocalDaemonAgentHttpClient:
                     return self._unchanged_control_effect(
                         control, session, "retained_work"
                     )
+                if self._trusted_config_loader is not None and any(
+                    profile.readiness_identity is not None
+                    for profile in self._config.resident_profiles
+                ):
+                    try:
+                        replacement = self._trusted_config_loader()
+                        self._validate_reload_config(replacement, retained_work=False)
+                        if _agent_active_fingerprint(
+                            replacement
+                        ) != _agent_active_fingerprint(self._config):
+                            raise QueueConflictError(
+                                "changed role requires explicit reload"
+                            )
+                    except (QueueError, OSError, TypeError, ValueError):
+                        return self._unchanged_control_effect(
+                            control, session, "reload_rejected"
+                        )
                 self._retained_profiles.clear()
                 self._reset_runtime_providers()
                 self._drained = False

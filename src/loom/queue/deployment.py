@@ -1173,13 +1173,23 @@ def _local_agent_active_projection(
 
 
 def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+    # Qualification controls select the observation, while the derived
+    # descriptor records the software actually offered to the coordinator.
+    profiles = [
+        {
+            key: item
+            for key, item in _mapping_value(value, "resident profile").items()
+            if key != "readiness"
+        }
+        for value in _sequence(payload, "resident_profiles")
+    ]
     return cast(
         dict[str, object],
         _without_paths(
             {
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
-                "resident_profiles": payload["resident_profiles"],
+                "resident_profiles": profiles,
                 "provider_factory": payload.get("provider_factory"),
             }
         ),

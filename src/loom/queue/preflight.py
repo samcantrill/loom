@@ -540,6 +540,7 @@ __all__ = [
     "QueuePreflightStatus",
     "SlurmCommandChecker",
     "run_queue_preflight",
+    "run_role_preflight",
 ]
 
 
@@ -721,8 +722,14 @@ def run_role_preflight(
     add(
         "resources.capacity",
         Group.RESOURCES,
-        Status.PASS if profiles else Status.SKIP,
-        "Agent resource selection and configured envelope were checked."
+        (Status.PASS if capacity is not None else Status.WARN)
+        if profiles
+        else Status.SKIP,
+        (
+            "Agent resource selection was checked against available supported limits."
+            if capacity is not None
+            else "Legacy profile capacity is declared; host limits and GPU selection were not discovered."
+        )
         if profiles
         else "A pure coordinator needs no execution resources.",
         owner="agent resource providers",

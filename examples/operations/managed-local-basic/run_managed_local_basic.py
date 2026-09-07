@@ -125,11 +125,6 @@ def _example_root() -> Path:
 def _write_service_config(root: Path) -> Path:
     config = root / "coordinator-service.yaml"
     agent = root / "agent-service.yaml"
-    resident_python = root / "resident-python"
-    resident_python.write_text(
-        f'#!/bin/sh\nexec "{Path(sys.executable)}" "$@"\n', encoding="utf-8"
-    )
-    resident_python.chmod(0o700)
     agent.write_text(
         json.dumps(
             {
@@ -141,16 +136,18 @@ def _write_service_config(root: Path) -> Path:
                         "descriptor": {
                             "profile_id": "starter-local",
                             "revision": "v1",
-                            "project_fingerprint": "managed-local-basic",
-                            "environment_fingerprint": "managed-local-basic",
-                            "executor_fingerprint": "local",
                         },
                         "project_root": str(HERE),
-                        "python_executable": str(resident_python),
+                        "python_executable": str(Path(sys.executable).absolute()),
                         "cpu_capacity": 1,
                         "memory_capacity_bytes": 0,
                         "gpu_devices": [],
                         "environment": {},
+                        "readiness": {
+                            "imports": ["loom", "stages"],
+                            "import_roots": {"stages": "."},
+                            "source_roots": ["stages.py"],
+                        },
                     }
                 ],
             }

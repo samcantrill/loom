@@ -57,7 +57,8 @@ for name in request["distributions"]:
         immutable = None
         if "vcs_info" in origin:
             parsed = urllib.parse.urlsplit(origin.get("url", ""))
-            immutable = {"url": urllib.parse.urlunsplit((parsed.scheme, parsed.hostname or "", parsed.path, "", "")), "commit": origin["vcs_info"].get("commit_id"), "vcs": origin["vcs_info"].get("vcs")}
+            remote_url = urllib.parse.urlunsplit((parsed.scheme, parsed.hostname or "", parsed.path, "", "")) if parsed.scheme in {"http", "https", "ssh", "git"} else None
+            immutable = {"url": remote_url, "commit": origin["vcs_info"].get("commit_id"), "vcs": origin["vcs_info"].get("vcs")}
         elif origin.get("archive_info", {}).get("hashes"):
             immutable = {"hashes": origin["archive_info"]["hashes"]}
         result["distributions"][name] = {"version": distribution.version, "origin": immutable}
@@ -65,17 +66,23 @@ for name in request["distributions"]:
         result["distributions"][name] = None
 for root_name in request["source_roots"]:
     root = pathlib.Path(root_name)
-    if not root.is_dir():
+    if root.is_file() and not root.is_symlink():
+        members = [(str(root.parent), [], [root.name])]
+        relative_root = root.parent
+    elif root.is_dir():
+        members = os.walk(root)
+        relative_root = root
+    else:
         result["sources"].append(None)
         continue
     digest = hashlib.sha256()
     excluded = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "datasets", "caches", "runs", "build", "dist"}
-    for directory, names, files in os.walk(root):
+    for directory, names, files in members:
         names[:] = sorted(name for name in names if name not in excluded and not pathlib.Path(directory, name).is_symlink())
         for name in sorted(files):
             item = pathlib.Path(directory, name)
             if item.is_symlink() or item.suffix in {".pyc", ".pyo"}: continue
-            relative = item.relative_to(root).as_posix().encode()
+            relative = item.relative_to(relative_root).as_posix().encode()
             contents = item.read_bytes()
             digest.update(len(relative).to_bytes(8, "big") + relative + len(contents).to_bytes(8, "big") + contents)
     result["sources"].append(digest.hexdigest())
@@ -510,3 +517,11 @@ def qualified_resident_profile(
         readiness_identity=result.identity,
         readiness_result=result,
     )
+
+
+__all__ = [
+    "ResidentReadinessRequirements",
+    "ResidentReadinessResult",
+    "qualified_resident_profile",
+    "qualify_resident_profile",
+]

@@ -9,6 +9,7 @@ validation: full
 surface: cli
 public_surfaces: [cli]
 surface_invocations:
+  - cli:queue agent-check
   - cli:queue agent-init
   - cli:queue agent-serve
   - cli:queue daemon-agent

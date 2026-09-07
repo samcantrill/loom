@@ -67,45 +67,81 @@ def run_resident_probe(
     ):
         raise ValueError("resident probe device environment is invalid")
 
-    with tempfile.TemporaryDirectory(prefix="loom-resident-probe-") as scratch:
-        # This remains the single worker-environment owner.  Empty resource
-        # inputs describe the unassigned qualification path.
-        from ._managed_local import _worker_environment
-
-        environment = _worker_environment(profile, Path(scratch), (), {})
-        environment.update(
-            {
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "TMPDIR": scratch,
-                "XDG_CACHE_HOME": scratch,
-                "XDG_CONFIG_HOME": scratch,
-                "CUDA_VISIBLE_DEVICES": "",
-            }
-        )
-        if device_environment is not None:
-            environment.update(device_environment)
-        try:
-            require_group_wait_support()
-            child = subprocess.Popen(
-                [
-                    str(profile.python_executable),
-                    "-c",
-                    script,
-                    json.dumps(request, sort_keys=True, separators=(",", ":")),
-                ],
-                cwd=profile.project_root,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
+    try:
+        temporary = tempfile.TemporaryDirectory(prefix="loom-resident-probe-")
+    except OSError:
+        return ResidentProbeResult(None, "resident probe scratch creation failed", True)
+    result: ResidentProbeResult | None = None
+    try:
+        with temporary as scratch:
+            result = _run_probe_process(
+                profile, script, request, timeout_seconds, device_environment, scratch
             )
-        except OSError:
-            return ResidentProbeResult(None, "resident probe could not start", True)
+    except OSError:
+        return ResidentProbeResult(
+            None,
+            "resident probe scratch creation or cleanup failed",
+            False if result is None else result.contained,
+        )
+    return result
 
-        group = OwnedProcessGroup(child)
+
+def _run_probe_process(
+    profile: ResidentWorkerLaunchProfile,
+    script: str,
+    request: Mapping[str, PlainData],
+    timeout_seconds: float,
+    device_environment: Mapping[str, str] | None,
+    scratch: str,
+) -> ResidentProbeResult:
+    # This remains the single worker-environment owner.  Empty resource
+    # inputs describe the unassigned qualification path.
+    from ._managed_local import _worker_environment
+
+    environment = _worker_environment(profile, Path(scratch), (), {})
+    environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": scratch,
+            "XDG_CACHE_HOME": scratch,
+            "XDG_CONFIG_HOME": scratch,
+            "CUDA_VISIBLE_DEVICES": "",
+        }
+    )
+    if device_environment is not None:
+        environment.update(device_environment)
+    try:
+        require_group_wait_support()
+        child = subprocess.Popen(
+            [
+                str(profile.python_executable),
+                "-c",
+                script,
+                json.dumps(request, sort_keys=True, separators=(",", ":")),
+            ],
+            cwd=profile.project_root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError:
+        return ResidentProbeResult(None, "resident probe could not start", True)
+
+    group = OwnedProcessGroup(child)
+    try:
         stdout, stderr, timed_out, oversized, contained = _drain_and_contain(
             child, group, float(timeout_seconds)
+        )
+    except OSError:
+        group.kill()
+        contained = group.contain()
+        for stream in (child.stdout, child.stderr):
+            if stream is not None:
+                stream.close()
+        return ResidentProbeResult(
+            None, "resident probe IO or cleanup failed", contained
         )
     if not contained:
         return ResidentProbeResult(None, "resident probe cleanup failed", False)

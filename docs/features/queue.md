@@ -792,15 +792,151 @@ only `PENDING_AUTHORITY`, and a coordinator without agents retains no-capacity
 waiting work. Private keys and service credentials never enter job data,
 committed `.env`, offers, or workers.
 
-The supported role applications now freeze the command and configuration
-boundary: `daemon-init CONFIG` and `daemon-serve CONFIG` use a
-`loom.coordinator-service` v2 document, while `agent-init CONFIG` and
-`agent-serve CONFIG` use a `loom.outbound-agent-service` v2 document. The file
-must be owned by the current user with no group/other permission bits. Init and
-serve use the same file and compare its canonical configuration fingerprint to
-the role binding. Relative paths resolve beside that file. There is no implicit
-search path, environment override, old root/profile flag translation, or
-in-place root migration.
+Role applications use schema version 3. `daemon-check`, `daemon-init` and
+`daemon-serve` read a `loom.coordinator-service` document. Its `local_agent` is
+either `null` for a pure coordinator or an explicit reference to a
+`loom.local-agent-service` document. `agent-check`, `agent-init` and `agent-serve`
+read a `loom.outbound-agent-service` document. Worker installation and resource
+settings belong to the agent. A pure coordinator requires no local worker or GPU.
+
+Every command accepts an explicit `--env-file`. Weave composes the protected
+YAML against that file's values without inheriting missing values from the
+service process. There is no automatic dotenv search or shell execution. A local
+agent reference chooses its own `config` and `env_file`; their paths resolve
+beside the coordinator YAML, while paths inside the agent YAML resolve beside
+that agent file. Preserve virtualenv executable spelling when setting
+`python_executable`: resolving `.venv/bin/python` to its system-Python target can
+lose the environment. Role inputs must be owned by the current user with no
+group/other permission bits.
+
+Initialization uses fresh roots and retains the resolved role and private launch
+binding. Start and explicit reload check compatibility before offering more
+work. Populated older roots are not migrated or reinterpreted. Keep an existing
+deployment on its compatible runtime until its work settles, then deliberately
+initialize the replacement.
+
+### Resident installation checks
+
+Install the project before checking its agent. A uv-created environment and a
+pip-created environment are both usable: Loom runs the configured installed
+Python directly. It does not create a virtualenv, install packages, run `uv run`
+or `uv sync`, clone a repository, or select a job from a repository name. The
+prepared pipeline's stage factory chooses the work; the resident profile chooses
+the Python executable and working directory.
+
+An agent profile can declare a finite installation requirement:
+
+```yaml
+resources:
+  cpu_capacity: 1
+  memory_capacity_bytes: 0
+  gpu: {provider: nvidia, devices: none}
+resident_profiles:
+  - descriptor:
+      profile_id: project-cpu
+      revision: v1
+    project_root: ${oc.env:LOOM_PROJECT_ROOT}
+    python_executable: ${oc.env:LOOM_PYTHON}
+    cpu_capacity: 1
+    memory_capacity_bytes: 0
+    gpu_devices: []
+    environment:
+      PROJECT_MODE: dummy
+    readiness:
+      python_version: "3.12"
+      imports: [loom, my_project]
+      distributions: [loom, my-project]
+      import_roots:
+        my_project: src/my_project
+      source_roots: [src/my_project]
+      required_environment: [PROJECT_MODE]
+      timeout_seconds: 5
+```
+
+The default requirement imports `loom` and observes its installed distribution.
+Python must be at least 3.12; an optional `python_version` selects a prefix such
+as `3.12` or the exact three-component version. `python_implementation` and
+`python_abi` can constrain the observed implementation and ABI.
+`distribution_versions` maps declared distribution names to exact versions;
+it is not a dependency resolver or a version-range language.
+`required_programs` checks availability on the actual worker's PATH.
+`import_roots` asserts that a declared import comes from the expected private
+directory. Merely importing a same-named package elsewhere does not satisfy
+that assertion. Source and import roots resolve against `project_root`.
+
+First the selected executable must answer a fixed stdlib handshake; only then
+does another bounded process import the declared packages and inspect metadata.
+Both processes use the worker environment builder and configured cwd. Profile
+variables are explicit; the service's ambient environment and complete dotenv
+file are not copied into workers. Unassigned probes have no assigned GPU
+visibility, disable bytecode writes, and use private temporary scratch/cache
+directories. Output, elapsed time and process descendants are bounded. Raw
+subprocess output and private path/environment values are omitted from ordinary
+findings. Trusted import code is not sandboxed.
+
+```sh
+loom queue daemon-check coordinator.yaml --env-file coordinator.env
+loom queue agent-check agent.yaml --env-file agent.env --format json
+loom queue agent-check agent.yaml --env-file agent.env --probe-io
+```
+
+Default checks create no durable deployment, run, claim or authority state.
+Reports reuse `PASS`, `WARN`, `FAIL` and `SKIP`, with stable check IDs, groups,
+owner, consequence, repair, applicability and evidence. Independent installation
+failures are collected together; a failed Python handshake blocks its dependent
+imports. A required failed check returns exit code 3. Communication checks run
+at actual startup/reconnect; scientific data, cache and run/artifact-contract
+checks remain with the project preparation boundary. Their `SKIP` findings do
+not claim that those checks passed.
+
+Filesystem access inspection is not proof of a write. `--probe-io` explicitly
+creates, writes, reads, renames and removes a tiny temporary file beneath each
+named existing execution root. It never probes a dataset directory, and removes
+only its own files. Missing roots and incomplete IO/cleanup are reported as
+failures. Initialization owns durable root creation and storage checks.
+
+The agent-level `resources` block supplies the shared inventory and supported
+host-limit observations. Missing evidence is shown as `null`; it is not proof of
+unlimited capacity. Legacy profile-only capacity remains readable and receives a
+warning that host limits and GPU selection were not discovered. Neither resource
+enumeration nor an unrequested GPU compute check proves that a kernel ran.
+
+### Observed software identity and restart
+
+The role loader derives the existing project, environment and executor
+fingerprints from actual Python implementation/version/ABI/platform evidence,
+declared import/distribution versions and available immutable install origins,
+and selected source contents. Old authored software fingerprint fields remain
+readable in agent declarations, but their values are replaced by observations.
+An agent-check report's `execution.identity` finding includes the portable
+`descriptor` under `details.evidence`. The coordinator's `remote_profiles` uses
+that complete observed descriptor; the coordinator does not inspect a remote
+agent's filesystem. The managed remote example demonstrates this handoff.
+
+Declare source files or directories narrowly. Digests include relative member names and
+contents, including untracked files, and exclude Git metadata, virtualenvs,
+bytecode, conventional dataset/cache/run/build directories and symlink members.
+An optional `lockfile` (default `uv.lock`) supplies a provenance digest when
+present. It does not affect observed identity or prove that all installed
+packages match that lock. Absolute source/interpreter paths, hardware UUIDs and
+unrelated packages are not portable software identity. Private launch bindings
+still prevent moving an initialized profile to a different interpreter or cwd.
+This narrow observation does not attest every transitive package, driver,
+package tampering or edits made after the observation.
+
+The observation is reused within a role operation. There is no durable readiness
+certificate or per-scheduling-cycle import scan. Startup compares the observed
+profile to initialized ownership; source/package drift or a changed private
+launch binding rejects startup before new offers. A rejected local reload
+withholds local candidates while the coordinator continues reconciling retained
+work; status reports `resident_profile_unready`. A valid compatible reload can
+restore local eligibility. An outbound reload drains availability, and resume
+rechecks a configured role loader before restoring offers. Neither rejection
+releases claims, changes retained descriptors, nor relaunches old assignments.
+Settle retained work using its compatible installation before qualifying a
+deliberately changed profile or deployment.
+
+### Status and cancellation
 
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
