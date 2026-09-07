@@ -2,17 +2,17 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
-- Worktree: create under recorded root after Phase 1 is remotely merged
-- Base revision: resolve current published develop at startup
+- Worktree: `stage-38-p2-direct-container-resources` under the recorded root
+- Base revision: `43b911fb0cfe9d9c5192623726607a1575a41da5`
 - PR target: develop
 - PR title: `feat(execution): map direct container CPU and memory requests`
-- Dependencies: Phase 1 merge; independent audit dispositions
+- Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: predecessor pending; actual container acceptance image/prerequisites
+- Blockers: live acceptance image/session pending; offline implementation is ready
 
 ## Objective And Context
 
@@ -40,6 +40,11 @@ infer the execution route from an authored capability record. Preflight's curren
 CPU/memory check reports advisory mappings without trying exact byte conversion;
 reuse the command owner's conversion rules rather than duplicating them there.
 
+Manager refresh verified that these production owners are unchanged since the
+audited baseline; the merged predecessor changes CLI validation, its tests/docs,
+and a test-only SLURM race. Use Python 3.12 and this worktree's locked environment
+(`uv sync --locked --all-groups`), never the dirty checkout's environment.
+
 ## Scope
 
 In scope: deterministic CPU/memory argv conversion, actionable unsupported
@@ -59,6 +64,9 @@ downloads without explicit authority, and host system administration.
 - Two CPUs and 512 MiB produce `--cpus 2 --memory 536870912` before the image.
   No-request command behavior remains compatible. Reuse public validators at
   the public mapping boundary; conversion owns runtime representability only.
+  Validate the CPU/memory entries owned by this mapping, not unrelated resource
+  kinds through a second validator. Existing GPU helper semantics, including
+  its supported zero-request public input path, must remain unchanged.
 - Report mapping support separately from host-dependent enforcement. Existing
   `SUPPORTED`/`BEST_EFFORT` vocabulary can describe flags plus cgroup caveats;
   do not report observed host enforcement without actual evidence.
@@ -121,19 +129,38 @@ gap, not an actual container enforcement result. The maintainer must supply an
 approved local image and a suitable runtime session/host for that check; do not
 silently create images, alter host administration, or waive the required check.
 
+Targeted commands (expand only for a changed public seam):
+
+    .venv/bin/python -m pytest -q \
+      tests/unit/loom/pipeline/executors/apptainer \
+      tests/unit/loom/pipeline/executors/slurm/test_slurm_container.py \
+      tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py \
+      tests/unit/loom/pipeline/test_executor_capabilities.py \
+      tests/unit/loom/diagnostics/test_diagnostics_preflight.py \
+      tests/contracts/test_executor_capabilities_contract.py \
+      tests/contracts/test_container_executor_contract.py \
+      tests/contracts/test_diagnostics_preflight_contract.py \
+      tests/integration/pipeline/test_apptainer_executor.py \
+      tests/integration/pipeline/test_runtime_capabilities_integration.py
+
 Final commands:
 
     make validate-pr
     make test-summary
 
-Manager refreshes exact targeted commands against current source at startup.
+Add and exercise the opt-in acceptance hook's absent-prerequisite behavior,
+but do not count a skipped real-runtime check as acceptance. The executor may
+complete offline implementation and gates while that external prerequisite is
+pending; phase completion and merge remain held for the required runtime proof.
 
 ## Risks, Review, And Stops
 
-Do not infer cgroup delegation from a runtime version. Stop for a required
-administrative change, missing image permission, incompatible public semantics,
-or materially broader unsupported-runtime handling. An unavailable acceptance
-check remains an explicit gap; it cannot support a stronger enforcement claim.
+Do not infer cgroup delegation from a runtime version. Stop the live-runtime
+path for a required administrative change or missing image permission, while
+completing independent scoped offline work. Stop product implementation for
+incompatible public semantics or materially broader unsupported-runtime handling.
+An unavailable acceptance check remains an explicit gap; it cannot support a
+stronger enforcement claim or a completed-phase receipt.
 
 ## Executor Handoff
 
@@ -144,7 +171,10 @@ administration, or timeout implementation. Return exact validation and blockers.
 
 ## Workflow State
 
-- Manager preparation: pending predecessor merge and source refresh
+- Manager preparation: complete; predecessor remote merge, fresh published base,
+  source/targeted-lane refresh, ownership, approval, and private discretion verified
+- Expanded planning: no new resource/public decision; independent implementation
+  review remains required and live acceptance is explicitly not waived
 - Implementation, pre-submit gate, independent review, PR and merge: pending
 - Blocker corrections: 0/3
 
