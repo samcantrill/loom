@@ -625,9 +625,9 @@ class LocalDaemonConfig:
     """Protected configuration for one local coordinator and agent."""
 
     coordinator_root: Path
-    agent_root: Path
+    agent_root: Path | None
     run_store_root: Path
-    resident_worker_launch_profile: ResidentWorkerLaunchProfile
+    resident_worker_launch_profile: ResidentWorkerLaunchProfile | None
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
@@ -650,7 +650,7 @@ class LocalDaemonConfig:
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
-        agent = Path(self.agent_root)
+        agent = None if self.agent_root is None else Path(self.agent_root)
         run_store = Path(self.run_store_root)
         deployment_root = (
             None if self.deployment_root is None else Path(self.deployment_root)
@@ -683,23 +683,28 @@ class LocalDaemonConfig:
         if not callable(authority_factory):
             raise QueueServiceError("coordinator authority factory is invalid")
         profile = self.resident_worker_launch_profile
-        if not isinstance(profile, ResidentWorkerLaunchProfile):
-            raise QueueServiceError("resident worker launch profile is required")
-        try:
-            descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
-        except (QueueServiceError, ValueError, TypeError) as exc:
+        if (agent is None) != (profile is None):
             raise QueueServiceError(
-                "resident worker launch profile is invalid"
-            ) from exc
-        if descriptor.to_dict() != profile.descriptor:
-            raise QueueServiceError("resident worker launch descriptor must be exact")
-        if coordinator == agent:
+                "local-agent root and resident worker launch profile must agree"
+            )
+        if profile is not None and not isinstance(profile, ResidentWorkerLaunchProfile):
+            raise QueueServiceError("resident worker launch profile is invalid")
+        if profile is not None:
+            try:
+                descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
+            except (QueueServiceError, ValueError, TypeError) as exc:
+                raise QueueServiceError(
+                    "resident worker launch profile is invalid"
+                ) from exc
+            if descriptor.to_dict() != profile.descriptor:
+                raise QueueServiceError("resident worker launch descriptor must be exact")
+        if agent is not None and coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
             )
         if deployment_root is not None and (
             coordinator != deployment_root / "coordinator"
-            or agent != deployment_root / "agent"
+            or (agent is not None and agent != deployment_root / "agent")
         ):
             raise QueueServiceError(
                 "deployment roots must be the coordinator and agent bundle subroots"
@@ -709,7 +714,7 @@ class LocalDaemonConfig:
         if (
             isinstance(self.cpu_capacity, bool)
             or not isinstance(self.cpu_capacity, int)
-            or self.cpu_capacity < 1
+            or self.cpu_capacity < (1 if agent is not None else 0)
         ):
             raise QueueServiceError("cpu_capacity must be a positive integer")
         if (
@@ -721,6 +726,13 @@ class LocalDaemonConfig:
                 "memory_capacity_bytes must be a non-negative integer"
             )
         gpu_devices = tuple(self.gpu_devices)
+        if agent is None and (
+            self.cpu_capacity
+            or self.memory_capacity_bytes
+            or gpu_devices
+            or self.agent_resource_providers not in (None, ())
+        ):
+            raise QueueServiceError("coordinator-only configuration has local agent state")
         if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
             raise QueueServiceError("gpu_devices must be configured GPU devices")
         if len({item.descriptor.device_id for item in gpu_devices}) != len(gpu_devices):
@@ -728,7 +740,9 @@ class LocalDaemonConfig:
         if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
             raise QueueServiceError("configured GPU bindings must be unique")
         providers = self.agent_resource_providers
-        if providers is None:
+        if agent is None:
+            providers = ()
+        elif providers is None:
             # This compatibility construction belongs to trusted configuration,
             # never to the daemon runtime.  Deployments that need a different
             # physical provider pass the complete composition explicitly.
@@ -826,7 +840,7 @@ class LocalDaemonConfig:
                 ),
             )
         providers = tuple(providers)
-        if not providers:
+        if agent is not None and not providers:
             raise QueueServiceError("agent resource provider composition is required")
         if any(
             not hasattr(item, "descriptor")
@@ -835,25 +849,27 @@ class LocalDaemonConfig:
             for item in providers
         ):
             raise QueueServiceError("agent resource providers are invalid")
-        from ._managed_local import ObserveRequest, _compose_agent_resource_providers
+        provider_capacity: tuple[CapacityAtom, ...] = ()
+        if agent is not None:
+            from ._managed_local import ObserveRequest, _compose_agent_resource_providers
 
-        try:
-            provider_owners = _compose_agent_resource_providers(providers)
-            provider_capacity = tuple(
-                atom
-                for kind, provider in sorted(provider_owners.items())
-                for atom in provider.observe(
-                    ObserveRequest(
-                        self.machine_id,
-                        "configured-local-agent",
-                        f"configured-capacity:{kind}",
-                    )
-                ).atoms
-            )
-        except Exception as exc:
-            raise QueueServiceError(
-                "agent resource provider capacity is invalid"
-            ) from exc
+            try:
+                provider_owners = _compose_agent_resource_providers(providers)
+                provider_capacity = tuple(
+                    atom
+                    for kind, provider in sorted(provider_owners.items())
+                    for atom in provider.observe(
+                        ObserveRequest(
+                            self.machine_id,
+                            "configured-local-agent",
+                            f"configured-capacity:{kind}",
+                        )
+                    ).atoms
+                )
+            except Exception as exc:
+                raise QueueServiceError(
+                    "agent resource provider capacity is invalid"
+                ) from exc
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -946,6 +962,8 @@ class LocalDaemonConfig:
 
     @property
     def agent_journal(self) -> Path:
+        if self.agent_root is None:
+            raise QueueServiceError("coordinator has no local agent journal")
         return self.agent_root / "journal.sqlite"
 
     @property
@@ -1449,21 +1467,26 @@ class LocalDaemon:
         staged = replace(
             config,
             coordinator_root=staging / "coordinator",
-            agent_root=staging / "agent",
+            agent_root=(None if config.agent_root is None else staging / "agent"),
             deployment_root=staging,
         )
         try:
             staging.mkdir(mode=0o700)
             cls.initialize(staged)
             coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
-            agent_id = _open_root(staged.agent_root, role="local-agent")
+            agent_id = (
+                None
+                if staged.agent_root is None
+                else _open_root(staged.agent_root, role="local-agent")
+            )
             binding = {
-                "schema_version": 2,
-                "role_kind": "coordinator-bundle",
+                "schema_version": 3,
+                "role_kind": "coordinator" if agent_id is None else "coordinator-bundle",
                 "coordinator_id": coordinator_id,
-                "agent_id": agent_id,
                 "immutable_fingerprint": (staged.deployment_configuration_fingerprint),
             }
+            if agent_id is not None:
+                binding["agent_id"] = agent_id
             binding_path = staging / _DEPLOYMENT_BINDING_FILE
             binding_path.write_text(
                 json.dumps(
@@ -1494,7 +1517,9 @@ class LocalDaemon:
     def initialize(cls, config: LocalDaemonConfig) -> None:
         """Create fresh owner-private roots; existing/legacy roots are rejected."""
 
-        if config.coordinator_root.exists() or config.agent_root.exists():
+        if config.coordinator_root.exists() or (
+            config.agent_root is not None and config.agent_root.exists()
+        ):
             raise QueueServiceError(
                 "local daemon requires fresh roots; migration and compatibility "
                 "with existing managed-local state are unsupported"
@@ -1517,19 +1542,22 @@ class LocalDaemon:
                     "VALUES ('active_configuration_revision', '1')"
                 )
                 conn.commit()
-            cls.initialize_agent_root(config.agent_root)
-            from ._agent_process_supervisor import (
-                AgentProcessSupervisorService,
-                SupervisorLaunchConfiguration,
-            )
+            agent_id: str | None = None
+            if config.agent_root is not None:
+                cls.initialize_agent_root(config.agent_root)
+                from ._agent_process_supervisor import (
+                    AgentProcessSupervisorService,
+                    SupervisorLaunchConfiguration,
+                )
 
-            agent_id = _open_root(config.agent_root, role="local-agent")
-            AgentProcessSupervisorService.initialize_process_free(
-                config.agent_root,
-                configuration=SupervisorLaunchConfiguration(
-                    agent_id, (config.resident_worker_launch_profile,)
-                ),
-            )
+                agent_id = _open_root(config.agent_root, role="local-agent")
+                profile = config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueServiceError("local agent profile is unavailable")
+                AgentProcessSupervisorService.initialize_process_free(
+                    config.agent_root,
+                    configuration=SupervisorLaunchConfiguration(agent_id, (profile,)),
+                )
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
             initialize_local_daemon_owner_stores(
@@ -1559,30 +1587,28 @@ class LocalDaemon:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
-        try:
-            agent_lock = _acquire_lock(self.config.agent_root)
-        except Exception:
-            coordinator_lock.close()
-            raise
+        agent_lock = None
+        if self.config.agent_root is not None:
+            try:
+                agent_lock = _acquire_lock(self.config.agent_root)
+            except Exception:
+                coordinator_lock.close()
+                raise
         created_supervisor: AgentProcessSupervisorClient | None = None
-        owner_ids: tuple[str, str] | None = None
+        owner_ids: tuple[str, str | None] | None = None
         try:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
-            agent_id = _open_root(self.config.agent_root, role="local-agent")
+            agent_id = (
+                None
+                if self.config.agent_root is None
+                else _open_root(self.config.agent_root, role="local-agent")
+            )
             verified_local_owner_subject = (
                 f"uid:{self.config.coordinator_root.stat().st_uid}"
             )
             owner_ids = coordinator_id, agent_id
-            from ._agent_process_supervisor import (
-                AgentProcessSupervisorService,
-                SupervisorLaunchConfiguration,
-            )
-
-            supervisor_configuration = SupervisorLaunchConfiguration(
-                agent_id, (self.config.resident_worker_launch_profile,)
-            )
             from .local_daemon_execution import local_daemon_owner_work_is_retained
 
             # Recover only a fully prepared reload intent that is bound to the
@@ -1622,19 +1648,31 @@ class LocalDaemon:
             local_daemon_owner_work_is_retained(
                 self.config, coordinator_id=coordinator_id, agent_id=agent_id
             )
-            try:
-                AgentProcessSupervisorClient(
-                    self.config.agent_root, supervisor_configuration
+            if agent_id is not None and self.config.agent_root is not None:
+                from ._agent_process_supervisor import (
+                    AgentProcessSupervisorService,
+                    SupervisorLaunchConfiguration,
                 )
-            except AgentProcessSupervisorError as exc:
-                if str(exc) != "managed supervisor endpoint is unavailable":
-                    raise
-                created_supervisor = (
-                    AgentProcessSupervisorService.start_empty_initialized(
-                        self.config.agent_root,
-                        configuration=supervisor_configuration,
+
+                profile = self.config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueServiceError("local agent profile is unavailable")
+                supervisor_configuration = SupervisorLaunchConfiguration(
+                    agent_id, (profile,)
+                )
+                try:
+                    AgentProcessSupervisorClient(
+                        self.config.agent_root, supervisor_configuration
                     )
-                )
+                except AgentProcessSupervisorError as exc:
+                    if str(exc) != "managed supervisor endpoint is unavailable":
+                        raise
+                    created_supervisor = (
+                        AgentProcessSupervisorService.start_empty_initialized(
+                            self.config.agent_root,
+                            configuration=supervisor_configuration,
+                        )
+                    )
             self._coordinator_id = coordinator_id
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
@@ -1671,7 +1709,8 @@ class LocalDaemon:
                     coordinator_id=owner_ids[0],
                     agent_id=owner_ids[1],
                 )
-            agent_lock.close()
+            if agent_lock is not None:
+                agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
             self._agent_id = None
@@ -1705,7 +1744,8 @@ class LocalDaemon:
                     coordinator_id=coordinator_id,
                     agent_id=agent_id,
                 )
-            agent_lock.close()
+            if agent_lock is not None:
+                agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
             self._agent_id = None
@@ -1741,12 +1781,14 @@ class LocalDaemon:
         supervisor: AgentProcessSupervisorClient,
         *,
         coordinator_id: str,
-        agent_id: str,
+        agent_id: str | None,
     ) -> None:
         """Retire only the empty cross-owner service this start created."""
 
         from .local_daemon_execution import local_daemon_owner_work_is_retained
 
+        if agent_id is None:
+            return
         try:
             if not local_daemon_owner_work_is_retained(
                 self.config, coordinator_id=coordinator_id, agent_id=agent_id
@@ -1881,15 +1923,16 @@ class LocalDaemon:
                         "WHERE state NOT IN ('rejected', 'released')"
                     ).fetchone()[0]
                 )
-            with sqlite3.connect(
-                f"{self.config.agent_journal.resolve().as_uri()}?mode=rw", uri=True
-            ) as journal:
-                running += int(
-                    journal.execute(
-                        "SELECT COUNT(*) FROM assignments "
-                        "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
-                    ).fetchone()[0]
-                )
+            if self.config.agent_root is not None:
+                with sqlite3.connect(
+                    f"{self.config.agent_journal.resolve().as_uri()}?mode=rw", uri=True
+                ) as journal:
+                    running += int(
+                        journal.execute(
+                            "SELECT COUNT(*) FROM assignments "
+                            "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
+                        ).fetchone()[0]
+                    )
         except (sqlite3.Error, OSError):
             # The coordinator remains observable even if a private owner store
             # is temporarily unavailable; health carries that condition.
@@ -1901,7 +1944,7 @@ class LocalDaemon:
         owners_available = local_daemon_owner_stores_available(
             self.config,
             coordinator_id=coordinator_id,
-            agent_id=self._require_agent_id(),
+            agent_id=self._agent_id,
         )
         as_of = self._clock()
         parse_timestamp(as_of)
@@ -1978,7 +2021,7 @@ class LocalDaemon:
             self.config,
             (admission,),
             coordinator_id=self._require_started(),
-            agent_id=self._require_agent_id(),
+            agent_id=self._agent_id,
             clock=self._clock,
             admission_revision=admission.revision,
         )
@@ -3151,8 +3194,8 @@ class LocalDaemon:
             getattr(replacement, name) != getattr(self.config, name)
             for name in immutable
         ) or (
-            replacement.resident_worker_launch_profile.fingerprint
-            != self.config.resident_worker_launch_profile.fingerprint
+            replacement.resident_worker_launch_profile
+            != self.config.resident_worker_launch_profile
         ):
             raise QueueConflictError(
                 "scheduling reload cannot replace process or agent-owned configuration"
@@ -3475,9 +3518,12 @@ class LocalDaemon:
 
     @contextmanager
     def _agent_connection(self) -> Iterator[sqlite3.Connection]:
+        agent_root = self.config.agent_root
+        if agent_root is None:
+            raise QueueStorageError("coordinator has no local agent control state")
         try:
             conn = sqlite3.connect(
-                f"{self.config.agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
+                f"{agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
                 uri=True,
                 timeout=30,
             )
@@ -3990,13 +4036,14 @@ def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
         binding = json.loads(binding_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise QueueServiceError("coordinator deployment binding is invalid") from exc
-    expected = {
-        "schema_version": 2,
-        "role_kind": "coordinator-bundle",
+    expected: dict[str, object] = {
+        "schema_version": 3,
+        "role_kind": "coordinator" if config.agent_root is None else "coordinator-bundle",
         "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
-        "agent_id": _open_root(config.agent_root, role="local-agent"),
         "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
+    if config.agent_root is not None:
+        expected["agent_id"] = _open_root(config.agent_root, role="local-agent")
     if binding != expected:
         raise QueueServiceError("coordinator deployment binding is invalid")
 
@@ -4010,7 +4057,11 @@ def _validate_private_directory(path: Path) -> None:
 
 
 def _validate_distinct_roots(config: LocalDaemonConfig) -> None:
-    if not config.coordinator_root.exists() or not config.agent_root.exists():
+    if not config.coordinator_root.exists():
+        raise QueueServiceError("local daemon initialized roots are missing")
+    if config.agent_root is None:
+        return
+    if not config.agent_root.exists():
         raise QueueServiceError("local daemon initialized roots are missing")
     if (
         config.coordinator_root.resolve() == config.agent_root.resolve()
@@ -4300,13 +4351,17 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             for item in config.gpu_devices
         ],
         "agent_policy": repr(config.agent_policy),
-        "resident_worker_launch_profile": {
-            "project_root": str(config.resident_worker_launch_profile.project_root),
-            "python_executable": str(
-                config.resident_worker_launch_profile.python_executable
-            ),
-            "descriptor": config.resident_worker_launch_profile.descriptor,
-        },
+        "resident_worker_launch_profile": (
+            None
+            if config.resident_worker_launch_profile is None
+            else {
+                "project_root": str(config.resident_worker_launch_profile.project_root),
+                "python_executable": str(
+                    config.resident_worker_launch_profile.python_executable
+                ),
+                "descriptor": config.resident_worker_launch_profile.descriptor,
+            }
+        ),
         "remote_profiles": [item.to_dict() for item in config.remote_profiles],
         "slurm_profiles": [
             {

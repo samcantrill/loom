@@ -1874,12 +1874,14 @@ def test_old_roots_are_rejected_by_the_hard_cutover(
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
+    assert config.agent_root is not None
     for path in (config.control_database, config.agent_root / "control.sqlite"):
         with sqlite3.connect(path) as conn:
             conn.execute(f"PRAGMA user_version = {old_version}")
             conn.commit()
     with pytest.raises(QueueStorageError, match="fresh roots are required"):
         LocalDaemon(config).start()
+    assert config.agent_root is not None
     for path in (config.control_database, config.agent_root / "control.sqlite"):
         with sqlite3.connect(path) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == old_version
@@ -1907,6 +1909,7 @@ def test_current_version_incomplete_session_schema_is_rejected_not_repaired(
 
     trigger_config = _config(tmp_path / "missing-trigger")
     LocalDaemon.initialize(trigger_config)
+    assert trigger_config.agent_root is not None
     with sqlite3.connect(trigger_config.agent_root / "control.sqlite") as conn:
         conn.execute("DROP TRIGGER agent_reference_revision_update")
         conn.commit()

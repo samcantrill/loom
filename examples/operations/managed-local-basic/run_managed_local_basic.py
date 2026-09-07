@@ -124,22 +124,19 @@ def _example_root() -> Path:
 
 def _write_service_config(root: Path) -> Path:
     config = root / "coordinator-service.yaml"
+    agent = root / "agent-service.yaml"
     resident_python = root / "resident-python"
     resident_python.write_text(
         f'#!/bin/sh\nexec "{Path(sys.executable)}" "$@"\n', encoding="utf-8"
     )
     resident_python.chmod(0o700)
-    config.write_text(
+    agent.write_text(
         json.dumps(
             {
-                "schema_version": 2,
-                "kind": "loom.coordinator-service",
-                "deployment_root": "deployment",
-                "run_store_root": "runs",
-                "machine_id": "starter-machine",
-                "poll_interval_seconds": 0.01,
-                "max_accepted_time_step_seconds": 60,
-                "embedded_profile": {
+                "schema_version": 3,
+                "kind": "loom.local-agent-service",
+                "agent_root": "deployment/agent",
+                "resident_profiles": [{
                     "descriptor": {
                         "profile_id": "starter-local",
                         "revision": "v1",
@@ -153,7 +150,23 @@ def _write_service_config(root: Path) -> Path:
                     "memory_capacity_bytes": 0,
                     "gpu_devices": [],
                     "environment": {},
-                },
+                }],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent.chmod(0o600)
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "kind": "loom.coordinator-service",
+                "deployment_root": "deployment",
+                "run_store_root": "runs",
+                "machine_id": "starter-machine",
+                "poll_interval_seconds": 0.01,
+                "max_accepted_time_step_seconds": 60,
+                "local_agent": {"config": "agent-service.yaml", "env_file": None},
                 "remote_profiles": [],
                 "agent_policy": {
                     "revision": "starter-1",

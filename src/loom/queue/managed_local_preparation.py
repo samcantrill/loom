@@ -196,7 +196,12 @@ def _runtime_for_service(
 def _execution_requirements(
     service: CoordinatorServiceConfig, pipeline: PipelineSpec
 ) -> dict[str, ExecutionRequirement]:
-    descriptor = service.daemon.resident_worker_launch_profile.descriptor
+    profile = service.daemon.resident_worker_launch_profile
+    if profile is None:
+        raise QueueServiceError(
+            "managed-local preparation requires an embedded local agent"
+        )
+    descriptor = profile.descriptor
     try:
         requirement = ExecutionRequirement(
             cast(str, descriptor["project_fingerprint"]),
