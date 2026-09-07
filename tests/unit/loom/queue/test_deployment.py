@@ -14,13 +14,19 @@ from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisorService,
 )
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+from loom.queue._remote_stage_execution import GpuDeviceDescriptor
 from loom.queue.deployment import (
     _open_outbound_agent,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
     load_run_inspection_client_config,
 )
-from loom.queue.errors import QueueConfigError, QueueError, QueueServiceError
+from loom.queue.errors import (
+    QueueConfigError,
+    QueueConflictError,
+    QueueError,
+    QueueServiceError,
+)
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from tests.support.stage29_composition import (
@@ -305,6 +311,43 @@ def test_local_provider_configuration_participates_in_reload_identity(
     agent_source.write_text(json.dumps(payload, indent=4, sort_keys=True))
     equivalent = load_coordinator_service_config(source)
     assert equivalent.active_fingerprint == changed.active_fingerprint
+
+
+def test_local_gpu_binding_change_requires_explicit_reload(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    device = {
+        "descriptor": GpuDeviceDescriptor("gpu-a", "synthetic", 1024).to_dict(),
+        "binding_value": "0",
+    }
+    profile["gpu_devices"] = [device]
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(first.daemon)
+    assert first.daemon.deployment_root is not None
+    binding = first.daemon.deployment_root / "deployment-binding.json"
+    retained_binding = binding.read_bytes()
+
+    device["binding_value"] = "1"
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    with pytest.raises(QueueConflictError, match="changed without reload"):
+        LocalDaemon(changed.daemon).start()
+    assert binding.read_bytes() == retained_binding
+
+    daemon = LocalDaemon(first.daemon)
+    try:
+        assert daemon.start().service_health == "healthy"
+    finally:
+        if daemon._execution is not None and daemon._execution.supervisor is not None:
+            daemon._execution.supervisor.shutdown_for_test()
+        daemon.stop()
 
 
 def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:

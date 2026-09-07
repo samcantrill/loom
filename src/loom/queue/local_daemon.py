@@ -2021,7 +2021,7 @@ class LocalDaemon:
             self.config,
             (admission,),
             coordinator_id=self._require_started(),
-            agent_id=self._require_agent_id(),
+            agent_id=self._agent_id,
             clock=self._clock,
             admission_revision=admission.revision,
         )

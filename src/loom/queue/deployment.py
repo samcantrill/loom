@@ -1020,7 +1020,15 @@ def _local_agent_active_projection(
     return {
         "cpu_capacity": profile.cpu_capacity,
         "memory_capacity_bytes": profile.memory_capacity_bytes,
-        "gpu_devices": [item.descriptor.to_dict() for item in profile.gpu_devices],
+        "gpu_devices": [
+            {
+                "descriptor": item.descriptor.to_dict(),
+                "binding_digest": hashlib.sha256(
+                    item.binding_value.encode()
+                ).hexdigest(),
+            }
+            for item in profile.gpu_devices
+        ],
         "providers": local_agent.provider_configuration,
     }
 

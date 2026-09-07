@@ -5426,7 +5426,7 @@ def build_local_daemon_owner_views(
     admissions: tuple[LocalDaemonAdmission, ...],
     *,
     coordinator_id: str = "coordinator",
-    agent_id: str = "agent",
+    agent_id: str | None = "agent",
     clock: Callable[[], str] = utc_timestamp,
     admission_revision: int = 0,
 ) -> tuple[Mapping[str, PlainData], ...]:
@@ -5588,62 +5588,63 @@ def build_local_daemon_owner_views(
         assignment_revision = None
         execution_available = False
     execution_observed_at = clock()
-    try:
-        with _connect_existing_sqlite(config.agent_journal) as conn:
-            conn.execute("BEGIN")
-            _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
-            revision_row = conn.execute(
-                "SELECT revision FROM local_daemon_status_revision"
-            ).fetchone()
-            if revision_row is None:
-                raise sqlite3.DatabaseError("agent status revision is missing")
-            agent_revision = int(revision_row[0])
-            assignment_ids = tuple(
-                sorted(
-                    {
-                        cast(str, item["assignment_id"])
-                        for values in assignments_by_run.values()
-                        for item in values
-                    }
-                )
-            )
-            assignment_placeholders = ",".join("?" for _ in assignment_ids)
-            rows = (
-                ()
-                if not assignment_ids
-                else conn.execute(
-                    "SELECT assignment_id, identity_json, state, "
-                    "process_execution_id, grant_fence, availability_revision "
-                    "FROM assignments WHERE assignment_id IN ("
-                    f"{assignment_placeholders}) ORDER BY assignment_id",
-                    assignment_ids,
-                )
-            )
-            for row in rows:
-                assignment = _assignment_from_dict(json.loads(str(row[1])))
-                if assignment.assignment_id != str(row[0]):
-                    raise QueueServiceError(
-                        "agent assignment identity conflicts with its index"
+    if config.agent_root is not None and agent_id is not None:
+        try:
+            with _connect_existing_sqlite(config.agent_journal) as conn:
+                conn.execute("BEGIN")
+                _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
+                revision_row = conn.execute(
+                    "SELECT revision FROM local_daemon_status_revision"
+                ).fetchone()
+                if revision_row is None:
+                    raise sqlite3.DatabaseError("agent status revision is missing")
+                agent_revision = int(revision_row[0])
+                assignment_ids = tuple(
+                    sorted(
+                        {
+                            cast(str, item["assignment_id"])
+                            for values in assignments_by_run.values()
+                            for item in values
+                        }
                     )
-                run_uri = assignment.run_uri
-                agent_work_by_run.setdefault(run_uri, []).append(
-                    {
-                        "assignment_id": str(row[0]),
-                        "state": str(row[2]),
-                        "process_execution_id": (
-                            None if row[3] is None else str(row[3])
-                        ),
-                        "execution_fence": (None if row[4] is None else str(row[4])),
-                        "availability_revision": (
-                            None if row[5] is None else str(row[5])
-                        ),
-                    }
                 )
-            agent_available = True
-    except Exception:
-        agent_work_by_run.clear()
-        agent_revision = None
-        agent_available = False
+                assignment_placeholders = ",".join("?" for _ in assignment_ids)
+                rows = (
+                    ()
+                    if not assignment_ids
+                    else conn.execute(
+                        "SELECT assignment_id, identity_json, state, "
+                        "process_execution_id, grant_fence, availability_revision "
+                        "FROM assignments WHERE assignment_id IN ("
+                        f"{assignment_placeholders}) ORDER BY assignment_id",
+                        assignment_ids,
+                    )
+                )
+                for row in rows:
+                    assignment = _assignment_from_dict(json.loads(str(row[1])))
+                    if assignment.assignment_id != str(row[0]):
+                        raise QueueServiceError(
+                            "agent assignment identity conflicts with its index"
+                        )
+                    run_uri = assignment.run_uri
+                    agent_work_by_run.setdefault(run_uri, []).append(
+                        {
+                            "assignment_id": str(row[0]),
+                            "state": str(row[2]),
+                            "process_execution_id": (
+                                None if row[3] is None else str(row[3])
+                            ),
+                            "execution_fence": (None if row[4] is None else str(row[4])),
+                            "availability_revision": (
+                                None if row[5] is None else str(row[5])
+                            ),
+                        }
+                    )
+                agent_available = True
+        except Exception:
+            agent_work_by_run.clear()
+            agent_revision = None
+            agent_available = False
     agent_observed_at = clock()
 
     views: list[Mapping[str, PlainData]] = []

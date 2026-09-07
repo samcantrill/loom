@@ -4024,7 +4024,17 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        coordinator.submit(LocalDaemonAdmissionRequest("remote-item", run_uri))
+        admission = coordinator.submit(
+            LocalDaemonAdmissionRequest("remote-item", run_uri)
+        )
+        detail = coordinator.admission(admission.admission_id)
+        assert detail.admission.run_uri == run_uri
+        assert detail.authority["availability"] == "available"
+        local_execution = detail.owners["execution"]
+        assert isinstance(local_execution, Mapping)
+        assert local_execution["availability"] == (
+            "available" if with_local_agent else "unavailable"
+        )
         with pytest.raises(TimeoutError):
             coordinator.wait("remote-item", timeout_seconds=0.05)
         assert daemon.status().service_health == "healthy"
@@ -4248,6 +4258,13 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         assert restarted
         assert daemon.status().coordinator_epoch != original_epoch
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+        detail = coordinator.admission(admission.admission_id)
+        assert detail.admission.state is LocalDaemonAdmissionState.SUCCEEDED
+        assert detail.authority["state"] == RunStatus.SUCCEEDED.value
+        assignments_view = detail.owners["assignment"]
+        assert isinstance(assignments_view, Mapping)
+        assert assignments_view["availability"] == "available"
+        assert assignments_view["state"] == "populated"
         snapshot = authority.open_run(run_uri)
         assert snapshot.status is RunStatus.SUCCEEDED
         assert [stage.status for stage in snapshot.stages] == [
