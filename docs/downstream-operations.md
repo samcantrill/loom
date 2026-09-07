@@ -131,22 +131,30 @@ or agent work (Stage 29). The [roadmap](roadmap.md) is the cross-stage index.
 
 ## Protected Coordinator And Agent Roles
 
-Persistent managed execution has four supported foreground role commands:
+Persistent managed execution has explicit check, initialization, and foreground
+role commands:
 
 ```bash
-chmod 600 coordinator-service.yaml outbound-agent-service.yaml
-loom queue daemon-init coordinator-service.yaml
-loom queue daemon-serve coordinator-service.yaml
-loom queue agent-init outbound-agent-service.yaml
-loom queue agent-serve outbound-agent-service.yaml
+chmod 600 coordinator-service.yaml coordinator-service.env outbound-agent-service.yaml outbound-agent-service.env
+loom queue daemon-check coordinator-service.yaml --env-file coordinator-service.env
+loom queue daemon-init coordinator-service.yaml --env-file coordinator-service.env
+loom queue daemon-serve coordinator-service.yaml --env-file coordinator-service.env
+loom queue agent-check outbound-agent-service.yaml --env-file outbound-agent-service.env
+loom queue agent-init outbound-agent-service.yaml --env-file outbound-agent-service.env
+loom queue agent-serve outbound-agent-service.yaml --env-file outbound-agent-service.env
 ```
 
-Initialization and serving consume the same explicit, owner-protected,
-schema-versioned YAML document. Loom does not discover a role config, read a
-replacement from environment variables, or infer roots, endpoints, the Python
-interpreter, resident profile identity, capacity, or credentials. The old
-daemon root/profile flags are rejected. Relative paths resolve from the config
-file, not the process working directory.
+The check, initialization, and serving commands consume the same explicit,
+owner-protected, schema-versioned YAML document and optional explicit dotenv
+file. The dotenv file is parsed without shell execution or interpolation, and
+its mapping is the only environment used to resolve that role's `oc.env`
+expressions; ambient shell variables neither override it nor fill omissions.
+Loom does not discover either role input, read a replacement from environment
+variables, or infer roots, endpoints, the Python interpreter, resident profile
+identity, capacity, or credentials. The old daemon root/profile flags are
+rejected. Relative paths resolve from the config file, not the process working
+directory. Explicit reload retains these selected inputs and revalidates them;
+it does not watch for changes.
 
 `daemon-init` publishes one absent deployment directory containing the bound
 `coordinator` and embedded `agent` roots plus a configuration fingerprint.

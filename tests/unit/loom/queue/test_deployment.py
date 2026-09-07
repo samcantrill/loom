@@ -53,6 +53,130 @@ def test_coordinator_config_is_protected_exact_and_path_bound(tmp_path: Path) ->
         load_coordinator_service_config(source)
 
 
+@pytest.mark.optional_dependency
+def test_explicit_environment_is_authoritative_and_binds_effective_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    profile = payload["embedded_profile"]
+    assert isinstance(profile, dict)
+    profile["project_root"] = "${oc.env:LOOM_ROLE_PROJECT}"
+    profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    payload["agent_server"] = {
+        "host": "localhost",
+        "port": "${oc.env:LOOM_ROLE_PORT}",
+        "certificate_path": "server.crt",
+        "private_key_path": "server.key",
+        "client_ca_path": "ca.crt",
+        "credential_fingerprints": {"a" * 64: "test-credential"},
+    }
+    _write_protected(source, payload)
+    environment = _write_protected_text(
+        tmp_path / "coordinator.env",
+        "# machine bindings\n"
+        f"LOOM_ROLE_PROJECT={tmp_path}\n"
+        "LOOM_ROLE_CPU=1\n"
+        "LOOM_ROLE_PORT=8443\n"
+        "UNUSED_ROLE_VALUE=first\n",
+    )
+    monkeypatch.setenv("LOOM_ROLE_PROJECT", "/ambient-project")
+    monkeypatch.setenv("LOOM_ROLE_CPU", "9")
+
+    first = load_coordinator_service_config(source, env_file=environment)
+    assert first.environment_path == environment.resolve()
+    assert first.daemon.resident_worker_launch_profile.project_root == tmp_path
+    assert first.daemon.cpu_capacity == 1
+    assert first.agent_server is not None
+    assert first.agent_server.port == 8443
+
+    _write_protected_text(
+        environment,
+        "# unrelated comment\n"
+        f"LOOM_ROLE_PROJECT={tmp_path}\n"
+        "LOOM_ROLE_CPU=1\n"
+        "LOOM_ROLE_PORT=08443\n"
+        "UNUSED_ROLE_VALUE=second\n",
+    )
+    unchanged = load_coordinator_service_config(source, env_file=environment)
+    assert unchanged.immutable_fingerprint == first.immutable_fingerprint
+    assert unchanged.active_fingerprint == first.active_fingerprint
+
+    alternate_project = tmp_path / "alternate-project"
+    alternate_project.mkdir()
+    _write_protected_text(
+        environment,
+        f"LOOM_ROLE_PROJECT={alternate_project}\nLOOM_ROLE_CPU=1\nLOOM_ROLE_PORT=8443\n",
+    )
+    changed_project = load_coordinator_service_config(source, env_file=environment)
+    assert changed_project.immutable_fingerprint == first.immutable_fingerprint
+    assert changed_project.active_fingerprint == first.active_fingerprint
+    assert (
+        changed_project.daemon.resident_worker_launch_profile.fingerprint
+        != first.daemon.resident_worker_launch_profile.fingerprint
+    )
+
+    _write_protected_text(
+        environment,
+        f"LOOM_ROLE_PROJECT={tmp_path}\nLOOM_ROLE_CPU=2\nLOOM_ROLE_PORT=8443\n",
+    )
+    changed = load_coordinator_service_config(source, env_file=environment)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    assert changed.daemon.cpu_capacity == 2
+
+
+@pytest.mark.optional_dependency
+def test_environment_and_composed_source_fail_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["provider_factory"] = {"_target_": "builtins.dict"}
+    _write_protected(source, payload)
+    environment = _write_protected_text(
+        tmp_path / "agent.env", "SECRET_TOKEN=top-secret\nSECRET_TOKEN=other-secret\n"
+    )
+    constructed = False
+
+    def mark_construction(*_args: object, **_kwargs: object) -> object:
+        nonlocal constructed
+        constructed = True
+        return object()
+
+    monkeypatch.setattr("loom.queue.deployment._trusted_target", mark_construction)
+    with pytest.raises(
+        QueueConfigError, match="deployment environment is invalid"
+    ) as exc:
+        load_outbound_agent_service_config(source, env_file=environment)
+
+    assert not constructed
+    assert "top-secret" not in str(exc.value)
+    assert "other-secret" not in str(exc.value)
+
+
+def test_composed_source_closure_accepts_shared_readable_templates(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    profile = payload["embedded_profile"]
+    assert isinstance(profile, dict)
+    included = tmp_path / "profile.yaml"
+    included.write_text(json.dumps(profile), encoding="utf-8")
+    included.chmod(0o644)
+    payload["embedded_profile"] = {"_include_": "profile.yaml"}
+    _write_protected(source, payload)
+
+    assert load_coordinator_service_config(source).daemon.cpu_capacity == 1
+
+    included.chmod(0o664)
+    with pytest.raises(
+        QueueConfigError, match="deployment config source must be owner-protected"
+    ):
+        load_coordinator_service_config(source)
+
+
 def test_coordinator_publication_removes_failed_staging_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -546,5 +670,11 @@ def _resident_profile(tmp_path: Path, profile_id: str) -> dict[str, object]:
 
 def _write_protected(path: Path, payload: object) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def _write_protected_text(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
     return path

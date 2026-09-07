@@ -18,11 +18,12 @@ loom = "loom.cli.main:main"
 
 [project.optional-dependencies]
 config = [
+    "python-dotenv>=1,<2",
     "weave",
 ]
 
 [tool.uv.sources]
-weave = { git = "https://github.com/samcantrill/weave.git", rev = "6a99a4d7e6f008748c0761e6ab1c359d62aacbbd" }
+weave = { git = "https://github.com/samcantrill/weave.git", rev = "388377b61cffbb225057082365f03cb0738996fd" }
 
 [build-system]
 requires = [
