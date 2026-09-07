@@ -550,6 +550,18 @@ maintainer agreement.
 
 ## Complexity Delta
 
+Pre-submit trace A-15: `StageExecutionResult` and `ExecutionFailure` freeze
+nested metadata, but execution reliability's `_timeout_metadata` accepted only
+a mutable `dict`. At `090385a`, the public result producer yields `mappingproxy`
+and the reader returns `None`: timeout classification becomes `executor_exit_code`
+and the durable timeout outcome is omitted. The supported producer and both
+consumers are current, so the smallest correction is to accept `Mapping` before
+the existing plain-data normalization. Preserve immutable models and schemas;
+do not add a second timeout reader or serialization mechanism. A regression using
+the public result/failure constructors fails before the correction and tests
+classification plus persisted outcome afterward. This bounded existing-reader
+correction is part of the Phase 3 outcome contract, not a new reliability design.
+
 Manager verification applies the reviewed signaling order to both actual queue
 owners. Resident `_agent_process_supervisor.py:query` reaps through `Popen.poll`
 before `contain` signals the numeric group; `_process_group_alive` and service

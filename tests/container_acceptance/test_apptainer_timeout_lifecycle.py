@@ -379,3 +379,67 @@ def test_real_resident_query_then_contain_settles_namespace(
     finally:
         _cleanup(handles)
         supervisor.contain(launch)
+
+
+def test_real_early_success_file_cannot_override_timeout(
+    runtime: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    import shlex
+    from loom.pipeline.executors.apptainer import ApptainerExecutor
+    from loom.pipeline.reliability import ReliabilityPolicy, TimeoutPolicy
+    from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+    from loom.pipeline.status import StageStatus
+    from tests.unit.loom.pipeline.executors.apptainer.test_apptainer_executor import (
+        _request,
+        _worker_success,
+    )
+
+    store, run_uri, request = _request(tmp_path)
+    assert isinstance(request.resolved_runtime, ResolvedStageRuntimeOptions)
+    request = replace(
+        request,
+        resolved_runtime=replace(
+            request.resolved_runtime,
+            adapter_options={
+                "container": {
+                    "image": {"reference": runtime[1]},
+                    "workdir": str(store.local_run_dir(run_uri)),
+                },
+                "apptainer": {"command": runtime[0], "cleanenv": True},
+            },
+            reliability=ReliabilityPolicy(
+                timeout=TimeoutPolicy(enabled=True, duration_seconds=1)
+            ),
+        ),
+    )
+    result_path = store.local_stage_worker_result_path(run_uri, "build")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(_worker_success(run_uri).to_dict())
+    worker = (
+        "sh",
+        "-c",
+        f"sleep 0.5; printf %s {shlex.quote(payload)} > {shlex.quote(str(result_path))}; sleep 30",
+    )
+    # The shell-only SIF supplies a worker-protocol fixture. The real executor,
+    # builder, runner, deadline, namespace cleanup and file-admission gate run.
+    monkeypatch.setattr(
+        "loom.pipeline.executors.apptainer.executor.build_stage_worker_command",
+        lambda **kwargs: worker,
+    )
+
+    def forbidden_read(**kwargs):  # noqa: ANN003, ANN202
+        pytest.fail("timed-out execution must reject before reading success")
+
+    monkeypatch.setattr(
+        "loom.pipeline.executors.apptainer.executor._read_worker_result", forbidden_read
+    )
+    result = ApptainerExecutor(run_store=store).execute(request)
+    assert result_path.is_file(), result.failure
+    assert json.loads(result_path.read_text())["status"] == "SUCCEEDED"
+    assert result.status is StageStatus.FAILED and not result.outputs
+    assert result.failure is not None
+    assert "container execution deadline exceeded" in result.failure.message
+    assert "unresolved" not in result.failure.message
