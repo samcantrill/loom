@@ -540,6 +540,38 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
     assert _supervisor_process_ids(cast(Path, client_config.agent_root)) == ()
 
 
+def test_assignment_retry_exhaustion_preserves_the_indeterminate_pregrant_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shared pre-grant retry owner never converts exhaustion to a grant."""
+
+    client = object.__new__(LocalDaemonAgentHttpClient)
+    attempts = 0
+    clock_values = iter((0.0, 0.0, 1.0))
+
+    def indeterminate_operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise agent_session_transport._IndeterminateAgentProtocolError(  # noqa: SLF001
+            "lost control response"
+        )
+
+    monkeypatch.setattr(agent_session_transport, "_ASSIGNMENT_RECONCILIATION_SECONDS", 1)
+    monkeypatch.setattr(agent_session_transport, "monotonic", lambda: next(clock_values))
+    monkeypatch.setattr(
+        client,
+        "handshake",
+        lambda: (_ for _ in ()).throw(
+            agent_session_transport._IndeterminateAgentProtocolError("unavailable")
+        ),
+    )
+    monkeypatch.setattr(agent_session_transport, "sleep", lambda _seconds: None)
+
+    with pytest.raises(agent_session_transport._IndeterminateAgentProtocolError):
+        client._assignment_call("session-1", "assignment-1", indeterminate_operation)  # noqa: SLF001
+    assert attempts == 2
+
+
 def test_outbound_service_stop_during_initial_close_cleans_its_supervisor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

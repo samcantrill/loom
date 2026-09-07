@@ -574,6 +574,32 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     )
 
 
+def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
+    tmp_path: Path,
+) -> None:
+    resources = ResourceRequest(
+        entries={"cpu": ResourceEntry(kind="cpu", amount=2)}
+    )
+    store, _run_uri, request = _request(
+        tmp_path,
+        resources=resources,
+        adapter_options={
+            "container": {"image": {"reference": "analysis.sif"}},
+            "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+        },
+    )
+
+    result = ApptainerExecutor(
+        run_store=store,
+        apptainer_command_runner=RecordingApptainerRunner(returncode=2),
+    ).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.message == "apptainer worker result is missing"
+    assert "resource_limit_remedy" not in failure.details
+
+
 def test_apptainer_executor_invalid_worker_result_is_failure(tmp_path: Path) -> None:
     store, run_uri, request = _request(tmp_path)
 

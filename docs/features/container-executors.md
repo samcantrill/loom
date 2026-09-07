@@ -60,12 +60,43 @@ preserves redacted command/runtime diagnostics and directs the operator to check
 them for unsupported flags and to use a compatible runtime/cgroup setup. That
 diagnostic does not attribute every container startup failure to resource limits.
 
+Set `adapter_options.apptainer.cpu_memory_enforcement` (or the matching
+`singularity` namespace) to `scheduling_only` when a site must retain CPU/memory
+requests for planning and provenance but cannot apply direct cgroup flags. This
+explicit policy validates the canonical requests and preserves them in metadata,
+but omits only `--cpus` and `--memory`; it reports CPU/RAM as not enforced.
+`runtime` remains the default and never retries a failed limited launch without
+its requested flags.
+
+A project can make the choice composable without embedding a site image or
+host path in the profile. The existing `container` options still supply those
+project-local details and resource requests remain ordinary stage runtime
+options:
+
+```yaml
+runtime_profiles:
+  scheduling-only-container:
+    executor: singularity
+    adapter_options:
+      singularity:
+        cpu_memory_enforcement: scheduling_only
+```
+
+Select the profile at launch with `loom run pipeline.yaml --profile
+scheduling-only-container`. An exact stage adapter override can restore
+`runtime` for that stage; it does not remove CPU or memory demand from the
+resolved runtime metadata.
+
 SLURM remains the CPU and memory enforcement owner for its container route, so
 its wrapped Apptainer command does not add direct `--cpus` or `--memory` flags.
 The opt-in real-runtime check requires an approved local image and suitable
 session; set `LOOM_RUN_APPTAINER_RESOURCE_ACCEPTANCE=1` and
-`LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/image.sif` to run it. It is not part of
-the default validation suite and does not pull or build images.
+`LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/image.sif` to run it. A separate
+production-command scheduling-only smoke uses the same image with
+`LOOM_RUN_APPTAINER_SCHEDULING_ONLY_ACCEPTANCE=1`; it verifies a bounded shell
+payload, retained intent, and absent direct limit flags, but does not prove
+runtime enforcement. Neither check is part of the default suite and neither
+pulls or builds images.
 
 ## Deferred
 

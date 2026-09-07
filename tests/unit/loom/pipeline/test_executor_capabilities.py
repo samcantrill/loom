@@ -338,6 +338,39 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
 
 
+def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="apptainer",
+            adapter_options={
+                "container": {"image": {"reference": "analysis.sif"}},
+                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+            },
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(
+                                kind="memory", amount=512, unit="MiB"
+                            ),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [
+        (item["resource_kind"], item["severity"], item["enforcement"])
+        for item in diagnostics
+    ] == [
+        ("cpu", "warning", "not_enforced"),
+        ("memory", "warning", "not_enforced"),
+    ]
+
+
 def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
     apptainer_result = validate_executor_capabilities(
         RunOptions(

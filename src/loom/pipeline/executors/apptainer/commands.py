@@ -36,7 +36,15 @@ from .build import (
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXEC_OPTIONS_FIELDS = frozenset(
-    {"command", "cleanenv", "nv", "rocm", "fakeroot", "no_home"}
+    {
+        "command",
+        "cleanenv",
+        "nv",
+        "rocm",
+        "fakeroot",
+        "no_home",
+        "cpu_memory_enforcement",
+    }
 )
 _MEMORY_BYTE_FACTORS = {
     "B": 1,
@@ -58,6 +66,7 @@ class ApptainerExecOptions:
     rocm: bool = False
     fakeroot: bool = False
     no_home: bool = False
+    cpu_memory_enforcement: str = "runtime"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -74,6 +83,13 @@ class ApptainerExecOptions:
             raise ApptainerOptionError(
                 "ApptainerExecOptions.nv and rocm cannot both be true"
             )
+        if not isinstance(self.cpu_memory_enforcement, str) or (
+            self.cpu_memory_enforcement not in {"runtime", "scheduling_only"}
+        ):
+            raise ApptainerOptionError(
+                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
+                "or 'scheduling_only'"
+            )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -83,6 +99,7 @@ class ApptainerExecOptions:
             "rocm": self.rocm,
             "fakeroot": self.fakeroot,
             "no_home": self.no_home,
+            "cpu_memory_enforcement": self.cpu_memory_enforcement,
         }
 
     @classmethod
@@ -91,6 +108,12 @@ class ApptainerExecOptions:
             return cls()
         mapping = _plain_mapping(data, path="ApptainerExecOptions")
         _reject_unknown(mapping, _EXEC_OPTIONS_FIELDS, path="ApptainerExecOptions")
+        enforcement = mapping.get("cpu_memory_enforcement", "runtime")
+        if not isinstance(enforcement, str):
+            raise ApptainerOptionError(
+                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
+                "or 'scheduling_only'"
+            )
         return cls(
             command=_text(
                 mapping.get("command", "apptainer"),
@@ -110,6 +133,7 @@ class ApptainerExecOptions:
                 mapping.get("no_home", False),
                 path="ApptainerExecOptions.no_home",
             ),
+            cpu_memory_enforcement=enforcement,
         )
 
 
@@ -362,7 +386,7 @@ def build_apptainer_exec_command(
         _append(argv, redacted, "--fakeroot")
     if options.no_home:
         _append(argv, redacted, "--no-home")
-    _append_resource_limits(argv, redacted, container)
+    _append_resource_limits(argv, redacted, container, options)
     if container.workdir is not None:
         _append_option(argv, redacted, "--pwd", container.workdir)
     for mount in _sorted_mounts(container):
@@ -395,6 +419,7 @@ def _append_resource_limits(
     argv: list[str],
     redacted: list[str],
     container: ContainerOptions,
+    options: ApptainerExecOptions,
 ) -> None:
     """Project direct CPU and memory intent to Apptainer cgroup flags."""
 
@@ -405,14 +430,14 @@ def _append_resource_limits(
     selected = {
         kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
     }
-    if not selected:
-        return
     try:
         validated = ResourceRequest(entries=selected).entries
     except RuntimeResourceError as exc:
         raise ApptainerOptionError(
             f"container CPU/memory resource request is invalid: {exc}"
         ) from exc
+    if not selected or options.cpu_memory_enforcement == "scheduling_only":
+        return
     cpu = validated.get("cpu")
     if cpu is not None:
         _append_option(argv, redacted, "--cpus", str(_cpu_count(cpu)))

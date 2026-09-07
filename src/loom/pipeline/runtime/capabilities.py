@@ -999,6 +999,21 @@ def _resource_capability_diagnostics(
         resources = cast(ResourceRequest, stage_options.resources)
         for kind in resources.entries:
             capability = descriptor.capability_for(kind)
+            if _is_scheduling_only_apptainer_cpu_memory(
+                options, stage_options, descriptor, kind
+            ):
+                capability = ResourceCapability(
+                    support_level=cast(ResourceSupportLevel, capability.support_level),
+                    enforcement=ResourceEnforcementExpectation.NOT_ENFORCED,
+                    severity=CapabilitySeverity.WARNING,
+                    details={
+                        "reason": (
+                            "direct CPU/memory runtime flags are disabled; requests "
+                            "remain scheduling and accounting intent"
+                        ),
+                        "cpu_memory_enforcement": "scheduling_only",
+                    },
+                )
             diagnostics.append(
                 CapabilityDiagnostic(
                     path=f"RunOptions.stage_options[{stage_id!r}].resources.entries[{kind!r}]",
@@ -1022,6 +1037,34 @@ def _resource_capability_diagnostics(
                 )
             )
     return diagnostics
+
+
+def _is_scheduling_only_apptainer_cpu_memory(
+    options: RunOptions,
+    stage_options: StageRuntimeOptions,
+    descriptor: ExecutorDescriptor,
+    kind: str,
+) -> bool:
+    """Resolve the direct adapter policy for CPU/RAM diagnostics only."""
+
+    if descriptor.name not in {"apptainer", "singularity"} or kind not in {
+        "cpu",
+        "memory",
+    }:
+        return False
+    adapter_options = dict(cast(Mapping[str, object], options.adapter_options))
+    adapter_options.update(cast(Mapping[str, object], stage_options.adapter_options))
+    raw = (
+        adapter_options.get("singularity", adapter_options.get("apptainer"))
+        if descriptor.name == "singularity"
+        else adapter_options.get("apptainer")
+    )
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+
+    return (
+        ApptainerExecOptions.from_dict(raw).cpu_memory_enforcement
+        == "scheduling_only"
+    )
 
 
 def _resource_diagnostic_code(support_level: ResourceSupportLevel) -> str:

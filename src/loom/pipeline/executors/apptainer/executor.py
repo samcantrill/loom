@@ -247,7 +247,7 @@ class ApptainerExecutor:
             process_exit_code=process_exit_code,
             process_signal=process_signal,
             finished_at=finished_at,
-            resource_limits_requested=_has_direct_resource_limits(prepared.container),
+            resource_limits_requested=_has_direct_resource_limits(prepared.command),
         )
         if isinstance(worker_result, ExecutionFailure):
             return _failed_result(
@@ -584,13 +584,10 @@ def _authority_config(run_store: RunStore) -> AuthorityConfig | None:
     return None
 
 
-def _has_direct_resource_limits(container: ContainerOptions) -> bool:
+def _has_direct_resource_limits(command: ApptainerExecCommand) -> bool:
     """Whether this direct command included CPU or memory runtime flags."""
 
-    resources = cast(ContainerResourceIntent | None, container.resources)
-    return resources is not None and any(
-        kind in resources.entries for kind in ("cpu", "memory")
-    )
+    return any(flag in command.argv for flag in ("--cpus", "--memory"))
 
 
 def _read_worker_result(
@@ -886,6 +883,7 @@ def _process_metadata(
         "executor": executor_name,
         "command": cast(list[PlainData], list(_redacted_argv(command))),
         "selected_command": command.argv[0],
+        "apptainer_options": command.metadata["apptainer_options"],
         "worker_command": cast(list[PlainData], list(worker_command)),
         "container": container.to_redacted_metadata(),
         "path_parity": cast(

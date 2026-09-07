@@ -992,7 +992,10 @@ loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --ti
 
 Each admission carries its own monotonic `revision`. A Python client can wait
 against that exact value; changes to another admission and no-op reconciliation
-do not complete the wait:
+do not complete the wait. Nonterminal admission and legacy queue-item waits are
+passive observations: they retain their polling cadence and result semantics but
+do not wake a reconciliation cycle. Periodic service work and durable mutations
+remain the reconciliation wake owners:
 
 ```python
 admission = client.admission(admission_id).admission

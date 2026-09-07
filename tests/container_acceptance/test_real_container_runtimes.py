@@ -155,6 +155,60 @@ def test_real_apptainer_cpu_memory_limits_are_applied() -> None:
     assert lines[-1] == "536870912"
 
 
+def test_real_apptainer_scheduling_only_cpu_memory_smoke() -> None:
+    """Run a bounded payload with retained intent and no direct limit flags."""
+
+    if os.environ.get("LOOM_RUN_APPTAINER_SCHEDULING_ONLY_ACCEPTANCE") != "1":
+        pytest.skip(
+            "set LOOM_RUN_APPTAINER_SCHEDULING_ONLY_ACCEPTANCE=1 to run "
+            "Apptainer scheduling-only CPU/memory smoke"
+        )
+    image = os.environ.get("LOOM_APPTAINER_RESOURCE_IMAGE")
+    if not image:
+        pytest.fail(
+            "set LOOM_APPTAINER_RESOURCE_IMAGE to an approved local image; "
+            "this test does not pull or build one"
+        )
+    image_path = Path(image).expanduser()
+    if not image_path.is_file():
+        pytest.fail("LOOM_APPTAINER_RESOURCE_IMAGE must name an existing local image")
+
+    command = _required_apptainer_resource_command()
+    resources = ContainerResourceIntent(
+        entries={
+            "cpu": ResourceEntry(kind="cpu", amount=2),
+            "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),
+        },
+        capabilities={
+            kind: ResourceCapability(support_level="supported")
+            for kind in ("cpu", "memory")
+        },
+    )
+    generated = build_apptainer_exec_command(
+        container_options=ContainerOptions(image=str(image_path), resources=resources),
+        apptainer_options=ApptainerExecOptions(
+            command=command, cpu_memory_enforcement="scheduling_only"
+        ),
+        worker_command=("sh", "-c", "printf 'scheduling-only\\n'"),
+    )
+
+    assert "--cpus" not in generated.argv
+    assert "--memory" not in generated.argv
+    assert generated.metadata["apptainer_options"] == ApptainerExecOptions(
+        command=command, cpu_memory_enforcement="scheduling_only"
+    ).to_dict()
+    completed = subprocess.run(  # noqa: S603 - generated production argv.
+        generated.argv,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_timeout(),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "scheduling-only"
+
+
 def _apptainer_command() -> str:
     configured = os.environ.get("LOOM_APPTAINER_COMMAND")
     if configured:

@@ -2923,11 +2923,16 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
             if scheduler_owned:
                 resources = _resource_entries(target.resources)
                 projected: Mapping[str, str] = {}
+                apptainer_options = None
             else:
                 resources = _apptainer_effective_resource_entries(target)
+                apptainer_options = _apptainer_options_from_adapter(
+                    target.adapter_options, executor_name=target.executor_name
+                )
                 projected = _projected_apptainer_cpu_memory_arguments(
                     entries=resources,
                     executor_name=target.executor_name,
+                    apptainer_options=apptainer_options,
                 )
         except Exception as exc:  # noqa: BLE001 - command mapping owns conversion.
             diagnostics.append(
@@ -2952,7 +2957,16 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                     "enforcement": (
                         "slurm_enforced"
                         if scheduler_owned
-                        else cast(Any, capability).enforcement.value
+                        else (
+                            "not_enforced"
+                            if getattr(
+                                apptainer_options,
+                                "cpu_memory_enforcement",
+                                "runtime",
+                            )
+                            == "scheduling_only"
+                            else cast(Any, capability).enforcement.value
+                        )
                     ),
                 }
                 if not scheduler_owned:
@@ -4776,6 +4790,7 @@ def _projected_apptainer_cpu_memory_arguments(
     *,
     entries: Mapping[str, object],
     executor_name: str,
+    apptainer_options: object | None = None,
 ) -> Mapping[str, str]:
     """Use the production command builder to inspect direct limit conversion."""
 
@@ -4802,6 +4817,7 @@ def _projected_apptainer_cpu_memory_arguments(
     )
     command = build_apptainer_exec_command(
         container_options=ContainerOptions(image="preflight.sif", resources=intent),
+        apptainer_options=cast(Any, apptainer_options),
         worker_command=("loom-preflight",),
     )
     argv = command.argv

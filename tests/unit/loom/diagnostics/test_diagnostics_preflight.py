@@ -813,6 +813,51 @@ def test_apptainer_preflight_uses_authored_container_resource_intent_fallback(
     ]
 
 
+def test_apptainer_preflight_reports_scheduling_only_cpu_memory_as_not_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "container": {"image": {"reference": "analysis.sif"}},
+                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    mapped = cast(
+        list[dict[str, Any]],
+        {check.check_id: check for check in result.checks}["resources.apptainer.mapping"]
+        .details["mapped_resources"],
+    )
+    assert [(item["resource_kind"], item["enforcement"]) for item in mapped] == [
+        ("cpu", "not_enforced"),
+        ("memory", "not_enforced"),
+    ]
+    assert all(item["runtime_argument"] is None for item in mapped)
+
+
 def test_selected_apptainer_executor_fails_when_command_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

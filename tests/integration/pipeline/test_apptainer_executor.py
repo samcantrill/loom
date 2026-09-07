@@ -99,6 +99,7 @@ def _request(
     executor: str = "apptainer",
     gpu: bool = False,
     cpu_memory: bool = False,
+    cpu_memory_enforcement: str = "runtime",
 ) -> RunRequest:
     entries: dict[str, object] = {}
     if gpu:
@@ -122,7 +123,10 @@ def _request(
                     "image": {"reference": "analysis.sif"},
                     "environment": {"variables": {"TOKEN": "secret"}},
                 },
-                "apptainer": {"cleanenv": True},
+                "apptainer": {
+                    "cleanenv": True,
+                    "cpu_memory_enforcement": cpu_memory_enforcement,
+                },
             },
             "stage_options": stage_options,
         },
@@ -255,3 +259,48 @@ def test_apptainer_cpu_memory_request_reaches_generated_command(tmp_path: Path) 
     assert command.argv[command.argv.index("--cpus") + 1] == "2"
     assert command.argv[command.argv.index("--memory") + 1] == "536870912"
     assert command.argv.index("--memory") < command.argv.index("analysis.sif")
+
+
+@pytest.mark.parametrize("executor", ("apptainer", "singularity"))
+def test_scheduling_only_retains_effective_resources_without_direct_flags(
+    tmp_path: Path, executor: str
+) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        runner = InProcessApptainerRunner(store)
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=(
+                SingularityExecutor(run_store=store, apptainer_command_runner=runner)
+                if executor == "singularity"
+                else ApptainerExecutor(run_store=store, apptainer_command_runner=runner)
+            ),
+        ).run(
+            _request(
+                executor=executor,
+                cpu_memory=True,
+                cpu_memory_enforcement="scheduling_only",
+            )
+        )
+
+    command = runner.calls[0]
+    assert result.status is RunStatus.SUCCEEDED
+    assert "--cpus" not in command.argv
+    assert "--memory" not in command.argv
+    metadata = cast(dict[str, object], result.stage_results["build"].executor_metadata)
+    container = cast(dict[str, object], metadata["container"])
+    resources = cast(dict[str, object], container["resources"])
+    assert set(cast(dict[str, object], resources["entries"])) == {"cpu", "memory"}
+    assert metadata["apptainer_options"] == {
+        "cleanenv": True,
+        "command": executor,
+        "cpu_memory_enforcement": "scheduling_only",
+        "fakeroot": False,
+        "no_home": False,
+        "nv": False,
+        "rocm": False,
+    }
