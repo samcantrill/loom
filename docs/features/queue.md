@@ -889,6 +889,10 @@ at actual startup/reconnect; scientific data, cache and run/artifact-contract
 checks remain with the project preparation boundary. Their `SKIP` findings do
 not claim that those checks passed.
 
+Use these role commands for installation groups such as `python`, `packages`,
+`environment` and `identity`. The generic `loom preflight` command checks pipeline
+configuration and rejects role-only `--check` groups as unsupported selections.
+
 Filesystem access inspection is not proof of a write. `--probe-io` explicitly
 creates, writes, reads, renames and removes a tiny temporary file beneath each
 named existing execution root. It never probes a dataset directory, and removes

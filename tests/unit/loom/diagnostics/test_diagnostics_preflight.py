@@ -12,6 +12,7 @@ import pytest
 
 from loom.diagnostics import (
     PreflightCheckStatus,
+    PreflightGroup,
     PreflightRequest,
     PreflightSeverity,
     PreflightStatus,
@@ -147,6 +148,17 @@ def test_empty_selected_groups_are_request_errors() -> None:
 def test_unknown_selected_groups_are_request_errors() -> None:
     with pytest.raises(PreflightError, match="unknown preflight group"):
         run_preflight(PreflightRequest(config_path="config.yaml", groups=("nope",)))
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [("python",), ("config", "python"), (PreflightGroup.PYTHON,)],
+)
+def test_role_groups_are_rejected_before_pipeline_config_loading(
+    groups: tuple[str | PreflightGroup, ...],
+) -> None:
+    with pytest.raises(PreflightError, match=r"unknown preflight group\(s\): python;"):
+        run_preflight(PreflightRequest(config_path="missing.yaml", groups=groups))
 
 
 def test_filesystem_check_reports_missing_inputs(tmp_path) -> None:
