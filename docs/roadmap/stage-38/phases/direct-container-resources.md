@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
@@ -12,8 +12,7 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: coordinator-responsiveness amendment; candidate review/full gates;
-  scheduling-only policy product startup and implementation (design review passed)
+- Blockers: amendment implementation, candidate review/full gates, scheduling-only live smoke
 
 ## Objective And Context
 
@@ -62,6 +61,10 @@ retry omission in `queue/agent_session_transport.py`, focused transport tests,
 and its existing queue contract documentation. Reuse the established bounded
 assignment retry owner; preserve control replay, rejection, and exhausted-retry
 retention. No global transport recovery or ownership redesign is included.
+The separately approved coordinator amendment changes only the reader-driven
+wakeups in `queue/local_daemon.py:LocalDaemon._wait` and `wait_admission`, plus
+focused queue tests and documentation. Preserve all lock/transaction owners,
+periodic reconciliation, mutation wakeups, deadlines, and release behavior.
 Out of scope: changing resource semantic validators, GPU allocation, fractional
 CPU scheduling, new registries/config namespaces, timeouts, container builds or
 downloads without explicit authority, and host system administration.
@@ -131,6 +134,23 @@ downloads without explicit authority, and host system administration.
   A scheduling-only pass does not assert unlimited inherited cgroups, prove
   enforcement, or constitute a full scientific experiment smoke.
 
+### Approved Coordinator-Responsiveness Amendment
+
+Measured evidence in planning.md, Approved Coordinator-Responsiveness Amendment,
+shows reader-driven wakeups causing repeated reconciliation lock reacquisition:
+a 15.575-second waiter overlaps 271 short cycles, rather than one long database
+operation. Suppressing only the two admission wait APIs' wakes reduced the largest
+observed wait to 0.112 seconds over three loopback cases. Both baseline and variant
+passed overall; these timings identify the mechanism, not universal latency bounds.
+
+Remove only `_wake.set()` from `_wait` and `wait_admission`. Keep observation,
+revision/terminal/timeout results and polling cadence unchanged. `wait_operation`
+is already passive. Do not change `_serve`, `_cycle_lock`, session/offer reload
+guards, SQLite authority, mutation wakeups, retry/release owners, or durable data.
+Add no locks, condition variables, queues, backoff, deadlines, or public options.
+This is one additional expressly approved bounded amendment; the three historical
+corrections remain consumed. Independent startup review precedes implementation.
+
 ## Proportionality
 
 Extend current container intent and capability owners. One adapter policy field
@@ -148,12 +168,15 @@ test, not a replacement scheduling mechanism.
 | Honest support/failure | Capabilities, preflight, runtime CLI | Flags exist but host cannot enforce | Consistent diagnostic caveats; runtime rejection and real acceptance |
 | Explicit policy without lost demand | Existing adapter parser/merge, command builder, diagnostic/metadata owners | Scheduling-only host has valid requests but cannot apply rootless cgroups | Composed policy/overrides, retained requests and reservation behavior, absent flags and `not_enforced` evidence |
 | Whole allocation grammar | SLURM script boundary | Newline suffix bypasses first-line parsing | Actual Bash and Python agree; raw values not printed |
+| Passive observation and live service progress | Local daemon wait APIs and existing service loop | Status polling repeatedly wakes reconciliation and delays serialized agent control | Deterministic nonterminal-poll regressions for both APIs, unchanged result outcomes, periodic/mutation progress, real loopback retry and cancellation |
 
 ## Implementation Slices
 
-1. Review the amended policy and startup readiness without resetting existing
-   fault-correction counts or assuming coordinator-responsiveness approval.
-2. Once execution is unblocked, add the adapter policy and conditional mapping;
+1. Independently review the measured passive-wait correction and combined startup
+   packet; preserve historical correction counts and the new bounded authority.
+2. Remove the two observer wakeups, add deterministic and live progress coverage,
+   and complete retained pre-grant retry rejection/exhaustion coverage. Then add
+   the adapter policy and conditional mapping;
    preserve canonical validation, resource intent, default flags, and GPU behavior.
 3. Align selected-policy capabilities, preflight, provenance, and failure remedies.
 4. Add composed-profile/override and retained managed-demand regressions, preserving
@@ -193,6 +216,21 @@ capability/preflight/provenance and missing-result remedies; retained managed
 resource demand/reservation semantics; GPU projection and SLURM-owned composition.
 Use existing fixtures and targeted interactions, not a full Cartesian matrix.
 
+Coordinator coverage must exercise a nonterminal poll in each affected API and
+prove observation does not set the reconciliation event while preserving changed,
+terminal and timeout outcomes. Exercise periodic service progress without readers
+and mutation-triggered wakeups. Avoid fragile wall-clock performance thresholds
+or deadline extensions. Retain real loopback lost-response success and
+cancel-before-grant outcomes; add proportionate final rejection/exhausted retry
+retention coverage using existing owners. Run adjacent session replacement and
+daemon production tests. Suggested queue lane:
+
+    .venv/bin/python -m pytest -q \
+      tests/unit/loom/queue/test_local_daemon.py \
+      tests/unit/loom/queue/test_agent_sessions.py \
+      tests/integration/queue/test_agent_session_transport.py \
+      tests/integration/queue/test_local_daemon_production.py
+
 Targeted commands (expand only for a changed public seam):
 
     .venv/bin/python -m pytest -q \
@@ -226,8 +264,10 @@ path for a required administrative change or missing image permission, while
 completing independent scoped offline work. Stop product implementation for
 incompatible public semantics or materially broader unsupported-runtime handling.
 An unavailable hard-limit check remains an explicit gap and cannot support a
-stronger enforcement claim. The 3/3 correction budget remains consumed; policy
-approval does not authorize unrelated coordinator work or override startup stops.
+stronger enforcement claim. The 3/3 historical correction budget remains consumed;
+one additional bounded passive-wait amendment is expressly approved. Stop for a
+new unrelated correction or broader coordinator mechanism, not for the superseded
+missing-authority condition. Independent startup and final gates remain required.
 
 ## Executor Handoff
 
@@ -235,17 +275,23 @@ Read this card and manifest Shared Constraints after startup preparation. The
 executor owns listed code/tests/docs and its completion receipt only; it is not
 alone and must preserve others' work. No PR/merge, delegation, downloads, host
 administration, or timeout implementation. Return exact validation and blockers.
-The scheduling-only amendment is approved behavior, but do not start product
-work until the independent startup gate and existing phase stop are resolved.
+The combined independent startup review passed without findings. Implement this
+bounded amendment and scheduling-only policy, retaining the final review/full gates.
 
 ## Workflow State
 
+- Additional amendment authority: maintainer approved one bounded cause-backed
+  coordinator-responsiveness correction and later scheduling-only implementation.
+  Historical correction counts and validation gates remain unchanged. Measured
+  evidence selects passive waits; independently review before product work and
+  stop for a broader/new remedy.
 - Manager preparation: complete; predecessor remote merge, fresh published base,
   source/targeted-lane refresh, ownership, approval, and private discretion verified
 - Expanded planning: scheduling-only policy design independently accepted;
-  manager corrected minor traceability/authority wording. Product startup remains
-  blocked: coordinator lock delays still require their separate disposition;
-  no correction-budget reset or queue-change approval is inferred.
+  manager corrected minor traceability/authority wording. The separately approved
+  passive-wait correction and combined startup passed independent review without
+  findings. Both amendments remain unimplemented; one amendment executor may
+  proceed. No general correction-budget reset is inferred.
 - Live acceptance: approved image available; runtime-limit attempt failed for
   missing D-Bus session. Scheduling-only implementation/smoke pending; positive
   runtime-limit proof deferred separately, never counted as passing.
@@ -268,9 +314,10 @@ work until the independent startup gate and existing phase stop are resolved.
   trace shows that retry succeeding, but prior renewal/control calls waited for
   the coordinator's reconciliation lock until the overall test deadline was
   exhausted. Cancellation replay passes without launch. The original
-  uninstrumented trigger and precise lock-delay mechanism remain unproven.
-  Stop further product corrections pending the responsiveness amendment; final
-  rejection/exhaustion coverage, independent acceptance and full gates remain.
+  uninstrumented trigger's entire causal history remains unproven. The additional
+  approved amendment now identifies reader-driven lock reacquisition using new
+  measurements; final rejection/exhaustion coverage, independent acceptance and
+  full gates remain.
 
 ## Completion Record
 
@@ -280,6 +327,6 @@ work until the independent startup gate and existing phase stop are resolved.
 | Current validation and revision | WIP retry candidate: focused Ruff and whole-tree Pyright pass. Refiner's two-case loopback run had success-case timeout and cancellation pass. Manager's instrumented retry run had five passes and one timeout; its failure trace proves successful retry and eventual release after coordinator lock delays exhausted the test deadline. Additional cycle-timing run: six passed. These are diagnostic receipts, not passing full gates. Last full `make validate-pr` at `9ebd227` had 2,810 passes and one A-13 timeout; no fresh full gates for the candidate. |
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
 | Real runtime evidence / unavailable checks | Approved shell SIF available and ordinary launch passed. Actual runtime-limit hook failed on rootless D-Bus prerequisites; receipt `build/container-resource-acceptance-local-sif.xml`. Scheduling-only policy and its production-command smoke are not implemented. Positive runtime-limit proof remains deferred to a compatible approved host. |
-| Amendment review and routing check | Independent policy-design review passed; overall startup remains blocked. Manager corrected FQ/DQ range and A-13 authority wording. An in-memory public profile-merge probe preserved the proposed adapter payload and CPU/memory demand; no product policy or live acceptance is claimed. |
+| Amendment review and routing check | Independent policy-design and combined amendment startup reviews passed without findings. Passive-wait correction selected from measured baseline/variant runs (three passed each). An in-memory public profile-merge probe preserved the proposed adapter payload and CPU/memory demand; no product policy or live acceptance is claimed. |
 | PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. The third candidate is WIP, requires final review and fresh full gates, and does not resolve the coordinator-responsiveness failure. No PR opened or branch pushed. |
-| Residual risk and cleanup | Three correction passes consumed; separate responsiveness amendment outstanding; scheduling-only policy design reviewed, not authorized for product execution past the existing stop. Keep the candidate and worktree. Known fixture supervisors were stopped; original dirty checkout remains preserved; published develop remains `43b911f`. |
+| Residual risk and cleanup | Three historical corrections consumed; one additional bounded passive-wait amendment approved and startup independently passed. Scheduling-only policy design reviewed, implementation/live smoke outstanding. Keep the candidate and worktree. Known fixture supervisors were stopped; original dirty checkout remains preserved; published develop remains `43b911f`. |

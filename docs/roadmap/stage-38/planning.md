@@ -1,12 +1,12 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; scheduling-only policy design reviewed; product startup blocked
+Status: first phase merged; combined amendment startup independently passed; implementation in progress
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: policy design ready; Phase 2 product startup and A-13 candidate remain blocked.
-Blockers: coordinator responsiveness amendment and full validation; runtime-limit
+Current gate: implement approved passive status waits and scheduling-only policy, then validate and review.
+Blockers: coordinator correction review/implementation and full validation; runtime-limit
 acceptance lacks a compatible session; the later timeout design gate remains.
 
 ## Current State
@@ -16,8 +16,8 @@ acceptance lacks a compatible session; the later timeout design gate remains.
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Independent review accepted the scheduling-only policy across launch and diagnostics | Timeout ownership remains unresolved; coordinator amendment not approved | Retain approved policy while resolving the separate startup stop |
-| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227`; third retry candidate retained as work in progress | Coordinator lock delays still block full validation; scheduling-only policy is not implemented | Obtain the separate coordinator-responsiveness disposition without resetting the consumed correction budget |
+| Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Implement the bounded amendment |
+| Implementation | Phase 1 and A-11 merged; resource implementation/two corrections reviewed; third retry candidate is WIP | Additional coordinator correction and scheduling-only policy are approved but not implemented; fresh full gates remain | One bounded amendment executor after startup review; preserve historical correction count |
 
 ## Evidence And Scope
 
@@ -148,9 +148,9 @@ after the test deadline. This separates a working retry path from a coordinator
 responsiveness failure; server TLS EOF/BAD_LENGTH messages followed already
 timed-out clients and are not established as the initiating cause. One later
 six-case run with additional cycle timing passed
-(`build/transport-diagnostic-cycle-contention.xml`), so neither a single slow
-authority operation nor repeated-cycle lock starvation is yet established as
-the precise lock-delay mechanism. Do not infer resolution from those passes.
+(`build/transport-diagnostic-cycle-contention.xml`), but that run alone did not
+identify the precise lock-delay mechanism. The approved amendment below now adds
+cause-backed measurements; do not infer resolution from the earlier passes.
 
 The candidate changes only the existing pre-grant retry call, its two loopback
 outcomes (eventual success and durable cancellation without launch), and queue
@@ -159,15 +159,73 @@ coverage, final independent acceptance, and fresh full gates remain outstanding.
 Both supervisors from the failed instrumented fixture were verified stopped;
 temporary diagnostics now use the repository's supervisor-cleanup fixture.
 
-The three inclusive correction passes are consumed. Request a separate bounded
-coordinator-responsiveness amendment before more product changes: distinguish
-lock hold time from acquisition starvation, reproduce that mechanism, and review
-the smallest correction while preserving replacement fencing, scheduling
-atomicity, and physical resource ownership. Do not remove serialization, extend
-deadlines, or weaken the regression to obtain a passing gate. Approval for that
-cross-owner amendment remains outstanding; the newly approved resource-policy
-amendment below does not authorize it. The current retry candidate is work in
-progress, not a completed Phase 2.
+The three historical correction passes remain consumed. The additional bounded
+amendment below is now explicitly approved and supplies new cause-backed evidence.
+It does not remove serialization, extend deadlines, or weaken regression tests.
+The current retry candidate remains work in progress until its remaining safety
+coverage, independent acceptance and full gates pass.
+
+#### Approved Coordinator-Responsiveness Amendment
+
+The maintainer now explicitly approves the bounded investigation and cause-backed
+correction described above, followed by resuming the already approved scheduling-only
+policy work. This supersedes the prior missing-authority stop, not the technical
+validation/review gates. The three historical corrections remain consumed; this
+is one additional expressly authorized amendment, not a reset to three more
+general-purpose corrections. No host settings, deadlines, session-replacement
+fences, assignment atomicity, retry/release semantics, or durable schemas may be
+weakened to obtain passing tests.
+
+Measure outer `_cycle_lock` acquisition wait and hold times, reconciliation-cycle
+overlap with waiting session calls, and authority connection/open/close time in
+the existing synthetic loopback fixture. Keep only operation names/timings in
+temporary ignored diagnostics, never payloads or credentials. Compare a passive
+completion-wait experiment only after baseline measurement. A concrete reproduced
+mechanism must precede selection of the smallest production correction and its
+independent design review; no broad lock replacement is preapproved. Retain
+periodic reconciliation and mutation-driven wakeups. Add a deterministic regression
+for the confirmed trigger and existing real loopback safety coverage. Run fresh
+full gates and independent implementation review before any PR/merge. Stop on
+a materially broader mechanism or a new unrelated correction need.
+
+Measured comparison at `c4b6297`, using ignored
+`build/coordinator_lock_diagnostic.py` over the existing real loopback retry
+fixture, with the repository supervisor-cleanup fixture and JUnit stdout capture:
+
+| Variant | Per-case largest lock wait (seconds) | Per-case largest lock hold (seconds) | Reconciliation cycles | Result |
+| --- | --- | --- | --- | --- |
+| Unchanged baseline | 2.991, 9.153, 15.575 | 0.161, 0.205, 0.145 | 166, 399, 368 | 3 passed; one wait exceeded the HTTP timeout |
+| Ignore wakes from passive admission waits only | 0.112, 0.105, 0.085 | 0.124, 0.157, 0.176 | 73, 73, 75 | 3 passed |
+
+Receipts: `build/coordinator-lock-timing-baseline.xml` and
+`build/coordinator-lock-timing-passive-wait.xml`. The 15.575-second wait overlaps
+271 completed reconciliation cycles, with no cycle longer than 0.145 seconds.
+The baseline completion waiter set the wake event 314 times in that case; the
+longest measured authority connection scope was approximately 0.011 seconds.
+This demonstrates repeated lock reacquisition under reader-driven wakeups, not
+one 15-second authority read. It does not identify every possible source of
+future coordinator latency or prove the original uninstrumented timeout's entire
+causal history.
+
+Selected minimum correction: remove `_wake.set()` from `LocalDaemon._wait` and
+`LocalDaemon.wait_admission`, leaving their reads, revision/terminal decisions,
+timeouts, and polling interval intact. `wait_operation` is already passive.
+Keep `_serve`, its periodic wait, all mutation-driven wakeups, `_cycle_lock`,
+replacement/reload guards, authority transactions, scheduling, and release logic
+unchanged. No new lock, queue, condition variable, sleep/backoff policy, public
+option, or schema is required. Background reconciliation is started independently
+by `LocalDaemon.start`; waiting is observation, not the scheduling driver.
+
+The deterministic regression must exercise a nonterminal poll in each affected
+wait API and prove that observation does not set the reconciliation event, then
+still returns the appropriate changed/terminal/timeout result. Exercise the actual
+service loop's periodic progress and existing mutation wakeups without lengthening
+production/test deadlines. Retain the real loopback lost-response success and
+cancel-before-grant cases and run adjacent session/replacement, daemon production,
+and final full gates. Complete the retained retry candidate's rejection/exhaustion
+coverage using existing retry/retention owners. Independent plan/startup review
+precedes one executor for this approved amendment and the already reviewed resource
+policy; independent implementation review covers both plus the retained candidate.
 
 ### Approved Scheduling-Only Policy Amendment
 
@@ -185,8 +243,8 @@ CPU/RAM enforcement, retaining managed coordinator/agent execution and GPU
 behavior. Evidence tree: the active Phase 2 worktree at `ecbb497`; clean before
 this docs amendment; published develop remains `43b911f`. Original checkout
 preservation hashes remain unchanged. This is an explicit behavior amendment,
-not silent fallback, a fourth fault correction, or approval of the independent
-coordinator-responsiveness amendment.
+not silent fallback or a fault-correction budget reset. Coordinator authority
+comes from its separately approved bounded amendment above.
 
 Reuse `ApptainerExecOptions` with one string field, `cpu_memory_enforcement`:
 
@@ -254,12 +312,10 @@ fixture to prove that disabling direct limits does not erase resource demand or
 change release conditions. No production queue change is part of this amendment.
 Whole-tree local gates and independent implementation review remain mandatory.
 
-Independent review accepted the policy design and its source/validation ownership;
-overall Phase 2 execution/merge readiness remains blocked. The manager corrected
-the stale FQ/DQ range and clarified that earlier A-13 approval covers the pre-grant
-retry correction only. The consumed 3/3 correction budget and separate coordinator
-blocker are unchanged; do not authorize more product work by relabelling the phase
-or silently resetting that budget. An in-memory public `merge_run_options` probe
+Independent review accepted the policy design and its source/validation ownership.
+The manager corrected the stale FQ/DQ range and clarified the earlier pre-grant
+retry scope. The separately approved coordinator amendment now addresses the
+startup stop without resetting the consumed 3/3 correction budget. An in-memory public `merge_run_options` probe
 confirmed that the existing profile surface retains the proposed adapter payload
 and CPU/memory demand without modifying its input; this is reuse evidence, not
 implementation or live acceptance of the policy.
@@ -353,6 +409,7 @@ process-cleanup guarantee from either existing command runner.
 | FQ-3 | FR-3 | Supported children obey containment ownership; arbitrary detaching/malicious processes are not a sandbox guarantee | Stop for a materially broader ownership redesign; earlier increments may land | locked |
 | FQ-4 | FR-4, FR-5 | Retain corrected upstream behavior and independently review new changes | More evidence than a patch copy, no upstream overwrite | locked |
 | FQ-5 | FR-2, FR-4, FR-5 | Explicit scheduling-only CPU/RAM policy; no host changes; retain requests and managed scheduling; defer unavailable positive hard-limit proof separately | Running work can exceed declared resources; no silent downgrade or claim of OS isolation | maintainer approved |
+| FQ-6 | FR-4, FR-5 | One additional cause-backed coordinator-responsiveness amendment, with unchanged safety contracts and independent review | New measured wakeup/lock evidence; no general correction-budget reset | maintainer approved |
 
 ## Behavior Baseline
 
@@ -432,13 +489,15 @@ unresolved cleanup evidence.
 | DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
 | DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy approved and independently reviewed; product startup blocked separately |
+| DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
 
 ## Expanded Design Review
 
 The independent scheduling-only plan/startup review found no policy-design blocker.
-It retained the existing product-startup stop for coordinator responsiveness and
-the consumed correction budget; minor traceability/authority wording was corrected
-manager-locally. Timeout review remains pending until its minimum design is
+The separately approved coordinator amendment and combined Phase 2 startup passed
+independent review without findings, including measured evidence, the passive-wait
+correction, retained safety contracts, and proportional validation.
+Historical correction counts remain intact. Timeout review remains pending until its minimum design is
 supported by source and runtime evidence. A new ownership framework or materially broader public contract must
 be presented to the maintainer separately, as required by the approved draft.
 
@@ -486,12 +545,13 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
-| Phase 2 product startup | Coordinator-responsiveness disposition still missing; 3/3 corrections consumed; implementation/live smoke and fresh gates not complete | blocked |
+| Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings; implementation/live smoke and fresh gates remain | pass for amended implementation |
 
 Gate result: Phase 1 merged; scheduling-only policy design approved and independently
-reviewed. Phase 2 remains blocked pending the coordinator-responsiveness
-amendment, final candidate review, fresh passing validation and the selected-policy
-live acceptance. This approval does not reset its correction budget. Phase 3 remains
+reviewed. Coordinator amendment is approved and measured; Phase 2 awaits its
+implementation, final candidate review, fresh passing
+validation and selected-policy live acceptance. This approval does not reset its
+historical correction budget. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals

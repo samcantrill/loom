@@ -2965,7 +2965,9 @@ Phase execution plans:
 
 Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
 CPU/RAM policy design independently reviewed, not yet implemented. A pre-grant retry
-candidate remains held for coordinator responsiveness review and full validation.
+candidate remains held for full validation. A separately approved responsiveness
+amendment has identified reader-driven lock reacquisition; the selected passive-wait
+correction and combined startup passed independent review; implementation is in progress.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,
