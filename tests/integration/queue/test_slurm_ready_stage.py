@@ -471,29 +471,32 @@ def _exercise_mixed_route_run(
             )
         )
         incarnation = "bootstrap-1"
-        submission_before_proof = execution.slurm_submissions.read(
-            record.assignment.operation_id
-        )
-        assignment_before_proof = execution.slurm_assignments.read(
-            record.assignment.assignment_id
-        )
-        with pytest.raises(QueueConflictError, match="capability conflicts"):
-            view.register(
-                operation_id=record.assignment.operation_id,
-                request_digest=record.assignment.request_digest,
-                job_id="1200",
-                cluster="cluster-a",
-                incarnation="bootstrap-unproven",
-                capability=base64.b64encode(b"wrong-capability-material").decode(),
+        # Keep unrelated scheduler observations out of this no-mutation check.
+        # Concurrent registration remains exercised independently below.
+        with daemon._cycle_lock:
+            submission_before_proof = execution.slurm_submissions.read(
+                record.assignment.operation_id
             )
-        assert (
-            execution.slurm_submissions.read(record.assignment.operation_id)
-            == submission_before_proof
-        )
-        assert (
-            execution.slurm_assignments.read(record.assignment.assignment_id)
-            == assignment_before_proof
-        )
+            assignment_before_proof = execution.slurm_assignments.read(
+                record.assignment.assignment_id
+            )
+            with pytest.raises(QueueConflictError, match="capability conflicts"):
+                view.register(
+                    operation_id=record.assignment.operation_id,
+                    request_digest=record.assignment.request_digest,
+                    job_id="1200",
+                    cluster="cluster-a",
+                    incarnation="bootstrap-unproven",
+                    capability=base64.b64encode(b"wrong-capability-material").decode(),
+                )
+            assert (
+                execution.slurm_submissions.read(record.assignment.operation_id)
+                == submission_before_proof
+            )
+            assert (
+                execution.slurm_assignments.read(record.assignment.assignment_id)
+                == assignment_before_proof
+            )
         registration = view.register(
             operation_id=record.assignment.operation_id,
             request_digest=record.assignment.request_digest,

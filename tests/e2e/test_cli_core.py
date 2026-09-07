@@ -40,37 +40,77 @@ def _write_pipeline_config(
     counter_path: Path | None = None,
     failing: bool = False,
     include_generic_target: bool = False,
+    include_stage_owned_targets: bool = False,
+    generic_target_path: str = "tests.support.config_samples:ConstructionProbeTarget",
+    build_target_override: str | None = None,
 ) -> None:
     service_block = ""
     if include_generic_target:
         service_block = (
             "service:\n"
-            "  _target_: tests.support.config_samples:ConstructionProbeTarget\n"
+            f"  _target_: {generic_target_path}\n"
             "  marker:\n"
             "    _target_: tests.support.config_samples:log_and_return\n"
             "    tag: service-child\n"
             "    value: ok\n"
         )
 
+    pipeline_metadata = ""
+    factory_init = ""
+    if include_stage_owned_targets:
+        pipeline_metadata = (
+            "  metadata:\n"
+            "    marker:\n"
+            "      _target_: tests.support.config_samples:log_and_return\n"
+            "      tag: pipeline-metadata\n"
+            "      value: inert\n"
+        )
+        factory_init = (
+            "        init:\n"
+            "          constructor_value:\n"
+            "            _target_: tests.support.config_samples:log_and_return\n"
+            "            tag: factory-init\n"
+            "            value: inert\n"
+        )
+
     if failing:
         build_target = "tests.support.pipeline_execution_stages.FailingStage"
         config_block = ""
     else:
-        build_target = "tests.support.pipeline_execution_stages.JsonProducerStage"
+        build_target = (
+            "tests.support.pipeline_execution_stages.ConfiguredProducerStage"
+            if include_stage_owned_targets
+            else "tests.support.pipeline_execution_stages.JsonProducerStage"
+        )
         counter_line = (
             f"        counter_path: {counter_path}\n"
             if counter_path is not None
             else ""
         )
-        config_block = f"      config:\n        value: {value}\n{counter_line}"
+        stage_marker = (
+            "        marker:\n"
+            "          _target_: tests.support.config_samples:log_and_return\n"
+            "          tag: stage-config\n"
+            "          value: inert\n"
+            if include_stage_owned_targets
+            else ""
+        )
+        config_block = (
+            f"      config:\n        value: {value}\n{counter_line}{stage_marker}"
+        )
+
+    if build_target_override is not None:
+        build_target = build_target_override
 
     path.write_text(
         service_block + "pipeline:\n"
         "  name: demo\n"
+        f"{pipeline_metadata}"
         "  stages:\n"
         "    - name: build\n"
         "      factory:\n"
         f"        _target_: {build_target}\n"
+        f"{factory_init}"
         f"{config_block}"
         "      outputs:\n"
         "        data:\n"
@@ -278,6 +318,81 @@ def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -
     assert payload["result"]["target_count"] == 4
     assert stderr.getvalue() == ""
     assert construction_event_log == ["service-child", "parent"]
+
+
+def test_cli_validate_check_targets_preserves_stage_owned_target_data(
+    tmp_path: Path,
+) -> None:
+    reset_instantiate_probe_state()
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(
+        config_path,
+        include_generic_target=True,
+        include_stage_owned_targets=True,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["validate", str(config_path), "--check-targets", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["target_count"] == 4
+    assert construction_event_log == ["service-child", "parent"]
+    assert stderr.getvalue() == ""
+
+
+def test_cli_validate_check_targets_rejects_invalid_outer_factory(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(
+        config_path,
+        build_target_override="tests.support.pipeline_execution_stages.NotAStage",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["validate", str(config_path), "--check-targets"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 4
+    )
+    assert stdout.getvalue() == ""
+    assert "did not construct a Stage-compatible object" in stderr.getvalue()
+
+
+def test_cli_validate_check_targets_rejects_invalid_generic_target(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(
+        config_path,
+        include_generic_target=True,
+        generic_target_path="tests.support.config_samples:NON_CALLABLE_TARGET",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["validate", str(config_path), "--check-targets"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 3
+    )
+    assert stdout.getvalue() == ""
+    assert "is not callable" in stderr.getvalue()
 
 
 def test_cli_run_default_and_explicit_run_uri(

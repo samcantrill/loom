@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import io
 import json
@@ -84,10 +85,11 @@ def test_validate_static_text_preserves_config_option_order(monkeypatch: pytest.
 
 def test_validate_json_check_targets_warns_and_invokes_facades_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
+    resolved = {"pipeline": {"stage_data": {"_target_": "inert"}}, "service": {}}
 
     def compose(*_args: object, **_kwargs: object) -> FakeComposedConfig:
         events.append("compose")
-        return FakeComposedConfig(resolved={"pipeline": {}, "service": {}})
+        return FakeComposedConfig(resolved=resolved)
 
     def validate_pipeline(_config: object) -> FakePipelineResult:
         events.append("static")
@@ -97,7 +99,9 @@ def test_validate_json_check_targets_warns_and_invokes_facades_in_order(monkeypa
         events.append("pipeline-targets")
         return FakeTargetResult(target_count=1)
 
-    def check_config(_config: object, *, skip_paths: tuple[str, ...]) -> FakeTargetResult:
+    def check_config(config: object, *, skip_paths: tuple[str, ...]) -> FakeTargetResult:
+        assert config == {"service": {}}
+        assert config is not resolved
         events.append(f"config-targets:{','.join(skip_paths)}")
         return FakeTargetResult(target_count=2)
 
@@ -120,7 +124,7 @@ def test_validate_json_check_targets_warns_and_invokes_facades_in_order(monkeypa
         "compose",
         "static",
         "pipeline-targets",
-        "config-targets:$.pipeline.stages[0].factory",
+        "config-targets:",
     ]
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == "loom.cli.validate.v2"
@@ -134,6 +138,31 @@ def test_validate_json_check_targets_warns_and_invokes_facades_in_order(monkeypa
     ]
     assert payload["result"]["target_count"] == 3
     assert payload["result"]["check_targets"] is True
+
+
+def test_generic_target_validation_view_omits_pipeline_without_mutating_config() -> None:
+    config = {
+        "pipeline": {
+            "metadata": {"_target_": "project.Metadata"},
+            "stages": [
+                {
+                    "factory": {
+                        "_target_": "project.Stage",
+                        "init": {"nested": {"_target_": "project.InitValue"}},
+                    },
+                    "config": {"nested": {"_target_": "project.StageValue"}},
+                }
+            ],
+        },
+        "service": {"_target_": "project.Service"},
+    }
+    before = deepcopy(config)
+
+    view = validate_command._generic_target_validation_view(config)
+
+    assert view == {"service": {"_target_": "project.Service"}}
+    assert view is not config
+    assert config == before
 
 
 def test_validate_text_check_targets_prints_warning_before_success(monkeypatch: pytest.MonkeyPatch) -> None:
