@@ -3518,9 +3518,12 @@ class LocalDaemon:
 
     @contextmanager
     def _agent_connection(self) -> Iterator[sqlite3.Connection]:
+        agent_root = self.config.agent_root
+        if agent_root is None:
+            raise QueueStorageError("coordinator has no local agent control state")
         try:
             conn = sqlite3.connect(
-                f"{self.config.agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
+                f"{agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
                 uri=True,
                 timeout=30,
             )
@@ -4348,13 +4351,17 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             for item in config.gpu_devices
         ],
         "agent_policy": repr(config.agent_policy),
-        "resident_worker_launch_profile": {
-            "project_root": str(config.resident_worker_launch_profile.project_root),
-            "python_executable": str(
-                config.resident_worker_launch_profile.python_executable
-            ),
-            "descriptor": config.resident_worker_launch_profile.descriptor,
-        },
+        "resident_worker_launch_profile": (
+            None
+            if config.resident_worker_launch_profile is None
+            else {
+                "project_root": str(config.resident_worker_launch_profile.project_root),
+                "python_executable": str(
+                    config.resident_worker_launch_profile.python_executable
+                ),
+                "descriptor": config.resident_worker_launch_profile.descriptor,
+            }
+        ),
         "remote_profiles": [item.to_dict() for item in config.remote_profiles],
         "slurm_profiles": [
             {

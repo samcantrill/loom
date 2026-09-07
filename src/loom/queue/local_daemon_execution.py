@@ -1254,11 +1254,13 @@ class LocalDaemonExecution:
         missing = (
             self._capacity_holding_coordinator_assignments() - retained_assignment_ids
         )
-        if missing and any(
-            not _ResidentAssignmentWorkspace(
-                self.config.agent_root, assignment_id
-            ).has_request()
-            for assignment_id in missing
+        agent_root = self.config.agent_root
+        if missing and (
+            agent_root is None
+            or any(
+                not _ResidentAssignmentWorkspace(agent_root, assignment_id).has_request()
+                for assignment_id in missing
+            )
         ):
             raise QueueServiceError(
                 "coordinator retained assignment lacks an exact resident bundle"
@@ -1454,6 +1456,10 @@ class LocalDaemonExecution:
     ) -> bool:
         """Replay one exact durable assignment without allocating replacement work."""
 
+        assert self.config.agent_root is not None
+        assert self.config.resident_worker_launch_profile is not None
+        assert self.journal is not None
+        assert self.supervisor is not None
         if self._recovery_retains_assignment(assignment.assignment_id):
             return False
         workspace = _ResidentAssignmentWorkspace(
@@ -1573,6 +1579,8 @@ class LocalDaemonExecution:
         )
 
     def _is_exact_retained_unknown(self, assignment_id: str) -> bool:
+        if self.journal is None:
+            return False
         try:
             return self.coordinator.state(
                 assignment_id
@@ -2310,6 +2318,7 @@ class LocalDaemonExecution:
             return True
         if self._managed_target_is_remote(request.assignment_id):
             return self._remote_result_is_complete(request.assignment_id)
+        assert self.journal is not None
         return self.journal.read_result(request.assignment_id) is not None
 
     def validate_recovery_admission(self, request: RecoverUnknownAssignment) -> None:
@@ -2425,6 +2434,8 @@ class LocalDaemonExecution:
             return "contained", evidence
         if self._managed_target_is_remote(request.assignment_id):
             return self._remote_managed_recovery_evidence(request)
+        assert self.config.agent_root is not None
+        assert self.supervisor is not None
         assignment = cast(ManagedAssignment, binding[0])
         workspace = _ResidentAssignmentWorkspace(
             self.config.agent_root, assignment.assignment_id
@@ -2693,7 +2704,8 @@ class LocalDaemonExecution:
             ):
                 raise QueueConflictError("managed recovery target identity conflicts")
         elif (
-            self.journal.read_grant_fence(request.assignment_id)
+            self.journal is None
+            or self.journal.read_grant_fence(request.assignment_id)
             != request.execution_fence
         ):
             raise QueueConflictError("managed recovery target identity conflicts")
@@ -2922,6 +2934,7 @@ class LocalDaemonExecution:
         if not self._managed_target_is_remote(request.assignment_id):
             from ._managed_local import _launch_from_value
 
+            assert self.config.agent_root is not None
             raw = _ResidentAssignmentWorkspace(
                 self.config.agent_root, request.assignment_id
             ).supervisor_launch_json()
@@ -3788,6 +3801,8 @@ class LocalDaemonExecution:
         grant, launch, unknown state, or failed containment remains settling.
         """
 
+        if self.journal is None:
+            return False
         settling = False
         for assignment_id, coordinator_state in self.coordinator.list_run_live_states(
             run_uri
@@ -4626,9 +4641,13 @@ class LocalDaemonExecution:
             execution_started()
             return True
         accepted = Event()
-        if self.journal is None or self.supervisor is None:
+        journal = self.journal
+        supervisor = self.supervisor
+        agent_root = self.config.agent_root
+        launch_profile = self.config.resident_worker_launch_profile
+        if journal is None or supervisor is None:
             raise QueueServiceError("local assignment has no local agent owner")
-        if self.config.agent_root is None or self.config.resident_worker_launch_profile is None:
+        if agent_root is None or launch_profile is None:
             raise QueueServiceError("local assignment binding is unavailable")
 
         def started() -> None:
@@ -4639,7 +4658,7 @@ class LocalDaemonExecution:
             run_managed_local_assignment(
                 coordinator=self.coordinator,
                 authority=authority,
-                journal=self.journal,
+                journal=journal,
                 assignment=assignment,
                 worker_request=worker_request,
                 claims=claims,
@@ -4647,9 +4666,9 @@ class LocalDaemonExecution:
                 run_store=self.run_store,
                 max_parallel_stages=intent.max_parallel_stages,
                 decision_receipt=decision_receipt,
-                agent_root=self.config.agent_root,
-                supervisor=self.supervisor,
-                resident_launch_profile=self.config.resident_worker_launch_profile,
+                agent_root=agent_root,
+                supervisor=supervisor,
+                resident_launch_profile=launch_profile,
                 cancellation_requested=lambda: self._install_cancellation_if_requested(
                     admission, authority, intent.plan.stage_order
                 ),

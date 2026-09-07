@@ -157,6 +157,18 @@ def test_preparation_allows_local_owner_policy(tmp_path: Path) -> None:
     assert receipt.run_uri == path_to_run_uri(tmp_path / "runs" / "starter-1")
 
 
+def test_preparation_requires_local_agent_before_run_creation(tmp_path: Path) -> None:
+    coordinator = _coordinator_config(tmp_path)
+    payload = json.loads(coordinator.read_text())
+    payload["local_agent"] = None
+    coordinator.write_text(json.dumps(payload))
+    with pytest.raises(QueueServiceError, match="requires an embedded local agent"):
+        prepare_managed_local_run(
+            coordinator, _pipeline_config(tmp_path), "starter-1"
+        )
+    assert not (tmp_path / "runs" / "starter-1").exists()
+
+
 def test_preparation_replay_rejects_changed_scheduling_composition(
     tmp_path: Path,
 ) -> None:

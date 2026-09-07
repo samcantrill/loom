@@ -75,6 +75,7 @@ class LocalAgentServiceConfig:
     agent_root: Path
     profile: ResidentExecutionProfile
     providers: tuple[object, ...] | None
+    provider_configuration: object
     source_path: Path
     environment_path: Path | None = None
 
@@ -648,7 +649,6 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     agent_source, environment_path, payload, _ = _load_protected_config(
         source, env_file=environment
     )
-    providers = _embedded_provider_composition(payload.get("providers"))
     _required_allowed(
         payload,
         {"schema_version", "kind", "agent_root", "resident_profiles"},
@@ -666,10 +666,13 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     )
     if len(profiles) != 1:
         raise QueueConfigError("local agent service requires one resident profile")
+    provider_configuration = payload.get("providers")
+    providers = _embedded_provider_composition(provider_configuration)
     return LocalAgentServiceConfig(
         _path(payload, "agent_root", agent_source.parent),
         profiles[0],
         providers,
+        _without_paths(provider_configuration),
         agent_source,
         environment_path,
     )
@@ -1020,6 +1023,7 @@ def _local_agent_active_projection(
         "cpu_capacity": profile.cpu_capacity,
         "memory_capacity_bytes": profile.memory_capacity_bytes,
         "gpu_devices": [item.descriptor.to_dict() for item in profile.gpu_devices],
+        "providers": local_agent.provider_configuration,
     }
 
 

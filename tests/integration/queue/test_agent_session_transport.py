@@ -270,8 +270,12 @@ def test_agent_listener_prepares_tls_rotation_before_atomic_install(
 
 
 @pytest.mark.parametrize("cancel_before_grant", (False, True))
+@pytest.mark.parametrize("with_local_agent", (False, True))
 def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_before_grant: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_before_grant: bool,
+    with_local_agent: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -303,9 +307,10 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
     )
     daemon_config = LocalDaemonConfig(
         tmp_path / "coordinator",
-        tmp_path / "coordinator-agent",
+        tmp_path / "coordinator-agent" if with_local_agent else None,
         store.root,
-        _local_launch_profile(),
+        _local_launch_profile() if with_local_agent else None,
+        cpu_capacity=1 if with_local_agent else 0,
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -3871,9 +3876,11 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
         daemon.stop()
 
 
+@pytest.mark.parametrize("with_local_agent", (False, True))
 def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    with_local_agent: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -3971,9 +3978,10 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
 
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
-        tmp_path / "coordinator-agent",
+        tmp_path / "coordinator-agent" if with_local_agent else None,
         run_root,
-        _local_launch_profile(),
+        _local_launch_profile() if with_local_agent else None,
+        cpu_capacity=1 if with_local_agent else 0,
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -4013,6 +4021,19 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
     try:
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("remote-item", run_uri))
+        with pytest.raises(TimeoutError):
+            coordinator.wait("remote-item", timeout_seconds=0.05)
+        assert daemon.status().service_health == "healthy"
+        assert daemon.status().running_assignments == 0
+        if not with_local_agent:
+            assert not (tmp_path / "coordinator-agent").exists()
+            assert config.agent_resource_providers == ()
+            assert daemon._execution is not None
+            assert daemon._execution.supervisor is None
         handshake = agent.handshake()
         session = agent.register(
             AgentRegistration(
@@ -4026,24 +4047,6 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 ("default",),
                 capabilities,
             )
-        )
-        agent.publish_offer(
-            AgentOffer(
-                session.session_id,
-                session.coordinator_epoch,
-                session.config_revision,
-                session.inventory_revision,
-                session.availability_revision,
-                1,
-                0,
-                30,
-                _resident_provider_descriptors(profile, session.agent_id),
-                resident_profiles=(descriptor,),
-            ),
-            idempotency_key="offer-remote-1",
-        )
-        coordinator = daemon.client_view(
-            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         original_target_delivery = local_daemon_execution._target_remote_delivery
         stale_target_once = False
@@ -4158,6 +4161,21 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
             return original_confirm(*args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(agent, "confirm_started", confirm_across_restart)
+        agent.publish_offer(
+            AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                session.config_revision,
+                session.inventory_revision,
+                session.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, session.agent_id),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="offer-remote-1",
+        )
         with ThreadPoolExecutor(max_workers=1) as workers:
             execution = workers.submit(
                 agent.execute_one,
@@ -4166,7 +4184,6 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 sequence=1,
                 wait_timeout_ms=5_000,
             )
-            coordinator.submit(LocalDaemonAdmissionRequest("remote-item", run_uri))
             declined = execution.result(timeout=20)
             next_session = cast(Mapping[str, object], declined["session"])
             next_availability = str(next_session["availability_revision"])
@@ -4354,6 +4371,7 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
                 (repaired.session_id,),
             ).fetchone()[0]
         assert str(first_secret) not in str(verifier)
+        assert config.agent_root is not None
         with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM agent_sessions_local").fetchone()[0]

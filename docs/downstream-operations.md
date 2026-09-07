@@ -156,15 +156,53 @@ rejected. Relative paths resolve from the config file, not the process working
 directory. Explicit reload retains these selected inputs and revalidates them;
 it does not watch for changes.
 
+Coordinator and agent role documents use `schema_version: 3`. A coordinator
+declares `local_agent: null` when all work will execute on outbound agents. It
+needs no local project, worker Python, CPU/memory/GPU inventory, agent root, or
+worker supervisor. It can accept prepared work and remain healthy while waiting
+for an eligible authenticated agent.
+
+To execute on the coordinator's host, replace that null with a protected agent
+file reference:
+
+```yaml
+local_agent:
+  config: ./agent.yaml
+  env_file: ./agent.env  # Use null for a literal agent configuration.
+```
+
+The referenced document has `kind: loom.local-agent-service`, an `agent_root`,
+and exactly one `resident_profiles` entry. That entry owns the existing
+`descriptor`, `project_root`, `python_executable`, `environment`, `cpu_capacity`,
+`memory_capacity_bytes`, and `gpu_devices` declarations. Optional `providers`
+contains the configured provider composition. These worker settings no longer
+belong in the coordinator's old `embedded_profile`/`embedded_agent` fields.
+Outbound documents retain `kind: loom.outbound-agent-service`, their resident
+profile declarations, and the required connection, registration, and TLS
+configuration. Local composition requires no outbound TLS credentials.
+
+The agent reference resolves relative to coordinator YAML; paths inside the
+agent document resolve relative to agent YAML. Its explicit env file is composed
+independently, so coordinator env values cannot silently supply missing agent
+values. Explicit daemon reload rereads both selected role inputs. A missing or
+invalid input rejects reload without replacing retained ownership.
+
 `daemon-init` publishes one absent deployment directory containing the bound
-`coordinator` and embedded `agent` roots plus a configuration fingerprint.
+`coordinator` root and, when selected, its embedded `agent` root, plus a
+configuration fingerprint. For local composition, `agent_root` must name that
+deployment's `agent` subdirectory. The coordinator owns this combined
+initialization; do not separately initialize or serve an outbound agent over the
+embedded root. With `local_agent: null`, no agent subdirectory is created.
 `agent-init` independently publishes one absent outbound-agent root. Each
 initializer constructs and validates a private sibling staging directory and
 performs one final directory rename; an existing target is never overwritten.
 Startup reopens only the complete bound role and rejects a different config.
-There is no root migration or in-place profile update.
+Old role schemas and populated roots are rejected; there is no root migration
+or in-place profile update. Settle existing work with its compatible runtime,
+then explicitly initialize fresh roots for the new configuration.
 
-The worker supervisor is a separate local service and remains the process owner
+For an embedded or outbound agent, the worker supervisor is a separate local
+service and remains the process owner
 when the daemon application stops. Restart the daemon with the same protected
 config and exact profile. Startup stays unavailable while it joins any retained
 worker, imports its result, releases its claims, and publishes a fresh capacity

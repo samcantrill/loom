@@ -60,7 +60,9 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
     source = _coordinator_config(tmp_path)
     payload = json.loads(source.read_text(encoding="utf-8"))
     agent_payload = _local_agent_payload(source)
-    profile = agent_payload["resident_profiles"][0]
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
     assert isinstance(profile, dict)
     profile["project_root"] = "${oc.env:LOOM_ROLE_PROJECT}"
     profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
@@ -90,6 +92,7 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
 
     first = load_coordinator_service_config(source, env_file=environment)
     assert first.environment_path == environment.resolve()
+    assert first.daemon.resident_worker_launch_profile is not None
     assert first.daemon.resident_worker_launch_profile.project_root == tmp_path
     assert first.daemon.cpu_capacity == 1
     assert first.agent_server is not None
@@ -116,6 +119,8 @@ def test_explicit_environment_is_authoritative_and_binds_effective_values(
     changed_project = load_coordinator_service_config(source, env_file=environment)
     assert changed_project.immutable_fingerprint == first.immutable_fingerprint
     assert changed_project.active_fingerprint == first.active_fingerprint
+    assert changed_project.daemon.resident_worker_launch_profile is not None
+    assert first.daemon.resident_worker_launch_profile is not None
     assert (
         changed_project.daemon.resident_worker_launch_profile.fingerprint
         != first.daemon.resident_worker_launch_profile.fingerprint
@@ -166,7 +171,9 @@ def test_composed_source_closure_accepts_shared_readable_templates(
     source = _coordinator_config(tmp_path)
     payload = json.loads(source.read_text(encoding="utf-8"))
     agent_payload = _local_agent_payload(source)
-    profile = agent_payload["resident_profiles"][0]
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
     assert isinstance(profile, dict)
     included = tmp_path / "local-agent.yaml"
     included.write_text(
@@ -213,6 +220,7 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
     daemon = LocalDaemon(service.daemon)
     daemon.start()
     assert daemon._execution is not None  # noqa: SLF001
+    assert daemon._execution.supervisor is not None
     daemon._execution.supervisor.shutdown_for_test()  # noqa: SLF001
     daemon.stop()
     restarted = LocalDaemon(service.daemon)
@@ -251,6 +259,61 @@ def test_pure_coordinator_initializes_and_waits_without_local_agent(
         assert status.running_assignments == 0
     finally:
         daemon.stop()
+
+
+def test_local_agent_rejects_old_schema_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["schema_version"] = 2
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    constructed = False
+
+    def construct(*_args: object, **_kwargs: object) -> object:
+        nonlocal constructed
+        constructed = True
+        return object()
+
+    monkeypatch.setattr("loom.queue.deployment._trusted_target", construct)
+    with pytest.raises(QueueConfigError, match="schema version"):
+        load_coordinator_service_config(source)
+    assert not constructed
+    assert not (tmp_path / "deployment").exists()
+
+
+def test_local_provider_configuration_participates_in_reload_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    provider = {
+        "_target_": "tests.support.stage29_composition.ConfiguredCpuProvider",
+        "capacity": 1,
+        "capacity_key": "local-machine:cpu",
+    }
+    payload["providers"] = {"providers": [provider]}
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    provider["capacity"] = 2
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    agent_source = source.parent / "agent.yaml"
+    agent_source.write_text(json.dumps(payload, indent=4, sort_keys=True))
+    equivalent = load_coordinator_service_config(source)
+    assert equivalent.active_fingerprint == changed.active_fingerprint
+
+
+def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    with pytest.raises(QueueServiceError, match="providers are invalid"):
+        load_coordinator_service_config(source)
 
 
 def test_outbound_agent_publication_is_atomic_and_config_bound(
@@ -320,7 +383,9 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     alternate_python = second_root / "python"
     alternate_python.symlink_to(sys.executable)
     agent_payload = _local_agent_payload(first_source)
-    profile = agent_payload["resident_profiles"][0]
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
     assert isinstance(profile, dict)
     profile["project_root"] = str(second_root)
     profile["python_executable"] = str(alternate_python)
@@ -330,6 +395,7 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     _write_local_agent(second_source, agent_payload)
     second = load_coordinator_service_config(second_source)
 
+    assert second.daemon.resident_worker_launch_profile is not None
     assert (
         second.daemon.resident_worker_launch_profile.python_executable
         == alternate_python.absolute()
