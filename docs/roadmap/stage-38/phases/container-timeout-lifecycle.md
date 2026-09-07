@@ -10,11 +10,11 @@
 - Base: `71d24525c21a57be4cf5db8ad325d28254273e3c`
 - PR target: develop
 - PR title: `feat(execution): supervise container timeout cleanup`
-- Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent review of the
-  existing-owner group-settlement candidate below
+- Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
+  accepted at `2441182`, with identity-order correction `0786e55`
 - Workflow path: expanded, cross-process ownership and cleanup proof
-- Blockers: not ready for execution; the group-settlement proof is not yet
-  independently accepted
+- Blockers: none for the bounded reviewed mechanism; implementation and runtime
+  acceptance must still prove it before PR/merge
 
 ## Objective And Context
 
@@ -155,24 +155,36 @@ candidate but is not broad acceptance, a latency contract, or proof for startup,
 interruption, and production capacity-release paths. Group absence also must not
 be assumed promptly observable while task release or zombie cleanup remains.
 
-### Resolved Question And Remaining Decision
+### Reviewed Mechanism And Exact Owners
 
-The smallest candidate remains existing ownership plus the runtime namespace;
-a new retained owner is not yet justified. On direct execution, the built-in
+Independent review accepts existing ownership plus the runtime namespace;
+a new retained owner is not justified. On direct execution, the built-in
 runner remains alive to enforce the deadline, signal only its created launcher,
 reap that launcher, and positively observe an identity-safe namespace-init handle
 captured from the live launch lineage. On managed cancellation, the runtime
 launcher and `sinit` must remain in the inherited outer group. The existing
-legacy/agent owners may treat confirmed group absence as terminal only if
-independent review accepts the kernel barrier above and runtime evidence proves
-that `sinit` remains a member through teardown. Namespace-init settlement, not
+legacy/agent owners use confirmed group absence as terminal only on the reviewed
+kernel/runtime path, with implementation evidence proving that `sinit` remains
+a member through teardown. Namespace-init settlement, not
 launcher exit, then covers the separate-session payload.
 
-The exact remaining decision is independent acceptance or rejection of that
-group-settlement argument. Review must assess the kernel source and fresh
-group-KILL receipt, then cover startup before `sinit` is observed, TERM and KILL
-interruption, caller loss, task/zombie reaping, PGID reuse risk, and the direct
-runner's identity-safe observation and result compatibility. Do not lock a helper
+The review also locks safe signaling order. Cache a creation-owned root's exit
+status through a non-reaping `waitid(..., WNOWAIT)` observation. Retain that root
+as an unreaped PID/PGID anchor through the single TERM/grace/KILL sequence, then
+reap exactly once and permanently close group signaling. Post-reap group checks
+are observation-only: presence or numeric reuse retains capacity, never grants
+permission for another signal. Root-first exit starts containment before reaping.
+Failure to retain the anchor fails closed. A bounded host probe confirms this
+wait/signal/reap order (`build/process-group-anchor-probe.txt`); it is mechanism
+evidence, not the full descendant acceptance matrix.
+
+Direct init capture must verify creation-linked live lineage and identity, not
+adopt a process by name or raw PID. If startup or launcher-first exit prevents
+positive capture/settlement, return an unresolved-cleanup failed attempt within
+the cleanup budget; retain timeout as primary when applicable. Reject worker
+outputs before reading/admitting them. Managed callers separately require their
+outer settlement barrier. Cover startup, TERM/KILL, interruption, task reaping,
+identity reuse and ordinary result compatibility. Do not add a helper
 process, process-wide subreaper, new group/session, new public method, or result
 schema for convenience. The current `StageContext` producers remain unchanged,
 and the executor must reject outputs before reading/admitting a worker result
@@ -187,10 +199,10 @@ not be smuggled into this phase as private wiring or expanded into a reusable
 supervisor framework, durable supervisor, cgroup requirement, registry, public
 owner enum, or required protocol method without that decision.
 
-A-10 remains a separate bounded correction at its existing owner. The built-in
-local process handle must cache the root return code but keep `poll()` nonterminal
-while the continuously owned process group exists; `cancel()` must signal that
-group even after root exit. This strengthens the existing terminal meaning and
+A-10 remains a bounded correction at its existing owner. The built-in local
+process handle caches root status without reaping and starts bounded containment
+on root-first exit, while `poll()` stays nonterminal until post-reap group absence.
+Cancellation uses the same one-shot signal/reap sequence. This strengthens the existing terminal meaning and
 does not add a protocol method. Injected runners remain responsible for the
 existing `LocalProcess.poll()` terminal contract; tests need not gain a new fake
 method. Process-group existence is conservative evidence only: it need not become
@@ -199,13 +211,32 @@ confirmed inherited-group root-first-exit defect. It covers a separate-session
 namespace child only if the independently reviewed kernel/runtime-init barrier
 above is established; `killpg(..., 0)` alone is not that proof.
 
+Manager source verification found the same identity-order defect at the existing
+resident supervisor, not a new ownership requirement: `query()` calls
+`child.poll()` before `contain()` signals the stored group; `_process_group_alive`
+also reaps before later escalation, and service `request_stop` can repeat the
+pattern. Apply the same reviewed anchor/signal/reap contract to these existing
+owners. Preserve query's root-exit result, separate CONTAINED/UNKNOWN decisions,
+launch replay, durable receipt/schema, shutdown, restart non-adoption and physical
+release semantics. Do not replace the supervisor or transport. A private helper
+shared by these two current queue consumers is justified only if it removes
+duplicate identity-order logic; the direct container runner must not import it.
+
+Exact product owners: `pipeline/executors/apptainer/commands.py` and `executor.py`,
+their existing command/capability/diagnostic integration where needed, queue
+`local.py`, and queue `_agent_process_supervisor.py`. Preserve public runner
+methods, command-result schema and `StageContext` producers. Tests/docs belong
+with those owners. Linux foreground SingularityCE 3.10.4 `--pid` with its init
+shim is the evidenced runtime; do not advertise unproven runtime/mode support or
+silently use launcher-only cleanup on unavailable OS identity primitives.
+
 ## Scope
 
 Approved outcome: configured deadlines, bounded graceful termination and
 escalation, observation and owned reaping, primary timeout plus cleanup context,
 and no success admission or physical release based on an exited launcher alone.
-The minimum existing-owner candidate is concrete but not accepted until the
-independent review and required runtime acceptance below.
+The existing-owner mechanism is independently reviewed. Required implementation
+review and runtime acceptance remain gates, not presumed results.
 
 Exclude a general supervisor framework, daemon imports into low-level commands,
 arbitrary hostile/daemonizing-process containment, new scheduler or recovery
@@ -219,11 +250,16 @@ design decision rather than being hidden as private wiring.
   written before the deadline cannot override timeout or cleanup uncertainty.
 - Start the deadline before runtime launch. Cleanup has one bounded TERM grace
   and one bounded KILL/observation grace; neither extends or rewrites the primary
-  deadline.
+  deadline. Reuse the current resident upper budgets: at most two seconds for
+  TERM grace and two additional seconds for KILL/settlement observation. Existing
+  explicit forced-stop paths may escalate earlier; do not delay an ownership-loss
+  stop or turn these caps into new mandatory waits.
 - Signal only processes/boundaries owned by this invocation. Observe exit and
   reap owned processes before claiming termination. Creation-linked child/OS
-  handles and wait status must establish identity; a scoped subreaper is a review
-  candidate, while `/proc` names, a raw PID, or a namespace-link read do not.
+  handles and wait status must establish identity. Managed group signals occur
+  only while the unreaped creation-owned root anchors the identity; once reaped,
+  never signal that group again. A name, raw PID or namespace-link read alone
+  is not ownership evidence. No helper process or subreaper is authorized.
 - Stage and enclosing-owner obligations must agree with actual containment.
   Keep the ordinary worker's `STAGE` fact and existing resident/SLURM
   `OUTER_BOUNDARY` facts. Keep the runtime launcher/init in the inherited outer
@@ -250,8 +286,8 @@ owners remain cancellation/capacity owners. The runtime init's inherited group
 membership plus the Linux namespace teardown ordering may connect those existing
 owners without a new process or public contract. A post-exit PID scan, new
 launcher group, process-wide subreaper, or launcher-only wait remains insufficient.
-Add a retained cross-owner supervisor only if independent review rejects the
-smaller barrier and the maintainer separately approves that broader direction.
+The accepted mechanism needs no retained cross-owner supervisor. Any demonstrated
+need for one must return for maintainer agreement, not expand this implementation.
 
 ## Invariant Ownership
 
@@ -264,17 +300,16 @@ smaller barrier and the maintainer separately approves that broader direction.
 
 ## Implementation Slices
 
-1. Obtain independent design review of the kernel/runtime-init group barrier,
-   startup/caller loss, group-KILL ordering, identity, and release proof. Do not
-   enable timeouts before that gate passes.
-2. If accepted, implement only timeout-only PID-namespace selection in the
+1. Design review passed with the non-reaping root-anchor correction. Implement
+   the same identity-safe ordering in the two existing managed group owners;
+   preserve root-exit publication separately from physical settlement.
+2. Implement timeout-only PID-namespace selection in the
    built-in runner, bounded cleanup/observation, identity-safe direct settlement,
    and the executor's timeout-before-result admission gate. Preserve public
    runner/result shapes and existing `StageContext` owner values.
-3. Correct A-10 only in the built-in legacy local process handle/adapter by
-   retaining root status separately, treating group existence as nonterminal,
-   and keeping cancellation effective after root exit. Do not add a protocol
-   method or copy resident supervisor state.
+3. Preserve the existing managed protocols and durable state. Root-first cleanup,
+   cancellation, resident query/contain/request-stop and shutdown must all respect
+   the one-shot signal/reap sequence. No post-reap signal or PID adoption.
 4. Add deterministic process fixtures, the selected-runtime acceptance cases,
    docs, and redacted failure evidence; then run targeted and full gates and
    independently review the resulting implementation.
@@ -291,6 +326,13 @@ observation/reaping, capacity retention through group-KILL settlement, and no
 output admission after timeout. Fixtures must own every process/group they signal
 and guarantee their own cleanup.
 
+Both managed owners need a production-path regression proving non-reaping root
+status, signals before the sole reap, and no signal after reap even when a numeric
+PGID remains present/reappears. Cover resident query-before-contain, request-stop,
+repeated contain and clean shutdown; preserve launch replay and restart
+non-adoption. Use controlled syscall evidence for reuse, never force host PID reuse
+or signal an unrelated process. Real descendant fixtures prove actual cleanup.
+
 Required production evidence: selected container runtime with a suitable image,
 actual `--pid`/init topology and cleanup behavior, unchanged worker containment
 facts, no success on timeout, and managed capacity retained until the reviewed
@@ -306,6 +348,9 @@ Targeted implementation gate (expand only for changed adjacent owners):
       tests/unit/loom/pipeline/execution/test_stage_worker.py \
       tests/unit/loom/pipeline/test_context.py \
       tests/unit/loom/queue/test_local_adapter.py \
+      tests/unit/loom/queue/test_agent_process_supervisor.py \
+      tests/unit/loom/queue/test_resident_stage_worker.py \
+      tests/integration/queue/test_agent_session_transport.py \
       tests/contracts/test_stage_worker_contract.py \
       tests/container_acceptance/test_real_container_runtimes.py \
       tests/package/test_import_boundaries.py
@@ -320,7 +365,7 @@ expanded phase preparation. Missing runtime prerequisites remain visible gaps.
 
 ## Risks, Review, And Stops
 
-Stop now for independent design review. If runtime-init membership or Linux
+Stop on a new missing contract or failed mechanism. If runtime-init membership or Linux
 teardown/group-release ordering cannot make group absence positive settlement
 evidence, do not implement the existing-owner candidate. Present any retained
 owner, public/durable handoff, new containment-owner value, supervisor, cgroup,
@@ -330,17 +375,21 @@ while this decision is resolved; the overall objective stays open.
 
 ## Executor Handoff
 
-No executor is authorized. The manager must obtain the independent design review
-above, then update this card's blocker/workflow state. Only an approved later
-executor may implement the locked narrow owners and return
-implementation/validation evidence without PR/merge or delegation.
+One executor is authorized for the owners and reviewed contracts above. Preserve
+all other work. Return coherent commits, changed paths, implementation and exact
+validation receipts here; no PR/merge, independent review, or delegation. Stop for
+an unsupported platform/runtime decision, new public/durable mechanism, or inability
+to maintain the creation-linked ownership proof. Do not weaken the accepted gate.
 
 ## Workflow State
 
 - Manager preparation: refreshed base and predecessor merge verified; isolated
   phase worktree prepared; locked environment and fresh runtime evidence recorded
-- Expanded planning: smallest existing-owner candidate recorded
-- Independent design review: group-settlement proof pending
+- Expanded planning: existing-owner mechanism and exact consumers locked
+- Independent design review: accepted at `2441182`; one bounded correction at
+  `0786e55` locks group identity through the final signal
+- Manager startup: kernel/runtime receipts, 161 baseline passes, exact source
+  owners and repeated resident identity-order path verified; ready for one executor
 - Implementation: not started
 - Pre-submit gate, independent implementation review, PR and merge: pending
 - Blocker corrections: 0/3

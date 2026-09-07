@@ -1,15 +1,15 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: Phases 1 and 2 merged; Phase 3 design investigation in progress
+Status: Phases 1 and 2 merged; Phase 3 reviewed implementation ready
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 3 timeout/lifecycle design review; Phase 2 PR #278 merged at `0c0dbf2`.
-Blockers: none for Phase 2; Phase 3 retains its design gate.
+Current gate: Phase 3 implementation/runtime evidence; Phase 2 PR #278 merged at `0c0dbf2`.
+Blockers: none at Phase 3 startup; the bounded mechanism is independently reviewed.
 The maintainer approved the warning correction and one fresh bounded verification
 after the prior reviewer reuse was consumed. Positive runtime-limit acceptance is deferred
-to a compatible host; the later timeout design gate remains.
+to a compatible host; timeout implementation and runtime evidence remain pending.
 
 ## Current State
 
@@ -18,8 +18,8 @@ to a compatible host; the later timeout design gate remains.
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
 | Evidence | Published merge verified; initial audit accepted; `04443ed` independently accepted with 80 focused passes, both full gates, 2,994 summary passes / five optional skips, and one selected-policy SIF smoke pass | A-10 remains design-gated | Retain exact-tree receipts for later integrated review |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Scheduling-only policy, combined startup, and implemented amendments independently accepted | Timeout ownership unresolved | Review Phase 3 lifecycle design |
-| Implementation | Phases 1 and 2 merged; PR #278 at `0c0dbf2` has the reviewed and fully validated product tree; receipts retained and phase cleanup complete | Phase 3 design gate | Review lifecycle design before any timeout implementation |
+| Design | Scheduling-only policy and timeout kernel/init mechanism independently accepted; bounded correction locks signal-before-reap ownership | None within the recorded mechanism | Implement the exact phase-card contracts |
+| Implementation | Phases 1 and 2 merged; Phase 3 packet ready with the two actual managed group owners | Implementation/runtime evidence pending | One executor, full gates and independent correctness review |
 
 ## Evidence And Scope
 
@@ -549,6 +549,16 @@ actual outer-owner loss is a materially broader ownership choice requiring
 maintainer agreement.
 
 ## Complexity Delta
+
+Manager verification applies the reviewed signaling order to both actual queue
+owners. Resident `_agent_process_supervisor.py:query` reaps through `Popen.poll`
+before `contain` signals the numeric group; `_process_group_alive` and service
+`request_stop` repeat that pattern. This confirmed A-14 lifecycle defect needs
+the same non-reaping anchor and one-shot cleanup ordering as legacy A-10, not a
+new supervision mechanism. Preserve resident root-exit/CONTAINED/UNKNOWN receipt
+semantics, replay, clean shutdown, restart non-adoption and physical release.
+Independent implementation review must cover both owners. Their private helper
+layout remains discretionary; low-level container code cannot import queue code.
 
 Current Phase 3 evidence is owned by the phase card's **Fresh Design Evidence**.
 Published `71d2452` includes the separate role-environment loading PR #279; the
