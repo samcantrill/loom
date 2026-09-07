@@ -63,9 +63,9 @@ Phase 3 retains its explicit timeout design gate.
   verified separately from the confirmed legacy adapter containment gap.
 - First-phase startup: manager verified scope, source, tests, locked baseline,
   independent audit, phase packet, and approval; no blocker.
-- Ready for implementation: Phase 1 is merged; Phase 2 offline implementation
-  is ready after its fresh source/base and packet check. Live acceptance remains
-  mandatory before closure. Phase 3's card is an explicit design-gated handoff,
+- Implementation readiness: Phase 1 is merged; Phase 2 offline implementation
+  and both local gates are complete, with independent correctness review and
+  mandatory live acceptance remaining. Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Accepted risks: host-dependent cgroup/runtime availability; original control
   checkout cannot be advanced by discarding or stashing its dirty contents.
@@ -77,7 +77,7 @@ Phase 3 retains its explicit timeout design gate.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | pending | not started | host acceptance pending | not created |
+| 2 | pending | offline implementation at `7b28cb3`; targeted 138 passed; both required local gates passed, 2,964 summary tests passed and 4 optional skips | independent review and required live enforcement acceptance pending | worktree and branch retained |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged

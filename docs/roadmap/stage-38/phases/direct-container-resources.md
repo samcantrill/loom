@@ -175,7 +175,9 @@ administration, or timeout implementation. Return exact validation and blockers.
   source/targeted-lane refresh, ownership, approval, and private discretion verified
 - Expanded planning: no new resource/public decision; independent implementation
   review remains required and live acceptance is explicitly not waived
-- Implementation, pre-submit gate, independent review, PR and merge: pending
+- Implementation and required offline validation: complete at `7b28cb3`
+- Independent correctness review: in progress; pre-submit, PR and merge held for
+  required live acceptance
 - Blocker corrections: 0/3
 
 ## Completion Record
@@ -183,7 +185,7 @@ administration, or timeout implementation. Return exact validation and blockers.
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Offline implementation complete: direct Apptainer/Singularity CPU and exact-byte memory flags; resource-intent revalidation and actionable resource-command failure; truthful capability/preflight projection with runtime-intent override and authored-intent fallback; scheduler-owned SLURM composition/preflight; A-9 complete-value grammar check; opt-in cgroup-v2 acceptance hook. Changed `src/loom/pipeline/executors/apptainer/{commands.py,executor.py}`, `src/loom/pipeline/{runtime/capabilities.py,executors/slurm/{container.py,rendering.py}}`, `src/loom/diagnostics/preflight.py`, related scoped tests, and `docs/features/container-executors.md`. |
-| Tests and validated revision | Targeted Phase 2 lane: 138 passed. Default opt-in resource hook: 1 skipped (expected opt-out). Explicit opt-in without `LOOM_APPTAINER_RESOURCE_IMAGE`: failed actionably as required. `make validate-pr` passed: Ruff, Pyright, 2,807 default tests, 157 config-extra tests (4 optional skips), and build. `make test-summary` passed: package 122, unit 1,976, contract 300, integration 340, e2e 69, config-extra 157 (4 optional skips). Validated implementation tree based on `e96ebb7`; this receipt-only edit does not change validation inputs. |
+| Tests and validated revision | Targeted Phase 2 lane: 138 passed. Default opt-in resource hook: 1 skipped (expected opt-out). Explicit opt-in without `LOOM_APPTAINER_RESOURCE_IMAGE`: failed actionably as required. `make validate-pr` passed: Ruff, Pyright, 2,807 default tests, 157 config-extra tests (4 optional skips), and build. `make test-summary` passed: package 122, unit 1,976, contract 300, integration 340, e2e 69, config-extra 157 (4 optional skips), total 2,964 passed. The tested source/test tree is committed at `7b28cb3274c218eeca8fd1dbf212c524b56bf595`; subsequent receipt/roadmap edits do not change validation inputs. |
 | Real runtime evidence / unavailable checks | No enforcement proof: default hook was opted out; explicit opt-in stopped because the maintainer has not supplied an approved local image and compatible delegated-cgroup runtime session. The hook reads the payload cgroup path from `/proc/self/cgroup` before inspecting `cpu.max` and `memory.max`; it performs no pull, build, download, or host administration. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Required live CPU/memory enforcement acceptance remains blocking for phase closure/merge. Phase status remains `in_progress`; independent correctness review, PR, merge, and cleanup are pending. |

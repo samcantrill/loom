@@ -1,11 +1,11 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; resource phase startup preparation
+Status: first phase merged; resource phase offline implementation in correctness review
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 2 startup; upstream audit and Phase 1 independently accepted.
+Current gate: Phase 2 independent correctness review; live acceptance remains open.
 Blockers: runtime acceptance prerequisites and timeout design remain open.
 
 ## Current State
@@ -16,7 +16,7 @@ Blockers: runtime acceptance prerequisites and timeout design remain open.
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; 236 tests passed and independent audit accepted | A-9 and A-10 need later bounded corrections | Preserve retained upstream behavior |
 | Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 and A-11 merged through PR #277 after both local gates and independent correctness review | Resource acceptance prerequisites open; Phase 3 retains its design gate | Prepare resource implementation from merged develop |
+| Implementation | Phase 1 and A-11 merged through PR #277; Phase 2 offline implementation committed at `7b28cb3`, targeted tests and both local gates passed | Independent Phase 2 review and runtime acceptance remain open; Phase 3 retains its design gate | Review the committed implementation; retain the mandatory live check |
 
 ## Evidence And Scope
 
@@ -24,9 +24,9 @@ The source checkout is `/nas/home/can134/work/loom`, on dirty `develop` at
 `a6bd1ef54523ac394b6a875c7486f9d8d7f68b95`. It contains 36 modified tracked
 files (15 source, 18 tests, three feature docs), plus the untracked historical
 concurrency brief and GPU visibility helper. None is an implementation base.
-The selected worktree root is `/nas/home/can134/work/loom-worktrees`; current
-audit/first-phase tree is `stage-38-p1-stage-target-validation`, branch
-`agent/stage-38-p1-stage-target-validation`. The older Stage 81 worktree remains
+The selected worktree root is `/nas/home/can134/work/loom-worktrees`; the active
+resource-phase tree is `stage-38-p2-direct-container-resources`, branch
+`agent/stage-38-p2-direct-container-resources`. The older Stage 81 worktree remains
 untouched and is not repurposed.
 
 Phase 1 merged at `133505b12d3e0bea53a42533ec240ff4f1b3562b`; its temporary
@@ -163,7 +163,7 @@ process-cleanup guarantee from either existing command runner.
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
-| FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | approved intent |
+| FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | offline implementation validated; review and live acceptance pending |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
@@ -202,7 +202,19 @@ unresolved cleanup evidence.
   `ContainerResourceIntent`. Reuse `ResourceRequest` semantic validation;
   conversion owns exact representability in runtime units. Preserve independent
   GPU projection and metadata redaction. Update current capability/preflight
-  owners and docs, not a new registry.
+  owners and docs, not a new registry. Preserve the executor's existing effective
+  intent precedence: nonempty runtime resource entries replace authored
+  container intent; otherwise authored `ContainerOptions.resources` survives.
+  Preflight must check the same effective CPU/memory intent as command generation,
+  including that supported fallback, rather than inspecting runtime entries only.
+  Scheduler routes retain their own resource validation and enforcement facts;
+  a container runtime name does not imply direct execution. Runtime byte
+  representability includes the supported external parser: SingularityCE 3.10.4
+  uses [go-units 0.5.0](https://github.com/docker/go-units/blob/v0.5.0/size.go),
+  which parses bare byte strings through float64 before int64. Reject values
+  that would change through that conversion. Live acceptance must inspect the
+  payload's actual cgroup, and explicit opt-in without prerequisites must fail
+  actionably rather than count as passing evidence.
 - Timeouts: investigation must identify the launch containment mechanism, worker
   owner propagation, supported child obligations, and positive-cleanup proof.
   Agent/SLURM supervision is evidence of needed ordering, not permission to
@@ -266,8 +278,10 @@ Final commands for each implementation phase are `make validate-pr` and
 
 Approved ordering is audit, validation guard, CPU/memory mapping (including
 A-9), lifecycle-safe timeouts, then integrated review. The compact manifest
-links three phase cards. Phase 1 has a complete bounded executor packet and its
-startup gate is ready. Phase 2 awaits its predecessor and runtime prerequisites.
+links three phase cards. Phase 1 is merged after independent review and both
+required gates. Phase 2 has committed its offline implementation and passed both
+local gates on that published base; independent review and required live
+acceptance remain open.
 Phase 3's card explicitly forbids execution until its lifecycle design is
 reviewed, including the separately identified legacy A-10 correction. This
 staged readiness follows the maintainer's explicit instruction that earlier
@@ -282,7 +296,7 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
 | Minimum timeout design justified | Ownership investigation in progress | pending |
-| Detailed phase traceability and startup readiness | FR-1 maps to a complete Phase 1 card; later phases retain explicit gates | pass for Phase 1 only |
+| Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 
 Gate result: ready to implement Phase 1. Phase 3 remains unapproved for product
