@@ -7,7 +7,7 @@
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p3-container-timeout-lifecycle`
 - Worktree: `stage-38-p3-container-timeout-lifecycle` under the recorded root
-- Base: `71d24525c21a57be4cf5db8ad325d28254273e3c`
+- Base: `43d02a19c59fcee5151d8a42bcc9bdf0f4dffde5`; initial reviewed base `71d2452`
 - PR target: develop
 - PR title: `feat(execution): supervise container timeout cleanup`
 - Dependencies: Phase 2 PR #278 merged at `0c0dbf2`; independent design review
@@ -506,6 +506,31 @@ verification closes the original finding at `6afbaef`, confirming the absolute
 deadline, forced-KILL shortening, delayed/repeated calls, one-shot identity and
 reaping, conservative capacity retention and mutation-sensitive regression
 evidence. No additional code findings remain. Fresh full gates are still required.
+
+### Published-Base Refresh
+
+Both full gates passed for corrected source `6afbaef`: 2,854 default and 161
+config-extra passes in `make validate-pr`, and 3,015 summary passes with 18 opt-in
+skips in 1,007.85 seconds. All receipts were copied to integration
+`build/stage-38-p3-6afbaef`; the summary checksum matches
+`5265e2b5660f6c480218c9b3e3e90f1ba38ea90ba5be182c501cdd02dceff61e`.
+
+During validation, independently delivered PR #281 advanced develop to `43d02a1`
+with optional embedded-agent composition and related owner/transport tests. The
+manager reviewed its published diff, PR validation evidence and local-versus-remote
+dispatch, recovery and release branches. There are no changed paths in common
+with this phase. Refresh merge `f1aaa9c` preserves the entire phase delta byte for
+byte: `git diff --binary 71d2452..0c28d5a` and `43d02a1..f1aaa9c` both hash to
+`bf1e3513178218d57b4c55bae8155c0d3565e20192aba3faea630466574804f9`.
+The independent code-review closure therefore remains applicable; no new product
+correction or ownership change is introduced by this refresh.
+
+Validate the combined tree before merge: process-group regression, both
+coordinator compositions through real pre-grant retry/cancellation and remote
+execute/restart/commit transport cases, all 13 container cases, and both full
+gates. Earlier receipts remain valid for their exact earlier tree, not the new
+combined-tree gate. The original and concurrently owned develop checkouts remain
+untouched.
 
 ## Completion Record
 
