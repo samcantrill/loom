@@ -572,3 +572,24 @@ For the provider constructor use optional keyword `occupancy_monitor`; monitor m
 Run directly affected tests under the locked Python 3.12/dev setup and any necessary static checks. Make coherent commits for owned changes only. Update this packet's result line with paths, interfaces, and evidence after completion. Stop at a terminal handoff or a specific blocker needing a public-contract decision; do not open PRs or merge. The manager will review and integrate all required behaviour.
 
 Executor result: implemented `gpu/occupancy.py` (policy, UUID-keyed NVIDIA XML observer and serialized monotonic cache), `_managed_local.py` status/composition/provider filtering and forced preparation refresh; `GpuResourceProvider(..., occupancy_monitor=...)` exposes `refresh_occupancy(force=False)`. Focused evidence: `uv run --no-sync pytest tests/unit/loom/queue/gpu/test_nvidia.py tests/unit/loom/queue/test_gpu_resource_provider.py tests/unit/loom/queue/test_managed_local.py -q` (48 passed) and focused Ruff passed. No executor blocker.
+
+### Reviewer packet: external GPU availability
+
+Review this approved feature against sections 1–10 and the validation table in
+this document. Worktree: the `external-gpu-availability` sibling of the control
+checkout; branch `agent/external-gpu-availability`, base `develop`. Read
+`.codex/prompts/pull-request-review.md` and the PR body for the current published
+head. This is one feature PR, not a numbered roadmap phase.
+
+The independent-review risk is the mutable boundary between resource reports,
+session revisions, targeted/delivered assignments, exact mutation replay and
+retained GPU claims. Also inspect the NVIDIA observation/cache and embedded
+inventory path. Scope is read-only; do not edit, delegate, or create a review
+sidecar. Return classified findings with exact source evidence and the smallest
+in-scope fixes, plus merge eligibility and residual risk. Do not invent criteria
+beyond the approved behaviour. Full validation runs under manager ownership.
+
+Current evidence: provider owner tests 48 passed; targeted GPU/session/deployment
+and transport tests 15 passed, including both composed two-device routes,
+response-loss/reopen, reporting during a real worker, fresh-prepare decline,
+query failure, and retained CPU/GPU roots. Full gates pending.

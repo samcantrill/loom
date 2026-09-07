@@ -299,7 +299,9 @@ class ResourceAvailabilityStatus:
         for name in ("resource_kind", "local_capacity_key", "reason_code"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
-                raise ManagedLocalError(f"resource status {name} must be a non-empty string")
+                raise ManagedLocalError(
+                    f"resource status {name} must be a non-empty string"
+                )
         if not isinstance(self.available, bool):
             raise ManagedLocalError("resource status availability must be boolean")
         if self.observed_at is not None:
@@ -308,7 +310,9 @@ class ResourceAvailabilityStatus:
             try:
                 parse_timestamp(self.observed_at)
             except ValueError as exc:
-                raise ManagedLocalError("resource status observation time is invalid") from exc
+                raise ManagedLocalError(
+                    "resource status observation time is invalid"
+                ) from exc
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -377,7 +381,10 @@ class ObserveResult:
         ):
             raise ManagedLocalError("resource statuses must be availability statuses")
         if len(
-            {(value.resource_kind, value.local_capacity_key) for value in self.resource_status}
+            {
+                (value.resource_kind, value.local_capacity_key)
+                for value in self.resource_status
+            }
         ) != len(self.resource_status):
             raise ManagedLocalError("resource status keys must be unique")
 
@@ -3744,9 +3751,7 @@ def _project_resident_result(
                 "resident output is outside its stage artifact directory"
             ) from exc
         target = target_root / relative
-        aliases[relative] = (
-            workspace.root / "retained-outputs" / item.logical_name
-        )
+        aliases[relative] = workspace.root / "retained-outputs" / item.logical_name
         retained.append((item, target))
 
     if retained:
@@ -3759,10 +3764,7 @@ def _project_resident_result(
 
     outputs: dict[str, ArtifactRef] = {}
     for item, target in retained:
-        if (
-            _regular_file_size_and_digest(target)
-            != (item.size_bytes, item.digest)
-        ):
+        if _regular_file_size_and_digest(target) != (item.size_bytes, item.digest):
             raise ManagedLocalError(
                 "published resident output conflicts with retained bytes"
             )
@@ -3847,9 +3849,7 @@ def _publish_regular_file_tree(
 
     target_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = Path(
-        tempfile.mkdtemp(
-            prefix=f".{target_root.name}.managed-", dir=target_root.parent
-        )
+        tempfile.mkdtemp(prefix=f".{target_root.name}.managed-", dir=target_root.parent)
     )
     try:
         for relative, source in sorted(
@@ -3958,7 +3958,9 @@ def _regular_file_size_and_digest(path: Path) -> tuple[int, str]:
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise ManagedLocalError("resident artifact is not a readable regular file") from exc
+        raise ManagedLocalError(
+            "resident artifact is not a readable regular file"
+        ) from exc
     digest = hashlib.sha256()
     try:
         details = os.fstat(descriptor)
@@ -3975,7 +3977,9 @@ def _regular_file_size_and_digest(path: Path) -> tuple[int, str]:
 def _fsync_local_tree(root: Path) -> None:
     directories = [root]
     directories.extend(path for path in root.rglob("*") if path.is_dir())
-    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+    for directory in sorted(
+        directories, key=lambda path: len(path.parts), reverse=True
+    ):
         _fsync_local_directory(directory)
 
 
@@ -4146,12 +4150,19 @@ class GpuResourceProvider(AtomResourceProvider):
             occupancy_monitor, GpuOccupancyMonitor
         ):
             raise ManagedLocalError("GPU occupancy monitor is invalid")
-        if occupancy_monitor is not None and set(occupancy_monitor.selected_uuids) != set(
-            self._bindings.values()
-        ):
-            raise ManagedLocalError("GPU occupancy monitor UUIDs conflict with bindings")
+        if occupancy_monitor is not None and set(
+            occupancy_monitor.selected_uuids
+        ) != set(self._bindings.values()):
+            raise ManagedLocalError(
+                "GPU occupancy monitor UUIDs conflict with bindings"
+            )
         self._occupancy_monitor = occupancy_monitor
         self._occupancy_decision: tuple[tuple[str, bool, str], ...] | None = None
+
+    @property
+    def configured_atoms(self) -> tuple[CapacityAtom, ...]:
+        """Stable device capacity for inventory and coordinator upper bounds."""
+        return tuple(sorted(self._capacity.values(), key=lambda atom: atom.key))
 
     def refresh_occupancy(self, force: bool = False) -> GpuOccupancySnapshot | None:
         """Refresh the optional local process cache without holding claim state."""
@@ -4198,7 +4209,8 @@ class GpuResourceProvider(AtomResourceProvider):
             if available and key in available_by_key:
                 filtered.append(available_by_key[key])
         decision = tuple(
-            (item.local_capacity_key, item.available, item.reason_code) for item in statuses
+            (item.local_capacity_key, item.available, item.reason_code)
+            for item in statuses
         )
         if decision != self._occupancy_decision:
             self._occupancy_decision = decision

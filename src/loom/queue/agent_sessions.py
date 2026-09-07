@@ -8,7 +8,7 @@ admission, and process launch remain protected agent-local concerns.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import wraps
 import hashlib
@@ -33,7 +33,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
-from ._managed_local import _provider_group_descriptor
+from ._managed_local import ResourceAvailabilityStatus, _provider_group_descriptor
 from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "10"
+PROTOCOL_VERSION = "11"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -681,6 +681,7 @@ class AgentOffer:
     gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
     gpu_atoms: tuple[CapacityAtom, ...] = ()
     capacity_atoms: tuple[CapacityAtom, ...] = ()
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -848,6 +849,44 @@ class AgentOffer:
             "capacity_atoms",
             tuple(sorted(capacity_atoms, key=lambda item: item.key)),
         )
+        statuses = tuple(self.resource_status)
+        if any(not isinstance(item, ResourceAvailabilityStatus) for item in statuses):
+            raise QueueServiceError("offer resource status is invalid")
+        if statuses:
+            keys = {(item.resource_kind, item.local_capacity_key) for item in statuses}
+            expected_keys = {("gpu", device.device_id) for device in devices}
+            if len(keys) != len(statuses) or keys != expected_keys:
+                raise QueueServiceError(
+                    "offer resource status must cover GPU inventory"
+                )
+            available_keys = {atom.key for atom in capacity_gpu_atoms}
+            if any(
+                item.available
+                != ((item.resource_kind, item.local_capacity_key) in available_keys)
+                for item in statuses
+            ):
+                raise QueueServiceError(
+                    "offer resource status conflicts with availability"
+                )
+        object.__setattr__(
+            self,
+            "resource_status",
+            tuple(
+                sorted(
+                    statuses,
+                    key=lambda item: (item.resource_kind, item.local_capacity_key),
+                )
+            ),
+        )
+
+    def decision_value(self) -> dict[str, PlainData]:
+        """Return scheduling content, excluding report identity and sample times."""
+        value = self.value()
+        value.pop("availability_revision")
+        value["resource_status"] = [
+            item.decision_dict() for item in self.resource_status
+        ]
+        return value
 
     def value(self) -> dict[str, PlainData]:
         return {
@@ -865,6 +904,7 @@ class AgentOffer:
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
             "gpu_devices": [device.to_dict() for device in self.gpu_devices],
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
@@ -883,8 +923,18 @@ class AgentOffer:
             "resident_profiles",
             "gpu_devices",
         }
-        if not isinstance(value, Mapping) or set(value) != expected:
+        if not isinstance(value, Mapping) or set(value) not in (
+            expected,
+            expected | {"resource_status"},
+        ):
             raise QueueServiceError("agent offer is invalid")
+        legacy = "resource_status" not in value
+        status_values = value.get("resource_status", ())
+        if not isinstance(status_values, (list, tuple)):
+            raise QueueServiceError("agent offer resource status is invalid")
+        statuses = tuple(
+            ResourceAvailabilityStatus.from_dict(item) for item in status_values
+        )
         atoms = value["capacity_atoms"]
         if not isinstance(atoms, Sequence) or isinstance(atoms, (str, bytes)):
             raise QueueServiceError("agent offer capacity is invalid")
@@ -957,8 +1007,26 @@ class AgentOffer:
             gpu_devices=tuple(
                 GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
             ),
-            gpu_atoms=tuple(gpu_atoms),
-            capacity_atoms=tuple(capacity_atoms),
+            gpu_atoms=() if legacy else tuple(gpu_atoms),
+            capacity_atoms=tuple(
+                atom
+                for atom in capacity_atoms
+                if not legacy or atom.owner_resource_kind != "gpu"
+            ),
+            resource_status=(
+                tuple(
+                    ResourceAvailabilityStatus(
+                        "gpu",
+                        GpuDeviceDescriptor.from_dict(item).device_id,
+                        False,
+                        "observation_unavailable",
+                        None,
+                    )
+                    for item in gpu_devices
+                )
+                if legacy
+                else statuses
+            ),
         )
 
     @property
@@ -1022,6 +1090,14 @@ def _offer_capacity_atom(value: Mapping[str, object]) -> CapacityAtom:
     return atom
 
 
+def _status_values(value: object) -> Sequence[Mapping[str, object]]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, Mapping) for item in value
+    ):
+        raise QueueServiceError("resource status collection is invalid")
+    return cast(Sequence[Mapping[str, object]], value)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentOfferRenewal:
     """One sequenced extension of an unchanged current offer."""
@@ -1030,6 +1106,7 @@ class AgentOfferRenewal:
     offer_id: str
     availability_revision: str
     sequence: int
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("session_id", "offer_id", "availability_revision"):
@@ -1041,12 +1118,20 @@ class AgentOfferRenewal:
         ):
             raise QueueServiceError("offer renewal sequence must be positive")
 
+        if any(
+            not isinstance(item, ResourceAvailabilityStatus)
+            for item in self.resource_status
+        ):
+            raise QueueServiceError("offer renewal resource status is invalid")
+        object.__setattr__(self, "resource_status", tuple(self.resource_status))
+
     def value(self) -> dict[str, PlainData]:
         return {
             "session_id": self.session_id,
             "offer_id": self.offer_id,
             "availability_revision": self.availability_revision,
             "sequence": self.sequence,
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
@@ -1056,6 +1141,7 @@ class AgentOfferRenewal:
             "offer_id",
             "availability_revision",
             "sequence",
+            "resource_status",
         }:
             raise QueueServiceError("agent offer renewal fields are invalid")
         sequence = value["sequence"]
@@ -1069,6 +1155,10 @@ class AgentOfferRenewal:
             cast(str, value["offer_id"]),
             cast(str, value["availability_revision"]),
             sequence,
+            tuple(
+                ResourceAvailabilityStatus.from_dict(item)
+                for item in _status_values(value["resource_status"])
+            ),
         )
 
 
@@ -1482,10 +1572,16 @@ class AgentSessionView:
         )
 
     def publish_offer(
-        self, offer: AgentOffer, *, idempotency_key: str
+        self,
+        offer: AgentOffer,
+        *,
+        idempotency_key: str,
+        expected_availability_revision: str | None = None,
     ) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).publish_offer(
-            offer, idempotency_key=idempotency_key
+            offer,
+            idempotency_key=idempotency_key,
+            expected_availability_revision=expected_availability_revision,
         )
 
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
@@ -1731,7 +1827,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v10",
+                    "agent-sessions-v11",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -2359,6 +2455,10 @@ class AgentSessionService:
             if current is None:
                 raise QueueConflictError("offer renewal requires the current offer")
             offer = AgentOffer.from_value(json.loads(str(current["offer_json"])))
+            if [item.decision_dict() for item in renewal.resource_status] != [
+                item.decision_dict() for item in offer.resource_status
+            ]:
+                raise QueueConflictError("offer renewal changes resource availability")
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             conn.execute(
@@ -2371,6 +2471,7 @@ class AgentSessionService:
                 "expires_at": expiry,
                 "sequence": renewal.sequence,
                 "state": "renewed",
+                "resource_status": [item.to_dict() for item in renewal.resource_status],
             }
             conn.execute(
                 "INSERT INTO agent_offer_renewals(principal_id, session_id, sequence, digest, result_json) "
@@ -2385,18 +2486,30 @@ class AgentSessionService:
                 ),
             )
             conn.commit()
-            return result
+            return freeze_plain_data(result, path="agent offer renewal receipt")
 
     @_serialized_offer_operation
     def publish_offer(
-        self, offer: AgentOffer, *, idempotency_key: str
+        self,
+        offer: AgentOffer,
+        *,
+        idempotency_key: str,
+        expected_availability_revision: str | None = None,
     ) -> Mapping[str, PlainData]:
         rule, policy_revision = self._authorize("offer")
         execution = self._daemon._execution  # type: ignore[attr-defined]
         if execution is None:
             raise QueueServiceError("agent offer validation is unavailable")
         _identifier(idempotency_key, "idempotency_key")
-        digest = _digest(offer.value())
+        publication = offer.value()
+        if expected_availability_revision is not None:
+            _identifier(
+                expected_availability_revision, "expected availability revision"
+            )
+            publication["expected_availability_revision"] = (
+                expected_availability_revision
+            )
+        digest = _digest(publication)
         replacement_admission = _replacement_offer_admission(
             self._daemon, offer.session_id
         )
@@ -2434,11 +2547,29 @@ class AgentSessionService:
             ) != (
                 session.config_revision,
                 session.inventory_revision,
-                session.availability_revision,
+                session.availability_revision
+                if expected_availability_revision is None
+                else offer.availability_revision,
             ):
                 raise QueueConflictError(
                     "agent offer revisions do not match its session"
                 )
+            if (
+                expected_availability_revision is not None
+                and session.availability_revision != expected_availability_revision
+            ):
+                raise QueueConflictError(
+                    "agent offer previous availability revision is stale"
+                )
+            if expected_availability_revision is not None and (
+                offer.availability_revision == expected_availability_revision
+                or conn.execute(
+                    "SELECT 1 FROM agent_offers WHERE session_id = ? AND availability_revision = ?",
+                    (offer.session_id, offer.availability_revision),
+                ).fetchone()
+                is not None
+            ):
+                raise QueueConflictError("agent availability revision cannot be reused")
             if offer.pools != session.pools:
                 raise QueueConflictError(
                     "agent offer pools do not match its effective scope"
@@ -2501,6 +2632,14 @@ class AgentSessionService:
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             offer_id = f"offer-{uuid4()}"
+            if expected_availability_revision is not None:
+                conn.execute(
+                    "UPDATE agent_sessions SET availability_revision = ? WHERE session_id = ?",
+                    (offer.availability_revision, session.session_id),
+                )
+                session = replace(
+                    session, availability_revision=offer.availability_revision
+                )
             conn.execute(
                 "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
                 (offer.session_id,),
@@ -2526,6 +2665,7 @@ class AgentSessionService:
                 "accepted_at": accepted,
                 "expires_at": expiry,
                 "state": "retained",
+                "session": session.value(),
             }
             if replacement_admission is not None:
                 projection_json = _canonical_json(
@@ -2792,9 +2932,9 @@ class AgentSessionService:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT assignment_id, request_json FROM agent_deliveries "
-                "WHERE session_id = ? AND availability_revision = ? AND "
-                "coordinator_epoch = ? AND state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
-                (session_id, availability_revision, epoch),
+                "WHERE session_id = ? AND coordinator_epoch = ? AND "
+                "state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
+                (session_id, epoch),
             ).fetchone()
             if row is None:
                 conn.commit()

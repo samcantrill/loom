@@ -65,6 +65,9 @@ class EnvironmentProducerStage:
         raw_name = context.stage_config.get("environment_name", "CUDA_VISIBLE_DEVICES")
         if not isinstance(raw_name, str) or not raw_name:
             raise ValueError("environment_name must be a non-empty string")
+        delay = context.stage_config.get("delay_seconds", 0)
+        assert isinstance(delay, (int, float))
+        time.sleep(delay)
         return {
             "data": context.save_artifact(
                 "data",
@@ -204,9 +207,7 @@ class SleepStage:
         _ = inputs
         raw_seconds = context.stage_config.get("seconds", 30)
         seconds = (
-            float(raw_seconds)
-            if isinstance(raw_seconds, int | float | str)
-            else 30.0
+            float(raw_seconds) if isinstance(raw_seconds, int | float | str) else 30.0
         )
         release_marker = context.stage_config.get("release_marker")
         if isinstance(release_marker, str) and Path(release_marker).exists():
@@ -274,9 +275,7 @@ class CoordinatedStage:
         _ = inputs
         marker_dir = Path(str(context.stage_config["marker_dir"]))
         raw_wait_for = context.stage_config.get("wait_for", 1)
-        wait_for = (
-            int(raw_wait_for) if isinstance(raw_wait_for, int | str) else 1
-        )
+        wait_for = int(raw_wait_for) if isinstance(raw_wait_for, int | str) else 1
         raw_timeout_seconds = context.stage_config.get("timeout_seconds", 5)
         timeout_seconds = (
             float(raw_timeout_seconds)
