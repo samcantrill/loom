@@ -16,9 +16,9 @@ to a compatible host; the later timeout design gate remains.
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published develop verified; initial audit accepted; `04443ed` independently accepted with 80 focused passes, both full gates, 2,994 summary passes / five optional skips, and one selected-policy SIF smoke pass | A-10 remains design-gated | Preserve exact-tree receipts and verify PR |
+| Evidence | Published merge verified; initial audit accepted; `04443ed` independently accepted with 80 focused passes, both full gates, 2,994 summary passes / five optional skips, and one selected-policy SIF smoke pass | A-10 remains design-gated | Retain exact-tree receipts for later integrated review |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Review the implemented amendment |
+| Design | Scheduling-only policy, combined startup, and implemented amendments independently accepted | Timeout ownership unresolved | Review Phase 3 lifecycle design |
 | Implementation | Phases 1 and 2 merged; PR #278 at `0c0dbf2` has the reviewed and fully validated product tree; receipts retained and phase cleanup complete | Phase 3 design gate | Review lifecycle design before any timeout implementation |
 
 ## Evidence And Scope
@@ -30,9 +30,10 @@ concurrency brief and GPU visibility helper. None is an implementation base.
 Another session has moved it to `agent/preserved-loom-control-before-stage-85`
 without changing the preserved content hashes, and owns a separate develop
 worktree. Do not update or retire either checkout as part of this phase.
-The selected worktree root is `/nas/home/can134/work/loom-worktrees`; the active
-resource-phase tree is `stage-38-p2-direct-container-resources`, branch
-`agent/stage-38-p2-direct-container-resources`. The older Stage 81 worktree remains
+The selected worktree root is `/nas/home/can134/work/loom-worktrees`. Resource-phase
+tree `stage-38-p2-direct-container-resources` and its
+`agent/stage-38-p2-direct-container-resources` branch were removed after PR #278
+merged; generated receipts remain in the integration tree. The older Stage 81 worktree remains
 untouched and is not repurposed.
 
 Phase 1 merged at `133505b12d3e0bea53a42533ec240ff4f1b3562b`; its temporary
