@@ -316,6 +316,23 @@ def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:
         load_coordinator_service_config(source)
 
 
+def test_equivalent_local_agent_references_keep_effective_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    first = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    for reference in ("./agent.yaml", str(tmp_path / "agent.yaml")):
+        payload["local_agent"]["config"] = reference
+        _write_protected(source, payload)
+        equivalent = load_coordinator_service_config(source)
+        assert equivalent.daemon.agent_root == first.daemon.agent_root
+        assert (
+            equivalent.daemon.resident_worker_launch_profile
+            == first.daemon.resident_worker_launch_profile
+        )
+        assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+        assert equivalent.active_fingerprint == first.active_fingerprint
+
+
 def test_outbound_agent_publication_is_atomic_and_config_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -951,7 +951,6 @@ def _coordinator_immutable_projection(
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "machine_id": payload["machine_id"],
-        "local_agent": payload["local_agent"],
         "agent_server": server_identity,
         "authority": _without_paths(_mapping(payload, "authority")),
     }
@@ -994,7 +993,6 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
                 "max_accepted_time_step_seconds": payload[
                     "max_accepted_time_step_seconds"
                 ],
-                "local_agent": payload["local_agent"],
                 "agent_policy": payload["agent_policy"],
                 "agent_server_credentials": server_credentials,
                 "remote_profiles": payload["remote_profiles"],
