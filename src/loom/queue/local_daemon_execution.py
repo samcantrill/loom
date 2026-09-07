@@ -544,7 +544,7 @@ def initialize_local_daemon_owner_stores(
     config: LocalDaemonConfig,
     *,
     coordinator_id: str = "coordinator",
-    agent_id: str = "agent",
+    agent_id: str | None = "agent",
 ) -> None:
     """Create the two current runtime-owner stores for a fresh daemon root."""
 
@@ -555,19 +555,20 @@ def initialize_local_daemon_owner_stores(
     SQLiteSlurmStageAssignments(
         config.execution_database, config.slurm_transfer_root
     )._initialize()
-    SQLiteAgentJournal(config.agent_journal)._initialize()
-    _initialize_owner_status_revisions(config)
     _bind_owner_store(
         config.execution_database, role="coordinator", stable_id=coordinator_id
     )
-    _bind_owner_store(config.agent_journal, role="local-agent", stable_id=agent_id)
+    if agent_id is not None:
+        SQLiteAgentJournal(config.agent_journal)._initialize()
+        _bind_owner_store(config.agent_journal, role="local-agent", stable_id=agent_id)
+    _initialize_owner_status_revisions(config)
 
 
 def local_daemon_owner_stores_available(
     config: LocalDaemonConfig,
     *,
     coordinator_id: str = "coordinator",
-    agent_id: str = "agent",
+    agent_id: str | None = "agent",
 ) -> bool:
     """Whether both retained runtime owners can still be opened read-only."""
 
@@ -587,9 +588,6 @@ def local_daemon_owner_stores_available(
             config.slurm_transfer_root,
             _allow_initialize=False,
         )._open_existing()
-        SQLiteAgentJournal(
-            config.agent_journal, _allow_initialize=False
-        )._open_existing()
         with _connect_existing_sqlite(config.execution_database) as conn:
             _verify_owner_store_binding(
                 conn, role="coordinator", stable_id=coordinator_id
@@ -600,11 +598,13 @@ def local_daemon_owner_stores_available(
                     "SELECT axis FROM local_daemon_status_revisions"
                 )
             }
-        with _connect_existing_sqlite(config.agent_journal) as conn:
-            _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
-            agent_revision = conn.execute(
-                "SELECT revision FROM local_daemon_status_revision"
-            ).fetchone()
+        agent_revision = True
+        if agent_id is not None:
+            with _connect_existing_sqlite(config.agent_journal) as conn:
+                _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
+                agent_revision = conn.execute(
+                    "SELECT revision FROM local_daemon_status_revision"
+                ).fetchone()
         return {"scheduling", "assignment"}.issubset(
             axes
         ) and agent_revision is not None
@@ -616,7 +616,7 @@ def local_daemon_owner_work_is_retained(
     config: LocalDaemonConfig,
     *,
     coordinator_id: str,
-    agent_id: str,
+    agent_id: str | None,
 ) -> bool:
     """Return only a validated cross-owner retained-work result."""
 
@@ -624,6 +624,8 @@ def local_daemon_owner_work_is_retained(
         config, coordinator_id=coordinator_id, agent_id=agent_id
     ):
         raise QueueServiceError("retained daemon owner state is unavailable")
+    if agent_id is None:
+        return False
     try:
         journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
         coordinator = SQLiteCoordinatorAssignments(
@@ -732,9 +734,10 @@ def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
             """
         )
         conn.commit()
-    with sqlite3.connect(config.agent_journal) as conn:
-        conn.executescript(
-            """
+    if config.agent_root is not None:
+        with sqlite3.connect(config.agent_journal) as conn:
+            conn.executescript(
+                """
             CREATE TABLE IF NOT EXISTS local_daemon_status_revision (
                 revision INTEGER NOT NULL
             );
@@ -751,9 +754,9 @@ def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
             CREATE TRIGGER IF NOT EXISTS local_daemon_agent_event_insert
                 AFTER INSERT ON events
                 BEGIN UPDATE local_daemon_status_revision SET revision = revision + 1; END;
-            """
-        )
-        conn.commit()
+                """
+            )
+            conn.commit()
 
 
 class _ScopedCoordinatorAuthority:
@@ -1166,7 +1169,7 @@ class LocalDaemonExecution:
         *,
         config: LocalDaemonConfig,
         coordinator_id: str,
-        agent_id: str,
+        agent_id: str | None,
         coordinator_epoch: str,
         scheduling_epoch: str,
         cancellation_operation: Callable[[str], str | None],
@@ -1197,8 +1200,10 @@ class LocalDaemonExecution:
         )
         initial_planners = self._scheduling.active_planners()
         configured_providers = tuple(config.agent_resource_providers or ())
-        self.providers = _validate_agent_provider_composition(
-            configured_providers, initial_planners
+        self.providers = (
+            _validate_agent_provider_composition(configured_providers, initial_planners)
+            if config.agent_root is not None
+            else {}
         )
         self.local_capacity = config.agent_resource_capacity
         self.capacity = _coordinator_capacity(config)
@@ -1213,18 +1218,25 @@ class LocalDaemonExecution:
             config.slurm_transfer_root,
             _allow_initialize=False,
         )
-        self.journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+        self.journal = (
+            SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+            if config.agent_root is not None
+            else None
+        )
         self.stage_work_store._open_existing()
         self.coordinator._open_existing()
         self.slurm_submissions._open_existing()
         self.slurm_assignments._open_existing()
-        self.journal._open_existing()
-        self.supervisor = AgentProcessSupervisorClient(
-            config.agent_root,
-            SupervisorLaunchConfiguration(
-                self.agent_id, (config.resident_worker_launch_profile,)
-            ),
-        )
+        if self.journal is not None:
+            self.journal._open_existing()
+        self.supervisor = None
+        if config.agent_root is not None:
+            profile = config.resident_worker_launch_profile
+            if profile is None or agent_id is None:
+                raise QueueServiceError("local agent binding is unavailable")
+            self.supervisor = AgentProcessSupervisorClient(
+                config.agent_root, SupervisorLaunchConfiguration(agent_id, (profile,))
+            )
         if not local_daemon_owner_stores_available(
             self.config,
             coordinator_id=self.coordinator_id,
@@ -1235,7 +1247,7 @@ class LocalDaemonExecution:
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
         # coordinator state without that claim is unsafe to reconstruct.
-        retained = self.journal.retained_claim_commands()
+        retained = () if self.journal is None else self.journal.retained_claim_commands()
         retained_assignment_ids = {
             command.assignment.assignment_id for command in retained
         }
@@ -1287,6 +1299,8 @@ class LocalDaemonExecution:
     def shutdown_clean(self) -> None:
         """Use all local authoritative owners before retiring the supervisor."""
 
+        if self.agent_id is None:
+            return
         if local_daemon_owner_work_is_retained(
             self.config,
             coordinator_id=self.coordinator_id,
@@ -1294,6 +1308,7 @@ class LocalDaemonExecution:
         ):
             raise QueueConflictError("local daemon has retained work")
         try:
+            assert self.supervisor is not None
             self.supervisor.shutdown_clean()
         except AgentProcessSupervisorError as exc:
             raise QueueConflictError(str(exc)) from exc
@@ -1511,6 +1526,10 @@ class LocalDaemonExecution:
     def resume_retained_local_work(self) -> None:
         """Join every local supervisor operation before daemon availability."""
 
+        if self.agent_id is None:
+            return
+        assert self.journal is not None
+
         intentionally_retained: set[str] = set()
         for assignment, decision_receipt in self.coordinator.retained_assignments(
             agent_id=self.config.machine_id
@@ -1637,7 +1656,8 @@ class LocalDaemonExecution:
             self.coordinator._open_existing()
             self.slurm_submissions._open_existing()
             self.slurm_assignments._open_existing()
-            self.journal._open_existing()
+            if self.journal is not None:
+                self.journal._open_existing()
             if not local_daemon_owner_stores_available(
                 self.config,
                 coordinator_id=self.coordinator_id,
@@ -1826,7 +1846,7 @@ class LocalDaemonExecution:
                 ):
                     exhausted_admissions.add(record.admission_id)
             remote_targets = self._remote_candidates()
-            local_candidate = self._candidate()
+            local_candidate = self._candidate() if self.agent_id is not None else None
             excluded_work: set[str] = set()
             attempted_slurm: set[str] = set()
             while True:
@@ -1839,14 +1859,20 @@ class LocalDaemonExecution:
                     and record.admission_id not in exhausted_admissions
                     and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
                 )
-                local_profile = ResidentProfileDescriptor.from_dict(
-                    self.config.resident_worker_launch_profile.descriptor
+                local_profile = (
+                    None
+                    if self.config.resident_worker_launch_profile is None
+                    else ResidentProfileDescriptor.from_dict(
+                        self.config.resident_worker_launch_profile.descriptor
+                    )
                 )
                 candidates = tuple(
                     [
                         local_candidate
                         for _ in (0,)
-                        if local_candidate.candidate_id not in remote_targets
+                        if local_candidate is not None
+                        and local_candidate.candidate_id not in remote_targets
+                        and local_profile is not None
                         and any(
                             _profile_satisfies_requirement(
                                 local_profile, record.execution_requirement
@@ -1919,13 +1945,17 @@ class LocalDaemonExecution:
                 snapshot = authority.open_run(admission.run_uri)
                 candidate_id = cast(str, decision.candidate_id)
                 remote_target = remote_targets.get(candidate_id)
-                local_profile = ResidentProfileDescriptor.from_dict(
-                    self.config.resident_worker_launch_profile.descriptor
+                local_profile = (
+                    None
+                    if self.config.resident_worker_launch_profile is None
+                    else ResidentProfileDescriptor.from_dict(
+                        self.config.resident_worker_launch_profile.descriptor
+                    )
                 )
                 selected_profile = (
                     local_profile if remote_target is None else remote_target[1].profile
                 )
-                if not _profile_satisfies_requirement(
+                if selected_profile is None or not _profile_satisfies_requirement(
                     selected_profile, record.execution_requirement
                 ):
                     if remote_target is not None:
@@ -3264,9 +3294,13 @@ class LocalDaemonExecution:
             item.resource_kind: item
             for item in replacement.scheduling_components.planners
         }
-        replacement_providers = _validate_agent_provider_composition(
-            tuple(replacement.agent_resource_providers or ()),
-            replacement_planners,
+        replacement_providers = (
+            _validate_agent_provider_composition(
+                tuple(replacement.agent_resource_providers or ()),
+                replacement_planners,
+            )
+            if replacement.agent_root is not None
+            else {}
         )
         replacement_local_capacity = replacement.agent_resource_capacity
         replacement_capacity = _coordinator_capacity(replacement)
@@ -3278,7 +3312,9 @@ class LocalDaemonExecution:
         )
         if provider_changed:
             try:
-                retained_claims = self.journal.retained_claim_commands()
+                retained_claims = (
+                    () if self.journal is None else self.journal.retained_claim_commands()
+                )
                 with sqlite3.connect(self.config.execution_database) as conn:
                     retained_assignment = conn.execute(
                         "SELECT 1 FROM coordinator_assignments "
@@ -4590,6 +4626,10 @@ class LocalDaemonExecution:
             execution_started()
             return True
         accepted = Event()
+        if self.journal is None or self.supervisor is None:
+            raise QueueServiceError("local assignment has no local agent owner")
+        if self.config.agent_root is None or self.config.resident_worker_launch_profile is None:
+            raise QueueServiceError("local assignment binding is unavailable")
 
         def started() -> None:
             execution_started()

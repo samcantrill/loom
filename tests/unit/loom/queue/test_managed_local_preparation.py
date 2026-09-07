@@ -198,26 +198,41 @@ def _coordinator_config(
     scheduling: dict[str, object] | None = None,
     slurm_profiles: list[dict[str, object]] | None = None,
 ) -> Path:
+    agent = root / "agent.yaml"
+    agent.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "kind": "loom.local-agent-service",
+                "agent_root": "deployment/agent",
+                "resident_profiles": [
+                    {
+                        "descriptor": _descriptor(),
+                        "project_root": str(root),
+                        "python_executable": sys.executable,
+                        "cpu_capacity": 1,
+                        "memory_capacity_bytes": 0,
+                        "gpu_devices": [],
+                        "environment": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent.chmod(0o600)
     source = root / "coordinator.yaml"
     source.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "loom.coordinator-service",
                 "deployment_root": "deployment",
                 "run_store_root": "runs",
                 "machine_id": "local-machine",
                 "poll_interval_seconds": 0.01,
                 "max_accepted_time_step_seconds": 60,
-                "embedded_profile": {
-                    "descriptor": _descriptor(),
-                    "project_root": str(root),
-                    "python_executable": sys.executable,
-                    "cpu_capacity": 1,
-                    "memory_capacity_bytes": 0,
-                    "gpu_devices": [],
-                    "environment": {},
-                },
+                "local_agent": {"config": "agent.yaml", "env_file": None},
                 "remote_profiles": remote_profiles or [],
                 "agent_policy": agent_policy
                 or {"revision": "policy-1", "agents": [], "principals": []},

@@ -183,7 +183,7 @@ def _available_agent(
 
 def _coordinator_yaml(root: Path, checkout: Path, port: int, fingerprint: str) -> str:
     return f"""
-schema_version: 2
+schema_version: 3
 kind: loom.coordinator-service
 deployment_root: {_quoted(root / 'deployment')}
 run_store_root: {_quoted(root / 'runs')}
@@ -192,19 +192,7 @@ poll_interval_seconds: 0.05
 max_accepted_time_step_seconds: 3600
 authority:
   kind: embedded
-embedded_profile:
-  descriptor:
-    profile_id: local-default
-    revision: v1
-    project_fingerprint: example-project-v1
-    environment_fingerprint: example-environment-v1
-    executor_fingerprint: local-executor-v1
-  project_root: {_quoted(checkout)}
-  python_executable: {_quoted(Path(sys.executable))}
-  cpu_capacity: 1
-  memory_capacity_bytes: 0
-  gpu_devices: []
-  environment: {{}}
+local_agent: null
 remote_profiles:
   - profile_id: remote-default
     revision: v1
@@ -238,7 +226,7 @@ agent_server:
 
 def _agent_yaml(root: Path, checkout: Path, port: int) -> str:
     return f"""
-schema_version: 2
+schema_version: 3
 kind: loom.outbound-agent-service
 agent_root: {_quoted(root / 'outbound-agent')}
 url: https://localhost:{port}

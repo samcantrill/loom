@@ -34,11 +34,9 @@ def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
 ) -> None:
     source = tmp_path / "coordinator.json"
     payload = _coordinator_payload(tmp_path, cpu_capacity=1)
-    profile = payload["embedded_profile"]
-    assert isinstance(profile, dict)
-    profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    payload["poll_interval_seconds"] = "${oc.env:LOOM_ROLE_POLL}"
     environment = tmp_path / "coordinator.env"
-    _write_protected_text(environment, "LOOM_ROLE_CPU=1\n")
+    _write_protected_text(environment, "LOOM_ROLE_POLL=0.01\n")
     _write_protected(source, payload)
     initialized = _run_cli(
         "queue",
@@ -55,7 +53,7 @@ def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
     first = _start_service(source, environment)
     try:
         before = _wait_for_status(first, endpoint)
-        _write_protected_text(environment, "LOOM_ROLE_CPU=2\n")
+        _write_protected_text(environment, "LOOM_ROLE_POLL=0.02\n")
         reloaded = _run_cli(
             "queue",
             "daemon-scheduling-reload",
@@ -195,28 +193,14 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
 
 def _coordinator_payload(tmp_path: Path, *, cpu_capacity: int) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "loom.coordinator-service",
         "deployment_root": "deployment",
         "run_store_root": "runs",
         "machine_id": "e2e-machine",
         "poll_interval_seconds": 0.01,
         "max_accepted_time_step_seconds": 60,
-        "embedded_profile": {
-            "descriptor": {
-                "profile_id": "e2e-local",
-                "revision": "v1",
-                "project_fingerprint": "project-1",
-                "environment_fingerprint": "environment-1",
-                "executor_fingerprint": "executor-1",
-            },
-            "project_root": str(tmp_path),
-            "python_executable": sys.executable,
-            "cpu_capacity": cpu_capacity,
-            "memory_capacity_bytes": 0,
-            "gpu_devices": [],
-            "environment": {},
-        },
+        "local_agent": None,
         "remote_profiles": [],
         "agent_policy": {
             "revision": "policy-1",
@@ -295,7 +279,7 @@ def _outbound_agent_payload(
     cpu_capacity: int,
 ) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "loom.outbound-agent-service",
         "agent_root": "remote-agent",
         "url": f"https://localhost:{port}",
