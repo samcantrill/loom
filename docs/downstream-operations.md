@@ -172,14 +172,22 @@ local_agent:
 ```
 
 The referenced document has `kind: loom.local-agent-service`, an `agent_root`,
-and exactly one `resident_profiles` entry. That entry owns the existing
-`descriptor`, `project_root`, `python_executable`, `environment`, `cpu_capacity`,
-`memory_capacity_bytes`, and `gpu_devices` declarations. Optional `providers`
-contains the configured provider composition. These worker settings no longer
-belong in the coordinator's old `embedded_profile`/`embedded_agent` fields.
-Outbound documents retain `kind: loom.outbound-agent-service`, their resident
-profile declarations, and the required connection, registration, and TLS
-configuration. Local composition requires no outbound TLS credentials.
+and exactly one `resident_profiles` entry. Profiles own their `descriptor`,
+`project_root`, `python_executable`, and `environment`; optional agent-level
+`resources` owns the shared CPU/memory capacity and GPU allowlist. It has
+`cpu_capacity`, `memory_capacity_bytes`, and `gpu: {provider: nvidia, devices:
+"none" | "0,2" | "0-7" | "GPU-..."}`. Empty, duplicate, overlapping,
+reversed, mixed index/UUID, and unknown selections are rejected. `none` is
+CPU-only and does not run NVIDIA discovery. NVIDIA selections resolve host
+indices to UUIDs with model and physical VRAM observations; a changed index
+resolution changes the active resource identity and requires explicit reload.
+Profiles sharing an agent use this one provider domain, so they cannot advertise
+or claim the same physical card twice. Optional `providers` contains the
+configured provider composition. These worker settings no longer belong in the
+coordinator's old `embedded_profile`/`embedded_agent` fields. Outbound documents
+retain `kind: loom.outbound-agent-service`, their resident profile declarations,
+and the required connection, registration, and TLS configuration. Local
+composition requires no outbound TLS credentials.
 
 The agent reference resolves relative to coordinator YAML; paths inside the
 agent document resolve relative to agent YAML. Its explicit env file is composed

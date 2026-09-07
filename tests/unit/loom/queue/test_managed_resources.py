@@ -8,8 +8,16 @@ from loom.pipeline.execution.resource_admission import ResourceLimitReconciliati
 from loom.pipeline.stores import WorkspaceIdentity
 from loom.queue import QueueServiceError, normalize_queue_spec
 from loom.queue.resources import (
+    EffectiveAgentCapacity,
+    require_effective_agent_capacity,
     reconcile_managed_pool_limits,
     require_managed_pool_limits,
+)
+import loom.queue.resources as queue_resources
+from loom.queue._remote_stage_execution import (
+    AgentResourceInventory,
+    GpuDeviceDescriptor,
+    ResidentGpuDevice,
 )
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -84,6 +92,44 @@ def test_reconcile_managed_pool_limits_rejects_zero_resource_expectations() -> N
 
     with pytest.raises(QueueServiceError, match="must be positive"):
         reconcile_managed_pool_limits(spec, store, workspace_id="workspace-1")
+
+
+def test_agent_inventory_is_one_capacity_domain_with_observed_gpu_bindings() -> None:
+    inventory = AgentResourceInventory(
+        cpu_capacity=32,
+        memory_capacity_bytes=128 * 1024**3,
+        gpu_devices=tuple(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor(f"GPU-{index}", "test", 80 * 1024**3),
+                f"GPU-{index}",
+            )
+            for index in range(8)
+        ),
+    )
+
+    atoms = inventory.capacity_atoms("agent-a")
+
+    assert sum(atom.amount.numerator for atom in atoms if atom.owner_resource_kind == "cpu") == 32
+    assert sum(atom.amount.numerator for atom in atoms if atom.owner_resource_kind == "memory") == 128 * 1024**3
+    assert [atom.local_capacity_key for atom in atoms if atom.owner_resource_kind == "gpu"] == [
+        f"agent-a:GPU-{index}" for index in range(8)
+    ]
+
+
+def test_effective_capacity_rejects_only_proven_overcommit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        queue_resources,
+        "observe_effective_agent_capacity",
+        lambda: EffectiveAgentCapacity(cpu_capacity=4, memory_capacity_bytes=1024),
+    )
+
+    assert require_effective_agent_capacity(cpu_capacity=4, memory_capacity_bytes=1024)
+    with pytest.raises(QueueServiceError, match="CPU"):
+        require_effective_agent_capacity(cpu_capacity=5, memory_capacity_bytes=0)
+    with pytest.raises(QueueServiceError, match="memory"):
+        require_effective_agent_capacity(cpu_capacity=1, memory_capacity_bytes=1025)
 
 
 def _store() -> InMemoryWorkspaceCoordinationStore:

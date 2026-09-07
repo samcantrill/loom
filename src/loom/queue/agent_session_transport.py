@@ -77,6 +77,7 @@ from .agent_sessions import (
     validate_agent_session_schema,
 )
 from ._remote_stage_execution import (
+    AgentResourceInventory,
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
@@ -198,6 +199,7 @@ class AgentTlsClientConfig:
     ) = None
     deployment_configuration_fingerprint: str | None = None
     active_configuration_fingerprint: str | None = None
+    resource_inventory: AgentResourceInventory | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -229,7 +231,12 @@ class AgentTlsClientConfig:
             )
             for item in profiles
         }
-        if len(capacity_domains) > 1:
+        inventory = self.resource_inventory
+        if inventory is not None and not isinstance(inventory, AgentResourceInventory):
+            raise QueueServiceError("agent resource inventory is invalid")
+        if inventory is not None and not profiles:
+            raise QueueServiceError("agent resource inventory requires a resident profile")
+        if inventory is None and len(capacity_domains) > 1:
             raise QueueServiceError(
                 "agent resident profiles must share one capacity domain"
             )
@@ -239,6 +246,7 @@ class AgentTlsClientConfig:
         if not callable(factory):
             raise QueueServiceError("agent resource provider factory is invalid")
         object.__setattr__(self, "resident_profiles", profiles)
+        object.__setattr__(self, "resource_inventory", inventory)
         object.__setattr__(self, "agent_resource_provider_factory", factory)
         fingerprint = self.deployment_configuration_fingerprint
         if fingerprint is not None and (
@@ -256,6 +264,22 @@ class AgentTlsClientConfig:
             or any(character not in "0123456789abcdef" for character in active)
         ):
             raise QueueServiceError("agent active configuration fingerprint is invalid")
+
+    @property
+    def capacity_profile(self) -> ResidentExecutionProfile:
+        """Project the one agent capacity domain through an executable profile."""
+
+        if not self.resident_profiles:
+            raise QueueServiceError("agent resource inventory requires a resident profile")
+        inventory = self.resource_inventory
+        if inventory is None:
+            return self.resident_profiles[0]
+        return replace(
+            self.resident_profiles[0],
+            cpu_capacity=inventory.cpu_capacity,
+            memory_capacity_bytes=inventory.memory_capacity_bytes,
+            gpu_devices=inventory.gpu_devices,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2305,7 +2329,7 @@ class LocalDaemonAgentHttpClient:
                 for descriptor in offer.resident_profiles
             ):
                 raise QueueConflictError("offer names an unavailable resident profile")
-            capacity = next(iter(local_descriptors.values()))
+            capacity = self._config.capacity_profile
             if (
                 offer.cpu > capacity.cpu_capacity
                 or offer.memory_bytes > capacity.memory_capacity_bytes
@@ -5346,20 +5370,17 @@ def _agent_config_revision(config: AgentTlsClientConfig) -> str:
 
 
 def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
+    if not config.resident_profiles:
+        return _agent_revision("inventory", {"capacity": None})
+    capacity = config.capacity_profile
     return _agent_revision(
         "inventory",
         {
-            "profiles": [
-                {
-                    "descriptor": profile.descriptor.to_dict(),
-                    "cpu_capacity": profile.cpu_capacity,
-                    "memory_capacity_bytes": profile.memory_capacity_bytes,
-                    "gpu_devices": [
-                        device.descriptor.to_dict() for device in profile.gpu_devices
-                    ],
-                }
-                for profile in config.resident_profiles
-            ]
+            "cpu_capacity": capacity.cpu_capacity,
+            "memory_capacity_bytes": capacity.memory_capacity_bytes,
+            "gpu_devices": [
+                device.descriptor.to_dict() for device in capacity.gpu_devices
+            ],
         },
     )
 

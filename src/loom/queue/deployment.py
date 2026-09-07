@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from importlib import import_module
 import json
@@ -19,6 +19,7 @@ from typing import Any, cast
 from loom.serialization import PlainData, thaw_plain_data
 
 from ._remote_stage_execution import (
+    AgentResourceInventory,
     GpuDeviceDescriptor,
     ResidentExecutionProfile,
     ResidentGpuDevice,
@@ -229,13 +230,12 @@ def load_outbound_agent_service_config(
             "registration",
             "reconnect_seconds",
         },
-        {"provider_factory"},
+        {"provider_factory", "resources"},
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
     payload = _normalize_outbound_agent_payload(payload)
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
-    active_fingerprint = _canonical_fingerprint(_outbound_active_projection(payload))
     base = source.parent
     profiles = tuple(
         _resident_profile(
@@ -247,6 +247,13 @@ def load_outbound_agent_service_config(
     )
     if not profiles:
         raise QueueConfigError("resident_profiles must not be empty")
+    resource_inventory = _agent_resource_inventory(payload.get("resources"))
+    active_fingerprint = _canonical_fingerprint(
+        {
+            "authored": _outbound_active_projection(payload),
+            "observed_resources": _resource_inventory_projection(resource_inventory),
+        }
+    )
     registration_value = _mapping(payload, "registration")
     _exact(
         registration_value,
@@ -280,6 +287,7 @@ def load_outbound_agent_service_config(
         private_key_path=_path(payload, "private_key_path", base),
         agent_root=_path(payload, "agent_root", base),
         resident_profiles=profiles,
+        resource_inventory=resource_inventory,
         agent_resource_provider_factory=cast(Any, provider_factory),
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
@@ -411,7 +419,7 @@ def run_outbound_agent_service(
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
-                profile = active.client.resident_profiles[0]
+                profile = active.client.capacity_profile
                 gpu_descriptors = tuple(item.descriptor for item in profile.gpu_devices)
                 (
                     provider_descriptors,
@@ -652,7 +660,7 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     _required_allowed(
         payload,
         {"schema_version", "kind", "agent_root", "resident_profiles"},
-        {"providers"},
+        {"providers", "resources"},
         "local agent service config",
     )
     _header(payload, "loom.local-agent-service")
@@ -667,10 +675,19 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
     if len(profiles) != 1:
         raise QueueConfigError("local agent service requires one resident profile")
     provider_configuration = payload.get("providers")
+    resource_inventory = _agent_resource_inventory(payload.get("resources"))
+    profile = profiles[0]
+    if resource_inventory is not None:
+        profile = replace(
+            profile,
+            cpu_capacity=resource_inventory.cpu_capacity,
+            memory_capacity_bytes=resource_inventory.memory_capacity_bytes,
+            gpu_devices=resource_inventory.gpu_devices,
+        )
     providers = _embedded_provider_composition(provider_configuration)
     return LocalAgentServiceConfig(
         _path(payload, "agent_root", agent_source.parent),
-        profiles[0],
+        profile,
         providers,
         _without_paths(provider_configuration),
         agent_source,
@@ -691,6 +708,81 @@ def _normalize_outbound_agent_payload(payload: Mapping[str, object]) -> Mapping[
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     ]
     return normalized
+
+
+def _agent_resource_inventory(value: object) -> AgentResourceInventory | None:
+    """Load one agent-owned capacity declaration and its selected NVIDIA cards."""
+
+    if value is None:
+        return None
+    resources = _mapping_value(value, "agent resources")
+    _exact(
+        resources,
+        {"cpu_capacity", "memory_capacity_bytes", "gpu"},
+        "agent resources",
+    )
+    gpu = _mapping(resources, "gpu")
+    _exact(gpu, {"provider", "devices"}, "agent GPU resources")
+    provider = _string(gpu, "provider")
+    selection = _string(gpu, "devices")
+    if provider != "nvidia":
+        raise QueueConfigError("agent GPU resource provider is unsupported")
+    devices: tuple[ResidentGpuDevice, ...] = ()
+    if selection != "none":
+        from .gpu.nvidia import NvidiaSmiGpuInventoryProvider, resolve_nvidia_gpu_selection
+
+        try:
+            selected = resolve_nvidia_gpu_selection(
+                selection, NvidiaSmiGpuInventoryProvider().discover()
+            )
+            devices = tuple(
+                ResidentGpuDevice(
+                    GpuDeviceDescriptor(
+                        device_id=device.device_id,
+                        model=cast(str, device.model),
+                        vram_bytes=cast(int, device.vram_bytes),
+                    ),
+                    device.binding_value,
+                )
+                for device in selected
+            )
+        except (QueueServiceError, TypeError, ValueError) as exc:
+            raise QueueConfigError("agent NVIDIA inventory is invalid") from exc
+    inventory = AgentResourceInventory(
+        _positive_int(resources, "cpu_capacity"),
+        _non_negative_int(resources, "memory_capacity_bytes"),
+        devices,
+    )
+    from .resources import require_effective_agent_capacity
+
+    try:
+        require_effective_agent_capacity(
+            cpu_capacity=inventory.cpu_capacity,
+            memory_capacity_bytes=inventory.memory_capacity_bytes,
+        )
+    except QueueServiceError as exc:
+        raise QueueConfigError("agent resources exceed effective capacity") from exc
+    return inventory
+
+
+def _resource_inventory_projection(
+    inventory: AgentResourceInventory | None,
+) -> object:
+    if inventory is None:
+        return None
+    return {
+        "cpu_capacity": inventory.cpu_capacity,
+        "memory_capacity_bytes": inventory.memory_capacity_bytes,
+        "gpu_devices": [
+            {
+                "descriptor": device.descriptor.to_dict(),
+                "binding_digest": hashlib.sha256(
+                    device.binding_value.encode()
+                ).hexdigest(),
+            }
+            for device in inventory.gpu_devices
+        ],
+    }
 
 
 def _normalize_resident_profile(
@@ -1041,6 +1133,7 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
                 "resident_profiles": payload["resident_profiles"],
+                "resources": payload.get("resources"),
                 "provider_factory": payload.get("provider_factory"),
             }
         ),

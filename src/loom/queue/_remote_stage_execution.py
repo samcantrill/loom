@@ -176,10 +176,16 @@ class GpuDeviceDescriptor:
     def __post_init__(self) -> None:
         for value, name in (
             (self.device_id, "device_id"),
-            (self.model, "model"),
             (self.provider, "provider"),
         ):
             _identifier(value, f"GPU {name}")
+        if (
+            not isinstance(self.model, str)
+            or not self.model
+            or len(self.model) > 160
+            or any(ord(character) < 32 for character in self.model)
+        ):
+            raise QueueServiceError("GPU model is invalid")
         if self.allocation_mode not in {
             "exclusive",
             "vram_share",
@@ -347,6 +353,60 @@ class ResidentGpuDevice:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentResourceInventory:
+    """One agent-owned capacity domain shared by resident executable profiles."""
+
+    cpu_capacity: int
+    memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ResidentGpuDevice, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cpu_capacity, bool)
+            or not isinstance(self.cpu_capacity, int)
+            or self.cpu_capacity < 1
+        ):
+            raise QueueServiceError("agent CPU capacity is invalid")
+        if (
+            isinstance(self.memory_capacity_bytes, bool)
+            or not isinstance(self.memory_capacity_bytes, int)
+            or self.memory_capacity_bytes < 0
+        ):
+            raise QueueServiceError("agent memory capacity is invalid")
+        devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ResidentGpuDevice) for item in devices) or len(
+            {item.descriptor.device_id for item in devices}
+        ) != len(devices):
+            raise QueueServiceError("agent GPU inventory is invalid")
+        if len({item.binding_value for item in devices}) != len(devices):
+            raise QueueServiceError("agent GPU inventory bindings are invalid")
+        object.__setattr__(self, "gpu_devices", devices)
+
+    def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
+        _identifier(agent_id, "agent_id")
+        atoms = [
+            CapacityAtom(
+                "cpu", f"{agent_id}:cpu", ExactQuantity(self.cpu_capacity), "count", ExactQuantity(1)
+            )
+        ]
+        if self.memory_capacity_bytes:
+            atoms.append(
+                CapacityAtom(
+                    "memory",
+                    f"{agent_id}:memory",
+                    ExactQuantity(self.memory_capacity_bytes),
+                    "B",
+                    ExactQuantity(1),
+                )
+            )
+        atoms.extend(
+            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
+            for device in self.gpu_devices
+        )
+        return tuple(atoms)
+
+
+@dataclass(frozen=True, slots=True)
 class ResidentExecutionProfile:
     """Protected local profile; its paths never enter protocol values."""
 
@@ -396,31 +456,9 @@ class ResidentExecutionProfile:
         object.__setattr__(self, "environment", environment)
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
-        _identifier(agent_id, "agent_id")
-        atoms = [
-            CapacityAtom(
-                "cpu",
-                f"{agent_id}:cpu",
-                ExactQuantity(self.cpu_capacity),
-                "count",
-                ExactQuantity(1),
-            )
-        ]
-        if self.memory_capacity_bytes:
-            atoms.append(
-                CapacityAtom(
-                    "memory",
-                    f"{agent_id}:memory",
-                    ExactQuantity(self.memory_capacity_bytes),
-                    "B",
-                    ExactQuantity(1),
-                )
-            )
-        atoms.extend(
-            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
-            for device in self.gpu_devices
-        )
-        return tuple(atoms)
+        return AgentResourceInventory(
+            self.cpu_capacity, self.memory_capacity_bytes, self.gpu_devices
+        ).capacity_atoms(agent_id)
 
     @property
     def launch_profile(self) -> ResidentWorkerLaunchProfile:

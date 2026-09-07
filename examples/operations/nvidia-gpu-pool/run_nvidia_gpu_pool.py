@@ -26,10 +26,10 @@ def main() -> None:
 
 class _FakeNvidiaSmi:
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if "--query-gpu=index,uuid,pci.bus_id" in argv:
+        if "--query-gpu=index,uuid,name,memory.total,pci.bus_id" in argv:
             stdout = (
-                "0, GPU-fake-a, 00000000:01:00.0\n"
-                "1, GPU-fake-b, 00000000:02:00.0\n"
+                "0, GPU-fake-a, Fake-A, 40960, 00000000:01:00.0\n"
+                "1, GPU-fake-b, Fake-B, 40960, 00000000:02:00.0\n"
             )
         elif tuple(argv) == ("nvidia-smi", "topo", "-m"):
             stdout = "GPU0 GPU1\nGPU0 X NV4\nGPU1 NV4 X\n"

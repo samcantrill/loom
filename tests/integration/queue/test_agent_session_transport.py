@@ -83,6 +83,7 @@ from loom.queue._agent_process_supervisor import (
     SupervisorLaunchState,
 )
 from loom.queue._remote_stage_execution import (
+    AgentResourceInventory,
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
@@ -1399,6 +1400,36 @@ def test_agent_reload_canonicalizes_bound_profile_set_without_update_path(
                 client._validate_reload_config(replacement)  # noqa: SLF001
     finally:
         client.close()
+
+
+def test_agent_resource_inventory_overrides_profile_capacity_as_one_domain(
+    tmp_path: Path,
+) -> None:
+    first = ResidentExecutionProfile(
+        ResidentProfileDescriptor("first", "1", "project-1", "environment-1", "executor-1"),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=1,
+    )
+    second = ResidentExecutionProfile(
+        ResidentProfileDescriptor("second", "1", "project-2", "environment-2", "executor-2"),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=9,
+    )
+
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=tmp_path / "agent",
+        resident_profiles=(first, second),
+        resource_inventory=AgentResourceInventory(cpu_capacity=4),
+    )
+
+    assert config.capacity_profile.cpu_capacity == 4
+    assert config.capacity_profile.descriptor == first.descriptor
 
 
 def _prepare_remote_producer_run(

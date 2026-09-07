@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import os
+from pathlib import Path
+import resource
 
 from loom.pipeline.execution.resource_admission import (
     ResourceLimitReconciliationResult,
@@ -15,6 +18,59 @@ from loom.serialization import PlainData
 from .config import QueueServiceSpec
 from .errors import QueueServiceError
 from .models import QueuePool, QueuePoolMode, validate_queue_id
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveAgentCapacity:
+    """Process-local resource evidence; ``None`` means the limit is unavailable."""
+
+    cpu_capacity: int | None
+    memory_capacity_bytes: int | None
+
+
+def observe_effective_agent_capacity() -> EffectiveAgentCapacity:
+    """Observe affinity and supported address-space/cgroup limits without probing work."""
+
+    cpu_capacity: int | None = None
+    try:
+        cpu_capacity = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        pass
+    memory_limits: list[int] = []
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        for limit in (soft, hard):
+            if limit not in {resource.RLIM_INFINITY, -1} and limit > 0:
+                memory_limits.append(limit)
+    except (ValueError, OSError):
+        pass
+    try:
+        value = Path("/sys/fs/cgroup/memory.max").read_text(encoding="ascii").strip()
+        if value != "max" and value.isdecimal() and int(value) > 0:
+            memory_limits.append(int(value))
+    except OSError:
+        pass
+    return EffectiveAgentCapacity(
+        cpu_capacity,
+        min(memory_limits) if memory_limits else None,
+    )
+
+
+def require_effective_agent_capacity(
+    *, cpu_capacity: int, memory_capacity_bytes: int
+) -> EffectiveAgentCapacity:
+    """Reject configured capacity that exceeds a proven process-local limit."""
+
+    observed = observe_effective_agent_capacity()
+    if observed.cpu_capacity is not None and cpu_capacity > observed.cpu_capacity:
+        raise QueueServiceError("configured CPU capacity exceeds effective affinity")
+    if (
+        memory_capacity_bytes
+        and observed.memory_capacity_bytes is not None
+        and memory_capacity_bytes > observed.memory_capacity_bytes
+    ):
+        raise QueueServiceError("configured memory capacity exceeds effective limit")
+    return observed
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,8 +206,11 @@ def _positive_resources(pool: QueuePool) -> Mapping[str, int]:
 
 
 __all__ = [
+    "EffectiveAgentCapacity",
     "ManagedPoolReconciliation",
     "ManagedPoolReconciliationReport",
+    "observe_effective_agent_capacity",
     "reconcile_managed_pool_limits",
+    "require_effective_agent_capacity",
     "require_managed_pool_limits",
 ]

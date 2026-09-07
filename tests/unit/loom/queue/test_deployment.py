@@ -428,6 +428,24 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         restarted.close()
 
 
+def test_cpu_only_agent_resources_skip_nvidia_discovery(tmp_path: Path) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["resources"] = {
+        "cpu_capacity": 4,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    source = _write_protected(source, payload)
+
+    service = load_outbound_agent_service_config(source)
+
+    assert service.client.resource_inventory is not None
+    assert service.client.capacity_profile.cpu_capacity == 4
+    assert service.client.capacity_profile.memory_capacity_bytes == 0
+    assert service.client.capacity_profile.gpu_devices == ()
+
+
 def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     tmp_path: Path,
 ) -> None:
