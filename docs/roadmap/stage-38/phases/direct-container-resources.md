@@ -12,14 +12,16 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: coordinator-responsiveness amendment; candidate review/full gates; live image/session
+- Blockers: coordinator-responsiveness amendment; candidate review/full gates;
+  scheduling-only policy product startup and implementation (design review passed)
 
 ## Objective And Context
 
-Implement FR-2 while preserving FR-4. Typed resource intent already reaches
-`ContainerOptions.resources`; direct argv generation currently omits CPU/memory.
-Retain upstream GPU behavior and fix the audit's narrow A-9 malformed multiline
-allocation gap. Timeouts and process-ownership redesign are Phase 3 work.
+Implement amended FR-2 while preserving FR-4. Direct CPU/memory mapping and A-9
+are already implemented. The maintainer now approves explicit scheduling-only
+CPU/RAM execution on a host where settings cannot change, while preserving the
+existing runtime-limit default and full resource intent. The new policy is not
+implemented. Timeouts and process-ownership redesign are Phase 3 work.
 
 ## Current Source And Harness
 
@@ -36,21 +38,26 @@ can be constructed without `ResourceRequest` semantic validation, and
 `slurm/container.py:wrap_slurm_command_with_apptainer` calls the same command
 builder while preserving container resource intent. Include that existing
 wrapper in scope only as necessary to retain scheduler-owned limits. Do not
-infer the execution route from an authored capability record. Preflight's current
-CPU/memory check reports advisory mappings without trying exact byte conversion;
-reuse the command owner's conversion rules rather than duplicating them there.
+infer the execution route from an authored capability record. Preflight now uses
+the command builder for exact conversion, but does not pass resolved execution
+options to that probe. It must use the selected policy as well as effective intent.
 
-Manager refresh verified that these production owners are unchanged since the
-audited baseline; the merged predecessor changes CLI validation, its tests/docs,
-and a test-only SLURM race. Use Python 3.12 and this worktree's locked environment
+Amendment evidence is the clean active tree at `ecbb497`, with published develop
+still `43b911f`. Existing GPU option projection uses `dataclasses.replace`;
+effective runtime resources override authored container intent only when nonempty.
+The failure helper currently infers emitted limits from resource entries alone,
+which must change when requests can survive without flags. Use Python 3.12 and this worktree's locked environment
 (`uv sync --locked --all-groups`), never the dirty checkout's environment.
 
 ## Scope
 
 In scope: deterministic CPU/memory argv conversion, actionable unsupported
-mapping/runtime failures, truthful capability/preflight/docs, a real-runtime
-acceptance hook over existing test infrastructure, and the bounded A-9 correction.
-The approved A-13 amendment also covers the reproduced pre-grant control-response
+mapping/runtime failures, explicit scheduling-only policy in the existing adapter,
+truthful capability/preflight/provenance, separate real-runtime acceptance hooks
+over existing test infrastructure, and the bounded A-9 correction. Relevant
+runtime profile composition and managed-placement tests are in scope for retained
+intent; production queue changes are not part of the resource-policy amendment.
+The previously approved A-13 pre-grant retry correction covers the reproduced control-response
 retry omission in `queue/agent_session_transport.py`, focused transport tests,
 and its existing queue contract documentation. Reuse the established bounded
 assignment retry owner; preserve control replay, rejection, and exhausted-retry
@@ -63,10 +70,12 @@ downloads without explicit authority, and host system administration.
 
 - Canonical CPU is a positive integer, unit absent or count, without attributes.
   Do not map zero to unlimited or accept fractional CPUs by broadening Loom.
-- Canonical memory is positive with B/KiB/MiB/GiB/TiB. Convert exactly to positive
-  integer bytes; reject fractional bytes or values unrepresentable by the
-  selected runtime. No silent rounding, overflow, or attribute reinterpretation.
-- Two CPUs and 512 MiB produce `--cpus 2 --memory 536870912` before the image.
+- Canonical memory is positive with B/KiB/MiB/GiB/TiB. In runtime mode, convert
+  exactly to positive integer bytes; reject fractional bytes or values
+  unrepresentable by the selected runtime. No silent rounding, overflow, or
+  attribute reinterpretation. Scheduling-only mode still validates canonical
+  semantics but does not impose an unused runtime parser's representability.
+- Runtime mode: two CPUs and 512 MiB produce `--cpus 2 --memory 536870912` before the image.
   No-request command behavior remains compatible. Reuse public validators at
   the public mapping boundary; conversion owns runtime representability only.
   Validate the CPU/memory entries owned by this mapping, not unrelated resource
@@ -77,9 +86,8 @@ downloads without explicit authority, and host system administration.
   do not report observed host enforcement without actual evidence.
 - Unsupported runtime options must lead to an actionable failure; never retry
   without requested limits or silently degrade into advisory execution.
-  Current missing-worker-result errors carry redacted process metadata but no
-  resource-specific remedy. The new rejection path must explain where to inspect
-  runtime diagnostics and how to supply a compatible runtime/cgroup setup,
+  Missing-worker-result errors retain redacted process metadata. Their existing
+  resource-specific remedy must apply only to a launch that requested limits,
   without claiming every startup failure was caused by resource limits.
 - Preserve upstream GPU passthrough, count validation, redacted metadata, and
   explicit `nv=True`. SLURM remains the CPU/memory enforcement owner on its
@@ -89,10 +97,45 @@ downloads without explicit authority, and host system administration.
 - Private flag/conversion helpers and fixture layout are executor discretion;
   no new shared abstraction is required for one direct adapter family.
 
+### Approved Policy Amendment
+
+- Public option: `ApptainerExecOptions.cpu_memory_enforcement`, serialized as
+  `cpu_memory_enforcement` in the existing `adapter_options.apptainer` or
+  `adapter_options.singularity` namespace. Accept only `runtime` (default) and
+  `scheduling_only`; reject unknown/non-string values. Preserve current namespace
+  alias precedence, runtime-profile merge, and exact-stage overrides.
+- `runtime` keeps current flag mapping, rejection, and host-dependent enforcement
+  reporting. It never means observed enforcement merely because flags exist.
+  No implicit runtime retry with limits removed is permitted.
+- `scheduling_only` omits only direct CPU/RAM limit flags. Do not clear, mutate,
+  or reduce effective resource entries, change placement/reservations or release,
+  or imply that direct unmanaged execution acquires a reservation. GPU projection,
+  visibility validation/redaction, and actual SLURM-owned CPU/RAM remain unchanged.
+- Configuration-aware capability/preflight output and existing executor command/
+  process provenance must identify the effective mode and `not_enforced` CPU/RAM,
+  with a visible warning. Static descriptors describe available capabilities,
+  not selected-policy enforcement. Reuse existing capability/diagnostic vocabulary
+  and merge owners; do not add a registry or heavyweight runtime import.
+- Preflight must use the same policy, intent precedence, validation, and command
+  projection as execution. Validate canonical CPU/memory at the public boundary
+  even when flags are disabled. Persist retained intent alongside policy evidence.
+- Missing-result errors should give resource-limit remedies only when the launch
+  actually requested limits. Scheduling-only launch failures preserve original
+  diagnostics/context without falsely blaming cgroup setup.
+- Document a generic composable runtime profile and launch examples. Site-local
+  image settings remain external; do not commit host identities, private paths,
+  credentials, datasets, CUDA allocation tokens, or `.env` modifications.
+- Split live receipts: scheduling-only requires a bounded production-command
+  smoke with nonempty CPU/memory intent and the approved SIF; runtime-limit proof
+  remains a separate fail-closed test, deferred to a compatible approved host.
+  A scheduling-only pass does not assert unlimited inherited cgroups, prove
+  enforcement, or constitute a full scientific experiment smoke.
+
 ## Proportionality
 
-Extend current container intent and capability owners. Add no parallel resource
-configuration. The SLURM correction is justified by a reproduced supported
+Extend current container intent and capability owners. One adapter policy field
+is necessary because removing resource declarations also removes scheduler demand.
+Add no parallel resource configuration or automatic fallback. The SLURM correction is justified by a reproduced supported
 environment-boundary defect and belongs in the existing executable grammar
 test, not a replacement scheduling mechanism.
 
@@ -103,17 +146,22 @@ test, not a replacement scheduling mechanism.
 | Canonical request validity | Resource validators | Public intent or config could bypass valid units/amounts | Reuse validation; mapped and rejected examples |
 | Exact runtime units | Direct argv conversion | Fractional bytes/overflow silently change limits | Exact byte checks and representative units |
 | Honest support/failure | Capabilities, preflight, runtime CLI | Flags exist but host cannot enforce | Consistent diagnostic caveats; runtime rejection and real acceptance |
+| Explicit policy without lost demand | Existing adapter parser/merge, command builder, diagnostic/metadata owners | Scheduling-only host has valid requests but cannot apply rootless cgroups | Composed policy/overrides, retained requests and reservation behavior, absent flags and `not_enforced` evidence |
 | Whole allocation grammar | SLURM script boundary | Newline suffix bypasses first-line parsing | Actual Bash and Python agree; raw values not printed |
 
 ## Implementation Slices
 
-1. Refresh upstream/resource owners and confirm exact request-to-intent flow.
-2. Implement supported mappings and explicit rejection using current validators.
-3. Align capabilities, preflight, and docs; preserve GPU and scheduler ownership.
-4. Correct A-9 and extend executable grammar coverage with newline cases.
-5. Add/run a small real-container acceptance test with an explicitly supplied
-   image and bounded CPU/memory work; record unavailable prerequisites honestly.
-6. Run focused suites, final gates, and record evidence for independent review.
+1. Review the amended policy and startup readiness without resetting existing
+   fault-correction counts or assuming coordinator-responsiveness approval.
+2. Once execution is unblocked, add the adapter policy and conditional mapping;
+   preserve canonical validation, resource intent, default flags, and GPU behavior.
+3. Align selected-policy capabilities, preflight, provenance, and failure remedies.
+4. Add composed-profile/override and retained managed-demand regressions, preserving
+   GPU and SLURM coverage and the already reviewed A-9 correction.
+5. Add/run scheduling-only live acceptance over the approved image; preserve the
+   separate runtime-limit check and its outstanding positive-proof limitation.
+6. Update generic docs/example, run focused and full gates, and obtain independent
+   correctness review before any Phase 2 PR or merge.
 
 ## Test And Validation Plan
 
@@ -121,18 +169,29 @@ Required: direct command/executor units and integration, capability contract,
 preflight tests, executable GPU grammar and SLURM-container composition. Cover
 positive CPU, binary units, exact fractional-unit-to-byte conversion, invalid/
 unrepresentable requests, no request, argv ordering, and preserved GPU redaction.
-Real acceptance must use the generated production command and inspect applied
-limits where the host permits it; CLI version/help is not enforcement proof.
-The absent prerequisite path must fail clearly without claiming success.
+Both live checks use production-generated commands. The scheduling-only check
+requires nonempty CPU/memory intent retained in metadata, absent limit flags,
+explicit no-enforcement evidence, and a successful bounded shell payload. It must
+not require a user D-Bus session or assert unlimited inherited controls. The
+runtime-limit check still inspects actual payload limits and fails on missing
+prerequisites; CLI version/help and the other mode's pass are not enforcement proof.
 
-Read-only host evidence during Phase 1: SingularityCE `3.10.4-focal`, cgroups
-v2, no user systemd bus socket, and `systemctl --user is-system-running` failed
-to connect to the bus. The [runtime requirements](https://docs.sylabs.io/guides/3.10/user-guide/cgroups.html)
-include delegated unified cgroups and compatible systemd configuration for
-non-root enforcement. These observations identify an acceptance prerequisite
-gap, not an actual container enforcement result. The maintainer must supply an
-approved local image and a suitable runtime session/host for that check; do not
-silently create images, alter host administration, or waive the required check.
+Current host evidence: SingularityCE `3.10.4-focal`, cgroups v2, and no user
+D-Bus session. The maintainer supplied and approved the local shell SIF (checksum
+in planning.md) and ordinary execution passes. The actual runtime-limit hook
+fails during rootless cgroup setup; report
+`build/container-resource-acceptance-local-sif.xml`. The maintainer cannot change
+host settings and approved scheduling-only execution with separate acceptance.
+The [runtime requirements](https://docs.sylabs.io/guides/3.10/user-guide/cgroups.html)
+remain relevant to deferred positive hard-limit proof on another approved host.
+Do not build/download an image, administer the host, or treat this failure as a pass.
+
+Required amendment coverage: option parsing/default/round trip and invalid policy;
+composed runtime profile plus exact-stage override; both executor names and alias
+precedence; unchanged effective intent including authored fallback; policy-aware
+capability/preflight/provenance and missing-result remedies; retained managed
+resource demand/reservation semantics; GPU projection and SLURM-owned composition.
+Use existing fixtures and targeted interactions, not a full Cartesian matrix.
 
 Targeted commands (expand only for a changed public seam):
 
@@ -154,9 +213,11 @@ Final commands:
     make test-summary
 
 Add and exercise the opt-in acceptance hook's absent-prerequisite behavior,
-but do not count a skipped real-runtime check as acceptance. The executor may
-complete offline implementation and gates while that external prerequisite is
-pending; phase completion and merge remain held for the required runtime proof.
+but do not count a skipped real-runtime check as acceptance. The selected
+scheduling-only route needs its own positive live receipt. Positive hard-limit
+proof is separately deferred under the approved amendment; report the limitation
+in any eventual PR. Full gates, independent review, and the coordinator blocker
+still hold phase completion/merge.
 
 ## Risks, Review, And Stops
 
@@ -164,8 +225,9 @@ Do not infer cgroup delegation from a runtime version. Stop the live-runtime
 path for a required administrative change or missing image permission, while
 completing independent scoped offline work. Stop product implementation for
 incompatible public semantics or materially broader unsupported-runtime handling.
-An unavailable acceptance check remains an explicit gap; it cannot support a
-stronger enforcement claim or a completed-phase receipt.
+An unavailable hard-limit check remains an explicit gap and cannot support a
+stronger enforcement claim. The 3/3 correction budget remains consumed; policy
+approval does not authorize unrelated coordinator work or override startup stops.
 
 ## Executor Handoff
 
@@ -173,14 +235,20 @@ Read this card and manifest Shared Constraints after startup preparation. The
 executor owns listed code/tests/docs and its completion receipt only; it is not
 alone and must preserve others' work. No PR/merge, delegation, downloads, host
 administration, or timeout implementation. Return exact validation and blockers.
+The scheduling-only amendment is approved behavior, but do not start product
+work until the independent startup gate and existing phase stop are resolved.
 
 ## Workflow State
 
 - Manager preparation: complete; predecessor remote merge, fresh published base,
   source/targeted-lane refresh, ownership, approval, and private discretion verified
-- Expanded planning: bounded A-13 retry work was approved; newly observed
-  coordinator lock delays require the separate amendment described in planning.md.
-  Live acceptance is not waived.
+- Expanded planning: scheduling-only policy design independently accepted;
+  manager corrected minor traceability/authority wording. Product startup remains
+  blocked: coordinator lock delays still require their separate disposition;
+  no correction-budget reset or queue-change approval is inferred.
+- Live acceptance: approved image available; runtime-limit attempt failed for
+  missing D-Bus session. Scheduling-only implementation/smoke pending; positive
+  runtime-limit proof deferred separately, never counted as passing.
 - Implementation: resource mapping complete through `9ebd227`; third pre-grant
   retry candidate remains work in progress and is not merge-ready.
 - Independent correctness review: passed for the resource implementation,
@@ -211,6 +279,7 @@ administration, or timeout implementation. Return exact validation and blockers.
 | Implementation and changed paths | Offline implementation complete: direct Apptainer/Singularity CPU and exact-byte memory flags; resource-intent revalidation and actionable resource-command failure; truthful capability/preflight projection with runtime-intent override and authored-intent fallback; scheduler-owned SLURM composition/preflight; A-9 complete-value grammar check; opt-in cgroup-v2 acceptance hook. Changed `src/loom/pipeline/executors/apptainer/{commands.py,executor.py}`, `src/loom/pipeline/{runtime/capabilities.py,executors/slurm/{container.py,rendering.py}}`, `src/loom/diagnostics/preflight.py`, related scoped tests, and `docs/features/container-executors.md`. |
 | Current validation and revision | WIP retry candidate: focused Ruff and whole-tree Pyright pass. Refiner's two-case loopback run had success-case timeout and cancellation pass. Manager's instrumented retry run had five passes and one timeout; its failure trace proves successful retry and eventual release after coordinator lock delays exhausted the test deadline. Additional cycle-timing run: six passed. These are diagnostic receipts, not passing full gates. Last full `make validate-pr` at `9ebd227` had 2,810 passes and one A-13 timeout; no fresh full gates for the candidate. |
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
-| Real runtime evidence / unavailable checks | No enforcement proof: default hook was opted out; explicit opt-in stopped because the maintainer has not supplied an approved local image and compatible delegated-cgroup runtime session. The hook reads the payload cgroup path from `/proc/self/cgroup` before inspecting `cpu.max` and `memory.max`; it performs no pull, build, download, or host administration. |
+| Real runtime evidence / unavailable checks | Approved shell SIF available and ordinary launch passed. Actual runtime-limit hook failed on rootless D-Bus prerequisites; receipt `build/container-resource-acceptance-local-sif.xml`. Scheduling-only policy and its production-command smoke are not implemented. Positive runtime-limit proof remains deferred to a compatible approved host. |
+| Amendment review and routing check | Independent policy-design review passed; overall startup remains blocked. Manager corrected FQ/DQ range and A-13 authority wording. An in-memory public profile-merge probe preserved the proposed adapter payload and CPU/memory demand; no product policy or live acceptance is claimed. |
 | PR, review, and merge | Resource mapping and the first two localized corrections independently accepted. The third candidate is WIP, requires final review and fresh full gates, and does not resolve the coordinator-responsiveness failure. No PR opened or branch pushed. |
-| Residual risk and cleanup | Three correction passes consumed; separate responsiveness amendment and approved live image/session requested. Keep the candidate and worktree for continuation. Original failed fixture had no worker; a later instrumented fixture completed work after the test deadline. Both supervisors of that later failed fixture were verified stopped. Original dirty checkout remains preserved; published develop remains `43b911f`. |
+| Residual risk and cleanup | Three correction passes consumed; separate responsiveness amendment outstanding; scheduling-only policy design reviewed, not authorized for product execution past the existing stop. Keep the candidate and worktree. Known fixture supervisors were stopped; original dirty checkout remains preserved; published develop remains `43b911f`. |

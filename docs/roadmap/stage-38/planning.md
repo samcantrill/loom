@@ -1,13 +1,13 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; resource phase blocked at validation and live acceptance
+Status: first phase merged; scheduling-only policy design reviewed; product startup blocked
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: resource mapping reviewed; A-13 candidate is not merge-ready.
-Blockers: coordinator responsiveness amendment, live acceptance prerequisites,
-and the later timeout design gate.
+Current gate: policy design ready; Phase 2 product startup and A-13 candidate remain blocked.
+Blockers: coordinator responsiveness amendment and full validation; runtime-limit
+acceptance lacks a compatible session; the later timeout design gate remains.
 
 ## Current State
 
@@ -15,9 +15,9 @@ and the later timeout design gate.
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
 | Evidence | Published develop verified; isolated locked Python 3.12 environment; initial 236-test audit independently accepted | A-9 fixed locally; A-10 remains design-gated; new A-13 validation failure is unresolved | Preserve accepted upstream contracts; investigate A-13 separately |
-| Functionality | Stage-owned validation, direct CPU/memory mapping, lifecycle-safe timeouts; retain corrected upstream behavior | No scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Reuse existing configuration, resource, worker, and failure surfaces | Timeout ownership must be resolved before enabling policy | Review the smallest end-to-end design |
-| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227`; third retry candidate retained as work in progress | Instrumented failures now show coordinator control/renewal calls blocked on the reconciliation lock; live acceptance unavailable | Approve a separately reviewed coordinator-responsiveness amendment and provide a suitable image/session; no Phase 2 PR or merge |
+| Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
+| Design | Independent review accepted the scheduling-only policy across launch and diagnostics | Timeout ownership remains unresolved; coordinator amendment not approved | Retain approved policy while resolving the separate startup stop |
+| Implementation | Phase 1 and A-11 merged through PR #277; resource implementation and two test-only corrections independently accepted through `9ebd227`; third retry candidate retained as work in progress | Coordinator lock delays still block full validation; scheduling-only policy is not implemented | Obtain the separate coordinator-responsiveness disposition without resetting the consumed correction budget |
 
 ## Evidence And Scope
 
@@ -61,7 +61,8 @@ diff: upstream has 145 intervening commits and intentional semantic differences.
 | Plain serialization helpers and round-trip tests | Mapping-based conversion and refreezing already implemented | Avoid duplicate port | FR-4 |
 
 User-visible outcome: trusted configuration keeps its stage-owned data intact;
-direct containers receive supported limits; timeout results tell the truth
+direct containers explicitly request supported limits or retain resource intent
+without direct CPU/RAM enforcement; timeout results tell the truth
 about supported-process cleanup. Existing managed execution remains compatible.
 
 Non-goals: rphys stages or scientific operations, PURE products, determinism,
@@ -164,8 +165,104 @@ lock hold time from acquisition starvation, reproduce that mechanism, and review
 the smallest correction while preserving replacement fencing, scheduling
 atomicity, and physical resource ownership. Do not remove serialization, extend
 deadlines, or weaken the regression to obtain a passing gate. Approval for that
-cross-owner amendment and an approved image/runtime session have been requested;
-the current retry candidate is work in progress, not a completed Phase 2.
+cross-owner amendment remains outstanding; the newly approved resource-policy
+amendment below does not authorize it. The current retry candidate is work in
+progress, not a completed Phase 2.
+
+### Approved Scheduling-Only Policy Amendment
+
+The maintainer supplied an approved Alpine SIF, verified to contain `sh`, `awk`,
+and `cat`, then confirmed that host settings cannot be changed. Its SHA-256 is
+`2ee9ccf77bea0f95bfa9274585bf30cea6976e4a5e709ece4243e19eef08f99e`.
+Ordinary container execution succeeds. The existing resource acceptance hook
+fails before payload execution because rootless cgroups require a user D-Bus
+session. The receipt is `build/container-resource-acceptance-local-sif.xml`.
+This is a real failed enforcement attempt, not an absent-image skip. Neither
+environment-variable workarounds nor host administration are an accepted remedy.
+
+On 2026-09-07 the maintainer approved separating scheduling requests from direct
+CPU/RAM enforcement, retaining managed coordinator/agent execution and GPU
+behavior. Evidence tree: the active Phase 2 worktree at `ecbb497`; clean before
+this docs amendment; published develop remains `43b911f`. Original checkout
+preservation hashes remain unchanged. This is an explicit behavior amendment,
+not silent fallback, a fourth fault correction, or approval of the independent
+coordinator-responsiveness amendment.
+
+Reuse `ApptainerExecOptions` with one string field, `cpu_memory_enforcement`:
+
+- `runtime` (default): retain the existing CPU/memory CLI mapping, exact runtime
+  representability checks, host-dependent capability caveat, and failure on a
+  rejected launch. The name describes a request to the runtime, not proof of
+  observed enforcement. Never retry automatically without the requested flags.
+- `scheduling_only`: explicitly omit only direct `--cpus` and `--memory` flags.
+  Preserve the complete effective `ResourceRequest` and container intent for
+  planning, reservations, provenance, and existing release behavior. Validate
+  canonical CPU/memory semantics in both modes; runtime-parser representability
+  is relevant only when generating limits. This policy neither reserves capacity
+  for unmanaged direct calls nor introduces a scheduler.
+
+The field belongs under the existing `adapter_options.apptainer` or
+`adapter_options.singularity` surface, composed through existing runtime profiles.
+Keep current alias precedence and stage overrides. Reject unknown policy values;
+do not add a new namespace, environment variable, hostname detector, registry,
+resource kind, worker schema, or automatic compatibility fallback. Existing
+GPU projection must retain the field while leaving visibility and redaction
+semantics unchanged. SLURM still owns CPU/memory enforcement on its actual route;
+this direct policy never disables scheduler requests or enforcement.
+
+All configuration-aware preflight/capability diagnostics and executor provenance
+must reflect the effective policy: scheduling-only CPU/RAM is `not_enforced`,
+with a visible warning explaining that requests remain scheduling/accounting
+intent. Static executor descriptors may describe available mapping support but
+must not masquerade as evidence for the selected policy. Reuse existing adapter
+merge/resource resolution and keep runtime imports lightweight. Preflight must
+use the production command mapping with the effective options, including authored
+container-intent fallback. Missing-worker-result remedies must depend on emitted
+limit flags, not merely on retained resource entries. Preserve full nested error
+context and existing runtime diagnostics.
+
+Example of the approved future profile (not executable on the current tree):
+
+```yaml
+runtime_profiles:
+  scheduling-only-singularity:
+    executor: singularity
+    adapter_options:
+      singularity:
+        cpu_memory_enforcement: scheduling_only
+```
+
+Compose the image and project-specific settings separately. The checked-in
+example must remain generic, with no host identity, private paths, credentials,
+datasets, CUDA device tokens, or modifications to root/project `.env` files.
+
+Acceptance is split by actual behavior. Scheduling-only execution requires a
+real, bounded shell payload through the production command builder using the
+approved SIF, nonempty CPU/memory intent, absent limit flags, and truthful
+metadata. It does not assert unlimited inherited cgroups or prove a scientific
+experiment completed. Retain the separate, fail-closed runtime-limit hook
+unchanged in purpose. Its failed local receipt remains visible; positive
+enforcement acceptance is deferred to a compatible approved host. The maintainer
+accepted this separation, so unavailable hard-limit proof alone no longer gates
+the scheduling-only deployment, but cannot be recorded as an enforcement pass.
+
+Offline coverage must cross profile composition, effective stage options,
+command generation, retained intent, preflight/capability diagnostics, executor
+failure remedies, GPU projection, and SLURM ownership. Use a composed-profile
+integration regression and a focused existing managed-placement/reservation
+fixture to prove that disabling direct limits does not erase resource demand or
+change release conditions. No production queue change is part of this amendment.
+Whole-tree local gates and independent implementation review remain mandatory.
+
+Independent review accepted the policy design and its source/validation ownership;
+overall Phase 2 execution/merge readiness remains blocked. The manager corrected
+the stale FQ/DQ range and clarified that earlier A-13 approval covers the pre-grant
+retry correction only. The consumed 3/3 correction budget and separate coordinator
+blocker are unchanged; do not authorize more product work by relabelling the phase
+or silently resetting that budget. An in-memory public `merge_run_options` probe
+confirmed that the existing profile surface retains the proposed adapter payload
+and CPU/memory demand without modifying its input; this is reuse evidence, not
+implementation or live acceptance of the policy.
 
 ### Historical Brief Reconciliation
 
@@ -230,9 +327,11 @@ gap, not that every actual Apptainer invocation leaks children.
 
 The first independent increment is a validation-only projection that omits
 stage-owned subtrees from generic target construction. The second extends
-existing container resource intent into runtime flags. Neither needs a public
-registry, durable record, extra config namespace, new dependency, or queue
-change. Timeout support is the third increment and cannot inherit an unproven
+existing container resource intent into explicitly selected runtime mapping or
+scheduling-only execution. One option in the existing adapter is needed because
+removing resource declarations also removes scheduler information. Neither
+increment needs a public registry, durable record, extra config namespace, new
+dependency, or queue change. Timeout support is the third increment and cannot inherit an unproven
 process-cleanup guarantee from either existing command runner.
 
 ## Functional Requirements
@@ -240,7 +339,7 @@ process-cleanup guarantee from either existing command runner.
 | ID | Required behavior | Scope / dependencies | Validation | Status |
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
-| FR-2 | Map supported direct-container CPU/memory requests without changing GPU or SLURM ownership | Current resource contracts; no implicit physical allocation | Conversion/rejection, capabilities/preflight, runtime acceptance | implementation reviewed; full-gate and live acceptance blocked |
+| FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | policy amendment approved; not implemented; full gates blocked |
 | FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
@@ -253,6 +352,7 @@ process-cleanup guarantee from either existing command runner.
 | FQ-2 | FR-2 | Preserve current positive integer CPU/count and positive memory binary-unit contracts | Runtime support for fractional CPUs does not broaden Loom's resource contract | repo-resolved |
 | FQ-3 | FR-3 | Supported children obey containment ownership; arbitrary detaching/malicious processes are not a sandbox guarantee | Stop for a materially broader ownership redesign; earlier increments may land | locked |
 | FQ-4 | FR-4, FR-5 | Retain corrected upstream behavior and independently review new changes | More evidence than a patch copy, no upstream overwrite | locked |
+| FQ-5 | FR-2, FR-4, FR-5 | Explicit scheduling-only CPU/RAM policy; no host changes; retain requests and managed scheduling; defer unavailable positive hard-limit proof separately | Running work can exceed declared resources; no silent downgrade or claim of OS isolation | maintainer approved |
 
 ## Behavior Baseline
 
@@ -264,7 +364,8 @@ factory check's argument semantics.
 
 Resource requests are logical requirements, not resource allocation. Direct
 CPU/memory options request host-runtime enforcement; generation alone proves no
-cgroup enforcement. Unsupported mappings must fail explicitly. SLURM-owned
+cgroup enforcement. Runtime mode rejects unsupported mappings; explicit
+scheduling-only mode retains intent without mapping CPU/RAM limits. SLURM-owned
 limits stay separate. A successful process exit cannot override timeout or
 unresolved cleanup evidence.
 
@@ -290,8 +391,10 @@ unresolved cleanup evidence.
   uses [go-units 0.5.0](https://github.com/docker/go-units/blob/v0.5.0/size.go),
   which parses bare byte strings through float64 before int64. Reject values
   that would change through that conversion. Live acceptance must inspect the
-  payload's actual cgroup, and explicit opt-in without prerequisites must fail
-  actionably rather than count as passing evidence.
+  payload's actual cgroup for runtime-limit acceptance, and explicit opt-in
+  without prerequisites must fail actionably rather than count as passing
+  evidence. Apply the approved scheduling-only amendment above at these same
+  owners, with separate live acceptance and no claim of enforced limits.
 - Timeouts: investigation must identify the launch containment mechanism, worker
   owner propagation, supported child obligations, and positive-cleanup proof.
   Agent/SLURM supervision is evidence of needed ordering, not permission to
@@ -316,7 +419,7 @@ unresolved cleanup evidence.
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
 | Detached validation projection | Generic traversal constructs stage-owned nested targets | Skip only outer path, which does not stop traversal | keep |
-| CPU/memory argv mapping | Typed intent currently produces no runtime options | Advisory intent only does not meet approved behavior | keep |
+| CPU/memory argv mapping plus explicit policy | Default mapping is implemented, but the available host rejects rootless limit setup | Erasing requests loses scheduler demand; implicit fallback violates intent | keep existing default; one adapter policy for approved scheduling-only execution |
 | Container lifecycle boundary | Launcher-only timeout does not prove descendant cleanup | Reuse existing immediate-child kill, which is insufficient | design required |
 | New registry, daemon supervisor import, durable cleanup ledger | No demonstrated need for these particular mechanisms | Extend existing owner at its boundary | defer |
 
@@ -328,11 +431,15 @@ unresolved cleanup evidence.
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
 | DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
+| DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy approved and independently reviewed; product startup blocked separately |
 
 ## Expanded Design Review
 
-Pending after the minimum timeout design is supported by source and runtime
-evidence. A new ownership framework or materially broader public contract must
+The independent scheduling-only plan/startup review found no policy-design blocker.
+It retained the existing product-startup stop for coordinator responsiveness and
+the consumed correction budget; minor traceability/authority wording was corrected
+manager-locally. Timeout review remains pending until its minimum design is
+supported by source and runtime evidence. A new ownership framework or materially broader public contract must
 be presented to the maintainer separately, as required by the approved draft.
 
 ## Examples And Validation
@@ -340,8 +447,9 @@ be presented to the maintainer separately, as required by the approved draft.
 | Invariant | Authoritative owner / boundary | Minimal coverage |
 | --- | --- | --- |
 | Outer checked, nested data inert | CLI adapter / trusted constructor boundary | Harmless marker constructors through public CLI, invalid outer and unrelated targets, exact counts/warnings, no mutation |
-| Two CPUs and 512 MiB become `--cpus 2 --memory 536870912` | Resource validator and direct argv conversion | Units, positive/integer constraints, unrepresentable bytes, flags before image, no-request path |
-| Flags do not prove host enforcement | Runtime CLI/cgroups and preflight docs | Unsupported runtime fails clearly; small real-runtime receipt or explicit unavailable prerequisite |
+| Runtime mode: two CPUs and 512 MiB become `--cpus 2 --memory 536870912` | Resource validator and direct argv conversion | Units, positive/integer constraints, unrepresentable bytes, flags before image, no-request/default path |
+| Scheduling-only mode preserves requests, omits CPU/RAM flags, reports no enforcement | Existing option/merge, mapping, metadata and diagnostic owners | Composed profile, stage override, unchanged intent/reservation, invalid policy, GPU/SLURM preservation, real shell smoke |
+| Flags do not prove host enforcement | Runtime CLI/cgroups and preflight docs | Runtime rejection remains a failed receipt; scheduling-only live pass is separate; positive hard-limit proof deferred to a compatible host |
 | No successful admission following timeout | Executor's outcome and cleanup boundary | Result written before deadline, root-first exit, children, TERM resistance, interruption, cleanup uncertainty, normal success |
 | No upstream regression | Existing serialization/runtime/GPU/managed owners | Targeted baseline plus phase-relevant and final integrated suites |
 
@@ -359,7 +467,8 @@ links three phase cards. Phase 1 is merged after independent review and both
 required gates. Phase 2 has committed and independently reviewed its offline
 implementation and both localized test corrections. Its latest full gate fails
 on A-13; earlier passing receipts cannot replace fresh corrected-tree validation.
-Required live acceptance also remains unavailable.
+The newly approved scheduling-only policy requires its own implementation and
+live acceptance; unavailable hard-limit proof remains explicit deferred evidence.
 Phase 3's card explicitly forbids execution until its lifecycle design is
 reviewed, including the separately identified legacy A-10 correction. This
 staged readiness follows the maintainer's explicit instruction that earlier
@@ -376,9 +485,13 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Minimum timeout design justified | Ownership investigation in progress | pending |
 | Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
+| Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
+| Phase 2 product startup | Coordinator-responsiveness disposition still missing; 3/3 corrections consumed; implementation/live smoke and fresh gates not complete | blocked |
 
-Gate result: Phase 1 merged; Phase 2 blocked pending the coordinator-responsiveness
-amendment, final candidate review, fresh passing validation and live acceptance. Phase 3 remains
+Gate result: Phase 1 merged; scheduling-only policy design approved and independently
+reviewed. Phase 2 remains blocked pending the coordinator-responsiveness
+amendment, final candidate review, fresh passing validation and the selected-policy
+live acceptance. This approval does not reset its correction budget. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
 ## Decisions And Deferrals

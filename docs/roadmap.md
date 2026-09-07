@@ -2963,16 +2963,18 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
 ## v38 - Selective Container Port And Correctness Review
 
-Status: Phase 1 merged; Phase 2 resource mapping reviewed, with a pre-grant retry
-candidate held for coordinator responsiveness review and live resource acceptance.
+Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
+CPU/RAM policy design independently reviewed, not yet implemented. A pre-grant retry
+candidate remains held for coordinator responsiveness review and full validation.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,
 serialization, or managed-execution contracts. The ordered increments are:
 
 1. Keep stage-owned target graphs inert during generic CLI target validation.
-2. Map supported direct-container CPU/memory requests, with truthful runtime
-   enforcement claims and a bounded malformed-allocation grammar correction.
+2. Preserve resource requests with an explicit choice of runtime CPU/memory
+   limits or scheduling-only execution, truthful diagnostics, separate live
+   acceptance, and a bounded malformed-allocation grammar correction.
 3. Establish reviewed, tested timeout cleanup and containment ownership before
    enabling direct-container deadlines; resolve the confirmed legacy queue
    root-exit/descendant-release gap at its actual owner.
