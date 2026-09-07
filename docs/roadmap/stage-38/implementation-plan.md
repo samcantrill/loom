@@ -1,14 +1,14 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phases 1 and 2 merged; Phase 3 approved cleanup-budget correction in progress
+Status: Phases 1 and 2 merged; Phase 3 review closed, refreshed-base gates in progress
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 3 — container-timeout-lifecycle
-Blockers: Phase 3's cleanup-budget review finding is undergoing the maintainer's
-approved additional bounded correction and independent verification. The original
-3/3 correction allowance remains consumed. PR #280 remains unmerged until closure.
+Blockers: none in the reviewed phase code. The approved cleanup-budget correction
+is independently closed at `6afbaef`. Develop advanced through PR #281, so refresh
+`f1aaa9c` needs its full gates before PR #280 merges. The phase delta is unchanged.
 Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
 The maintainer authorized this specific correction and a fresh bounded independent
 verification, without resetting other budgets. Targeted checks pass 80 tests and
@@ -92,8 +92,8 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
   mapping warnings for mixed explicit/implicit stages without inventing runtime
   limits. Fresh full gates and independent closure passed; PR #278 merged at `0c0dbf2`.
   Phase 3's independently reviewed mechanism is implemented and its local gates
-  pass, but independent implementation review found a bounded-cleanup violation.
-  The phase card records the required correction and exhausted allowance.
+  pass at `6afbaef`; independent verification closed the bounded-cleanup correction.
+  Fresh combined-tree gates are now running after the published-base refresh.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
   adapter options, with `runtime` default and explicit `scheduling_only`. The
   selected-policy live smoke is required; positive hard-limit proof on a suitable
@@ -125,6 +125,13 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
   approves this one additional bounded correction and independent verification;
   the phase's original 3/3 allowance remains consumed. Exact review and validation
   evidence lives in the card; merge is held until the correction passes its gates.
+- Phase 3 review closure and refresh: the authorized `6afbaef` correction has no
+  remaining code findings; both full gates passed with 3,015 summary passes and
+  18 opt-in skips. Upstream PR #281 advanced develop to `43d02a1` during validation.
+  Refresh merge `f1aaa9c` has the byte-identical phase delta and no overlapping
+  changed paths. Manager review found no new ownership contract; all 26 combined
+  transport/process-group/live-container checks pass. Rerun full gates on that
+  combined tree before merge; retain earlier receipts under their exact revision.
 - Previously approved A-13 pre-grant retry correction: reproduce a transient pre-grant control-response
   failure, reuse the existing bounded assignment retry owner, and independently
   review cancellation/replay and exhausted-retry retention. No global retry,
@@ -156,7 +163,7 @@ Phase 3's independent design review passed with identity-safe signal/reap orderi
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
 | 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
-| 3 | [#280](https://github.com/samcantrill/loom/pull/280) open, unmerged | `6afbaef`: approved non-renewable cleanup-budget correction; 89 affected-consumer tests and 13 live-runtime tests pass. Earlier `3fd6f65` full-gate receipts remain preserved but do not validate the correction | original review finding awaits independent closure and fresh full gates; the additional bounded correction is authorized, original 3/3 allowance remains consumed | isolated phase worktree retained; earlier receipts copied to integration `build/stage-38-p3-3fd6f65` |
+| 3 | [#280](https://github.com/samcantrill/loom/pull/280) open, unmerged | `6afbaef`: independent closure, both full gates, 3,015 summary passes / 18 skips, 89 affected checks and 13 live cases. Refreshed combined tree `f1aaa9c`: 26 focused transport/group/live cases pass; full gates running | no remaining phase code finding; preserve the reviewed byte-identical delta while validating upstream PR #281 composition | isolated phase worktree retained; receipts copied to integration `build/stage-38-p3-6afbaef` |
 
 Final integrated review must verify all selected changes on their merged
 develop revision, not just each PR in isolation. The overall stage is incomplete

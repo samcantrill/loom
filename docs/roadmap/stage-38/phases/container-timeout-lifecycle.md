@@ -515,7 +515,7 @@ skips in 1,007.85 seconds. All receipts were copied to integration
 `build/stage-38-p3-6afbaef`; the summary checksum matches
 `5265e2b5660f6c480218c9b3e3e90f1ba38ea90ba5be182c501cdd02dceff61e`.
 
-During validation, independently delivered PR #281 advanced develop to `43d02a1`
+During validation, upstream PR #281 advanced develop to `43d02a1`
 with optional embedded-agent composition and related owner/transport tests. The
 manager reviewed its published diff, PR validation evidence and local-versus-remote
 dispatch, recovery and release branches. There are no changed paths in common
@@ -531,6 +531,10 @@ execute/restart/commit transport cases, all 13 container cases, and both full
 gates. Earlier receipts remain valid for their exact earlier tree, not the new
 combined-tree gate. The original and concurrently owned develop checkouts remain
 untouched.
+
+All 26 focused composition checks passed in 75.62 seconds at `f1aaa9c` plus
+roadmap-only metadata (`build/refreshed-timeout-composition.xml`). Fresh
+`make validate-pr` and `make test-summary` remain required on this combined tree.
 
 ## Completion Record
 
