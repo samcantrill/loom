@@ -186,6 +186,10 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert apptainer_descriptor.details["containerized"] is True
     assert apptainer_descriptor.details["apptainer_cli"] is True
     assert apptainer_descriptor.details["singularity_compatible"] is False
+    assert apptainer_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
+    prerequisites = apptainer_descriptor.details["timeout_prerequisites"]
+    assert isinstance(prerequisites, str)
+    assert "execution-host admission" in prerequisites
     assert {
         kind: capability.to_dict()["support_level"]
         for kind, capability in cast(
@@ -200,6 +204,7 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "best_effort"}
     singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
     assert singularity_descriptor.details["singularity_compatible"] is True
+    assert singularity_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
     assert slurm_descriptor.adapter_namespaces == (
         "apptainer",

@@ -26,6 +26,11 @@ from loom.pipeline.executors.containers import (
     parse_container_options,
 )
 from loom.pipeline.executors.errors import ExecutorError
+from loom.pipeline.executors._reliability import (
+    metadata_with_timeout,
+    timeout_metadata,
+    timeout_policy_from_request,
+)
 from loom.pipeline.executors.gpu_visibility import (
     CUDA_VISIBLE_DEVICES,
     GpuVisibilityEvidence,
@@ -35,6 +40,7 @@ from loom.pipeline.executors.gpu_visibility import (
 )
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.status import StageStatus
@@ -52,6 +58,7 @@ from .commands import (
     ApptainerExecOptions,
     ApptainerExecRunner,
     SubprocessApptainerExecRunner,
+    _with_timeout_namespace,
     build_apptainer_exec_command,
 )
 
@@ -118,7 +125,18 @@ class ApptainerExecutor:
             )
 
         started_at = self.clock()
+        policy = timeout_policy_from_request(request)
         try:
+            if (
+                policy is not None
+                and type(self.apptainer_command_runner)
+                is not SubprocessApptainerExecRunner
+            ):
+                raise _ApptainerSetupError(
+                    "container timeouts require the built-in subprocess runner; "
+                    "use it or explicitly disable the timeout",
+                    {"timeout_admission": "unsupported_runner"},
+                )
             prepared = _prepare_apptainer_attempt(
                 request=request,
                 run_store=self.run_store,
@@ -126,6 +144,10 @@ class ApptainerExecutor:
                 executor_name=self.name,
                 plugin_selectors=self.plugin_selectors,
             )
+            if policy is not None:
+                prepared = replace(
+                    prepared, command=_with_timeout_namespace(prepared.command)
+                )
         except Exception as exc:  # noqa: BLE001 - setup errors become failures.
             finished_at = self.clock()
             setup_error = _coerce_setup_error(exc)
@@ -136,6 +158,18 @@ class ApptainerExecutor:
                 finished_at=finished_at,
                 setup_error=setup_error,
             )
+            if policy is not None:
+                metadata = metadata_with_timeout(
+                    metadata,
+                    timeout_metadata(
+                        policy=policy,
+                        support_level=TimeoutSupportLevel.UNSUPPORTED,
+                        outcome=TimeoutOutcome.UNSUPPORTED,
+                        timed_out=False,
+                        message="timeout attempt was not admitted: "
+                        + setup_error.message,
+                    ),
+                )
             failure = _failure(
                 request=request,
                 executor_name=self.name,
@@ -159,10 +193,21 @@ class ApptainerExecutor:
             )
 
         try:
-            process = self.apptainer_command_runner.run(prepared.command)
+            if policy is None:
+                process = self.apptainer_command_runner.run(prepared.command)
+            else:
+                process = self.apptainer_command_runner.run(
+                    prepared.command,
+                    timeout_seconds=policy.duration_seconds,
+                )
         except Exception as exc:  # noqa: BLE001 - launch errors become failures.
             finished_at = self.clock()
             launch_error = _safe_exception_name(exc)
+            if policy is not None:
+                from ._timeout import UnsupportedTimeoutError
+
+                if isinstance(exc, UnsupportedTimeoutError):
+                    launch_error = str(exc)
             metadata = _process_metadata(
                 executor_name=self.name,
                 command=prepared.command,
@@ -175,6 +220,17 @@ class ApptainerExecutor:
                 finished_at=finished_at,
                 launch_error=launch_error,
             )
+            if policy is not None:
+                metadata = metadata_with_timeout(
+                    metadata,
+                    timeout_metadata(
+                        policy=policy,
+                        support_level=TimeoutSupportLevel.UNSUPPORTED,
+                        outcome=TimeoutOutcome.UNSUPPORTED,
+                        timed_out=False,
+                        message="timeout attempt was not admitted: " + launch_error,
+                    ),
+                )
             failure = _failure(
                 request=request,
                 executor_name=self.name,
@@ -239,6 +295,41 @@ class ApptainerExecutor:
             finished_at=finished_at,
         )
         process_exit_code, process_signal = _process_failure_fields(process.returncode)
+        if policy is not None:
+            metadata = metadata_with_timeout(
+                metadata,
+                timeout_metadata(
+                    policy=policy,
+                    support_level=TimeoutSupportLevel.ENFORCED,
+                    outcome=TimeoutOutcome.TIMED_OUT
+                    if process.timed_out
+                    else TimeoutOutcome.ENFORCED,
+                    timed_out=process.timed_out,
+                    message=process.error,
+                ),
+            )
+        if process.timed_out or process.error is not None:
+            failure = _failure(
+                request=request,
+                executor_name=self.name,
+                failed_at=finished_at,
+                message=process.error or f"{self.name} execution deadline exceeded",
+                exit_code=process_exit_code,
+                signal=process_signal,
+                metadata=metadata,
+                details={
+                    "timed_out": process.timed_out,
+                    "command_error": process.error,
+                },
+            )
+            return _failed_result(
+                request=request,
+                executor_name=self.name,
+                started_at=started_at,
+                finished_at=finished_at,
+                failure=failure,
+                metadata=metadata,
+            )
         worker_result = _read_worker_result(
             run_store=self.run_store,
             request=request,
@@ -404,7 +495,9 @@ def _prepare_apptainer_attempt(
     )
     resources = cast(ResourceRequest, runtime.resources)
     apptainer_options = project_apptainer_gpu_options(apptainer_options, resources)
-    gpu_visibility = validate_cuda_visibility(requested_gpu_count(resources), os.environ)
+    gpu_visibility = validate_cuda_visibility(
+        requested_gpu_count(resources), os.environ
+    )
     container = _with_cuda_visibility(container, gpu_visibility=gpu_visibility)
     worker_command = build_stage_worker_command(
         python_executable=python_executable,

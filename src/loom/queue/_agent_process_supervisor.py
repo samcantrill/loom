@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 from multiprocessing.connection import Client, Listener
 import secrets
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -28,6 +27,7 @@ from typing import Mapping, cast
 from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from ._process_group import OwnedProcessGroup, require_group_wait_support
 
 
 class AgentProcessSupervisorError(ValueError):
@@ -232,7 +232,7 @@ class AgentProcessSupervisor:
         self.root = Path(root).resolve()
         self._configuration = SupervisorLaunchConfiguration(agent_id, profiles)
         self._agent_id = self._configuration.agent_id
-        self._children: dict[str, subprocess.Popen[bytes]] = {}
+        self._children: dict[str, OwnedProcessGroup] = {}
         self._path = self.root / "supervisor.sqlite"
         if initialize:
             self._initialize()
@@ -313,6 +313,7 @@ class AgentProcessSupervisor:
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
+        require_group_wait_support()
         encoded = _launch_json(launch)
         with self._connect() as conn:
             row = conn.execute(
@@ -364,7 +365,7 @@ class AgentProcessSupervisor:
                 )
                 conn.commit()
             raise AgentProcessSupervisorError("resident root was not created") from exc
-        self._children[launch.launch_operation_id] = child
+        self._children[launch.launch_operation_id] = OwnedProcessGroup(child)
         with self._connect() as conn:
             conn.execute(
                 "UPDATE launches SET state = ?, pid = ?, revision = revision + 1 WHERE operation_id = ?",
@@ -396,7 +397,7 @@ class AgentProcessSupervisor:
                 )
             child = self._children.get(launch.launch_operation_id)
             if child is not None:
-                code = child.poll()
+                code = child.root_status()
                 if code is not None and str(row["state"]) in {
                     SupervisorLaunchState.STARTING.value,
                     SupervisorLaunchState.RUNNING.value,
@@ -439,37 +440,14 @@ class AgentProcessSupervisor:
         child = self._children.get(launch.launch_operation_id)
         if child is None:
             return receipt
-        # A root wait/result is deliberately not containment evidence: a child
-        # can outlive its root.  The service owns the original process-group ID
-        # and proves that group has vanished after bounded TERM/KILL escalation.
         try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+            contained = child.contain()
         except OSError:
+            contained = False
+        if not contained:
             return SupervisorReceipt(
                 SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
             )
-        deadline = monotonic() + 2
-        while _process_group_alive(child) and monotonic() < deadline:
-            sleep(0.02)
-        if _process_group_alive(child):
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError:
-                return SupervisorReceipt(
-                    SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
-                )
-            deadline = monotonic() + 2
-            while _process_group_alive(child) and monotonic() < deadline:
-                sleep(0.02)
-        if _process_group_alive(child):
-            return SupervisorReceipt(
-                SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
-            )
-        child.poll()
         result = launch.workspace_root / "worker-result.json"
         with self._connect() as conn:
             conn.execute(
@@ -718,27 +696,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
     )
 
 
-def _process_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _process_group_alive(child: subprocess.Popen[bytes]) -> bool:
-    """Reap our leader before using the group as descendant evidence.
-
-    A killed leader remains a zombie until its owning service reaps it, and a
-    zombie still makes ``killpg(..., 0)`` report a group.  Reaping first does
-    not weaken containment: any living descendant remains in the original
-    group and keeps the group observable.
-    """
-
-    child.poll()
-    return _process_group_exists(child.pid)
+def _process_group_alive(child: OwnedProcessGroup) -> bool:
+    return not child.settled()
 
 
 class AgentProcessSupervisorClient:
@@ -1077,9 +1036,9 @@ def _serve(root: Path) -> None:
                     child = supervisor._children.get(
                         cast(ResidentWorkerLaunch, launch).launch_operation_id
                     )
-                    if child is not None and child.poll() is None:
+                    if child is not None:
                         try:
-                            os.killpg(child.pid, signal.SIGTERM)
+                            child.terminate()
                         except OSError:
                             pass
                     response = _receipt_value(current)

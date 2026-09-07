@@ -1,25 +1,26 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: Phases 1 and 2 merged; Phase 3 remains design-gated
+Status: Phases 1 and 2 merged; Phase 3 reviewed and validated, remote merge pending
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: Phase 3 timeout/lifecycle design review; Phase 2 PR #278 merged at `0c0dbf2`.
-Blockers: none for Phase 2; Phase 3 retains its design gate.
-The maintainer approved the warning correction and one fresh bounded verification
-after the prior reviewer reuse was consumed. Positive runtime-limit acceptance is deferred
-to a compatible host; the later timeout design gate remains.
+Current gate: Phase 3 PR #280 remote merge, then final integrated review.
+Blockers: none. Independent verification closes the authorized cleanup-budget
+correction at `6afbaef`. Refreshed combined tree `f1aaa9c` retains the exact phase
+delta and passes both full gates (3,024 summary passes), plus 26 focused cases
+including all 13 selected-runtime cases. Correction allowances are not reset.
+Positive CPU/RAM runtime-limit acceptance remains deferred to a compatible host.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Authority | Maintainer requested execution of the selective-port draft, including review and merges to develop | No authority to retire the original dirty checkout | Preserve it throughout |
-| Evidence | Published merge verified; initial audit accepted; `04443ed` independently accepted with 80 focused passes, both full gates, 2,994 summary passes / five optional skips, and one selected-policy SIF smoke pass | A-10 remains design-gated | Retain exact-tree receipts for later integrated review |
+| Evidence | Baseline and all phase implementations independently reviewed; latest full gates pass 3,024 summary cases and 26 focused composition cases including 13 live-runtime cases | Phase 3 remote merge and final integrated review pending | Retain exact-tree receipts for final integrated review |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
-| Design | Scheduling-only policy, combined startup, and implemented amendments independently accepted | Timeout ownership unresolved | Review Phase 3 lifecycle design |
-| Implementation | Phases 1 and 2 merged; PR #278 at `0c0dbf2` has the reviewed and fully validated product tree; receipts retained and phase cleanup complete | Phase 3 design gate | Review lifecycle design before any timeout implementation |
+| Design | Scheduling-only policy and timeout kernel/init mechanism independently accepted; bounded correction locks signal-before-reap ownership | None within the recorded mechanism | Implement the exact phase-card contracts |
+| Implementation | Phases 1 and 2 merged; Phase 3 approved in PR #280 after independent closure and fresh combined-tree gates | Remote merge and final integrated review pending | Merge, then review the integrated develop tree |
 
 ## Evidence And Scope
 
@@ -286,7 +287,7 @@ container-intent fallback. Missing-worker-result remedies must depend on emitted
 limit flags, not merely on retained resource entries. Preserve full nested error
 context and existing runtime diagnostics.
 
-Example of the approved future profile (not executable on the current tree):
+Example of the implemented profile policy:
 
 ```yaml
 runtime_profiles:
@@ -403,7 +404,7 @@ process-cleanup guarantee from either existing command runner.
 | --- | --- | --- | --- | --- |
 | FR-1 | Check outer factories and unrelated generic targets, keeping stage config, factory init data, and pipeline metadata inert for generic traversal | Preserve opt-in warning, counts, static default, and input immutability | Public CLI constructor markers; invalid factories and generic targets | merged, PR #277 |
 | FR-2 | Explicitly select runtime CPU/memory limits or scheduling-only execution without losing resource intent or changing GPU/SLURM ownership | Current resource contracts; runtime mapping stays default; no implicit allocation or fallback | Policy composition, retained intent, conversion/rejection, truthful diagnostics, separate live receipts | implemented; smoke, independent review, and full gates passed |
-| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Resolve stage versus outer cleanup owner; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | design investigation |
+| FR-3 | Deadline, bounded termination/escalation, observation/reaping, primary and cleanup context; no success after timeout or unresolved containment | Existing stage and outer cleanup owners; no capacity release solely on launcher exit | Real child-process fixtures and suitable container check | independently reviewed and validated in PR #280; approved for merge |
 | FR-4 | Preserve run roots, GPU redaction/grammar, serialization, managed deferral/exclusivity/release/restart | Current published behavior, not old patch parity | Baseline audit and regression suites | baseline audit accepted; bounded corrections assigned |
 | FR-5 | Independent baseline and implementation reviews; local validation; ordered PRs and merges to develop; final integrated review | Preserve original checkout, refresh base between phases | Exact revision receipts and remote merge evidence | required |
 
@@ -478,13 +479,123 @@ unresolved cleanup evidence.
 - No changes to scientific fingerprints, run-root defaults, serialized worker
   schemas, remote submission, or public ownership enum are assumed.
 
+### Phase 3 Ownership Review — Approved Bounded Mechanism
+
+The independent removal-first review accepts the existing-owner mechanism for
+the selected built-in Linux foreground exec path only. It does not establish a
+general Apptainer/Singularity or process-group guarantee. In that path,
+[SingularityCE v3.10.4 starter](https://raw.githubusercontent.com/sylabs/singularity/v3.10.4/cmd/starter/c/starter.c)
+creates the requested PID namespace without the instance-only `setsid`, and
+[its process engine](https://raw.githubusercontent.com/sylabs/singularity/v3.10.4/internal/pkg/runtime/engine/singularity/process_linux.go)
+uses `sinit` when PID isolation is selected without `--no-init`. The recorded
+topology shows the launcher and `sinit` retaining the enclosing owned group even
+when a payload enters a separate session.
+
+The corresponding group barrier is coherent. [Linux v6.8 namespace
+teardown](https://raw.githubusercontent.com/torvalds/linux/v6.8/kernel/pid_namespace.c)
+does not permit namespace init to finish being reaped until all other namespace
+processes are gone, while the [process exit
+path](https://raw.githubusercontent.com/torvalds/linux/v6.8/kernel/exit.c) retains
+process-group membership until task release. The bounded whole-group KILL receipt
+then confirms the relevant ordering on the selected host: `sinit` remained in the
+owned group, the TERM-ignoring payload remained in another session, and no pinned
+descendant was live when the group became absent. Launcher exit alone remains
+insufficient; after the built-in owner has reaped its root, absence of this
+continuously owned group is the accepted namespace-settlement barrier.
+
+PGID reuse cannot turn group observation into premature release: reuse before a
+post-reap check is conservative and keeps the owner nonterminal, while an
+observed absence means the old group, including its namespace init, has already
+been detached. It can, however, make a later `killpg` unsafe. The built-in handle
+must therefore retain its creation-owned leader as an unreaped identity anchor:
+observe and cache root status through a creation-linked non-reaping child wait
+(`waitid(..., WNOWAIT)` on the selected Linux path), perform at most the one
+bounded TERM/grace/KILL sequence while that leader still reserves the PID/PGID,
+then reap the root exactly once and permanently close group signaling. After
+reaping, group checks are settlement observation only; a still-present or reused
+numeric group remains nonterminal/unresolved and retains leases but is never
+signaled. Failure to retain that anchor also fails closed without signaling or
+release. This ordering applies whether cancellation/ownership loss starts cleanup
+or the root exits first; a root-first exit starts containment of the remaining
+owned group before root reaping.
+
+The settlement claim still depends on verified init membership and the selected
+runtime mode; it must not be generalized to `--no-init`, instance/join paths,
+another runtime/version, or a path that changes the init's group.
+Startup/runtime rejection before those facts are established is a failed
+attempt, not supported timeout enforcement.
+
+Direct execution has a separate, smaller proof. The built-in runner owns and
+reaps its created launcher and may claim namespace settlement only after it has
+captured an identity-safe `sinit` handle from that live launch lineage and
+observed that handle exit. If startup failure or launcher-first exit prevents
+that capture, bounded cleanup ends as a failed attempt with unresolved cleanup
+(and remains timeout when the deadline fired), and the executor rejects the
+worker result before reading or admitting it. The existing command result's
+timeout/error fields and execution failure details can carry that outcome; no
+result schema or public runner method is needed. Direct execution has no managed
+capacity to release, and managed callers independently retain capacity through
+their outer group barrier.
+
+Legacy A-10 is therefore an existing-owner correction: cache the built-in root
+return code without reaping it, keep group cancellation effective after root exit
+while that root anchors the PGID, and prohibit every group signal after the root
+is reaped. `poll()` remains nonterminal until post-reap observation confirms
+group absence. Existing adapter renewal and release ordering then remain
+authoritative. Clean interruption must run the same bounded cleanup; abrupt loss
+of the actual outer owner makes no settlement claim and does not justify a
+detached replacement. Remove the proposed subreaper/helper, handshake, retained
+supervisor, new owner value, and durable state. Any later requirement to survive
+actual outer-owner loss is a materially broader ownership choice requiring
+maintainer agreement.
+
 ## Complexity Delta
+
+Pre-submit trace A-15: `StageExecutionResult` and `ExecutionFailure` freeze
+nested metadata, but execution reliability's `_timeout_metadata` accepted only
+a mutable `dict`. At `090385a`, the public result producer yields `mappingproxy`
+and the reader returns `None`: timeout classification becomes `executor_exit_code`
+and the durable timeout outcome is omitted. The supported producer and both
+consumers are current, so the smallest correction is to accept `Mapping` before
+the existing plain-data normalization. Preserve immutable models and schemas;
+do not add a second timeout reader or serialization mechanism. A regression using
+the public result/failure constructors fails before the correction and tests
+classification plus persisted outcome afterward. This bounded existing-reader
+correction is part of the Phase 3 outcome contract, not a new reliability design.
+
+Manager verification applies the reviewed signaling order to both actual queue
+owners. Resident `_agent_process_supervisor.py:query` reaps through `Popen.poll`
+before `contain` signals the numeric group; `_process_group_alive` and service
+`request_stop` repeat that pattern. This confirmed A-14 lifecycle defect needs
+the same non-reaping anchor and one-shot cleanup ordering as legacy A-10, not a
+new supervision mechanism. Preserve resident root-exit/CONTAINED/UNKNOWN receipt
+semantics, replay, clean shutdown, restart non-adoption and physical release.
+Independent implementation review must cover both owners. Their private helper
+layout remains discretionary; low-level container code cannot import queue code.
+
+Current Phase 3 evidence is owned by the phase card's **Fresh Design Evidence**.
+Published `71d2452` includes the separate role-environment loading PR #279; the
+new phase preserves those owners and dependency updates. The approved shell SIF
+can use the runtime's PID namespace with `sinit`. The probes distinguish root
+exit from settlement and establish the smaller boundary needed here: direct use
+requires an identity-safe init observation, while managed use requires the
+existing owner's group to become absent after root reaping. Legacy A-10 must stop
+conflating root exit with that group barrier. No extra process owner, handshake,
+public protocol, owner value, result schema, or durable state is necessary.
+
+Validation selection follows the affected command, worker-owner reconstruction,
+legacy release, result contract, and import boundaries. Existing targeted tests
+passed 161 cases with no skips at `855a4f6` (receipt:
+`build/timeout-owner-baseline.xml`). These are baseline compatibility evidence;
+the design probe is mechanism evidence,
+not the final required real-process/runtime acceptance matrix or full gates.
 
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
 | Detached validation projection | Generic traversal constructs stage-owned nested targets | Skip only outer path, which does not stop traversal | keep |
 | CPU/memory argv mapping plus explicit policy | Default mapping is implemented, but the available host rejects rootless limit setup | Erasing requests loses scheduler demand; implicit fallback violates intent | keep existing default; one adapter policy for approved scheduling-only execution |
 | Container lifecycle boundary | Launcher-only timeout does not prove descendant cleanup | Reuse existing immediate-child kill, which is insufficient | design required |
+| Identity-safe direct init observation | Direct root wait can precede namespace settlement | Capture the selected runtime init from live lineage and observe its pidfd; report cleanup unresolved when capture is unavailable | keep private to the built-in timeout runner; no helper, handshake, or public result change |
 | New registry, daemon supervisor import, durable cleanup ledger | No demonstrated need for these particular mechanisms | Extend existing owner at its boundary | defer |
 
 ## Design Agreement
@@ -493,7 +604,7 @@ unresolved cleanup evidence.
 | --- | --- | --- | --- |
 | DQ-1 | FR-1 | CLI owns validation projection; source config and stage constructor semantics stay unchanged | locked |
 | DQ-2 | FR-2 | Positive integer CPUs; memory converts exactly to integer bytes; no silent rounding, zero-as-unlimited, or attribute reinterpretation | repo-resolved |
-| DQ-3 | FR-3 | Close ownership and mechanism investigation before enabling timeouts or advertising enforcement | open investigation |
+| DQ-3 | FR-3, FR-4 | Use the selected runtime's PID namespace/init with existing owners: identity-safe init observation for direct execution; for managed cleanup, cache root status without reaping, signal the group only while the unreaped root anchors its PID/PGID, then reap once, close signaling permanently, and require group absence before release; unresolved cleanup cannot admit output or release capacity | design approved for implementation with the identity-preserving signal/reap order; any post-reap group signal, detached/retained owner, handshake, new owner value, public/durable handoff, or actual outer-owner-loss guarantee is outside the accepted mechanism and broader ownership requires maintainer agreement |
 | DQ-4 | FR-5 | One phase worktree/PR each; independent correctness review and exact-tree local gates; final integrated review | locked |
 | DQ-5 | FR-2, FR-4 | One existing adapter field; reuse merge/validation/provenance; no queue, host, or durable-schema change; independent amendment review | policy implemented; namespace and implicit-stage warning findings independently closed |
 | DQ-6 | FR-4 | Make the two admission waits passive; retain locks, periodic reconciliation and mutation wakeups | approved; independent combined startup review passed without findings |
@@ -504,9 +615,19 @@ The independent scheduling-only plan/startup review found no policy-design block
 The separately approved coordinator amendment and combined Phase 2 startup passed
 independent review without findings, including measured evidence, the passive-wait
 correction, retained safety contracts, and proportional validation.
-Historical correction counts remain intact. Timeout review remains pending until its minimum design is
-supported by source and runtime evidence. A new ownership framework or materially broader public contract must
-be presented to the maintainer separately, as required by the approved draft.
+Historical correction counts remain intact. The independent Phase 3 removal-first
+review accepts the bounded existing-owner mechanism on the cited source and
+runtime evidence: the selected runtime/init and kernel ordering make managed
+group absence a settlement barrier, while direct execution either observes a
+creation-linked init identity or truthfully reports cleanup unresolved. It
+also requires the managed built-in handle to keep its leader unreaped through
+the final group signal, then make all post-reap processing observation-only;
+the earlier conservative-reuse argument alone was insufficient for signaling
+safety. It rejects the unneeded subreaper/helper and any detached supervisor or
+handshake. This is not universal runtime support and does not approve survival
+of actual outer-owner loss. A new ownership framework or materially broader
+public contract must be presented to the maintainer separately, as required by
+the approved draft.
 
 ## Examples And Validation
 
@@ -530,15 +651,14 @@ Final commands for each implementation phase are `make validate-pr` and
 Approved ordering is audit, validation guard, CPU/memory mapping (including
 A-9), lifecycle-safe timeouts, then integrated review. The compact manifest
 links three phase cards. Phase 1 is merged after independent review and both
-required gates. Phase 2 has committed and independently reviewed its offline
-implementation and both localized test corrections. Its latest full gate fails
-on A-13; earlier passing receipts cannot replace fresh corrected-tree validation.
-The newly approved scheduling-only policy requires its own implementation and
-live acceptance; unavailable hard-limit proof remains explicit deferred evidence.
-Phase 3's card explicitly forbids execution until its lifecycle design is
-reviewed, including the separately identified legacy A-10 correction. This
-staged readiness follows the maintainer's explicit instruction that earlier
-increments may land while a broader timeout design is presented separately.
+required gates. Phase 2 is also merged after the separately authorized bounded
+corrections, fresh full gates, scheduling-only live acceptance, and independent
+closure. Its completion receipt is authoritative; the earlier failed gates in
+the audit are cause evidence, not current blockers. Positive hard-limit proof
+remains explicitly deferred to a compatible host.
+Phase 3's lifecycle design, including the legacy A-10 correction, passed its
+required independent review before implementation. Its card now owns final
+implementation evidence and the separately approved cleanup-budget correction.
 The full objective remains incomplete until all accepted outcomes are achieved.
 
 ## Quality Gate
@@ -548,8 +668,8 @@ The full objective remains incomplete until all accepted outcomes are achieved.
 | Behavior and scope authorized | Maintainer-supplied selective-port objective | pass |
 | Dirty checkout preserved and fresh locked baseline | Revision and preservation receipts above | pass |
 | Upstream audit independently accepted | Independent source/contract review; 236 passing baseline tests; A-1/A-9/A-10 dispositions recorded | pass |
-| Minimum timeout design justified | Ownership investigation in progress | pending |
-| Detailed phase traceability and startup readiness | Phase 1 merged; FR-2 maps to the prepared resource packet and offline implementation; live acceptance and timeout design remain explicit gates | pass for Phase 2 offline scope only |
+| Minimum timeout design justified | Independent removal-first review accepts selected-runtime init observation plus the managed group barrier only with unreaped-root PGID anchoring through the final signal and permanently observation-only processing after root reap; launcher exit remains insufficient and unresolved cleanup retains capacity | pass with identity-preserving signal/reap order locked |
+| Detailed phase traceability and startup readiness | Phases 1 and 2 merged; FR-3 maps to the reviewed existing-owner mechanism, mutation-sensitive correction tests, real-runtime acceptance and fresh full gates | pass; remote Phase 3 merge and final integrated review pending |
 | Required reviews and final checks defined | FR-5 and validation table | pass |
 | Scheduling-only policy design | Independent review accepted existing owners, explicit modes, retained demand and separate live receipts; minor wording corrected | pass |
 | Phase 2 product startup | Separate bounded amendment approved; measured passive-wait correction and combined startup independently accepted without findings | pass |
@@ -563,8 +683,24 @@ explicit/implicit-stage path at the existing mapping owner without inventing
 runtime limits. The phase card records focused evidence and the newly approved
 bounded verification. Independent closure and both fresh full gates passed;
 Phase 2 merged through PR #278 at `0c0dbf2`; the merged tree equals the reviewed head.
-Historical correction counts are not reset. Phase 3 remains
-unapproved for product execution pending its expanded design review.
+Historical correction counts are not reset. Phase 3's existing-owner mechanism
+is implemented. Independent implementation review accepted its ownership and
+result-gating behavior but found the managed wait-budget renewal defect. The
+maintainer-authorized `6afbaef` correction passes 89 affected-consumer tests and
+13 live-runtime tests, with independent closure. Refreshed source `f1aaa9c` passes
+both full gates and 26 focused composition cases; its phase delta is unchanged.
+Remote merge and the final integrated review are the remaining delivery steps.
+The implementation review gate must prove the selected foreground `--pid` plus
+init-shim topology, startup/TERM/KILL/interruption behavior, direct pidfd identity
+or unresolved-cleanup failure, and timeout-before-result admission. The managed
+root-first case must prove root status is observed without reap, every group
+signal occurs while that creation-owned leader still anchors the PGID, root reap
+closes signaling exactly once, post-reap group checks cannot signal even when the
+numeric PGID remains present/reappears, and leases remain held until confirmed
+absence. A failed topology/identity check is an actionable unsupported attempt,
+not launcher-only success. Any post-reap group signal, detached or retained
+owner, cross-owner handshake, new public/durable surface, or guarantee after
+actual outer-owner loss stops for maintainer agreement and a new design review.
 
 ## Decisions And Deferrals
 

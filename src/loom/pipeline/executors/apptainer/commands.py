@@ -247,6 +247,24 @@ class SubprocessApptainerExecRunner:
         try:
             import subprocess
 
+            if timeout is not None and tuple(run_command.argv[1:]) != ("--version",):
+                from ._timeout import run_timed_exec
+
+                run_command = _with_timeout_namespace(run_command)
+                result = run_timed_exec(run_command.argv, float(timeout))
+                return ApptainerCommandResult(
+                    command=run_command.argv[0],
+                    argv=run_command.argv,
+                    redacted_argv=cast(tuple[str, ...], run_command.redacted_argv),
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    started_at=started_at,
+                    finished_at=self.clock(),
+                    timed_out=result.timed_out,
+                    timeout_seconds=timeout,
+                    error=result.error,
+                )
             completed = subprocess.run(  # noqa: S603
                 list(run_command.argv),
                 check=False,
@@ -255,6 +273,11 @@ class SubprocessApptainerExecRunner:
                 timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001 - command-launch facts are returned.
+            if timeout is not None:
+                from ._timeout import UnsupportedTimeoutError
+
+                if isinstance(exc, UnsupportedTimeoutError):
+                    raise
             return _result_from_exception(
                 command=run_command.argv[0],
                 argv=run_command.argv,
@@ -285,6 +308,18 @@ class SubprocessApptainerExecRunner:
             build_apptainer_version_command(apptainer_options=apptainer_options),
             timeout_seconds=timeout_seconds,
         )
+
+
+def _with_timeout_namespace(command: ApptainerExecCommand) -> ApptainerExecCommand:
+    from ._timeout import namespace_argv
+
+    argv = namespace_argv(command.argv)
+    redacted = namespace_argv(cast(tuple[str, ...], command.redacted_argv))
+    return ApptainerExecCommand(
+        argv=argv,
+        redacted_argv=redacted,
+        metadata={**command.metadata, "argv": list(redacted)},
+    )
 
 
 class FakeApptainerExecRunner:

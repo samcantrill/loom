@@ -60,6 +60,10 @@ an environment that intentionally provides the selected runtime:
 ```sh
 LOOM_RUN_DOCKER_ACCEPTANCE=1 uv run pytest tests/container_acceptance
 LOOM_RUN_APPTAINER_ACCEPTANCE=1 uv run pytest tests/container_acceptance
+LOOM_RUN_APPTAINER_TIMEOUT_ACCEPTANCE=1 \
+  LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/approved-local.sif \
+  LOOM_APPTAINER_COMMAND=singularity \
+  uv run pytest tests/container_acceptance/test_apptainer_timeout_lifecycle.py
 LOOM_RUN_APPTAINER_BUILD_ACCEPTANCE=1 \
   LOOM_APPTAINER_BUILD_DEFINITION=/path/to/definition.def \
   uv run pytest tests/container_acceptance
@@ -84,3 +88,10 @@ Phase 1 splits validation into two install surfaces:
 `make test-summary` documents both rows so reviewers can see executed config
 evidence versus default no-extra evidence. The summary e2e row runs with
 `loom[config]` when the public workflow under test is config-backed.
+
+The timeout acceptance image needs `sh`, `setsid`, and `sleep`; the supplied path
+must already exist. Tests use temporary bind-mounted readiness files, fixture-owned
+pidfds, and the selected Linux/SingularityCE 3.10.4 foreground namespace path.
+They exercise direct timeout/startup/interruption, root-first exit, TERM-resistant
+descendants, uncertain cleanup, ordinary results, and both managed group owners.
+They neither pull/build an image nor request CPU/RAM cgroups or GPUs.

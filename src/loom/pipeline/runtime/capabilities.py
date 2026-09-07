@@ -766,12 +766,17 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
             "container_build",
             "singularity",
         ),
-        timeout_support=TimeoutSupportLevel.UNSUPPORTED,
+        timeout_support=TimeoutSupportLevel.ENFORCED,
         details={
             "built_in": True,
             "containerized": True,
             "apptainer_cli": True,
             "singularity_compatible": name == "singularity",
+            "timeout_prerequisites": (
+                "built-in subprocess runner on Linux with pidfds and waitid/WNOWAIT; "
+                "SingularityCE 3.10.4 foreground exec with PID-namespace init; "
+                "execution-host admission is checked at launch, not by this descriptor"
+            ),
             "security_sandbox": False,
             "requires_prepared_worker_request": True,
         },
@@ -927,6 +932,13 @@ def _timeout_capability_message(
     timeout_support: TimeoutSupportLevel,
 ) -> str:
     if timeout_support is TimeoutSupportLevel.ENFORCED:
+        if executor in {"apptainer", "singularity"}:
+            return (
+                f"executor {executor!r} can enforce reliability timeout policy with "
+                "the built-in runner on supported Linux/SingularityCE 3.10.4 "
+                "PID-namespace hosts; execution-host prerequisites are checked at "
+                "launch, not by this static diagnostic"
+            )
         return f"executor {executor!r} can enforce reliability timeout policy"
     if timeout_support is TimeoutSupportLevel.DELEGATED:
         return f"executor {executor!r} delegates reliability timeout policy"
