@@ -1,6 +1,6 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phase 2 implementation, full gates, and independent review passed; ready for PR
+Status: Phase 2 PR #278 open; implementation, full gates, and independent review passed
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -61,7 +61,7 @@ Phase 3 retains its timeout design gate.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
-| 2 | direct-container-resources | in_progress | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | pending | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
+| 2 | direct-container-resources | pr_open | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
@@ -130,7 +130,7 @@ Phase 3 retains its timeout design gate.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | ready for PR | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed | independent review passed; hard-limit proof deferred | worktree/branch retained for merge; receipts preserved in integration `build/stage-38-p2-04443ed` |
+| 2 | [#278](https://github.com/samcantrill/loom/pull/278) open to develop; manager PR checks passed | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed | independent review passed; hard-limit proof deferred | worktree/branch retained for merge; receipts preserved in integration `build/stage-38-p2-04443ed` |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged
