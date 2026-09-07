@@ -2963,13 +2963,13 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
 ## v38 - Selective Container Port And Correctness Review
 
-Status: Phase 1 merged; Phase 2 resource mapping reviewed and explicit scheduling-only
+Status: Phases 1 and 2 merged; Phase 2 PR #278 landed at `0c0dbf2`. Explicit scheduling-only
 CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
 reconciliation wakeups and passed independent review. The scheduling-only SIF smoke
 passes. The approved `04443ed` reporting correction warns for implicit stages
 inheriting unenforced CPU/RAM intent and preserves no invented direct limits
 when unmapped. Both fresh full gates and independent verification passed;
-Phase 2 is ready for PR/merge checks.
+The merged tree matches the reviewed and validated phase head.
 Container lifecycle implementation retains its explicit design review.
 
 Preserve useful local changes without reverting newer upstream run-root, GPU,

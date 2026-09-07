@@ -1,12 +1,13 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phase 2 PR #278 open; implementation, full gates, and independent review passed
+Status: Phases 1 and 2 merged; Phase 3 retains its explicit design gate
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 2 — direct-container-resources
-Blockers: none for Phase 2; fresh full gates and independent closure passed at `04443ed`.
+Current phase: 3 — container-timeout-lifecycle (design review required)
+Blockers: Phase 3 lifecycle/timeout ownership design must be reviewed before implementation.
+Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
 The maintainer authorized this specific correction and a fresh bounded independent
 verification, without resetting other budgets. Targeted checks pass 80 tests and
 the latest SIF smoke passes one test. Both full gates passed with 2,994 summary
@@ -61,7 +62,7 @@ Phase 3 retains its timeout design gate.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
-| 2 | direct-container-resources | pr_open | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
+| 2 | direct-container-resources | merged | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
 | 3 | container-timeout-lifecycle | pending | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle | pending | Container lifecycle and required worker-owner propagation, tests/docs | Truthful deadlines and supported-process cleanup |
 
 ## Quality Gate
@@ -87,7 +88,7 @@ Phase 3 retains its timeout design gate.
   gaps. Bounded correction `6b831e7` closes namespace selection and explicit/global
   fallback warnings. The separately approved `04443ed` correction adds visible
   mapping warnings for mixed explicit/implicit stages without inventing runtime
-  limits. Fresh full gates and independent closure passed; ready for PR/merge checks.
+  limits. Fresh full gates and independent closure passed; PR #278 merged at `0c0dbf2`.
   Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
@@ -130,7 +131,7 @@ Phase 3 retains its timeout design gate.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | [#278](https://github.com/samcantrill/loom/pull/278) open to develop; manager PR checks passed | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed | independent review passed; hard-limit proof deferred | worktree/branch retained for merge; receipts preserved in integration `build/stage-38-p2-04443ed` |
+| 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged

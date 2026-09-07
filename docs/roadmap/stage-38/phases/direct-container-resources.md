@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 38, Phase 2
 - Manifest: `docs/roadmap/stage-38/implementation-plan.md`
 - Branch: `agent/stage-38-p2-direct-container-resources`
@@ -13,8 +13,7 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: none for Phase 2; independent review, both fresh full gates, and the
-  scheduling-only SIF smoke passed at `04443ed`; ready for PR/merge checks
+- Blockers: none for Phase 2; PR #278 merged at `0c0dbf2`; cleanup complete
 
 ## Objective And Context
 
@@ -364,5 +363,5 @@ verification passed without findings and closed the remaining warning defect.
 | Prior evidence and invalidation | Initial resource tree `7b28cb3`: targeted 138 passed, both gates passed, 2,964 summary passes and four optional skips. Probe correction `ff42b6d`: four shell regressions passed; old-probe negative control failed three cases; `make validate-pr` passed with 2,811 default and 157 config-extra tests. Its summary then exposed A-12: 2,967 passed and one failed, preserved under `build/test-summary-before-session-race-fix.md` and the matching directory. These receipts are not fresh full validation for the subsequent A-12 correction. |
 | Real runtime evidence / unavailable checks | Approved local shell SIF checksum matched planning evidence. Scheduling-only production-command smoke passed at `04443ed`: one passed, receipt `build/container-scheduling-only-04443ed.xml`; it retained CPU/RAM intent and omitted direct flags. The runtime-limit hook remains a real rootless D-Bus prerequisite failure at `build/container-resource-acceptance-local-sif.xml`; positive hard-limit proof remains deferred to a compatible approved host. |
 | Amendment review and routing check | Independent policy-design and combined amendment startup reviews passed without findings. Passive waits remain the measured, approved correction; deterministic nonterminal observer tests confirm neither path wakes reconciliation while existing queue integration, cancellation replay, retry, and production-daemon coverage pass. |
-| PR, review, and merge | [#278](https://github.com/samcantrill/loom/pull/278) open to develop with the planned title and phase branch. Resource mapping, first two localized corrections, and passive-wait/retry independently accepted. Namespace finding closed at `6b831e7`; fresh bounded independent verification of `04443ed` passed without findings and closed the remaining warning defect. Both full gates passed. Manager verified body, diff, target, title, clean mergeability, and unchanged product tree; eligible for squash merge. |
-| Residual risk and cleanup | Hard CPU/RAM enforcement remains unproven on this host; scheduling-only smoke is not enforcement evidence. Worktree retained for PR/merge. Latest receipts preserved in integration `build/stage-38-p2-04443ed`, summary SHA-256 `74273b9c989311f8fbe9b7e7b5faab9138a3545614755a540c315c6cb85dd7af`. Earlier receipts remain in `build/stage-38-p2-6b831e7` and `build/stage-38-p2-8702e06`. Original dirty content hashes remain unchanged; the preservation branch and concurrent develop worktree remain untouched. Published develop remains `43b911f`. |
+| PR, review, and merge | [#278](https://github.com/samcantrill/loom/pull/278) squash-merged to develop at `0c0dbf2a79e97ca4c242b34613cd7991ff1c3364`. Resource mapping, localized corrections, and passive-wait/retry independently accepted. Final warning verification passed without findings at `04443ed`. Both full gates passed; manager verified body, scope, target, title, mergeability, and unchanged product tree before merge. Remote merge confirmed; merged tree equals reviewed head `e9f050f`. |
+| Residual risk and cleanup | Hard CPU/RAM enforcement remains unproven on this host; scheduling-only smoke is not enforcement evidence. Latest receipts and generated queue logs preserved in integration `build/stage-38-p2-04443ed`, summary SHA-256 `74273b9c989311f8fbe9b7e7b5faab9138a3545614755a540c315c6cb85dd7af`. Earlier receipts remain in `build/stage-38-p2-6b831e7` and `build/stage-38-p2-8702e06`. Original dirty content hashes remain unchanged; the preservation branch and concurrent develop worktree remain untouched. Integration checkout advanced safely to the merged tree; phase worktree and local/remote branches removed. |

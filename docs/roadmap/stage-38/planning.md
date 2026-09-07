@@ -1,11 +1,11 @@
 # Roadmap Stage 38 Planning: Selective Container Port And Correctness Review
 
-Status: first phase merged; Phase 2 implementation, full gates, and independent review passed
+Status: Phases 1 and 2 merged; Phase 3 remains design-gated
 Roadmap stage: 38
 Evidence revision: `f4b1ae76f63d33f2d481916bf36147f372e6225d`
 Planning route: expanded for container process ownership; independent baseline
 and implementation correctness reviews explicitly required by the maintainer.
-Current gate: manager PR checks and merge; all Phase 2 product gates passed at `04443ed`.
+Current gate: Phase 3 timeout/lifecycle design review; Phase 2 PR #278 merged at `0c0dbf2`.
 Blockers: none for Phase 2; Phase 3 retains its design gate.
 The maintainer approved the warning correction and one fresh bounded verification
 after the prior reviewer reuse was consumed. Positive runtime-limit acceptance is deferred
@@ -19,7 +19,7 @@ to a compatible host; the later timeout design gate remains.
 | Evidence | Published develop verified; initial audit accepted; `04443ed` independently accepted with 80 focused passes, both full gates, 2,994 summary passes / five optional skips, and one selected-policy SIF smoke pass | A-10 remains design-gated | Preserve exact-tree receipts and verify PR |
 | Functionality | Stage-owned validation, explicit direct CPU/memory enforcement policy, lifecycle-safe timeouts; retain corrected upstream behavior | Scheduling-only execution explicitly accepts no OS CPU/RAM limit; no scientific or remote submission changes | Trace each requirement to an owner |
 | Design | Scheduling-only policy and combined passive-wait amendment startup independently accepted without findings | Timeout ownership unresolved | Review the implemented amendment |
-| Implementation | Phase 1 merged; queue correction and `04443ed` warning correction independently accepted; fresh full gates passed | No Phase 2 product blocker | Verify PR and merge |
+| Implementation | Phases 1 and 2 merged; PR #278 at `0c0dbf2` has the reviewed and fully validated product tree; receipts retained and phase cleanup complete | Phase 3 design gate | Review lifecycle design before any timeout implementation |
 
 ## Evidence And Scope
 
@@ -561,7 +561,7 @@ fallback warnings. The separately approved `04443ed` correction closes the mixed
 explicit/implicit-stage path at the existing mapping owner without inventing
 runtime limits. The phase card records focused evidence and the newly approved
 bounded verification. Independent closure and both fresh full gates passed;
-Phase 2 is ready for PR/merge checks.
+Phase 2 merged through PR #278 at `0c0dbf2`; the merged tree equals the reviewed head.
 Historical correction counts are not reset. Phase 3 remains
 unapproved for product execution pending its expanded design review.
 
