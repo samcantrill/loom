@@ -94,17 +94,24 @@ def _spec() -> PipelineSpec:
     )
 
 
-def _request(*, executor: str = "apptainer", gpu: bool = False) -> RunRequest:
-    stage_options = (
-        {
-            "build": {
-                "resources": {
-                    "entries": {"gpu": {"kind": "gpu", "amount": 1}}
-                }
+def _request(
+    *,
+    executor: str = "apptainer",
+    gpu: bool = False,
+    cpu_memory: bool = False,
+) -> RunRequest:
+    entries: dict[str, object] = {}
+    if gpu:
+        entries["gpu"] = {"kind": "gpu", "amount": 1}
+    if cpu_memory:
+        entries.update(
+            {
+                "cpu": {"kind": "cpu", "amount": 2},
+                "memory": {"kind": "memory", "amount": 512, "unit": "MiB"},
             }
-        }
-        if gpu
-        else {}
+        )
+    stage_options = (
+        {"build": {"resources": {"entries": entries}}} if entries else {}
     )
     return RunRequest(
         pipeline=_spec(),
@@ -224,4 +231,27 @@ def test_apptainer_gpu_request_reaches_clean_container_without_durable_token(
         assert result.status == RunStatus.SUCCEEDED
         assert "--nv" in command.argv
         assert "CUDA_VISIBLE_DEVICES=allocated-device" in command.argv
-        assert "allocated-device" not in repr(result.stage_results["build"].executor_metadata)
+    assert "allocated-device" not in repr(result.stage_results["build"].executor_metadata)
+
+
+def test_apptainer_cpu_memory_request_reaches_generated_command(tmp_path: Path) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        apptainer_runner = InProcessApptainerRunner(store)
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=ApptainerExecutor(
+                run_store=store,
+                apptainer_command_runner=apptainer_runner,
+            ),
+        ).run(_request(cpu_memory=True))
+
+    command = apptainer_runner.calls[0]
+    assert result.status == RunStatus.SUCCEEDED
+    assert command.argv[command.argv.index("--cpus") + 1] == "2"
+    assert command.argv[command.argv.index("--memory") + 1] == "536870912"
+    assert command.argv.index("--memory") < command.argv.index("analysis.sif")

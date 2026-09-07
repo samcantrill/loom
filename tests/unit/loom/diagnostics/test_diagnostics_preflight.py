@@ -630,7 +630,15 @@ def test_selected_docker_resource_checks_fail_gpu_requests(
                 "stage_options": {
                     "train": {
                         "resources": {
-                            "entries": {"gpu": {"kind": "gpu", "amount": 1}}
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                                "gpu": {"kind": "gpu", "amount": 1},
+                            }
                         }
                     }
                 },
@@ -695,12 +703,20 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
                     },
                     "apptainer": {"command": "apptainer"},
                 },
-                "stage_options": {
-                    "train": {
-                        "resources": {
-                            "entries": {"gpu": {"kind": "gpu", "amount": 1}}
+                    "stage_options": {
+                        "train": {
+                            "resources": {
+                                "entries": {
+                                    "cpu": {"kind": "cpu", "amount": 2},
+                                    "memory": {
+                                        "kind": "memory",
+                                        "amount": 512,
+                                        "unit": "MiB",
+                                    },
+                                    "gpu": {"kind": "gpu", "amount": 1},
+                                }
+                            }
                         }
-                    }
                 },
             },
         )
@@ -736,6 +752,65 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
         by_id["resources.apptainer.gpu"].details["gpu_targets"],
     )
     assert gpu_targets[0]["gpu_flag"] == "nv"
+    mapped_resources = cast(
+        list[dict[str, Any]],
+        by_id["resources.apptainer.mapping"].details["mapped_resources"],
+    )
+    assert [(item["resource_kind"], item["runtime_argument"]) for item in mapped_resources] == [
+        ("cpu", "2"),
+        ("memory", "536870912"),
+    ]
+
+
+def test_apptainer_preflight_uses_authored_container_resource_intent_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "analysis.sif"},
+                        "resources": {
+                            "entries": {
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 1,
+                                    "unit": "GiB",
+                                }
+                            },
+                            "capabilities": {
+                                "memory": {"support_level": "supported"}
+                            },
+                        },
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert by_id["resources.apptainer.mapping"].status is PreflightCheckStatus.PASS
+    mapped = cast(
+        list[dict[str, Any]],
+        by_id["resources.apptainer.mapping"].details["mapped_resources"],
+    )
+    assert mapped == [
+        {
+            "stage_id": "train",
+            "resource_kind": "memory",
+            "amount": 1,
+            "unit": "GiB",
+            "runtime_argument": "1073741824",
+            "support_level": "supported",
+            "enforcement": "best_effort",
+        }
+    ]
 
 
 def test_selected_apptainer_executor_fails_when_command_is_missing(
@@ -855,6 +930,52 @@ def test_slurm_container_preflight_resolves_build_target_and_warns_without_runti
         by_id["resources.slurm.container_compatibility"].status
         is PreflightCheckStatus.PASS
     )
+
+
+def test_slurm_container_preflight_keeps_cpu_memory_mapping_scheduler_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "slurm-afterok",
+                "dry_run": True,
+                "adapter_options": {
+                    "container": {"image": {"reference": "analysis.sif"}},
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert by_id["resources.apptainer.mapping"].status is PreflightCheckStatus.PASS
+    mapped = cast(
+        list[dict[str, Any]],
+        by_id["resources.apptainer.mapping"].details["mapped_resources"],
+    )
+    assert [(item["resource_kind"], item["enforcement"]) for item in mapped] == [
+        ("cpu", "slurm_enforced"),
+        ("memory", "slurm_enforced"),
+    ]
+    assert all("runtime_argument" not in item for item in mapped)
 
 
 def test_container_build_filesystem_checks_sources_and_never_outputs(

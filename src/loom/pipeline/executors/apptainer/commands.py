@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from fractions import Fraction
 import os
 import re
 import shutil
@@ -17,8 +18,11 @@ from loom.pipeline.executors.containers import (
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
+    ContainerResourceIntent,
     parse_container_options,
 )
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.errors import RuntimeResourceError
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import utc_timestamp
@@ -34,6 +38,14 @@ _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXEC_OPTIONS_FIELDS = frozenset(
     {"command", "cleanenv", "nv", "rocm", "fakeroot", "no_home"}
 )
+_MEMORY_BYTE_FACTORS = {
+    "B": 1,
+    "KiB": 1 << 10,
+    "MiB": 1 << 20,
+    "GiB": 1 << 30,
+    "TiB": 1 << 40,
+}
+_APPTAINER_LIMIT_MAX = (1 << 63) - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +362,7 @@ def build_apptainer_exec_command(
         _append(argv, redacted, "--fakeroot")
     if options.no_home:
         _append(argv, redacted, "--no-home")
+    _append_resource_limits(argv, redacted, container)
     if container.workdir is not None:
         _append_option(argv, redacted, "--pwd", container.workdir)
     for mount in _sorted_mounts(container):
@@ -376,6 +389,84 @@ def build_apptainer_exec_command(
             "worker_command": list(worker),
         },
     )
+
+
+def _append_resource_limits(
+    argv: list[str],
+    redacted: list[str],
+    container: ContainerOptions,
+) -> None:
+    """Project direct CPU and memory intent to Apptainer cgroup flags."""
+
+    intent = cast(ContainerResourceIntent | None, container.resources)
+    if intent is None:
+        return
+    entries = cast(Mapping[str, ResourceEntry], intent.entries)
+    selected = {
+        kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
+    }
+    if not selected:
+        return
+    try:
+        validated = ResourceRequest(entries=selected).entries
+    except RuntimeResourceError as exc:
+        raise ApptainerOptionError(
+            f"container CPU/memory resource request is invalid: {exc}"
+        ) from exc
+    cpu = validated.get("cpu")
+    if cpu is not None:
+        _append_option(argv, redacted, "--cpus", str(_cpu_count(cpu)))
+    memory = validated.get("memory")
+    if memory is not None:
+        _append_option(argv, redacted, "--memory", str(_memory_bytes(memory)))
+
+
+def _cpu_count(entry: ResourceEntry) -> int:
+    """Return a validated CPU count accepted by the runtime flag."""
+
+    if not isinstance(entry.amount, int) or isinstance(entry.amount, bool):
+        raise ApptainerOptionError("container CPU request must be a positive integer")
+    if entry.amount > _APPTAINER_LIMIT_MAX:
+        raise ApptainerOptionError(
+            "container CPU request is unrepresentable by the Apptainer runtime"
+        )
+    return entry.amount
+
+
+def _memory_bytes(entry: ResourceEntry) -> int:
+    """Return an exact positive byte count accepted by the runtime flag."""
+
+    unit = entry.unit
+    if unit is None:
+        raise ApptainerOptionError("container memory request has an unsupported unit")
+    factor = _MEMORY_BYTE_FACTORS.get(unit)
+    if factor is None:  # ResourceRequest validation owns the public unit contract.
+        raise ApptainerOptionError("container memory request has an unsupported unit")
+    bytes_value = Fraction(entry.amount) * factor
+    if bytes_value.denominator != 1:
+        raise ApptainerOptionError(
+            "container memory request must convert to an exact whole number of bytes"
+        )
+    value = bytes_value.numerator
+    if value <= 0 or value > _APPTAINER_LIMIT_MAX:
+        raise ApptainerOptionError(
+            "container memory request is unrepresentable by the Apptainer runtime"
+        )
+    if not _is_exact_float64_integer(value):
+        raise ApptainerOptionError(
+            "container memory request is not exactly representable by the "
+            "Apptainer runtime"
+        )
+    return value
+
+
+def _is_exact_float64_integer(value: int) -> bool:
+    """Match the exact-integer range of the runtime's float64 byte parser."""
+
+    exponent = value.bit_length() - 1
+    if exponent <= 52:
+        return True
+    return value % (1 << (exponent - 52)) == 0
 
 
 def build_apptainer_version_command(

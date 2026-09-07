@@ -38,6 +38,35 @@ allocation, then forwards the scheduler value through both
 Loom does not choose physical devices or persist their tokens. A zero or absent
 GPU request leaves container options and visibility untouched.
 
+## Direct CPU And Memory Limits
+
+For direct `apptainer` and `singularity` stage execution, a canonical `cpu`
+request maps to `--cpus` and a canonical `memory` request maps to `--memory` in
+exact bytes before the image reference. CPU requests are positive integer counts;
+memory uses `B`, `KiB`, `MiB`, `GiB`, or `TiB` and must convert to an exact
+positive byte count. Loom rejects invalid or runtime-unrepresentable values
+rather than rounding or launching without the requested limit.
+
+The direct compatible runtime path parses memory flags through a `float64`
+before producing its signed byte limit, so Loom also rejects byte counts that
+would be rounded by that parser. This follows
+[go-units `RAMInBytes`](https://github.com/docker/go-units/blob/v0.5.0/size.go#L101-L112)
+as called by [SingularityCE 3.10.4 memory-limit handling](https://github.com/sylabs/singularity/blob/v3.10.4/cmd/internal/cli/cgroups.go#L203-L214).
+
+The flags express a supported mapping, while enforcement remains best effort:
+the runtime needs compatible cgroups and delegated host/session configuration.
+When a resource-limited command exits before publishing its worker result, Loom
+preserves redacted command/runtime diagnostics and directs the operator to check
+them for unsupported flags and to use a compatible runtime/cgroup setup. That
+diagnostic does not attribute every container startup failure to resource limits.
+
+SLURM remains the CPU and memory enforcement owner for its container route, so
+its wrapped Apptainer command does not add direct `--cpus` or `--memory` flags.
+The opt-in real-runtime check requires an approved local image and suitable
+session; set `LOOM_RUN_APPTAINER_RESOURCE_ACCEPTANCE=1` and
+`LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/image.sif` to run it. It is not part of
+the default validation suite and does not pull or build images.
+
 ## Deferred
 
 Managed external image-build services, image publishing, Kubernetes, and Docker

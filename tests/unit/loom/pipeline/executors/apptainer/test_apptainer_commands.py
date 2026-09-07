@@ -20,7 +20,9 @@ from loom.pipeline.executors.apptainer import (
 from loom.pipeline.executors.apptainer.build import (
     ApptainerCommandUnavailableError,
 )
-from loom.pipeline.executors.containers import ContainerOptions
+from loom.pipeline.executors.containers import ContainerOptions, ContainerResourceIntent
+from loom.pipeline.resources import ResourceEntry
+from loom.pipeline.runtime.capabilities import ResourceCapability
 from loom.serialization import stable_json_dumps
 
 
@@ -123,6 +125,90 @@ def test_apptainer_exec_options_and_inputs_reject_invalid_shapes() -> None:
         )
 
 
+def test_build_apptainer_exec_command_maps_exact_cpu_and_memory_before_image() -> None:
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(
+            image="analysis.sif",
+            resources=_resource_intent(
+                cpu=ResourceEntry(kind="cpu", amount=2),
+                memory=ResourceEntry(kind="memory", amount=512, unit="MiB"),
+            ),
+        ),
+        worker_command=("python", "-V"),
+    )
+
+    assert command.argv == (
+        "apptainer",
+        "exec",
+        "--cleanenv",
+        "--cpus",
+        "2",
+        "--memory",
+        "536870912",
+        "analysis.sif",
+        "python",
+        "-V",
+    )
+    assert command.redacted_argv == command.argv
+
+
+def test_build_apptainer_exec_command_converts_exact_fractional_memory_units() -> None:
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(
+            image="analysis.sif",
+            resources=_resource_intent(
+                memory=ResourceEntry(kind="memory", amount=0.5, unit="MiB"),
+            ),
+        ),
+        worker_command=("python", "-V"),
+    )
+
+    assert command.argv[command.argv.index("--memory") + 1] == "524288"
+
+
+@pytest.mark.parametrize(
+    ("entry", "match"),
+    (
+        (ResourceEntry(kind="cpu", amount=0), "positive integer"),
+        (ResourceEntry(kind="memory", amount=0.5, unit="B"), "whole number of bytes"),
+        (
+            ResourceEntry(kind="memory", amount=1 << 63, unit="B"),
+            "unrepresentable",
+        ),
+        (
+            ResourceEntry(kind="memory", amount=(1 << 53) + 1, unit="B"),
+            "not exactly representable",
+        ),
+    ),
+)
+def test_build_apptainer_exec_command_revalidates_bypassed_resource_intent(
+    entry: ResourceEntry,
+    match: str,
+) -> None:
+    with pytest.raises(ApptainerOptionError, match=match):
+        build_apptainer_exec_command(
+            container_options=ContainerOptions(
+                image="analysis.sif",
+                resources=_resource_intent(**{entry.kind: entry}),
+            ),
+            worker_command=("python", "-V"),
+        )
+
+
+def test_build_apptainer_exec_command_accepts_exact_large_float64_byte_value() -> None:
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(
+            image="analysis.sif",
+            resources=_resource_intent(
+                memory=ResourceEntry(kind="memory", amount=(1 << 53) + 2, unit="B")
+            ),
+        ),
+        worker_command=("python", "-V"),
+    )
+
+    assert command.argv[command.argv.index("--memory") + 1] == str((1 << 53) + 2)
+
+
 def test_fake_runner_records_calls_and_scripts_version_results() -> None:
     runner = FakeApptainerExecRunner()
 
@@ -208,5 +294,17 @@ def _container_options() -> ContainerOptions:
         environment={
             "variables": {"TOKEN": "secret", "MODE": "test"},
             "required_host_variables": ["HOME"],
+        },
+    )
+
+
+def _resource_intent(
+    **entries: ResourceEntry,
+) -> ContainerResourceIntent:
+    return ContainerResourceIntent(
+        entries=entries,
+        capabilities={
+            kind: ResourceCapability(support_level="supported")
+            for kind in entries
         },
     )

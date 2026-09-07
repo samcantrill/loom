@@ -27,6 +27,7 @@ from loom.pipeline.executors.containers import (
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
+    ContainerResourceIntent,
     LocalContainerBuildService,
     container_build_output_identity,
     parse_container_build_options,
@@ -38,6 +39,7 @@ from loom.pipeline.executors.gpu_visibility import (
     requested_gpu_count,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime.capabilities import ResourceCapability
 from loom.pipeline.stores.run_store import LocalRunStorePaths
 from loom.serialization import PlainData
 
@@ -75,6 +77,7 @@ def wrap_slurm_command_with_apptainer(
         if isinstance(container_options, ContainerOptions)
         else parse_container_options(container_options)
     )
+    container = _without_direct_cpu_memory_limits(container)
     if requested_gpu_count(resources) > 0:
         environment = cast(ContainerEnvironment, container.environment)
         if (
@@ -159,6 +162,41 @@ def prepare_slurm_container_options(
     if invalid:
         raise SlurmPlanningError("SLURM Apptainer path parity validation failed")
     return prepared
+
+
+def _without_direct_cpu_memory_limits(container: ContainerOptions) -> ContainerOptions:
+    """Keep SLURM as the CPU/memory enforcement owner for wrapped commands."""
+
+    intent = cast(ContainerResourceIntent | None, container.resources)
+    if intent is None:
+        return container
+    entries = {
+        kind: entry
+        for kind, entry in cast(Mapping[str, ResourceEntry], intent.entries).items()
+        if kind not in {"cpu", "memory"}
+    }
+    if len(entries) == len(cast(Mapping[str, ResourceEntry], intent.entries)):
+        return container
+    capabilities = cast(
+        Mapping[str, ResourceCapability],
+        {
+            kind: capability
+            for kind, capability in cast(
+                Mapping[str, object], intent.capabilities
+            ).items()
+            if kind in entries
+        },
+    )
+    return ContainerOptions(
+        image=container.image,
+        workdir=container.workdir,
+        mounts=container.mounts,
+        environment=container.environment,
+        resources=ContainerResourceIntent(
+            entries=entries,
+            capabilities=capabilities,
+        ),
+    )
 
 
 def resolve_slurm_container_target(

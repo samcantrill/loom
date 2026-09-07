@@ -731,14 +731,14 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
 
 
 def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
-    advisory = ResourceCapability(
-        support_level=ResourceSupportLevel.ADVISORY,
+    mapped = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
         enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
-        severity=CapabilitySeverity.WARNING,
+        severity=CapabilitySeverity.INFO,
         details={
             "reason": (
-                "direct Apptainer execution can expose runtime flags, but scheduler "
-                "allocation and platform enforcement are outside the direct executor"
+                "direct Apptainer execution maps this resource to runtime flags; "
+                "cgroup delegation and platform enforcement remain host-dependent"
             )
         },
     )
@@ -756,8 +756,8 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
     return ExecutorDescriptor(
         name=name,
         resource_capabilities={
-            "cpu": advisory,
-            "memory": advisory,
+            "cpu": mapped,
+            "memory": mapped,
             "gpu": gpu,
         },
         adapter_namespaces=(

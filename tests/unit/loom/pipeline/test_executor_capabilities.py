@@ -186,6 +186,18 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert apptainer_descriptor.details["containerized"] is True
     assert apptainer_descriptor.details["apptainer_cli"] is True
     assert apptainer_descriptor.details["singularity_compatible"] is False
+    assert {
+        kind: capability.to_dict()["support_level"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
+        ).items()
+    } == {"cpu": "supported", "memory": "supported", "gpu": "supported"}
+    assert {
+        kind: capability.to_dict()["enforcement"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
+        ).items()
+    } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "best_effort"}
     singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
     assert singularity_descriptor.details["singularity_compatible"] is True
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
