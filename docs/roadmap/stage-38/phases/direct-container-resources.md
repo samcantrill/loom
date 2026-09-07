@@ -179,9 +179,14 @@ administration, or timeout implementation. Return exact validation and blockers.
 - Independent correctness review: no offline runtime product blocker; one
   localized acceptance-probe correction required. Pre-submit, PR and merge
   remain held for fresh corrected-tree validation and required live acceptance.
-- Blocker corrections: 1/3; make membership lookup and both control reads fail
-  closed, with host-free executable-shell regressions. Full prior gate receipts
-  are stale for the corrected test tree until refreshed.
+- Blocker corrections: 2/3. First, fail closed on missing cgroup membership and
+  control reads; four executable-shell regressions pass and independent
+  correction review accepted `ff42b6d`. Second, the refreshed summary exposed
+  upstream A-12: background accepted-time sampling races a whole-database
+  no-retirement-mutation assertion. Hold the existing cycle lock only around
+  before/rejection/after, preserving full equality and production behavior.
+  `make validate-pr` passed at `ff42b6d`; its summary had 2,967 passes and this
+  one failure. Both gates require refresh after the second test-only correction.
 
 ## Completion Record
 
