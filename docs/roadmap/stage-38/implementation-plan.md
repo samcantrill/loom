@@ -1,18 +1,16 @@
 # Roadmap Stage 38 Implementation Plan
 
-Status: Phase 2 approved mixed-stage fallback-warning correction in progress
+Status: Phase 2 implementation, full gates, and independent review passed; ready for PR
 Roadmap stage: 38
 Planning document: docs/roadmap/stage-38/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 2 — direct-container-resources
-Blockers: the bounded correction verification closed namespace selection but
-found missing visible warnings for implicit stages inheriting container intent
-when another stage has explicit resource options. The bounded reviewer reuse is
-consumed; the maintainer now authorizes this specific correction and a fresh
-bounded independent verification, without resetting other budgets. Fresh full gates
-passed at `6b831e7` (2,988 summary passes, five optional skips); the known reporting
-defect still holds merge. The latest SIF smoke also passed one test.
+Blockers: none for Phase 2; fresh full gates and independent closure passed at `04443ed`.
+The maintainer authorized this specific correction and a fresh bounded independent
+verification, without resetting other budgets. Targeted checks pass 80 tests and
+the latest SIF smoke passes one test. Both full gates passed with 2,994 summary
+passes and five optional skips; only roadmap metadata changed afterward.
 Positive runtime-limit proof remains deferred to a compatible host.
 Phase 3 retains its timeout design gate.
 
@@ -87,8 +85,9 @@ Phase 3 retains its timeout design gate.
   at `8702e06`; fresh full gates and the scheduling-only live smoke passed.
   Independent review accepted the queue correction but found policy-diagnostic
   gaps. Bounded correction `6b831e7` closes namespace selection and explicit/global
-  fallback warnings, but mixed explicit/implicit stages still miss the warning.
-  No PR/merge until the remaining finding is corrected and independently verified.
+  fallback warnings. The separately approved `04443ed` correction adds visible
+  mapping warnings for mixed explicit/implicit stages without inventing runtime
+  limits. Fresh full gates and independent closure passed; ready for PR/merge checks.
   Phase 3's card is a design-gated handoff,
   not permission to implement its unresolved mechanism.
 - Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
@@ -109,7 +108,7 @@ Phase 3 retains its timeout design gate.
   deterministic failure mode is documented in planning.md.
 - Independent amendment review: no policy-design blocker; manager corrected
   FQ/DQ traceability and the earlier A-13 authority label. Combined startup has
-  since passed; merge readiness remains gated by independent implementation review.
+  since passed; independent implementation review and fresh full gates also passed.
   Existing profile composition preserves the
   proposed option payload and resource demand in a read-only diagnostic; this
   is not a policy implementation receipt.
@@ -123,15 +122,15 @@ Phase 3 retains its timeout design gate.
   not a full gate receipt. Remove only their reconciliation wakeups, preserving
   the service loop and mutation wakeups. Independent startup review passed with
   no findings; regression coverage and both full gates now pass at `8702e06`.
-  Independent review accepted this queue correction; the separate mixed-stage
-  policy-warning finding remains open after bounded verification.
+  Independent review accepted this queue correction; the separate `04443ed`
+  policy-warning correction passed its newly approved verification without findings.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
-| 2 | no PR; merge held | `6b831e7`: 151 focused passes, both full gates passed, summary 2,988 passed / 5 optional skips, latest SIF smoke 1 passed | namespace finding closed; mixed-stage fallback warning still missing; bounded reviewer reuse consumed; scoped correction/review authorization required; hard-limit proof deferred | worktree/branch retained; receipts preserved in integration `build/stage-38-p2-6b831e7` |
+| 2 | ready for PR | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed | independent review passed; hard-limit proof deferred | worktree/branch retained for merge; receipts preserved in integration `build/stage-38-p2-04443ed` |
 | 3 | pending | not started | design gate pending | not created |
 
 Final integrated review must verify all selected changes on their merged
