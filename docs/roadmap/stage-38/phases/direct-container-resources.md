@@ -12,7 +12,8 @@
 - PR title: `feat(execution): map direct container CPU and memory requests`
 - Dependencies: Phase 1 PR #277 merged at `133505b`; audit dispositions accepted
 - Workflow path: expanded correctness review for external-runtime mapping
-- Blockers: independent implementation review and PR/merge gates
+- Blockers: two independent policy-diagnostic findings require bounded completion
+  correction, refreshed validation, and review verification before PR/merge
 
 ## Objective And Context
 
@@ -322,6 +323,17 @@ bounded amendment and scheduling-only policy, retaining the final review/full ga
   implementation acceptance remains.
 
 ## Completion Record
+
+Independent implementation review accepted the passive-wait/retry boundaries and
+identified two unmet existing policy contracts at `8702e06`: direct Apptainer
+preflight inferred the Singularity namespace when both were authored, and
+container-authored fallback CPU/RAM had no visible scheduling-only warning.
+Complete the already approved policy at the existing preflight/capability owners:
+retain the selected direct executor (infer only for SLURM), and inspect effective
+authored fallback for the same warning as stage requests. Add both-namespace and
+fallback/override regressions, refresh full gates, and verify these two findings
+with the same reviewer. This is bounded completion of the accepted policy, not
+another coordinator remedy, new behavior agreement, or general budget reset.
 
 | Item | Result |
 | --- | --- |

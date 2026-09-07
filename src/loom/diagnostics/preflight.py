@@ -4487,7 +4487,6 @@ def _apptainer_raw_targets(
     ):
         return ()
     stage_ids = _apptainer_stage_ids(context, options)
-    executor_name = _apptainer_executor_name_for_options(options)
     selected_executor = str(getattr(options, "executor", None) or "apptainer")
     if not stage_ids:
         adapter_options = cast(Mapping[str, object], options.adapter_options)
@@ -4498,7 +4497,7 @@ def _apptainer_raw_targets(
                 resources=None,
                 executor_name=_apptainer_executor_name_for_adapter(
                     adapter_options,
-                    fallback=executor_name,
+                    fallback=selected_executor,
                 ),
                 selected_executor=selected_executor,
             ),
@@ -4518,7 +4517,7 @@ def _apptainer_raw_targets(
                 cast(
                     Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options
                 ),
-                fallback=executor_name,
+                fallback=selected_executor,
             ),
             selected_executor=selected_executor,
         )
@@ -4659,21 +4658,16 @@ def _adapter_options_set_command(raw_options: object | None) -> bool:
     return isinstance(raw_options, Mapping) and "command" in raw_options
 
 
-def _apptainer_executor_name_for_options(options: object) -> str:
-    executor = getattr(options, "executor", None)
-    if executor in _APPTAINER_EXECUTORS:
-        return cast(str, executor)
-    return "apptainer"
-
-
 def _apptainer_executor_name_for_adapter(
     adapter_options: Mapping[str, object],
     *,
     fallback: str,
 ) -> str:
+    if fallback in _APPTAINER_EXECUTORS:
+        return fallback
     if "singularity" in adapter_options:
         return "singularity"
-    return fallback if fallback in _APPTAINER_EXECUTORS else "apptainer"
+    return "apptainer"
 
 
 def _apptainer_image_from_adapter(
@@ -4802,16 +4796,16 @@ def _projected_apptainer_cpu_memory_arguments(
     from loom.pipeline.resources import ResourceEntry, ResourceRequest
 
     selected = {
-        kind: entry
-        for kind, entry in entries.items()
-        if kind in {"cpu", "memory"}
+        kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
     }
     if not selected:
         return {}
     descriptor = _executor_descriptor(executor_name)
     intent = ContainerResourceIntent.from_runtime(
         ResourceRequest(
-            entries={kind: cast(ResourceEntry, entry) for kind, entry in selected.items()}
+            entries={
+                kind: cast(ResourceEntry, entry) for kind, entry in selected.items()
+            }
         ),
         {kind: descriptor.capability_for(kind) for kind in selected},
     )

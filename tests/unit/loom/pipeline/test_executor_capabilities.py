@@ -371,6 +371,74 @@ def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
     ]
 
 
+@pytest.mark.parametrize("scope", ("global", "inherited", "stage"))
+def test_scheduling_only_capabilities_include_authored_container_fallback(
+    scope: str,
+) -> None:
+    container = {
+        "image": {"reference": "analysis.sif"},
+        "resources": {
+            "entries": {"memory": {"kind": "memory", "amount": 512, "unit": "MiB"}},
+            "capabilities": {"memory": {"support_level": "supported"}},
+        },
+    }
+    adapters: dict[str, Any] = {
+        "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+        "container": container,
+    }
+    stages: dict[str, Any] = {} if scope == "global" else {"train": {}}
+    if scope == "stage":
+        adapters.pop("container")
+        stages["train"] = {"adapter_options": {"container": container}}
+    result = validate_executor_capabilities(
+        {"executor": "apptainer", "adapter_options": adapters, "stage_options": stages}
+    )
+    assert len(result.diagnostics) == 1
+    diagnostic = cast(CapabilityDiagnostic, result.diagnostics[0])
+    assert diagnostic.resource_kind == "memory"
+    assert diagnostic.enforcement is ResourceEnforcementExpectation.NOT_ENFORCED
+    assert diagnostic.severity is CapabilitySeverity.WARNING
+    assert diagnostic.stage_id == (None if scope == "global" else "train")
+    source = "RunOptions.stage_options['train']" if scope == "stage" else "RunOptions"
+    assert (
+        diagnostic.path
+        == f"{source}.adapter_options['container'].resources.entries['memory']"
+    )
+
+
+def test_nonempty_runtime_resources_replace_container_fallback_in_capabilities() -> (
+    None
+):
+    result = validate_executor_capabilities(
+        {
+            "executor": "apptainer",
+            "adapter_options": {
+                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+                "container": {
+                    "image": {"reference": "analysis.sif"},
+                    "resources": {
+                        "entries": {
+                            "memory": {"kind": "memory", "amount": 512, "unit": "MiB"}
+                        },
+                        "capabilities": {"memory": {"support_level": "supported"}},
+                    },
+                },
+            },
+            "stage_options": {
+                "train": {
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
+                }
+            },
+        }
+    )
+    diagnostics = cast(tuple[CapabilityDiagnostic, ...], result.diagnostics)
+    assert [item.resource_kind for item in diagnostics] == ["cpu"]
+    assert (
+        diagnostics[0].path
+        == "RunOptions.stage_options['train'].resources.entries['cpu']"
+    )
+
+
 def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
     apptainer_result = validate_executor_capabilities(
         RunOptions(

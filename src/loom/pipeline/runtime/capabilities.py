@@ -992,12 +992,29 @@ def _resource_capability_diagnostics(
     descriptor: ExecutorDescriptor,
 ) -> list[CapabilityDiagnostic]:
     diagnostics: list[CapabilityDiagnostic] = []
-    for stage_id, stage_options in cast(
-        Mapping[str, StageRuntimeOptions],
-        options.stage_options,
-    ).items():
+    stage_options_by_id: dict[str | None, StageRuntimeOptions] = {
+        stage_id: stage_options
+        for stage_id, stage_options in cast(
+            Mapping[str, StageRuntimeOptions], options.stage_options
+        ).items()
+    }
+    direct_apptainer = descriptor.name in {"apptainer", "singularity"}
+    if direct_apptainer and not stage_options_by_id:
+        stage_options_by_id[None] = StageRuntimeOptions()
+    for stage_id, stage_options in stage_options_by_id.items():
         resources = cast(ResourceRequest, stage_options.resources)
-        for kind in resources.entries:
+        kinds = tuple(resources.entries)
+        stage_path = f"RunOptions.stage_options[{stage_id!r}]"
+        resource_path = f"{stage_path}.resources"
+        if direct_apptainer and not kinds:
+            authored_at_stage = "container" in stage_options.adapter_options
+            container = stage_options.adapter_options.get(
+                "container", options.adapter_options.get("container")
+            )
+            kinds = _container_cpu_memory_kinds(container)
+            source = stage_path if authored_at_stage else "RunOptions"
+            resource_path = f"{source}.adapter_options['container'].resources"
+        for kind in kinds:
             capability = descriptor.capability_for(kind)
             if _is_scheduling_only_apptainer_cpu_memory(
                 options, stage_options, descriptor, kind
@@ -1016,7 +1033,7 @@ def _resource_capability_diagnostics(
                 )
             diagnostics.append(
                 CapabilityDiagnostic(
-                    path=f"RunOptions.stage_options[{stage_id!r}].resources.entries[{kind!r}]",
+                    path=f"{resource_path}.entries[{kind!r}]",
                     severity=cast(CapabilitySeverity, capability.severity),
                     code=_resource_diagnostic_code(
                         cast(ResourceSupportLevel, capability.support_level)
@@ -1037,6 +1054,20 @@ def _resource_capability_diagnostics(
                 )
             )
     return diagnostics
+
+
+def _container_cpu_memory_kinds(container: object) -> tuple[str, ...]:
+    """Inspect authored fallback kinds; the command mapper owns validity."""
+
+    if not isinstance(container, Mapping):
+        return ()
+    resources = container.get("resources")
+    if not isinstance(resources, Mapping):
+        return ()
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        return ()
+    return tuple(kind for kind in ("cpu", "memory") if kind in entries)
 
 
 def _is_scheduling_only_apptainer_cpu_memory(
@@ -1062,8 +1093,7 @@ def _is_scheduling_only_apptainer_cpu_memory(
     from loom.pipeline.executors.apptainer import ApptainerExecOptions
 
     return (
-        ApptainerExecOptions.from_dict(raw).cpu_memory_enforcement
-        == "scheduling_only"
+        ApptainerExecOptions.from_dict(raw).cpu_memory_enforcement == "scheduling_only"
     )
 
 

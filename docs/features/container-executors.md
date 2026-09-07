@@ -68,6 +68,14 @@ but omits only `--cpus` and `--memory`; it reports CPU/RAM as not enforced.
 `runtime` remains the default and never retries a failed limited launch without
 its requested flags.
 
+Direct `apptainer` execution reads the `apptainer` namespace even when both
+namespaces are present. Direct `singularity` prefers `singularity`, falling back
+to `apptainer` only when the former is absent; preflight uses the same choice.
+Nonempty stage resource requests replace authored `container.resources` intent.
+When that authored fallback applies, capability/preflight warnings also identify
+its CPU/RAM as not enforced in scheduling-only mode. Observing this intent does
+not create a managed resource reservation.
+
 A project can make the choice composable without embedding a site image or
 host path in the profile. The existing `container` options still supply those
 project-local details and resource requests remain ordinary stage runtime

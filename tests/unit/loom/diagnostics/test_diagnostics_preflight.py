@@ -501,7 +501,9 @@ def test_selected_docker_executor_reports_missing_image(
 
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL
-    assert by_id["executor.docker.container_options"].status is PreflightCheckStatus.FAIL
+    assert (
+        by_id["executor.docker.container_options"].status is PreflightCheckStatus.FAIL
+    )
     assert by_id["executor.docker.image"].status is PreflightCheckStatus.FAIL
     diagnostics = cast(
         list[dict[str, Any]],
@@ -606,9 +608,7 @@ def test_selected_docker_environment_reports_missing_required_host_env(
     assert by_id["executor.docker.environment"].status is PreflightCheckStatus.FAIL
     missing = cast(
         list[dict[str, Any]],
-        by_id["executor.docker.environment"].details[
-            "missing_required_host_variables"
-        ],
+        by_id["executor.docker.environment"].details["missing_required_host_variables"],
     )
     assert missing == [{"stage_id": "train", "name": "MISSING_HOST_TOKEN"}]
 
@@ -703,20 +703,20 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
                     },
                     "apptainer": {"command": "apptainer"},
                 },
-                    "stage_options": {
-                        "train": {
-                            "resources": {
-                                "entries": {
-                                    "cpu": {"kind": "cpu", "amount": 2},
-                                    "memory": {
-                                        "kind": "memory",
-                                        "amount": 512,
-                                        "unit": "MiB",
-                                    },
-                                    "gpu": {"kind": "gpu", "amount": 1},
-                                }
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                                "gpu": {"kind": "gpu", "amount": 1},
                             }
                         }
+                    }
                 },
             },
         )
@@ -756,7 +756,9 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
         list[dict[str, Any]],
         by_id["resources.apptainer.mapping"].details["mapped_resources"],
     )
-    assert [(item["resource_kind"], item["runtime_argument"]) for item in mapped_resources] == [
+    assert [
+        (item["resource_kind"], item["runtime_argument"]) for item in mapped_resources
+    ] == [
         ("cpu", "2"),
         ("memory", "536870912"),
     ]
@@ -784,9 +786,7 @@ def test_apptainer_preflight_uses_authored_container_resource_intent_fallback(
                                     "unit": "GiB",
                                 }
                             },
-                            "capabilities": {
-                                "memory": {"support_level": "supported"}
-                            },
+                            "capabilities": {"memory": {"support_level": "supported"}},
                         },
                     }
                 },
@@ -848,14 +848,112 @@ def test_apptainer_preflight_reports_scheduling_only_cpu_memory_as_not_enforced(
 
     mapped = cast(
         list[dict[str, Any]],
-        {check.check_id: check for check in result.checks}["resources.apptainer.mapping"]
-        .details["mapped_resources"],
+        {check.check_id: check for check in result.checks}[
+            "resources.apptainer.mapping"
+        ].details["mapped_resources"],
     )
     assert [(item["resource_kind"], item["enforcement"]) for item in mapped] == [
         ("cpu", "not_enforced"),
         ("memory", "not_enforced"),
     ]
     assert all(item["runtime_argument"] is None for item in mapped)
+
+
+@pytest.mark.parametrize(
+    ("executor", "apptainer_policy", "singularity_policy", "enforcement", "argument"),
+    (
+        ("apptainer", "runtime", "scheduling_only", "best_effort", "2"),
+        ("apptainer", "scheduling_only", "runtime", "not_enforced", None),
+        ("singularity", "runtime", "scheduling_only", "not_enforced", None),
+    ),
+)
+def test_direct_preflight_policy_matches_selected_executor_with_both_namespaces(
+    monkeypatch: pytest.MonkeyPatch,
+    executor: str,
+    apptainer_policy: str,
+    singularity_policy: str,
+    enforcement: str,
+    argument: str | None,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": executor,
+                "adapter_options": {
+                    "container": {"image": {"reference": "analysis.sif"}},
+                    "apptainer": {"cpu_memory_enforcement": apptainer_policy},
+                    "singularity": {"cpu_memory_enforcement": singularity_policy},
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
+                    }
+                },
+            },
+        )
+    )
+    checks = {check.check_id: check for check in result.checks}
+    mapped = cast(
+        list[dict[str, Any]],
+        checks["resources.apptainer.mapping"].details["mapped_resources"],
+    )
+    diagnostics = cast(
+        list[dict[str, Any]], checks["resources.capabilities"].details["diagnostics"]
+    )
+    assert mapped[0]["enforcement"] == enforcement
+    assert mapped[0]["runtime_argument"] == argument
+    assert diagnostics[0]["enforcement"] == enforcement
+
+
+def test_scheduling_only_authored_fallback_has_visible_preflight_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
+                    "container": {
+                        "image": {"reference": "analysis.sif"},
+                        "resources": {
+                            "entries": {
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                }
+                            },
+                            "capabilities": {"memory": {"support_level": "supported"}},
+                        },
+                    },
+                },
+                "stage_options": {"train": {}},
+            },
+        )
+    )
+    checks = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.WARN
+    assert checks["resources.capabilities"].status is PreflightCheckStatus.WARN
+    diagnostics = cast(
+        list[dict[str, Any]], checks["resources.capabilities"].details["diagnostics"]
+    )
+    assert [
+        (item["resource_kind"], item["severity"], item["enforcement"])
+        for item in diagnostics
+    ] == [("memory", "warning", "not_enforced")]
+    mapped = cast(
+        list[dict[str, Any]],
+        checks["resources.apptainer.mapping"].details["mapped_resources"],
+    )
+    assert mapped[0]["enforcement"] == "not_enforced"
+    assert mapped[0]["runtime_argument"] is None
 
 
 def test_selected_apptainer_executor_fails_when_command_is_missing(
@@ -969,7 +1067,10 @@ def test_slurm_container_preflight_resolves_build_target_and_warns_without_runti
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.WARN
     assert by_id["executor.container_build.targets"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.apptainer.container_options"].status is PreflightCheckStatus.PASS
+    assert (
+        by_id["executor.apptainer.container_options"].status
+        is PreflightCheckStatus.PASS
+    )
     assert by_id["executor.apptainer.command"].status is PreflightCheckStatus.WARN
     assert (
         by_id["resources.slurm.container_compatibility"].status
@@ -1064,8 +1165,12 @@ def test_container_build_filesystem_checks_sources_and_never_outputs(
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL
     assert by_id["runtime.container_build.options"].status is PreflightCheckStatus.PASS
-    assert by_id["filesystem.container_build.sources"].status is PreflightCheckStatus.FAIL
-    assert by_id["filesystem.container_build.outputs"].status is PreflightCheckStatus.FAIL
+    assert (
+        by_id["filesystem.container_build.sources"].status is PreflightCheckStatus.FAIL
+    )
+    assert (
+        by_id["filesystem.container_build.outputs"].status is PreflightCheckStatus.FAIL
+    )
     assert str(source_path) in json.dumps(
         by_id["filesystem.container_build.sources"].to_dict(),
         sort_keys=True,
@@ -1270,10 +1375,7 @@ def test_slurm_run_preflight_fails_existing_active_submission(
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL
     assert by_id["run_uri.resolve"].status is PreflightCheckStatus.PASS
-    assert (
-        by_id["run_uri.slurm.active_submission"].status
-        is PreflightCheckStatus.FAIL
-    )
+    assert by_id["run_uri.slurm.active_submission"].status is PreflightCheckStatus.FAIL
     source = cast(
         dict[str, Any],
         by_id["run_uri.slurm.active_submission"].details["state_source"],
@@ -1309,8 +1411,7 @@ def test_slurm_filesystem_preflight_probes_generated_path_writability(
     assert result.status is PreflightStatus.PASS
     assert by_id["filesystem.slurm.generated_paths"].status is PreflightCheckStatus.PASS
     assert (
-        by_id["filesystem.slurm.generated_writable"].status
-        is PreflightCheckStatus.PASS
+        by_id["filesystem.slurm.generated_writable"].status is PreflightCheckStatus.PASS
     )
     assert not (tmp_path / "runs" / "writable").exists()
 
@@ -1357,16 +1458,12 @@ def _patch_runtime_preflight_dependencies(monkeypatch: pytest.MonkeyPatch) -> No
 def _docker_runtime_options() -> dict[str, object]:
     return {
         "executor": "docker",
-        "adapter_options": {
-            "container": {"image": {"reference": "python:3.11-slim"}}
-        },
+        "adapter_options": {"container": {"image": {"reference": "python:3.11-slim"}}},
     }
 
 
 def _apptainer_runtime_options() -> dict[str, object]:
     return {
         "executor": "apptainer",
-        "adapter_options": {
-            "container": {"image": {"reference": "analysis.sif"}}
-        },
+        "adapter_options": {"container": {"image": {"reference": "analysis.sif"}}},
     }
