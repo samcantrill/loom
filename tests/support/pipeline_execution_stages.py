@@ -85,6 +85,9 @@ class EnvironmentProducerStage:
         raw_name = context.stage_config.get("environment_name", "CUDA_VISIBLE_DEVICES")
         if not isinstance(raw_name, str) or not raw_name:
             raise ValueError("environment_name must be a non-empty string")
+        delay = context.stage_config.get("delay_seconds", 0)
+        assert isinstance(delay, (int, float))
+        time.sleep(delay)
         return {
             "data": context.save_artifact(
                 "data",

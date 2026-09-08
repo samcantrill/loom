@@ -15,6 +15,7 @@ from loom.queue._managed_local import (
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
+    ResourceAvailabilityStatus,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     ObserveRequest,
@@ -204,6 +205,59 @@ def test_same_kind_provider_group_splits_and_releases_aggregate_claim() -> None:
     released = provider.observe(ObserveRequest("agent", "session", "observe-released"))
     assert released.atoms == atoms
     assert released.live_claim_ids == ()
+
+
+def test_same_kind_provider_group_preserves_withdrawn_resource_statuses() -> None:
+    contract = ResourceClaimContractDescriptor("gpu", 1, "configured")
+    atoms = (
+        CapacityAtom("gpu", "gpu-a", ExactQuantity(1), "count", ExactQuantity(1)),
+        CapacityAtom("gpu", "gpu-b", ExactQuantity(1), "count", ExactQuantity(1)),
+    )
+    members = tuple(
+        _StatusAtomProvider(
+            SchedulingComponentDescriptor("gpu", 1, "1", "implementation", key),
+            (contract,),
+            (atom,),
+            ResourceAvailabilityStatus(
+                "gpu",
+                atom.local_capacity_key,
+                index == 1,
+                "available" if index == 1 else "external_process_detected",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        for index, (key, atom) in enumerate(zip(("a", "b"), atoms, strict=True))
+    )
+
+    observed = _compose_agent_resource_providers(members)["gpu"].observe(
+        ObserveRequest("agent", "session", "observe")
+    )
+
+    assert observed.atoms == (atoms[1],)
+    assert [(item.local_capacity_key, item.reason_code) for item in observed.resource_status] == [
+        ("gpu-a", "external_process_detected"),
+        ("gpu-b", "available"),
+    ]
+
+
+class _StatusAtomProvider(AtomResourceProvider):
+    def __init__(
+        self,
+        descriptor: SchedulingComponentDescriptor,
+        claim_contracts: tuple[ResourceClaimContractDescriptor, ...],
+        atoms: tuple[CapacityAtom, ...],
+        status: ResourceAvailabilityStatus,
+    ) -> None:
+        super().__init__(descriptor, claim_contracts, atoms)
+        self._status = status
+
+    def observe(self, request: ObserveRequest):
+        result = super().observe(request)
+        return replace(
+            result,
+            atoms=result.atoms if self._status.available else (),
+            resource_status=(self._status,),
+        )
 
 
 class _RaisingAtomProvider(AtomResourceProvider):

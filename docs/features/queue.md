@@ -1094,8 +1094,14 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v5 CLI result shape, agent protocol 10, and coordinator/agent
-state version 12. Loom does not upgrade or dual-read a previous control schema.
+roots for older control schemas and use the v5 CLI result shape,
+agent protocol 11, and coordinator/agent state version 12. The GPU availability
+update preserves roots already using state version 12. Upgrade agent and
+coordinator together: protocol 10 peers are rejected at handshake. Historical
+offers without GPU status decode as unverified and contribute no GPU capacity;
+existing assignment and release evidence remains intact. See
+[external GPU availability](runtime-resources.md#gpus-occupied-by-work-outside-loom)
+for monitoring defaults, status fields, and admission behaviour.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,
