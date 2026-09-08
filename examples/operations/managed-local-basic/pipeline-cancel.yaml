@@ -1,9 +1,9 @@
 pipeline:
-  name: managed-local-basic
+  name: managed-local-cancellation
   stages:
-    - name: produce
+    - name: stop_early
       factory:
-        _target_: stages.ProduceStage
+        _target_: stages.StopEarlyStage
       resources:
         entries:
           cpu: {kind: cpu, amount: 1, unit: count}
@@ -11,18 +11,16 @@ pipeline:
         data:
           artifact_type: json
           codec_key: json.v1
-    - name: consume
+    - name: downstream
       factory:
-        _target_: stages.ConsumeStage
+        _target_: stages.ProduceStage
+      depends_on: [stop_early]
       resources:
         entries:
           cpu: {kind: cpu, amount: 1, unit: count}
-      depends_on: [produce]
-      inputs:
-        data: produce.data
       outputs:
-        report:
-          artifact_type: text
-          codec_key: text.v1
+        data:
+          artifact_type: json
+          codec_key: json.v1
 runtime:
   executor: local

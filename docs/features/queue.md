@@ -1054,6 +1054,19 @@ cancels prepared attempts and never-ready descendants, refuses any live binding,
 preserves an already-terminal success/failure winner, and CASes the run to
 `CANCELLED`.
 
+A stage's `context.stop_early()` enters this shared run-cancellation path: active
+siblings settle, downstream work cannot start, and authority run truth becomes
+`CANCELLED`. Ordinary terminal admission waiting includes result settlement and
+physical provider release, including when cancellation arrives after a terminal
+stage result. Explicit guarded recovery is the exception: its recorded decision
+can retain uncertain capacity for operator recovery. A terminal run alone is not
+permission to reuse such a retained claim.
+
+The [local starter](../../examples/operations/managed-local-basic/README.md)
+demonstrates controlled cancellation followed by reuse of its sole CPU slot.
+The [remote operations journey](../../examples/operations/managed-remote-operations/README.md)
+demonstrates foreground restart while supervised work remains active.
+
 The old request shape without that stage set is rejected; it is not
 filled in or upgraded. Existing whole-run queue rows remain readable and
 cancellable. New managed work uses a distinct orchestration state rather than

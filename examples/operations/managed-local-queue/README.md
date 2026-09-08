@@ -1,7 +1,7 @@
 # Managed Local Daemon
 
-This example creates a normal persisted Loom plan and starts the supported
-single-machine daemon. The client submits only a queue identity and run URI.
+This example prepares a normal persisted Loom run through
+`prepare_managed_local_run()` and embeds the supported single-machine daemon. The client submits only a queue identity and run URI.
 The daemon reloads the plan, resolves dependency-ready stages, reserves local
 CPU capacity, and runs the existing assignment saga.
 
@@ -35,10 +35,17 @@ path is what selects the configured environment.
 
 ## Public Python Surface
 
-The example uses Loom's public local-daemon types from `loom.queue`. Project
-code persists the plan, resolved config, and exact managed-local runtime record
-first; daemon clients then submit only the queue item identity and `run_uri`.
-`runtime.json` is safe observability metadata and is not executable input.
+The example uses the public preparation helper and local-daemon types from
+`loom.queue`. Its runner generates protected embedded-local role configuration
+for fresh temporary directories. Loading that configuration checks the selected
+Python and project source and derives the resident software descriptor. The
+same role configuration controls both preparation and daemon setup.
+
+`pipeline.yaml` declares the two project-owned stages. Preparation owns the
+plan, configuration provenance, runtime record, and embedded authority setup.
+Repeating identical preparation returns the same receipt without rewriting the
+run. A partial or changed preparation conflicts and preserves existing evidence;
+use a fresh run name for changed inputs. Preparation does not submit work.
 
 A same-host managed-local assignment preserves project-authored stage config,
 including local filesystem paths that the resident worker can resolve on that
@@ -49,32 +56,37 @@ metadata and uses its protected agent-local paths and bounded artifact relay.
 The important public flow is:
 
 ```python
-config = LocalDaemonConfig(
-    coordinator_root=Path(".loom/coordinator"),
-    agent_root=Path(".loom/agent"),
-    run_store_root=Path("runs"),
-    resident_worker_launch_profile=ResidentWorkerLaunchProfile(
-        project_root=Path.cwd(),
-        python_executable=Path(sys.executable),
-        descriptor={
-            "profile_id": "local-default",
-            "revision": "v1",
-            "project_fingerprint": "my-project",
-            "environment_fingerprint": "my-environment",
-            "executor_fingerprint": "local",
-        },
-    ),
+from loom.queue import (
+    LocalDaemon, LocalDaemonAdmissionRequest,
+    LocalDaemonPrincipal, LocalDaemonRole, prepare_managed_local_run,
 )
-LocalDaemon.initialize(config)  # fresh roots only
+from loom.queue.deployment import load_coordinator_service_config
+
+config = load_coordinator_service_config(coordinator_config).daemon
+LocalDaemon.initialize_deployment(config)  # fresh deployment bundle only
+receipt = prepare_managed_local_run(
+    coordinator_config, pipeline_config, "embedded-example"
+)
 daemon = LocalDaemon(config)
 daemon.start()
-
-client = daemon.client_view(
-    LocalDaemonPrincipal("local-client", LocalDaemonRole.CLIENT)
-)
-client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
-result = client.wait("queue-1", timeout_seconds=120)
+try:
+    client = daemon.client_view(
+        LocalDaemonPrincipal("local-client", LocalDaemonRole.CLIENT)
+    )
+    client.submit(LocalDaemonAdmissionRequest("queue-1", receipt.run_uri))
+    result = client.wait("queue-1", timeout_seconds=15)
+finally:
+    daemon.stop()
 ```
+
+By default, the runner creates a fresh directory below the system temporary
+directory, keeping Unix socket paths short. Set `LOOM_EXAMPLE_OUTPUT_ROOT` to
+choose another short output path.
+
+The runner checks identical preparation replay, terminal success, and the final
+report text `consumed {'value': 42}`. The illustrative TLS role files above remain
+a separate deployment example; the embedding runner generates its own
+embedded-local role files and needs no TLS credentials.
 
 Initialization creates the coordinator execution store and local-agent journal
 alongside the private control roots and independent worker supervisor. Use the
