@@ -532,6 +532,8 @@ def _worker_failure(
     details: dict[str, PlainData] = {"worker_status": worker_result.status.value}
     if worker_failure is not None:
         details["worker_failure"] = worker_failure.to_dict()
+        if "domain_failure" in worker_failure.details:
+            details["domain_failure"] = worker_failure.details["domain_failure"]
     message = (
         worker_failure.message
         if worker_failure is not None

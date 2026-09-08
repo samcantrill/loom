@@ -45,7 +45,7 @@ from loom.serialization import PlainData, json_loads, thaw_plain_data
 from loom.serialization.errors import DeserializationError
 from loom.timestamps import utc_timestamp
 
-from .errors import PipelineExecutionError
+from .errors import PipelineExecutionError, StageReportedFailure
 from .logs import write_text_file
 from .models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
@@ -883,10 +883,12 @@ def _failed_worker_result_from_exception(
     clock: Clock,
 ) -> StageWorkerResult:
     failed_at = clock()
-    write_text_file(
-        Path(worker_request.traceback_path),
-        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-    )
+    reported_failure = exc if isinstance(exc, StageReportedFailure) else None
+    if reported_failure is None:
+        write_text_file(
+            Path(worker_request.traceback_path),
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        )
     failure = ExecutionFailure(
         schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
         run_uri=worker_request.run_uri,
@@ -894,12 +896,31 @@ def _failed_worker_result_from_exception(
         attempt=worker_request.attempt,
         failed_at=failed_at,
         executor=worker_request.executor_name,
-        failure_type=_failure_type_for_exception(exc),
-        message=str(exc) or type(exc).__name__,
-        exception_type=f"{type(exc).__module__}.{type(exc).__name__}",
-        traceback_path=worker_request.traceback_path,
+        failure_type=(
+            "stage_exception"
+            if reported_failure is not None
+            else _failure_type_for_exception(exc)
+        ),
+        message=(
+            "stage reported a domain failure"
+            if reported_failure is not None
+            else str(exc) or type(exc).__name__
+        ),
+        exception_type=(
+            "loom.pipeline.execution.StageReportedFailure"
+            if reported_failure is not None
+            else f"{type(exc).__module__}.{type(exc).__name__}"
+        ),
+        traceback_path=(
+            None if reported_failure is not None else worker_request.traceback_path
+        ),
         stdout_path=worker_request.stdout_path,
         stderr_path=worker_request.stderr_path,
+        details=(
+            {"domain_failure": reported_failure.domain_failure}
+            if reported_failure is not None
+            else {}
+        ),
     )
     return StageWorkerResult(
         schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
@@ -914,7 +935,9 @@ def _failed_worker_result_from_exception(
         failure=failure,
         stdout_path=worker_request.stdout_path,
         stderr_path=worker_request.stderr_path,
-        traceback_path=worker_request.traceback_path,
+        traceback_path=(
+            None if reported_failure is not None else worker_request.traceback_path
+        ),
         exit_code=1,
     )
 

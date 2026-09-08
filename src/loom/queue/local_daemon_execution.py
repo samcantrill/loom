@@ -5421,6 +5421,79 @@ def _produced_outputs(
     }
 
 
+def _run_result_owner_view(
+    config: LocalDaemonConfig,
+    admission: LocalDaemonAdmission,
+    *,
+    clock: Callable[[], str],
+) -> Mapping[str, PlainData]:
+    """Project complete persisted stage failures as one fail-closed owner view."""
+
+    observed_at = clock()
+    unavailable: dict[str, PlainData] = {
+        "owner": "run-store",
+        "availability": "unavailable",
+        "state": "unavailable",
+        "observed_at": observed_at,
+        "freshness": "unavailable",
+        "diagnostic": "run_store_unavailable",
+        "failures": [],
+    }
+    try:
+        store = LocalRunStore(config.run_store_root)
+        store.open_run(admission.run_uri)
+        raw_plan = store.read_plan(admission.run_uri)
+        if raw_plan is None:
+            raise QueueServiceError("run-store plan is unavailable")
+        plan = ExecutionPlan.from_dict(raw_plan)
+        if plan.run_uri != admission.run_uri:
+            raise QueueServiceError("run-store plan does not match admission")
+        resolved_snapshot = store.read_config_snapshot(admission.run_uri, "resolved")
+        if resolved_snapshot is None:
+            raise QueueServiceError("run-store resolved pipeline is unavailable")
+        resolved = json_loads(resolved_snapshot, path="config/resolved.json")
+        if not isinstance(resolved, Mapping) or "pipeline" not in resolved:
+            raise QueueServiceError("run-store resolved pipeline is invalid")
+        pipeline = parse_pipeline_config(resolved["pipeline"])
+        if set(plan.stage_order) != set(pipeline.stage_names):
+            raise QueueServiceError("run-store plan and pipeline disagree")
+
+        failures: list[PlainData] = []
+        failed_stage_count = 0
+        for stage_name in plan.stage_order:
+            status = store.read_stage_status(admission.run_uri, stage_name)
+            if status is None or status.status is not StageStatus.FAILED:
+                continue
+            failed_stage_count += 1
+            persisted = store.read_stage_failure(admission.run_uri, stage_name)
+            if persisted is None:
+                raise QueueServiceError("failed stage has no persisted failure")
+            failure = ExecutionFailure.from_dict(persisted)
+            if (
+                failure.run_uri != admission.run_uri
+                or failure.stage_name != stage_name
+                or failure.attempt != status.attempt
+            ):
+                raise QueueServiceError("persisted stage failure conflicts with status")
+            failures.append(failure.to_dict())
+        if (
+            admission.state is LocalDaemonAdmissionState.FAILED
+            and failed_stage_count == 0
+        ):
+            raise QueueServiceError("failed admission has no persisted failure")
+    except Exception:
+        return unavailable
+    return {
+        "owner": "run-store",
+        "availability": "available",
+        "state": "populated" if failures else "empty",
+        "observed_at": observed_at,
+        "freshness": "current",
+        "diagnostic": None,
+        "failures": failures,
+    }
+
+
 def build_local_daemon_owner_views(
     config: LocalDaemonConfig,
     admissions: tuple[LocalDaemonAdmission, ...],
@@ -5651,6 +5724,7 @@ def build_local_daemon_owner_views(
     for admission in admissions:
         authority_view: dict[str, PlainData]
         authority_observed_at = clock()
+        run_result_view = _run_result_owner_view(config, admission, clock=clock)
         cancellation_receipt: dict[str, PlainData] | None = None
         try:
             factory = config.coordinator_authority_factory
@@ -5711,6 +5785,7 @@ def build_local_daemon_owner_views(
                     "freshness": "current",
                 },
                 "authority": authority_view,
+                "run_result": run_result_view,
                 "scheduling": {
                     "owner": "coordinator-stage-work",
                     "availability": "available"

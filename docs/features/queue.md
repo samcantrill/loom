@@ -1006,6 +1006,22 @@ changed = client.wait_admission(
 )
 ```
 
+After a terminal wait, `client.admission(admission_id).owners["run_result"]`
+is the opaque run-store failure view. It has exactly `owner`, `availability`,
+`state`, `observed_at`, `freshness`, `diagnostic`, and `failures`. A readable
+view is `available` and `current`; it is `populated` when it contains the full
+pipeline-ordered list of schema-v1 `ExecutionFailure` mappings and `empty`
+otherwise. Every mapping retains its persisted attempt identity. The timestamp
+is the observation time, not a cross-owner snapshot or failure time.
+
+Loom fails that entire view closed on a run-store read, corruption, or required
+failed-stage evidence error: it reports `unavailable`,
+`run_store_unavailable`, and an empty failures list rather than returning a
+partial result. Applications may raise
+`loom.pipeline.execution.StageReportedFailure` to retain one validated opaque
+plain-data payload at `failure.details["domain_failure"]`; Loom neither
+interprets nor renders that payload.
+
 `daemon-status` remains constant-size and includes `accepted_time_revision` as
 the fence for clock recovery. Operation detail returns a typed `kind`, `state`,
 `code`, and bounded `result`; ready-stage SLURM waits remain open after scheduler

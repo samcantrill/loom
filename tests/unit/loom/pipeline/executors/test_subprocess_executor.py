@@ -177,6 +177,21 @@ def _worker_failure(run_uri: str) -> StageWorkerResult:
     )
 
 
+def _reported_worker_failure(run_uri: str) -> StageWorkerResult:
+    result = _worker_failure(run_uri)
+    return replace(
+        result,
+        failure=replace(
+            cast(ExecutionFailure, result.failure),
+            message="stage reported a domain failure",
+            exception_type="loom.pipeline.execution.StageReportedFailure",
+            traceback_path=None,
+            details={"domain_failure": None},
+        ),
+        traceback_path=None,
+    )
+
+
 def test_build_stage_worker_command_uses_current_worker_cli() -> None:
     command = build_stage_worker_command(
         python_executable="/usr/bin/python",
@@ -586,3 +601,26 @@ def test_subprocess_executor_wraps_failed_worker_result(tmp_path: Path) -> None:
     assert failure.message == "stage failed intentionally"
     assert failure.exit_code == 1
     assert failure.details["worker_status"] == "FAILED"
+
+
+def test_subprocess_executor_promotes_null_reported_failure(tmp_path: Path) -> None:
+    store, run_uri, request = _request(tmp_path)
+
+    def runner(
+        command: Sequence[str], *, timeout_seconds: float | None = None
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
+        store.write_stage_worker_result(
+            run_uri,
+            "build",
+            _reported_worker_failure(run_uri).to_dict(),
+            attempt=1,
+        )
+        return SubprocessRunResult(returncode=1)
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.details["domain_failure"] is None
+    nested = cast(dict[str, object], failure.details["worker_failure"])
+    assert cast(dict[str, object], nested["details"])["domain_failure"] is None

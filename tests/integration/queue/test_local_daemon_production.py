@@ -40,7 +40,7 @@ from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime import CpuResourcePlanner, scheduling_entry_view
 from loom.pipeline.runtime.options import ExecutionOptions
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import (
     CancellationEpochRequest,
     CoordinatorAdmissionRequest,
@@ -48,6 +48,7 @@ from loom.pipeline.stores import (
     LocalRunStore,
     path_to_run_uri,
 )
+from loom.pipeline.execution import ExecutionFailure
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     CapacityAtom,
@@ -441,6 +442,32 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             assert cast(int, socket_axis["revision"]) >= cast(
                 int, direct_axis["revision"]
             )
+        direct_result = cast(Mapping[str, object], owner_view["run_result"])
+        socket_result = cast(Mapping[str, object], socket_view["run_result"])
+        for field in (
+            "owner",
+            "availability",
+            "state",
+            "freshness",
+            "diagnostic",
+        ):
+            assert socket_result[field] == direct_result[field]
+        assert list(cast(tuple[object, ...], socket_result["failures"])) == cast(
+            list[object], direct_result["failures"]
+        )
+        assert str(socket_result["observed_at"]) >= str(direct_result["observed_at"])
+        assert set(direct_result) == {
+            "owner",
+            "availability",
+            "state",
+            "observed_at",
+            "freshness",
+            "diagnostic",
+            "failures",
+        }
+        assert direct_result["owner"] == "run-store"
+        assert direct_result["availability"] == "available"
+        assert direct_result["state"] == "empty"
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -2160,6 +2187,72 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         assert authority.open_run(run_uri).status is RunStatus.FAILED
     finally:
         daemon.stop()
+
+
+def test_run_result_owner_projects_complete_failures_or_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
+    config = _daemon_config(tmp_path)
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=run_uri,
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.FAILED,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.FAILED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    persisted = ExecutionFailure(
+        schema_version=1,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        failed_at="2020-01-01T00:00:02Z",
+        executor="local",
+        failure_type="stage_exception",
+        message="stage reported a domain failure",
+        details={"domain_failure": None},
+    )
+    store.write_stage_failure(run_uri, "build", persisted.to_dict(), attempt=1)
+
+    view = cast(
+        Mapping[str, object],
+        build_local_daemon_owner_views(config, (admission,))[0]["run_result"],
+    )
+
+    assert view["availability"] == "available"
+    assert view["state"] == "populated"
+    assert view["diagnostic"] is None
+    assert view["failures"] == [persisted.to_dict()]
+
+    store.local_stage_dir(run_uri, "build").joinpath("failure.json").unlink()
+    unavailable = cast(
+        Mapping[str, object],
+        build_local_daemon_owner_views(config, (admission,))[0]["run_result"],
+    )
+    assert unavailable == {
+        "owner": "run-store",
+        "availability": "unavailable",
+        "state": "unavailable",
+        "observed_at": unavailable["observed_at"],
+        "freshness": "unavailable",
+        "diagnostic": "run_store_unavailable",
+        "failures": [],
+    }
 
 
 @pytest.mark.parametrize(
