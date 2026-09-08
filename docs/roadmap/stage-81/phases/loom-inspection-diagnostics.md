@@ -1,0 +1,150 @@
+# Phase 12 Execution Plan: Loom Inspection Diagnostics
+
+## Metadata
+
+- Status: in_progress
+- Roadmap stage and phase: rphys 81, Loom owner phase 12
+- Manifest: [implementation-plan.md](../implementation-plan.md)
+- Branch: `agent/stage-81-p12-loom-inspection-diagnostics`
+- Worktree: `/nas/home/can134/work/loom-worktrees/stage-81-p12-loom-inspection-diagnostics`
+- Base: published Loom `d444284c161a036d5eae759c297bdf42012157f0`
+- PR target: `develop` in `samcantrill/loom`
+- PR title: `Stage 81 Causal Failure Propagation And Deferred Retained Smoke - Phase 12: Loom Inspection Diagnostics`
+- Dependencies: approved rphys diagnostic amendment; P11 PR #287 remotely merged,
+  completion metadata published and exact phase cleanup verified.
+- Workflow: one executor, both local gates and required independent PR review.
+- Blockers: none; no dependency on Stage 85's rphys adoption or resource policy.
+
+## Objective And Contract Owner
+
+When a client cannot inspect persisted experiment failures, explain the actual
+inspection failure and its nested causes. This does not create another experiment
+failure, change admission state or make a partial list look complete. Producer,
+strict diagnostic reader/renderer and the existing admission CLI ship together.
+
+Canonical fixed contract is FR-81-31, DD-81-24, EX-81-18 and VAL-81-03/05 in
+[the published diagnostic card](https://github.com/samcantrill/rphys/blob/b6f49c0dffa1933d92f51c4a11d39c0ebf4265b3/docs/roadmap/stage-81/planning/diagnostic-failures.md#inspection-failure-contract--dd-81-24).
+The manager verified this section at the clean canonical rphys stage tree. Read
+that section for contract questions, not the whole historical planning packet.
+This is another rphys Stage 81 owner contribution, not a new Loom milestone.
+
+## Current Source And Harness
+
+`queue/local_daemon_execution.py::_run_result_owner_view` currently returns exactly
+seven fields. It reads a plan, resolved pipeline and each failed stage's persisted
+failure, validates identity/attempt and discards the live exception on any failed
+read. It deliberately returns an empty failure list when a later read fails.
+`build_local_daemon_owner_views` separately catches authority snapshot errors
+before calling this helper. Capture there before the original exception is lost.
+Retain the existing cancellation-receipt and other owner-state semantics; a
+failure unrelated to facts required by run-result inspection is not a new reason
+to change that view's availability.
+
+`diagnostics/__init__.py` owns import-light public exports. The existing
+`diagnostics/run_inspection.py::RunInspectionFailure` is a separate closed-code
+protocol and stays unchanged. Add the current diagnostic behavior under the
+existing diagnostics package; private file/helper names remain discretionary.
+`docs/structure.md` sections 4 and diagnostics ownership prohibit lower pipeline,
+store and executor modules from importing diagnostics. Queue readiness/probe
+composition already consumes diagnostic models; the owner-view composition may
+consume the new diagnostic projector without moving it into pipeline code.
+
+`cli/queue.py::handle_daemon_admission` reads the existing socket endpoint and
+currently uses `_emit_daemon_payload`, whose text branch prints mapping values.
+Use the new public renderer for this admission diagnostic presentation, leaving
+JSON as the existing generic envelope and unrelated daemon output unchanged.
+No new endpoint or queue-to-CLI dependency is needed.
+
+Known tests: `tests/integration/queue/test_local_daemon_production.py` contains
+the complete-or-unavailable test and actual socket owner-view assertions;
+`tests/unit/loom/cli/test_queue.py`, `tests/e2e/test_queue_cli.py`,
+`tests/integration/queue/test_cli_operations.py`, existing diagnostics unit tests,
+and `tests/package/test_import_boundaries.py` own adjacent boundaries. Locate
+actual assertions before selecting or extending them; a test name alone is not
+coverage. Existing closed owner-key assertions must gain the eighth field.
+
+`make validate-pr` and `make test-summary` are both required. The config-extra
+environment must execute its selected cases; physical container acceptance is
+opt-in and outside this phase. Do not change the harness or dependencies.
+
+## Scope And Fixed Contracts
+
+1. Add exactly `diagnostic_failure` to the existing `run_result` owner mapping:
+   null when available, detached diagnostic mapping when unavailable. Preserve
+   `diagnostic=run_store_unavailable`, `failures=[]` on any required read failure,
+   and all original owner/state/time/ordering/attempt checks.
+2. Use exactly the canonical `loom.diagnostic.v1` shape: root schema/type/message/
+   links; nested type/message/links; ordered cause/context/group_child links with
+   exactly record or cycle/limit truncation. Root-inclusive projection admits
+   128 materialized occurrences, explicit cause wins, suppressed context is
+   omitted, group order and active-ancestry cycle detection are preserved.
+   Native messages may be empty; broken formatting uses
+   `<exception message unavailable>`. No tracebacks, notes, locals, environment
+   dumps, arbitrary exception attributes or downstream dependency.
+3. Capture the actual authority/store/codec error at the read owner. Missing
+   required facts raise a specific owner-authored explanation. Higher wrappers
+   preserve causes. The returned mapping retains no live exception.
+4. Expose `loom.diagnostics.render_diagnostic_failure(value)`, which strictly
+   validates the canonical shape before rendering nested types/messages/relations.
+   Invalid external data raises a diagnostic boundary error; never import the
+   named type or stringify arbitrary input. The projector can remain private.
+5. Current admission text uses that public renderer. Preserve its JSON mapping,
+   endpoint authorization, ordinary successful/empty views and application
+   failures. Messages and paths are private diagnostic content; document that
+   existing authorized inspection access can disclose them. This is not a new
+   sanitization policy or an endpoint-access redesign.
+6. P8 owns downstream dependency adoption and its old-seven-field reader behavior.
+   Do not implement a second rphys decoder or edit rphys in this Loom phase.
+
+Out of scope: Stage 85 composition/preparation, the resource-policy draft,
+application failure schemas, execution/cancellation/retry changes, new stores,
+inspection indexes, endpoints or wait states, physical runs and hosted CI.
+
+## Proportionality And Validation
+
+The existing owner mapping is extensible PlainData; do not bump unrelated outer
+schemas. The diagnostic format has current CLI and downstream presenter consumers.
+One diagnostics owner validates its format; existing lower owners continue to
+validate their own facts. Keep primitive/generic transport codecs generic.
+
+| Boundary | Required discriminating evidence |
+| --- | --- |
+| Diagnostic projection and strict rendering | Native nested cause/context, suppression, ordered group children, shared child versus true cycle, 128-occurrence limit, broken formatting and malformed external shapes |
+| Complete failure owner | Existing `test_run_result_owner_projects_complete_failures_or_fails_closed` variants retain distinct missing/corrupt/read/authority reasons and never leak a partial list after a later failed read |
+| Authority handoff | Real injected authority-read error survives outer owner assembly, not a newly fabricated replacement message |
+| Endpoint and admission CLI | Actual socket response carries the new mapping, text renders its chain, JSON retains it, and success/empty/ordinary application failure behavior remains correct |
+| Import/public contract | Import-light diagnostics public renderer, no lower-layer diagnostics dependency or downstream imports, intended public exports and documentation |
+
+Use existing fixtures and entrypoints. Select focused new diagnostic tests plus
+the named owner/CLI/public tests while developing, then run both final commands
+on one stable source/test tree. Preserve exact command, revision/tree, reports,
+raw JUnit and skipped-case disposition in this card. Keep raw final-gate logs
+when practical. No physical proof is required. Expand only for an affected
+current consumer, demonstrated defect or missing accepted oracle.
+
+## Review, Coordination And Executor Handoff
+
+P11 changed only static validation/CLI owners; published PR #286 changes lifecycle
+ownership but not these result-view functions. The reviewed canonical amendment
+therefore remains current without another planning pass. Stage 85 P7 is separately
+active in its own worktree: it owns `queue/managed_local_preparation.py`, its lazy
+queue export and preparation tests. Preserve those changes and avoid adopting
+unpublished code. Its docs/public-test edits may require scoped merge reconciliation
+on then-current develop, not a change to P12 requirements.
+
+Executor owns only diagnostics implementation/public exports, the two owner-view
+functions and their necessary imports/private handoff, admission CLI presentation,
+affected tests/user docs, and this card's completion record. You are not alone;
+preserve others' work. Do not edit the manifest, rphys, Stage 39/85, dependencies,
+workflows or other worktrees. No child agents, PR creation, merge or physical run.
+Stop for an actual accepted-contract conflict; private wiring is discretionary.
+Return coherent commits, clean worktree and terminal revision-bound evidence.
+Manager owns independent actual-PR review, publication, merge and cleanup.
+
+## Workflow State And Completion
+
+- Manager setup: complete on clean published base; canonical readiness reused.
+- Implementation: pending executor.
+- Optional planner/refiner: unused; corrections 0/3.
+- Independent review: required after implementation and both local gates.
+- PR, merge and cleanup: pending; no runtime validation claimed.
