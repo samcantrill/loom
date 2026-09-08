@@ -232,14 +232,27 @@ reach both launch paths and their retained launch comparison so reconnect does
 not reconstruct different controls. Deployment-owned base environment and
 inherited scheduler constraints remain their existing owners' responsibility.
 
+No new remote policy envelope is needed: `StageWorkerRequest.resolved_runtime`
+already crosses `_remote_stage_execution.py::from_worker_request` into the
+resident request, and `_ResidentAssignmentWorkspace.worker_request` reconstructs
+it unchanged. Local and remote parent launch owners can consume this admitted
+mapping before launching the child. Keep the policy at that existing runtime
+owner, not duplicated in claim provider data or a new assignment field. Test its
+round trip and retained launch comparison together with the actual environment.
+
 The older whole-run queue is a separate boundary requiring a final disposition:
 `QueueItem.launch_contract` supplies opaque command/environment snapshots and
 integer resource demands; `queue/local.py::_merge_assignment_environment`
-merges assignment bindings without reading pipeline runtime policy. Do not claim
-that adding a RunOptions field changes this route. Trace maintained producers
-before deciding whether a narrow adapter can convey the policy or this separate
-public launch contract must retain its explicit existing behavior. Do not silently
-rewrite saved queue items or add an unneeded second policy schema.
+merges assignment bindings without reading pipeline runtime policy. Its only
+production constructor is `QueueService._admit`, fed by `QueueEnqueueRequest`.
+The maintained service-less SLURM example passes a previously prepared scheduler
+launch snapshot, so policy must already be reflected in the upstream SLURM
+planning/script owner; queue dispatch must not reinterpret it. The many-run
+admission example does not supply a resource-enforcement choice. The feature
+specifications explicitly distinguish this whole-run API from the dependency-ready
+managed-stage route. Finish the raw local launch-contract disposition without
+claiming that a RunOptions field reaches arbitrary opaque commands, silently
+rewriting saved queue items, or introducing a second demand schema.
 
 Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
