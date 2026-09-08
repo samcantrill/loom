@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: approved
 - Roadmap stage and phase: rphys 81, Loom owner phase 11
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: `agent/stage-81-p11-loom-structural-validation`
@@ -156,9 +156,10 @@ revision-bound validation evidence. Manager owns PR/review/delivery and metadata
   `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`.
 - Refiner: unused; blocker correction 1/3 completed by the executor's one
   directly related repair.
-- Independent review: required after implementation and local gates.
-- PR, merge and cleanup: pending; corrected-tree local validation is recorded
-  below.
+- Independent review: passed with no findings on actual PR #287 head
+  `d222e7b9186bb3954e4f2da10798344512a3aae7`, base `cf9e285`.
+- PR: [#287](https://github.com/samcantrill/loom/pull/287), open, non-draft,
+  mergeable, exact approved title and target `develop`; merge and cleanup pending.
 
 Manager pre-submit verification: the corrected source/test revision is
 `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`, tree
@@ -170,6 +171,21 @@ The correction closes the named acceptance gap without runtime changes. Current
 Loom `origin/develop` remains `cf9e285`; no dependency/build or other source drift
 invalidates the gates. Scope and removal search passed; independent PR review
 is the remaining pre-merge gate. These receipt edits are validation-irrelevant.
+
+Independent review completed read-only under the configured Loom phase reviewer:
+no findings, merge eligible. It verified removal completeness, exact v3 output,
+unchanged structural/runtime validation and actual construction, fresh-target
+coverage, both gate receipts and the actual PR body/head. The manager verified
+the result; the only residual risk is deliberate downstream CLI/API adoption.
+The reviewer requested no correction or confirmation. This review/status receipt
+changes only the two local owner documents; source/tests are identical to the
+reviewed head and the corrected validated tree, so both receipts carry forward.
+
+Retained evidence copy, verified byte-for-byte before worktree cleanup:
+`/nas/home/can134/work/loom-worktrees/stage-85-control/build/stage81-p11-e4150d1/`.
+It contains `test-summary.md`, all six JUnit/coverage groups under `test-summary/`,
+and built distributions under `dist/`. The original report's command paths name
+the execution worktree; this copy preserves that evidence without rewriting it.
 
 ### Manager Pre-submit Correction
 

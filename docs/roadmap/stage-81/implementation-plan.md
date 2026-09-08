@@ -1,6 +1,6 @@
 # Rphys Stage 81: Loom Owner Implementation
 
-Status: Phase 11 in progress
+Status: Phase 11 approved for merge
 Roadmap stage: rphys 81, external owner contribution
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
@@ -37,7 +37,7 @@ reopen the canonical planning packet.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 11 | loom-structural-validation | in_progress | [plan](phases/loom-structural-validation.md) | agent/stage-81-p11-loom-structural-validation | pending | Loom pipeline/CLI validation | remove eager construction checks atomically |
+| 11 | loom-structural-validation | approved | [plan](phases/loom-structural-validation.md) | agent/stage-81-p11-loom-structural-validation | [#287](https://github.com/samcantrill/loom/pull/287) | Loom pipeline/CLI validation | remove eager construction checks atomically |
 
 Later contributions are admitted in the canonical rphys order, after predecessor
 merge and synchronization. This manifest does not create additional phases or
@@ -61,4 +61,4 @@ reserve placeholder execution plans.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 11 | pending | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent PR review next | deliberate CLI/API removal; downstream adoption follows separately | retain until merged |
+| 11 | [#287](https://github.com/samcantrill/loom/pull/287), merge pending | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent review passed at `d222e7b`, no findings | deliberate CLI/API removal; downstream adoption follows separately | retained evidence copy verified; worktree retained until merged |
