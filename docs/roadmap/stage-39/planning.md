@@ -35,6 +35,8 @@ experiment can depend on it only through an explicit published prerequisite.
 | `queue/local_daemon_runtime.py::_runtime_payload` | Every runtime resource kind currently needs a configured planner; authored/runtime resources resolve into persisted placements | Account only selected demand kinds without dropping unselected original intent |
 | `queue/local_daemon_runtime.py::_stage_placement_policy` | Current default resource demand includes one CPU | Explicit empty/GPU-only accounting must not accidentally reintroduce CPU claims through this default |
 | `pipeline/runtime/placement.py::ResolvedStagePlacement` | Immutable schema-2 placement and fingerprint feed admission, recovery and SLURM mapping | Policy must survive this boundary and replay comparison; command generation cannot reconstruct a different selection |
+| `pipeline/runtime/placement.py::resolve_stage_placement` and `ResolvedStagePlacement.from_dict` | Planners own authored/default/runtime demand resolution; decoding currently reconstructs scheduling requests for every resource entry | Apply accounting selection after semantic demand resolution; persist the selection so decoding cannot recreate excluded claims |
+| `queue/local_daemon_runtime.py` schema-2 prepared payload | Exact runtime/placement payload participates in replay comparison | A policy change needs an explicit retained-payload version/read/upgrade rule, not only new Python defaults |
 | `pipeline/runtime/capabilities.py::ResourceCapability`, `ResourceEnforcementExpectation` | Metadata already distinguishes enforced, best-effort, not-enforced and not-applicable | Extend truthful reporting at its current owner; static capability is not measured host enforcement |
 | `pipeline/executors/apptainer/commands.py::_append_resource_limits` | `cpu_memory_enforcement=runtime/scheduling_only` selects CPU/RAM flags from mapped container resource intent | Replace the adapter-specific switch after generic policy and consumers exist |
 | `pipeline/executors/_reliability.py`, reliability policy | One existing timeout policy and metadata path | Do not introduce a second deadline model merely to nest timeout under a new config key |
@@ -103,6 +105,11 @@ The following are named source-reconciliation tasks, not delegated product choic
 - Preserve all effective demand for provenance while deriving accounting claims
   from the selected subset. Account for the existing default-CPU path and current
   unsupported-planner check. A selection without a demand must not invent one.
+  A resource planner also owns semantic refinement/unit rules: excluding a kind
+  from capacity accounting does not justify bypassing its demand-resolution
+  invariant. Separate semantic normalization from availability/claim validation.
+  The current decoder rebuilding all `scheduling_requests` is a required negative
+  regression: a GPU-only prepared placement must remain GPU-only after decode.
 - Trace the policy through exact resolved runtime, persisted placement,
   assignment launch, preparation/replay and adapter command generation. Runtime
   receipt metadata must distinguish selected intent from applied control.
