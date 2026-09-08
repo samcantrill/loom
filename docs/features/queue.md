@@ -1031,7 +1031,18 @@ containment evidence. The canonical cancellation request contains the complete,
 exact plan stage set. Once all physical owners settle, one authority transaction
 cancels prepared attempts and never-ready descendants, refuses any live binding,
 preserves an already-terminal success/failure winner, and CASes the run to
-`CANCELLED`. The old request shape without that stage set is rejected; it is not
+`CANCELLED`.
+
+When an authorized admission inspection cannot read every persisted stage
+failure, its `run_result` owner remains unavailable with an empty failure list
+rather than presenting a partial result. Its private `diagnostic_failure`
+details the local inspection error and nested causes for the same authorized
+reader; it can include native messages and paths, so operators must treat the
+existing admission-inspection access control as the disclosure boundary. The
+text `daemon-admission` view renders that diagnostic chain, while JSON preserves
+the detached mapping for an authorized client.
+
+The old request shape without that stage set is rejected; it is not
 filled in or upgraded. Existing whole-run queue rows remain readable and
 cancellable. New managed work uses a distinct orchestration state rather than
 silently reinterpreting historical `DISPATCHED`.

@@ -450,6 +450,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "state",
             "freshness",
             "diagnostic",
+            "diagnostic_failure",
         ):
             assert socket_result[field] == direct_result[field]
         assert list(cast(tuple[object, ...], socket_result["failures"])) == cast(
@@ -463,6 +464,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "observed_at",
             "freshness",
             "diagnostic",
+            "diagnostic_failure",
             "failures",
         }
         assert direct_result["owner"] == "run-store"
@@ -2218,6 +2220,7 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         assert view["state"] == "populated"
         assert view["freshness"] == "current"
         assert view["diagnostic"] is None
+        assert view["diagnostic_failure"] is None
         persisted = store.read_stage_failure(run_uri, "build")
         assert persisted is not None
         assert thaw_plain_data(view["failures"]) == [persisted]
@@ -2349,6 +2352,7 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         "observed_at": view["observed_at"],
         "freshness": "current",
         "diagnostic": None,
+        "diagnostic_failure": None,
         "failures": failures,
     }
 
@@ -2390,8 +2394,19 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         "observed_at": unavailable["observed_at"],
         "freshness": "unavailable",
         "diagnostic": "run_store_unavailable",
+        "diagnostic_failure": unavailable["diagnostic_failure"],
         "failures": [],
     }
+    diagnostic_failure = cast(Mapping[str, object], unavailable["diagnostic_failure"])
+    assert diagnostic_failure["schema"] == "loom.diagnostic.v1"
+    assert diagnostic_failure["type"]
+    assert diagnostic_failure["message"]
+    if damage == "authority_unavailable":
+        from loom.diagnostics import render_diagnostic_failure
+
+        rendered = render_diagnostic_failure(diagnostic_failure)
+        assert "failed-stage authority is unavailable" in rendered
+        assert "injected authority read failure" in rendered
 
 
 @pytest.mark.parametrize(

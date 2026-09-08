@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
+from loom.diagnostics.diagnostic_failure import project_diagnostic_failure
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
 from loom.pipeline.execution.reliability import (
     record_resolved_reliability_policy_fact,
@@ -5551,23 +5552,19 @@ def _run_result_owner_view(
     admission: LocalDaemonAdmission,
     *,
     snapshot: AuthoritativeRunSnapshot | None,
+    authority_failure: Exception | None = None,
     clock: Callable[[], str],
 ) -> Mapping[str, PlainData]:
     """Project complete persisted stage failures as one fail-closed owner view."""
 
     observed_at = clock()
-    unavailable: dict[str, PlainData] = {
-        "owner": "run-store",
-        "availability": "unavailable",
-        "state": "unavailable",
-        "observed_at": observed_at,
-        "freshness": "unavailable",
-        "diagnostic": "run_store_unavailable",
-        "failures": [],
-    }
     try:
         if snapshot is None:
-            raise QueueServiceError("failed-stage authority is unavailable")
+            if authority_failure is None:
+                raise QueueServiceError("failed-stage authority is unavailable")
+            raise QueueServiceError(
+                "failed-stage authority is unavailable"
+            ) from authority_failure
         store = LocalRunStore(config.run_store_root)
         store.open_run(admission.run_uri)
         raw_plan = store.read_plan(admission.run_uri)
@@ -5612,8 +5609,17 @@ def _run_result_owner_view(
             and failed_stage_count == 0
         ):
             raise QueueServiceError("failed admission has no persisted failure")
-    except Exception:
-        return unavailable
+    except Exception as exc:
+        return {
+            "owner": "run-store",
+            "availability": "unavailable",
+            "state": "unavailable",
+            "observed_at": observed_at,
+            "freshness": "unavailable",
+            "diagnostic": "run_store_unavailable",
+            "diagnostic_failure": project_diagnostic_failure(exc),
+            "failures": [],
+        }
     return {
         "owner": "run-store",
         "availability": "available",
@@ -5621,6 +5627,7 @@ def _run_result_owner_view(
         "observed_at": observed_at,
         "freshness": "current",
         "diagnostic": None,
+        "diagnostic_failure": None,
         "failures": failures,
     }
 
@@ -5863,6 +5870,7 @@ def build_local_daemon_owner_views(
         authority_view: dict[str, PlainData]
         authority_observed_at = clock()
         snapshot: AuthoritativeRunSnapshot | None = None
+        authority_failure: Exception | None = None
         cancellation_receipt: dict[str, PlainData] | None = None
         try:
             factory = config.coordinator_authority_factory
@@ -5875,7 +5883,8 @@ def build_local_daemon_owner_views(
                     admission.run_uri, admission.cancellation_operation_id
                 )
                 cancellation_receipt = None if receipt is None else receipt.to_dict()
-        except Exception:
+        except Exception as exc:
+            authority_failure = exc
             authority_view = {
                 "owner": "per-run-authority",
                 "availability": "unavailable",
@@ -5908,7 +5917,11 @@ def build_local_daemon_owner_views(
                 "freshness": "current",
             }
         run_result_view = _run_result_owner_view(
-            config, admission, snapshot=snapshot, clock=clock
+            config,
+            admission,
+            snapshot=snapshot,
+            authority_failure=authority_failure,
+            clock=clock,
         )
         view = ensure_plain_data(
             {

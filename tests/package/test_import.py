@@ -71,6 +71,8 @@ def test_import_loom_diagnostics_public_api() -> None:
         "inspect_run",
         "decode_run_inspection_response",
         "projection_callable",
+        "DiagnosticFailureError",
+        "render_diagnostic_failure",
     ]
 
 
