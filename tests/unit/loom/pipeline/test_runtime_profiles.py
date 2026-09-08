@@ -36,13 +36,13 @@ def test_resource_policy_stage_override_replaces_run_policy_independently() -> N
         base={"resource_policy": {"account_for": ["cpu"], "enforce": ["cpu"]}},
         explicit={
             "stage_options": {
-                "train": {"resource_policy": {"account_for": [], "enforce": ["gpu"]}}
+                "train": {"resource_policy": {"enforce": []}}
             }
         },
     )
 
     resolved = resolve_run_runtime(result, stage_ids=["train"])["train"]
-    assert resolved.resource_policy == ResourcePolicy(account_for=[], enforce=["gpu"])
+    assert resolved.resource_policy == ResourcePolicy(account_for=["cpu"], enforce=[])
 
 
 def test_runtime_profile_serializes_sparse_core_fields_and_adapter_sections() -> None:

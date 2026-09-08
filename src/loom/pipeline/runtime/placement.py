@@ -186,7 +186,7 @@ class ResolvedStagePlacement:
         requests = dict(self.scheduling_requests)
         descriptors = dict(self.planner_descriptors)
         validators = dict(self.validator_ids)
-        kinds = set(self.resource_request.entries)
+        kinds = set(selection["account_for"])
         if (
             set(requests) != kinds
             or set(descriptors) != kinds
@@ -506,6 +506,18 @@ def resolve_stage_placement(
 
     canonical = ResourceRequest(entries=entries, validator_registry=registry)
     selection = policy_value.select(canonical.entries)
+    accounted = set(selection["account_for"])
+    requests = {
+        kind: request for kind, request in requests.items() if kind in accounted
+    }
+    descriptors = {
+        kind: descriptor
+        for kind, descriptor in descriptors.items()
+        if kind in accounted
+    }
+    validator_ids = {
+        kind: identity for kind, identity in validator_ids.items() if kind in accounted
+    }
     payload: dict[str, PlainData] = {
         "schema_version": RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION,
         "resource_request": canonical.to_dict(),

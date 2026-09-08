@@ -73,6 +73,16 @@ def test_resource_policy_is_strict_and_selects_only_present_kinds() -> None:
         ResourcePolicy.from_dict({"account_for": None, "enforce": []})
 
 
+def test_resource_policy_all_and_zero_demand_are_distinct() -> None:
+    policy = ResourcePolicy.from_dict({"enforce": "all"})
+
+    assert policy == ResourcePolicy(account_for="all", enforce="all")
+    assert policy.select({"cpu": 2, "gpu": 0}) == {
+        "account_for": ("cpu",),
+        "enforce": ("cpu",),
+    }
+
+
 def test_run_options_populated_round_trip_freezes_inputs_and_sorts_mappings() -> None:
     tags = {"z": "last", "a": "first"}
     adapter_options: dict[str, Any] = {"slurm": {"partition": "debug"}}

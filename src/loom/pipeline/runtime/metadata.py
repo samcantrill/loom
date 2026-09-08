@@ -226,6 +226,7 @@ def resolve_run_runtime(
         stage_resource_policy = cast(
             ResourcePolicy | None, stage_runtime.resource_policy
         )
+        stage_axes = stage_runtime.resource_policy_axes
         resolved[stage_id] = ResolvedStageRuntimeOptions(
             stage_id=stage_id,
             executor=executor,
@@ -237,7 +238,18 @@ def resolve_run_runtime(
                 }
             ),
             reliability=resolved_reliability,
-            resource_policy=stage_resource_policy or run_resource_policy,
+            resource_policy=ResourcePolicy(
+                account_for=(
+                    stage_resource_policy.account_for
+                    if stage_resource_policy is not None and "account_for" in stage_axes
+                    else run_resource_policy.account_for
+                ),
+                enforce=(
+                    stage_resource_policy.enforce
+                    if stage_resource_policy is not None and "enforce" in stage_axes
+                    else run_resource_policy.enforce
+                ),
+            ),
             run_environment=run_environment,
             stage_environment=stage_runtime.environment,
             adapter_options=stage_adapter_options,

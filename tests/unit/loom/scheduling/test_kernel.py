@@ -635,7 +635,7 @@ def test_runtime_placement_preserves_minima_route_and_fingerprint() -> None:
         "profile_name": "gpu",
         "profile_fingerprint": "profile-fingerprint",
     }
-    with pytest.raises(RuntimeResourceError, match="fields are unsupported"):
+    with pytest.raises(RuntimeResourceError, match="pinned environment"):
         ResolvedStagePlacement.from_dict(legacy)
     with pytest.raises(RuntimeResourceError, match="explicit profile"):
         ExecutionRoute(ExecutionRouteKind.SLURM)

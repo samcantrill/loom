@@ -9,16 +9,15 @@ from types import MappingProxyType
 from loom.pipeline.errors import RuntimeResourceError
 from loom.serialization import PlainData
 
-
 ALL_RESOURCES = "all"
+_AXES = frozenset({"account_for", "enforce"})
 
 
-def _identifiers(value: object, *, path: str, allow_all: bool) -> str | tuple[str, ...]:
-    if allow_all and value == ALL_RESOURCES:
+def _identifiers(value: object, *, path: str) -> str | tuple[str, ...]:
+    if value == ALL_RESOURCES:
         return ALL_RESOURCES
     if isinstance(value, str) or not isinstance(value, Iterable):
-        choices = "'all' or a list" if allow_all else "a list"
-        raise RuntimeResourceError(f"{path} must be {choices}")
+        raise RuntimeResourceError(f"{path} must be 'all' or a list")
     names = tuple(value)
     if any(not isinstance(name, str) or not name for name in names):
         raise RuntimeResourceError(f"{path} entries must be non-empty strings")
@@ -27,30 +26,28 @@ def _identifiers(value: object, *, path: str, allow_all: bool) -> str | tuple[st
     return tuple(sorted(names))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class ResourcePolicy:
-    """Select pipeline demand for accounting and additional controls.
+    """Concrete two-axis selector; construction is deliberately keyword-only."""
 
-    ``account_for='all'`` accounts for every present normalized resource.  A
-    list selects only those identifiers.  ``enforce`` is always an explicit
-    list; it requests supported additional controls without creating a claim.
-    """
+    account_for: str | tuple[str, ...]
+    enforce: str | tuple[str, ...]
 
-    account_for: str | Iterable[str] = ALL_RESOURCES
-    enforce: Iterable[str] = ()
-
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        account_for: str | Iterable[str] = ALL_RESOURCES,
+        enforce: str | Iterable[str] = (),
+    ) -> None:
         object.__setattr__(
             self,
             "account_for",
-            _identifiers(
-                self.account_for, path="ResourcePolicy.account_for", allow_all=True
-            ),
+            _identifiers(account_for, path="ResourcePolicy.account_for"),
         )
         object.__setattr__(
             self,
             "enforce",
-            _identifiers(self.enforce, path="ResourcePolicy.enforce", allow_all=False),
+            _identifiers(enforce, path="ResourcePolicy.enforce"),
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -58,34 +55,62 @@ class ResourcePolicy:
             "account_for": self.account_for
             if isinstance(self.account_for, str)
             else list(self.account_for),
-            "enforce": list(self.enforce),
+            "enforce": self.enforce
+            if isinstance(self.enforce, str)
+            else list(self.enforce),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> "ResourcePolicy":
-        if not isinstance(value, Mapping) or any(
-            not isinstance(key, str) for key in value
-        ):
-            raise RuntimeResourceError("ResourcePolicy must be a string-keyed mapping")
-        if set(value) != {"account_for", "enforce"}:
-            raise RuntimeResourceError(
-                "ResourcePolicy fields must be account_for and enforce"
+        mapping = sparse_resource_policy(value, path="ResourcePolicy")
+        return cls(
+            account_for=mapping.get("account_for", ALL_RESOURCES),
+            enforce=mapping.get("enforce", ()),
+        )
+
+    def select(
+        self, present: Mapping[str, object] | Iterable[str]
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Project only present, nonzero normalized resource kinds."""
+
+        if isinstance(present, Mapping):
+            kinds = tuple(
+                sorted(
+                    name
+                    for name, entry in present.items()
+                    if getattr(entry, "amount", entry) != 0
+                )
             )
-        if value["account_for"] is None or value["enforce"] is None:
-            raise RuntimeResourceError("ResourcePolicy axes cannot be null")
-        return cls(account_for=value["account_for"], enforce=value["enforce"])
-
-    def select(self, present: Iterable[str]) -> Mapping[str, tuple[str, ...]]:
-        """Project present normalized kinds; absent selections remain absent."""
-
-        kinds = tuple(sorted(set(present)))
+        else:
+            kinds = tuple(sorted(set(present)))
         accounted = (
             kinds
             if self.account_for == ALL_RESOURCES
             else tuple(name for name in kinds if name in self.account_for)
         )
-        enforced = tuple(name for name in kinds if name in self.enforce)
+        enforced = (
+            kinds
+            if self.enforce == ALL_RESOURCES
+            else tuple(name for name in kinds if name in self.enforce)
+        )
         return MappingProxyType({"account_for": accounted, "enforce": enforced})
+
+
+def sparse_resource_policy(value: object, *, path: str) -> Mapping[str, object]:
+    """Validate an override while retaining omitted-axis inheritance."""
+
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise RuntimeResourceError(f"{path} must be a string-keyed mapping")
+    unknown = set(value) - _AXES
+    if unknown:
+        raise RuntimeResourceError(f"{path} fields must be account_for and enforce")
+    result: dict[str, object] = {}
+    for axis, raw in value.items():
+        if raw is None:
+            raise RuntimeResourceError(f"{path}.{axis} cannot be null")
+        normalized = _identifiers(raw, path=f"{path}.{axis}")
+        result[axis] = normalized if isinstance(normalized, str) else list(normalized)
+    return MappingProxyType(result)
 
 
 def coerce_resource_policy(value: object, *, path: str) -> ResourcePolicy:
@@ -99,4 +124,9 @@ def coerce_resource_policy(value: object, *, path: str) -> ResourcePolicy:
         raise RuntimeResourceError(f"{path}: {exc}") from exc
 
 
-__all__ = ["ALL_RESOURCES", "ResourcePolicy", "coerce_resource_policy"]
+__all__ = [
+    "ALL_RESOURCES",
+    "ResourcePolicy",
+    "coerce_resource_policy",
+    "sparse_resource_policy",
+]

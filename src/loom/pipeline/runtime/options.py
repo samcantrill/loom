@@ -216,6 +216,7 @@ class StageRuntimeOptions:
     )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     resource_policy: ResourcePolicy | Mapping[str, object] | None = None
+    resource_policy_axes: frozenset[str] = field(default_factory=frozenset, init=False)
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
     validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
@@ -254,11 +255,21 @@ class StageRuntimeOptions:
             ),
         )
         if self.resource_policy is not None:
+            raw_policy = self.resource_policy
             object.__setattr__(
                 self,
                 "resource_policy",
                 coerce_resource_policy(
                     self.resource_policy, path="StageRuntimeOptions.resource_policy"
+                ),
+            )
+            object.__setattr__(
+                self,
+                "resource_policy_axes",
+                frozenset(
+                    {"account_for", "enforce"}
+                    if isinstance(raw_policy, ResourcePolicy)
+                    else raw_policy
                 ),
             )
         object.__setattr__(
@@ -323,10 +334,7 @@ class StageRuntimeOptions:
                 path="StageRuntimeOptions.reliability",
             ),
             resource_policy=(
-                coerce_resource_policy(
-                    mapping["resource_policy"],
-                    path="StageRuntimeOptions.resource_policy",
-                )
+                mapping["resource_policy"]
                 if "resource_policy" in mapping
                 else None
             ),

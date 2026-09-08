@@ -38,7 +38,7 @@ from loom.pipeline.runtime.options import (
     _validate_stage_id,
     validate_stage_runtime_options,
 )
-from loom.pipeline.runtime.resource_policy import coerce_resource_policy
+from loom.pipeline.runtime.resource_policy import sparse_resource_policy
 
 _RUN_SOURCE_FIELDS = frozenset(
     {
@@ -545,7 +545,7 @@ def _normalize_resources(
 
 
 def _normalize_resource_policy(value: object, *, path: str) -> dict[str, object]:
-    return dict(coerce_resource_policy(value, path=path).to_dict())
+    return dict(sparse_resource_policy(value, path=path))
 
 
 def _plain_adapter_mapping(value: object, *, path: str) -> dict[str, PlainData]:
