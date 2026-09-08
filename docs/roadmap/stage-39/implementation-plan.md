@@ -1,12 +1,12 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: draft; design review passed, independent plan review pending
+Status: draft; design and independent plan review passed, final approval pending
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: none; final concrete plan approval precedes execution
-Blockers: independent plan review and maintainer approval of this phase/migration packet
+Blockers: maintainer approval of this phase/migration packet
 
 ## Summary
 
@@ -83,9 +83,12 @@ Blockers: independent plan review and maintainer approval of this phase/migratio
 - Planning gate: functionality and default approved; expanded design review
   passed after one bounded correction and targeted confirmation of EDR-39-01/02.
 - Manager review: two coherent vertical phases; current producer/consumer and
-  test seams identified; no physical evidence or runtime implementation claimed.
-- Independent plan review: pending; one review of this manifest and both cards.
-- Plan correction: not yet needed; one bounded correction for qualified findings.
+  test seams identified; returned SLURM correction verified against the existing
+  delivery decoder/workspace/worker join. Documentation diff, local links and
+  explicit targeted-test paths checked; no runtime validation claimed.
+- Independent plan review: passed after one qualified cross-machine replay finding.
+- Plan correction: complete; Phase 1 now cuts the independently versioned
+  `SlurmStageDelivery` and requires old-writer/current round-trip coverage.
 - Ready for implementation: no; final concrete plan approval remains required.
 - Accepted risks: no additional enforcement can expose more host resources than
   reservation bookkeeping suggests; excluded accounting permits oversubscription.

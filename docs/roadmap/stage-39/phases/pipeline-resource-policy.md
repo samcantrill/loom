@@ -13,7 +13,7 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: final reviewed Stage 39 plan and concrete migration approval
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: plan review and final approval; no phase branch or runtime changes yet
+- Blockers: final approval; no phase branch or runtime changes yet
 
 ## Objective And Context
 
@@ -112,11 +112,13 @@ binding. Excluding accounting cannot create a secret reservation for enforcement
   erase valid launch evidence. SLURM delegated and inner not_requested can coexist.
   Older metadata is unreported; no lease capability or raw binding values here.
 - Executable cuts: RunOptions 1→2; placement 2→3; exact managed runtime 2→3;
-  StageWorkerRequest 1→2; resident bundle 3→4. Reject old explicit versions before
-  resource/launch effects, preserve saved bytes and nested causes, and give guidance
-  to finish/cancel in the pinned old environment and prepare a fresh identity.
-  Ordinary result inspection schemas are unchanged. Reconcile version constants
-  with actual published owners at startup; material overlapping changes need review.
+  StageWorkerRequest 1→2; resident bundle 3→4; `SlurmStageDelivery` 3→4 at
+  its existing codec. Preserve the delivery's enclosing store schema. Reject old
+  explicit versions before input acceptance, resource/worker reconstruction or
+  launch, preserve saved bytes and nested causes, and give guidance to finish/cancel
+  in the pinned old environment and prepare a fresh identity. Ordinary result
+  inspection schemas are unchanged. Reconcile version constants with actual
+  published owners at startup; material overlapping changes need review.
 - Retire `cpu_memory_enforcement=runtime/scheduling_only` atomically with all its
   current pipeline consumers. Reject the removed key with replacement guidance;
   no silent alias/translation. Examples explicitly select intended controls.
@@ -165,7 +167,7 @@ mechanisms, live upgrades, new scheduler kinds and a policy-by-backend Cartesian
 | Admission / placement | required | `pipeline/execution/test_resource_admission.py`, `pipeline/test_orchestration.py`, `queue/test_managed_resources.py`, `test_managed_local.py`: default CPU after refinement; GPU-only actual claims; retained full fractional-memory demand; absent/zero invents none |
 | Worker / replay | required | Stage-worker contracts/units/integration, `queue/test_managed_local_preparation.py`, `test_resident_stage_worker.py`: old versions reject pre-effect; exact replay preserves bytes/timestamps; changed selection conflicts; saved placement/worker mismatch cannot launch |
 | Managed integration | required | `test_local_daemon_production.py`, `test_agent_session_transport.py`, `pipeline/test_managed_local_execution.py`: actual local/remote environment differs with enforcement, no-binding reservation still renews/releases, retained launch uses exact policy |
-| Container / SLURM | required | Apptainer/Docker command/executor tests, Docker command contract, SLURM resources/planner/container/scripts/ready-stage and queue ready-stage tests: default no flags, explicit exact CPU/RAM, unsupported selected vs unselected GPU, preserved intent precedence and driver access, full SBATCH demand with no duplicate cgroups |
+| Container / SLURM | required | Apptainer/Docker command/executor tests, Docker command contract, SLURM resources/planner/container/scripts/ready-stage and queue ready-stage tests: default no flags, explicit exact CPU/RAM, unsupported selected vs unselected GPU, preserved intent precedence and driver access, full SBATCH demand with no duplicate cgroups; `tests/integration/queue/test_slurm_ready_stage.py` uses an old-writer schema-3 delivery to prove pre-input/pre-resource/pre-worker rejection and a current schema-4 round trip to preserve the exact selection |
 | Diagnostics / examples | required | Runtime-capability integration, preflight unit/contract/integration and CLI contract: same execution choice, no false applied controls, setup/application failure distinction, old unreported metadata and removed-key guidance; composed maintained examples select intended behavior |
 | Lifecycle regression | required | Existing timeout, cancellation, suspension/reconnect, containment and release cases in final gates; explicit enforcement-none does not disable timeout or lease ownership |
 | Physical / live scheduler | deferred | No host configuration, GPU workload, SIF launch or SLURM submission is authorized by this plan; fake commands/CPU loopback do not prove physical isolation |
@@ -189,8 +191,12 @@ claimed by this planning-only packet.
 
 - Review upstream/current source assumptions and the complete implemented diff,
   especially post-demand ownership, retained local/remote comparison, standalone
-  builder defaults, selected admission versus semantic validation, SLURM delegation,
-  import direction and truthful failed-launch evidence.
+  builder defaults, selected admission versus semantic validation, SLURM delegation
+  and delivery replay, import direction and truthful failed-launch evidence.
+- Plan review found one qualified replay gap: the retained flattened SLURM delivery
+  could otherwise stamp a current worker schema around old runtime data. The added
+  delivery codec cut and discriminating integration coverage resolve that finding;
+  no other qualified plan blocker remains before final approval.
 - Required expanded independent implementation review follows manager pre-submit
   checks. Use the canonical phase budget: one executor, at most one qualified
   refiner and three total scoped blocker corrections; no speculative hardening.
@@ -213,7 +219,8 @@ gate/review/merge ownership follows the canonical phase workflow.
 ## Workflow State
 
 - Manager preparation: source reconciliation and design review complete; phase not started
-- Expanded planning: EDR-39-01 corrected and independently confirmed; final packet review pending
+- Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
+  passed after the bounded `SlurmStageDelivery` replay correction; final approval pending
 - Implementation / refiner / pre-submit / independent implementation review: not started
 - Blocker corrections: 0/3
 - PR and merge: pending

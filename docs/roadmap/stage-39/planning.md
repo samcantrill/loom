@@ -1,14 +1,14 @@
 # Roadmap Stage 39 Planning: Independent Resource Accounting And Enforcement
 
-Status: design review passed; complete phase packet awaiting plan review and approval
+Status: design and plan review passed; complete phase packet awaiting final approval
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
 at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: functionality/default approved and design independently confirmed; phase packet prepared
-Blockers: independent plan review and final concrete migration/phase approval
+Current gate: functionality/default approved; design and phase packet independently reviewed
+Blockers: final concrete migration/phase approval
 
 ## Current State
 
@@ -24,8 +24,8 @@ an explicit published prerequisite; that proof grants no physical authority.
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Approved; no unanswered default |
 | Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Final concrete migration approval |
-| Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards | Independent packet review |
-| Quality / implementation | Design review passed; no runtime edits | Plan review and approval, then normal Loom phase workflow |
+| Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards; plan review passed after bounded SLURM delivery correction | Final approval |
+| Quality / implementation | Design and plan review passed; no runtime edits | Approval, then normal Loom phase workflow |
 
 ## Evidence And Scope
 
@@ -288,6 +288,7 @@ Design-reviewed version boundary, subject to final concrete plan approval:
 | Exact managed runtime record schema 2 | Schema 3 embeds the new invocation and placements with concrete effective selections | Reject schema 2 before admission; never rewrite the saved record during replay |
 | `StageWorkerRequest` schema 1 | Schema 2 requires the resolved policy in its existing `resolved_runtime` mapping | Reject old prepared requests before launch instead of substituting new defaults |
 | Resident assignment bundle schema 3 | Schema 4 carries and validates that same resolved runtime | Reject old retained bundles; local/remote launch cannot reinterpret omitted policy |
+| `SlurmStageDelivery` schema 3 | Schema 4 carries the same exact resolved demand/policy/selection; enclosing assignment store schema is unchanged | Reject schema 3 at the existing delivery codec before input acceptance or resource/worker launch; never wrap old flattened runtime in a current worker request |
 | Whole-run `LaunchContract` schema 2 | A dedicated launch-contract schema 3 includes policy; other queue record and DB versions stay 2 | Preserve the legacy contract for inspection; reject fresh admission and terminally fail a retained queued item through queue ownership, before resource/launch effects |
 
 The worker and resident boundaries are material, not additional copies of the
@@ -298,6 +299,16 @@ top-level managed record would therefore leave direct prepared-worker and remote
 replay paths without the same executable-version decision. Use one runtime-owned
 policy decoder at these actual process/serialization boundaries; do not add a
 parallel remote policy envelope or infer choices from claim-provider data.
+
+The SLURM delivery is a separate retained executable boundary:
+`queue/slurm_ready_stage.py::SlurmStageDelivery` persists flattened runtime in
+SQLite and workspace `delivery.json`; `worker_request` reconstructs a request
+using the current worker schema constant. A worker-format cut alone therefore
+does not cut the outer delivery. Reject its old schema at the delivery codec,
+before workspace input acceptance or worker reconstruction, using the same
+pinned-environment/fresh-identity guidance. Keep saved artifacts and the enclosing
+store schema unchanged. The existing SLURM ready-stage integration owns old-writer
+pre-effect rejection and new exact runtime/selection round-trip coverage.
 
 New, unversioned authored configurations compose under the approved new-job
 default. They are new invocations, not retained
@@ -856,6 +867,11 @@ public/durable/runtime changes. Hosted CI remains disabled. Normal Loom isolated
 phase branches/PRs target develop, with verified merge and exact cleanup.
 
 Current quality gate: expanded design review passed after one bounded correction
-and targeted confirmation; manifest and both phase cards are prepared. No runtime
-tests or resource guarantees are claimed. Independent plan review and final
-approval of the concrete migration and phase packet remain before implementation.
+and targeted confirmation. Independent packet review found one missing retained
+SLURM delivery cut; its bounded correction adds the existing delivery codec's
+3→4 boundary, pre-input/pre-worker rejection and exact old/current integration
+oracles. Manager verification confirms the source path and corrected card.
+No other qualified plan findings remain. Documentation diff, links and targeted
+test paths pass mechanical checks; no runtime tests or resource guarantees are
+claimed. Final approval of the concrete migration and phase packet remains
+before implementation.

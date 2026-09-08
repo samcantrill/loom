@@ -13,7 +13,7 @@
 - PR title: `feat(queue): separate queued resource accounting and binding policy`
 - Dependencies: final concrete plan approval and Phase 1 remotely merged
 - Workflow path: expanded; public provider contract, durable identity and lifecycle
-- Blockers: packet review/approval and predecessor merge; no runtime changes yet
+- Blockers: final packet approval and predecessor merge; no runtime changes yet
 
 ## Objective And Context
 
@@ -206,7 +206,8 @@ manager owns subsequent full gates/PR/review/merge through the workflow.
 ## Workflow State
 
 - Manager preparation: source inventory and two-phase dependency recorded
-- Expanded planning: EDR-39-02 confirmed; packet review pending
+- Expanded planning: EDR-39-02 confirmed; packet review passed with no Phase 2
+  findings; final approval pending
 - Implementation / refiner / pre-submit / independent implementation review: not started
 - Blocker corrections: 0/3
 - PR and merge: pending
