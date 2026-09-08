@@ -1,6 +1,6 @@
 id: operations.managed-local-basic
 title: Managed Local Basic
-summary: Prepare and run one copied embedded managed-local project through the persistent daemon.
+summary: Cancel a copied managed-local pipeline, reuse its CPU capacity, and restart the persistent daemon after success.
 capability: operations
 level: advanced
 introduced_in: v29
@@ -23,5 +23,5 @@ validation_path: tests/e2e/test_queue_cli.py::test_managed_local_basic_manifest_
 entrypoints:
   - path: run_managed_local_basic.py
     kind: python
-    description: Prepare and run the embedded daemon lifecycle through protected role commands.
+    description: Prepare cancellation and success runs, verify capacity reuse, and restart through protected role commands.
 tags: [queue, managed-local, lifecycle, standalone]

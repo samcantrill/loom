@@ -1,9 +1,9 @@
 pipeline:
-  name: managed-local-basic
+  name: managed-local-embedding
   stages:
     - name: produce
       factory:
-        _target_: stages.ProduceStage
+        _target_: run_managed_local_queue.ProduceStage
       resources:
         entries:
           cpu: {kind: cpu, amount: 1, unit: count}
@@ -13,7 +13,7 @@ pipeline:
           codec_key: json.v1
     - name: consume
       factory:
-        _target_: stages.ConsumeStage
+        _target_: run_managed_local_queue.ConsumeStage
       resources:
         entries:
           cpu: {kind: cpu, amount: 1, unit: count}

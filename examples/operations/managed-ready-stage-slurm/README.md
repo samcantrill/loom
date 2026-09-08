@@ -30,6 +30,19 @@ finishes only when the owned stage assignment is released or conflicts. The
 journey also fails on an extra `sbatch`, a retained capability, or a leaked
 worker/service process.
 
+Scheduler acceptance, execution containment, Loom result commit, and physical
+release are separate observations. In particular, scheduler `COMPLETED` alone
+does not establish Loom success, and a successful `scancel` only acknowledges a
+request; it does not prove execution has stopped. Ordinary terminal admission
+waiting includes the required result settlement and provider release. Guarded
+recovery can intentionally retain capacity when safe release has not been
+established. See the shared [cancellation and settlement contract](../../../docs/features/queue.md#status-and-cancellation).
+
+This journey retains its explicit Slurm preparation path. The composed-run
+`prepare_managed_run()` helper currently excludes Slurm profiles. The fake
+scheduler provides deterministic lifecycle evidence without claiming real
+cluster acceptance coverage.
+
 ## Variants
 
 Use the remote journey for a resident agent or the local journey for embedded

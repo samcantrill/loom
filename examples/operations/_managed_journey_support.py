@@ -258,6 +258,8 @@ def _process_exists(pid: int) -> bool:
 def _cli_surface(arguments: Sequence[str]) -> str:
     if len(arguments) < 2:
         raise RuntimeError("journey CLI call has no command")
+    if arguments[0] == "inspect-run":
+        return "cli:inspect-run"
     return f"cli:{arguments[0]} {arguments[1]}"
 
 

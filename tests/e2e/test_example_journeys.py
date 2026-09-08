@@ -59,7 +59,8 @@ def test_e2e_example_authority_lifecycle_cli(tmp_path: Path) -> None:
     assert summary["registry_status"] == "valid"
     assert summary["doctor_ok"] is True
     assert summary["restarted_generation_changed"] is True
-    assert summary["stop_state"] in {"stopped", "stopping"}
+    assert summary["stop_state"] == "stopped"
+    assert summary["repeated_stop_state"] == "stopped"
 
 
 def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
