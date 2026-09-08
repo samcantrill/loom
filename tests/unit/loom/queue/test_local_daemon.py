@@ -872,8 +872,9 @@ def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
     )
     try:
         now[0] = "2026-08-29T00:01:00Z"
-        with pytest.raises(QueueServiceError, match="degraded|step"):
-            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with daemon._cycle_lock:  # noqa: SLF001 - use the live clock owner
+            with pytest.raises(QueueServiceError, match="degraded|step"):
+                daemon._accepted_snapshot()  # noqa: SLF001
         status = daemon.status()
         assert status.accepted_time_health == "degraded"
         assert status.accepted_time_diagnostic == "clock_step_exceeds_policy"
@@ -925,13 +926,15 @@ def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> Non
     )
     try:
         now[0] = "2026-08-29T00:00:00Z"
-        with pytest.raises(QueueServiceError, match="regressed|degraded"):
-            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with daemon._cycle_lock:  # noqa: SLF001 - use the live clock owner
+            with pytest.raises(QueueServiceError, match="regressed|degraded"):
+                daemon._accepted_snapshot()  # noqa: SLF001
+        degraded = daemon.status()
         with pytest.raises(QueueConflictError, match="still below"):
             operator.recover_time(
                 TimeRecoveryRequest(
                     "recover-clock-regressed",
-                    1,
+                    degraded.accepted_time_revision,
                     initial.coordinator_epoch,
                     "clock is still behind",
                 )
