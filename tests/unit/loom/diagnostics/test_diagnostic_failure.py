@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from loom.diagnostics import DiagnosticFailureError, render_diagnostic_failure
 from loom.diagnostics.diagnostic_failure import project_diagnostic_failure
+from loom.serialization import freeze_plain_data, thaw_plain_data
 
 
 pytestmark = pytest.mark.unit
@@ -81,6 +84,10 @@ def test_projection_marks_cycles_and_limits_and_guards_messages() -> None:
         node = link["record"]
     assert isinstance(node, dict)
     assert node["links"] == [{"relation": "cause", "truncation": "limit"}]
+    limit_wire = json.loads(
+        json.dumps(thaw_plain_data(freeze_plain_data(limit_projection)))
+    )
+    assert render_diagnostic_failure(limit_wire).count("builtins.RuntimeError") == 128
 
     class Hostile(Exception):
         def __str__(self) -> str:

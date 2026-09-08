@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import pytest
 
 import loom.queue._managed_local as managed_local
 from loom.pipeline import PipelineSpec, parse_resource_request
+from loom.cli.main import main
 from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
@@ -2213,7 +2215,74 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
             terminal = socket_client.wait(submitted.queue_item_id, timeout_seconds=10)
             assert terminal.state is LocalDaemonAdmissionState.FAILED
             detail = socket_client.admission(submitted.admission_id)
+
+            def unavailable_authority(_run_uri: str) -> Never:
+                raise OSError("socket authority read failure")
+
+            daemon.config = replace(
+                config, coordinator_authority_factory=unavailable_authority
+            )
+            unavailable_detail = socket_client.admission(submitted.admission_id)
+            unavailable_view = cast(
+                Mapping[str, object], unavailable_detail.owners["run_result"]
+            )
+            assert unavailable_view["availability"] == "unavailable"
+            assert unavailable_view["diagnostic"] == "run_store_unavailable"
+            assert unavailable_view["failures"] == ()
+            diagnostic_failure = cast(
+                Mapping[str, object], unavailable_view["diagnostic_failure"]
+            )
+            assert diagnostic_failure["type"] == "loom.queue.errors.QueueServiceError"
+            links = cast(tuple[Mapping[str, object], ...], diagnostic_failure["links"])
+            assert links[0]["relation"] == "cause"
+            assert cast(Mapping[str, object], links[0]["record"])["message"] == (
+                "socket authority read failure"
+            )
+
+            text_stdout = io.StringIO()
+            assert (
+                main(
+                    [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                    ],
+                    stdout=text_stdout,
+                    stderr=io.StringIO(),
+                )
+                == 0
+            )
+            assert "failed-stage authority is unavailable" in text_stdout.getvalue()
+            assert "socket authority read failure" in text_stdout.getvalue()
+
+            json_stdout = io.StringIO()
+            assert (
+                main(
+                    [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                        "--format",
+                        "json",
+                    ],
+                    stdout=json_stdout,
+                    stderr=io.StringIO(),
+                )
+                == 0
+            )
+            json_view = json.loads(json_stdout.getvalue())["result"]["owners"][
+                "run_result"
+            ]
+            assert json_view["failures"] == []
+            assert json_view["diagnostic_failure"] == thaw_plain_data(
+                diagnostic_failure
+            )
         finally:
+            daemon.config = config
             server.stop()
         view = cast(Mapping[str, object], detail.owners["run_result"])
         assert view["availability"] == "available"
@@ -2399,13 +2468,34 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
     }
     diagnostic_failure = cast(Mapping[str, object], unavailable["diagnostic_failure"])
     assert diagnostic_failure["schema"] == "loom.diagnostic.v1"
-    assert diagnostic_failure["type"]
-    assert diagnostic_failure["message"]
-    if damage == "authority_unavailable":
-        from loom.diagnostics import render_diagnostic_failure
+    expected = {
+        "missing": (
+            "loom.queue.errors.QueueServiceError",
+            "failed stage has no persisted failure",
+        ),
+        "corrupt": (
+            "loom.pipeline.execution.errors.RunRequestError",
+            "ExecutionFailure.from_dict: $: unknown field(s): unknown",
+        ),
+        "read_error": ("builtins.OSError", "injected unreadable failure"),
+        "missing_status_and_failure": (
+            "loom.queue.errors.QueueServiceError",
+            "failed stage has no persisted failure",
+        ),
+        "authority_unavailable": (
+            "loom.queue.errors.QueueServiceError",
+            "failed-stage authority is unavailable",
+        ),
+    }
+    assert (diagnostic_failure["type"], diagnostic_failure["message"]) == expected[
+        damage
+    ]
+    from loom.diagnostics import render_diagnostic_failure
 
-        rendered = render_diagnostic_failure(diagnostic_failure)
-        assert "failed-stage authority is unavailable" in rendered
+    rendered = render_diagnostic_failure(diagnostic_failure)
+    if damage == "corrupt":
+        assert "loom.serialization.errors.SchemaVersionError" in rendered
+    if damage == "authority_unavailable":
         assert "injected authority read failure" in rendered
 
 

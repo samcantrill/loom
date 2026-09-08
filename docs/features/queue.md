@@ -1033,15 +1033,6 @@ cancels prepared attempts and never-ready descendants, refuses any live binding,
 preserves an already-terminal success/failure winner, and CASes the run to
 `CANCELLED`.
 
-When an authorized admission inspection cannot read every persisted stage
-failure, its `run_result` owner remains unavailable with an empty failure list
-rather than presenting a partial result. Its private `diagnostic_failure`
-details the local inspection error and nested causes for the same authorized
-reader; it can include native messages and paths, so operators must treat the
-existing admission-inspection access control as the disclosure boundary. The
-text `daemon-admission` view renders that diagnostic chain, while JSON preserves
-the detached mapping for an authorized client.
-
 The old request shape without that stage set is rejected; it is not
 filled in or upgraded. Existing whole-run queue rows remain readable and
 cancellable. New managed work uses a distinct orchestration state rather than
@@ -1228,8 +1219,9 @@ changed = client.wait_admission(
 
 After a terminal wait, `client.admission(admission_id).owners["run_result"]`
 is the opaque run-store failure view. It has exactly `owner`, `availability`,
-`state`, `observed_at`, `freshness`, `diagnostic`, and `failures`. A readable
-view is `available` and `current`; it is `populated` when it contains the full
+`state`, `observed_at`, `freshness`, `diagnostic`, `diagnostic_failure`, and
+`failures`. A readable view is `available` and `current`, has a null
+`diagnostic_failure`, and is `populated` when it contains the full
 pipeline-ordered list of schema-v1 `ExecutionFailure` mappings and `empty`
 otherwise. Every mapping retains its persisted attempt identity. The timestamp
 is the observation time, not a cross-owner snapshot or failure time.
@@ -1245,7 +1237,12 @@ historical backfill is introduced.
 Loom fails that entire view closed on a run-store read, corruption, or required
 failed-stage evidence error: it reports `unavailable`,
 `run_store_unavailable`, and an empty failures list rather than returning a
-partial result. Applications may raise
+partial result. Its private `diagnostic_failure` is a detached
+`loom.diagnostic.v1` mapping with the local inspection error and nested causes.
+It can include native messages and paths, so existing authorized
+admission-inspection access control is the disclosure boundary. The text
+`daemon-admission` view renders that chain, while JSON retains the mapping for
+the same authorized client. Applications may raise
 `loom.pipeline.execution.StageReportedFailure` to retain one validated opaque
 plain-data payload at `failure.details["domain_failure"]`; Loom neither
 interprets nor renders that payload.
