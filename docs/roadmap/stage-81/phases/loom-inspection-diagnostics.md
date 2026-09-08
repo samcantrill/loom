@@ -2,11 +2,12 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: rphys 81, Loom owner phase 12
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: `agent/stage-81-p12-loom-inspection-diagnostics`
 - Worktree: `/nas/home/can134/work/loom-worktrees/stage-81-p12-loom-inspection-diagnostics`
+  (removed after verified merge; local and remote phase branch also removed)
 - Base: published Loom `d444284c161a036d5eae759c297bdf42012157f0`
 - PR target: `develop` in `samcantrill/loom`
 - PR title: `Stage 81 Causal Failure Propagation And Deferred Retained Smoke - Phase 12: Loom Inspection Diagnostics`
@@ -152,9 +153,15 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 - Independent review: actual PR #288 head `3d8e53a2a6616e73d3a088ff457ab0fd856e9c17`
   reviewed; its sole coverage finding is resolved by the test-only correction
   and refreshed gates below. No runtime changes followed that review.
-- PR: [#288](https://github.com/samcantrill/loom/pull/288), correct title/target,
-  open and non-draft. Scope, local evidence and review are merge-ready;
-  publish the corrected head and recheck remote identity before merge. Cleanup pending.
+- PR: [#288](https://github.com/samcantrill/loom/pull/288), verified merged into
+  develop at `2026-09-08T14:17:14Z` as
+  `e756ee4e821fc3a16cb5d59dced55eb527595dfe`. Final phase head
+  `96d320aabf8f54af58f562cb1352d304420fbaa9` differs from the validated head
+  only in manifest/card receipts; its full tree matches the squash merge.
+- Cleanup: clean control fast-forwarded; exact remote branch deleted with the
+  verified head lease, exact clean worktree and sole local phase branch removed.
+  An idle childless task-runner shell was closed before removal. No original
+  dirty checkout or unrelated worktree was changed.
 
 ### Independent Review Correction
 
@@ -191,8 +198,11 @@ six JUnit/coverage groups under `build/test-summary/`, and raw gate logs
 `build/phase-12-validation/validate-pr-correction-2.log` and
 `build/phase-12-validation/test-summary-correction-2.log`. The focused diagnostic
 selection passed seven tests; its receipt is
-`build/phase-12-validation/implicit-context-junit.xml`. Preserve this final
-evidence outside the phase worktree before cleanup. The 18 skipped physical
+`build/phase-12-validation/implicit-context-junit.xml`. Final summary, raw logs,
+all JUnit/coverage files and distribution builds were copied and verified
+byte-for-byte before cleanup at
+`/nas/home/can134/work/loom-worktrees/stage-85-control/build/stage81-p12-150bbbc/`.
+The older `build/stage81-p12-c4f9120/` copy remains historical. The 18 skipped physical
 container cases remain outside P12; none of the required diagnostic cases skipped.
 
 ### Manager Pre-submit Correction
