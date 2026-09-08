@@ -3487,6 +3487,16 @@ def run_managed_local_assignment(
                 status=worker_result.status,
                 reason=_worker_terminal_reason(worker_result),
             )
+            if worker_result.status is StageStatus.FAILED:
+                failure = cast(ExecutionFailure, worker_result.failure)
+                # Publish diagnostic files only after the authority accepts the
+                # fenced result, and before terminal admission becomes visible.
+                run_store.write_stage_failure(
+                    assignment.run_uri,
+                    assignment.stage_name,
+                    failure.to_dict(),
+                    attempt=assignment.attempt,
+                )
         coordinator.advance(
             assignment.assignment_id,
             expected=coordinator_expected,

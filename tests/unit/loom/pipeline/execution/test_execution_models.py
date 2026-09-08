@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+import inspect
 from typing import Any, cast
 
 import pytest
@@ -15,6 +16,7 @@ from loom.pipeline.execution import (
     FailurePolicy,
     RunRequest,
     RunRequestError,
+    StageReportedFailure,
     StageWorkerRequest,
     StageWorkerResult,
     redact_executor_metadata,
@@ -315,6 +317,38 @@ def test_execution_failure_round_trips_plain_data() -> None:
     )
 
     assert ExecutionFailure.from_dict(failure.to_dict()) == failure
+
+
+def test_stage_reported_failure_normalizes_a_detached_plain_payload() -> None:
+    payload: Any = {"record": {"items": [1]}}
+
+    failure = StageReportedFailure(payload)
+
+    payload["record"]["items"].append(2)
+    assert failure.domain_failure == {"record": {"items": [1]}}
+    assert str(failure) == "stage reported a domain failure"
+    assert StageReportedFailure(None).domain_failure is None
+    with pytest.raises(Exception, match="Invalid plain data"):
+        StageReportedFailure(float("nan"))
+
+
+def test_stage_reported_failure_has_one_required_payload_and_never_converts_objects() -> (
+    None
+):
+    from loom.serialization.errors import PlainDataError
+
+    parameters = inspect.signature(StageReportedFailure).parameters
+    assert tuple(parameters) == ("domain_failure",)
+    assert parameters["domain_failure"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["domain_failure"].default is inspect.Parameter.empty
+    assert StageReportedFailure(domain_failure=None).domain_failure is None
+
+    class DomainObject:
+        def to_dict(self) -> dict[str, object]:
+            pytest.fail("Loom must not call a domain conversion method")
+
+    with pytest.raises(PlainDataError, match="Invalid plain data"):
+        StageReportedFailure(cast(Any, DomainObject()))
 
 
 def test_execution_failure_plain_data_is_frozen_and_serialization_is_independent() -> (

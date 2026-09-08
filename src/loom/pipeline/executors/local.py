@@ -13,6 +13,7 @@ from loom.pipeline.early_stopping import (
     EarlyStopSignal,
     lifecycle_reason_from_early_stop,
 )
+from loom.pipeline.execution.errors import StageReportedFailure
 from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import StageStatus
@@ -104,6 +105,41 @@ class LocalExecutor:
                         "capture_stdout_stderr": self.capture_stdout_stderr,
                         "lifecycle_reason": reason.to_dict(),
                     },
+                    timeout,
+                ),
+            )
+        except StageReportedFailure as exc:
+            finished_at = utc_timestamp()
+            if self.capture_stdout_stderr:
+                write_text_file(request.stdout_path, stdout_buffer.getvalue())
+                write_text_file(request.stderr_path, stderr_buffer.getvalue())
+            failure = ExecutionFailure(
+                schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+                run_uri=request.run_uri,
+                stage_name=request.stage.name,
+                attempt=request.attempt,
+                failed_at=finished_at,
+                executor=self.name,
+                failure_type="stage_exception",
+                message="stage reported a domain failure",
+                exception_type="loom.pipeline.execution.StageReportedFailure",
+                stdout_path=str(request.stdout_path),
+                stderr_path=str(request.stderr_path),
+                details={"domain_failure": exc.domain_failure},
+            )
+            return StageExecutionResult(
+                stage_name=request.stage.name,
+                status=StageStatus.FAILED,
+                outputs={},
+                failure=failure,
+                started_at=started_at,
+                finished_at=finished_at,
+                executor_name=self.name,
+                attempt=request.attempt,
+                stdout_path=str(request.stdout_path),
+                stderr_path=str(request.stderr_path),
+                executor_metadata=metadata_with_timeout(
+                    {"capture_stdout_stderr": self.capture_stdout_stderr},
                     timeout,
                 ),
             )

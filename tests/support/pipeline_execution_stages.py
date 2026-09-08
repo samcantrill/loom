@@ -13,6 +13,26 @@ from loom.io.uris import uri_to_path
 from loom.pipeline.context import StageContext
 
 
+class ReportedFailureStage:
+    """Report nested public evidence while retaining a private native cause."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        from loom.pipeline.execution import StageReportedFailure
+
+        del context, inputs
+        try:
+            raise ValueError("private-native-failure-sentinel")
+        except ValueError as cause:
+            cause.add_note("private-native-note-sentinel")
+            raise StageReportedFailure(
+                {"record": {"items": [1, None, "safe"]}}
+            ) from cause
+
+
 class JsonProducerStage:
     def run(
         self,
