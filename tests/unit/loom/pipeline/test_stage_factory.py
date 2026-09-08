@@ -1,6 +1,8 @@
 """Unit tests for pipeline-owned stage construction helpers."""
 
 from collections.abc import Mapping
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -16,7 +18,9 @@ class InitStage:
     def __init__(self, *, value: int = 0) -> None:
         self.value = value
 
-    def run(self, context: StageContext, inputs: Mapping[str, ArtifactRef]) -> Mapping[str, ArtifactRef]:
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
         _ = context, inputs
         return {}
 
@@ -107,13 +111,50 @@ def test_construct_stage_rejects_invalid_path_syntax() -> None:
 
 
 def test_construct_stage_rejects_protocol_mismatch() -> None:
-    with pytest.raises(StageContractError, match="did not construct a Stage-compatible object"):
+    with pytest.raises(
+        StageContractError, match="did not construct a Stage-compatible object"
+    ):
         construct_stage(
             stage_path="$.pipeline.stages[0]",
             factory=StageFactorySpec(
                 target_path="tests.unit.loom.pipeline.test_stage_factory:IncompleteStage",
             ),
         )
+
+
+def test_construct_stage_imports_fresh_project_target_and_preserves_constructor_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module_name = "fresh_failing_project_target"
+    marker_path = tmp_path / "target-events.txt"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from pathlib import Path\n"
+        f"MARKER = Path({str(marker_path)!r})\n"
+        "MARKER.write_text('imported\\n', encoding='utf-8')\n"
+        "class ProjectConstructorError(Exception):\n"
+        "    pass\n"
+        "class FailingProjectStage:\n"
+        "    def __init__(self) -> None:\n"
+        "        MARKER.write_text('imported\\nconstructed\\n', encoding='utf-8')\n"
+        "        raise ProjectConstructorError('fresh constructor sentinel')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    assert module_name not in sys.modules
+    with pytest.raises(StageContractError, match="could not construct stage") as error:
+        construct_stage(
+            stage_path="$.pipeline.stages[0]",
+            factory=StageFactorySpec(
+                target_path=f"{module_name}:FailingProjectStage",
+            ),
+        )
+
+    assert marker_path.read_text(encoding="utf-8") == "imported\nconstructed\n"
+    cause = error.value.__cause__
+    assert cause is not None
+    assert type(cause).__name__ == "ProjectConstructorError"
+    assert str(cause) == "fresh constructor sentinel"
 
 
 def cast_init_value(stage: Stage) -> int:

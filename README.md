@@ -34,18 +34,10 @@ project targets:
 loom validate pipeline.yaml
 ```
 
-Opt in to target readiness checks when the config is trusted project code:
-
-```sh
-loom validate pipeline.yaml --check-targets
-```
-
-`--check-targets` imports and constructs generic `_target_` blocks outside
-`pipeline` after static validation succeeds, plus each pipeline stage factory
-through the pipeline contract. Other pipeline values, including pipeline
-metadata, stage `config`, and `factory.init`, remain data for their pipeline or
-stage owner; they are not independently constructed by this check. The command
-emits a warning when that consent boundary is crossed.
+`loom validate` checks Loom-owned graph and runtime/resource settings only.
+Project owners construct and perform readiness checks for their `_target_`
+objects during execution; project-shaped values remain data at Loom's static
+boundary.
 
 Preview stage actions without executing or allocating run state:
 

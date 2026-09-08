@@ -297,7 +297,7 @@ def test_cli_preflight_strict_resource_warning_exits_pipeline_failure(
     assert stderr.getvalue() == ""
 
 
-def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -> None:
+def test_cli_validate_keeps_generic_project_targets_as_data(tmp_path: Path) -> None:
     reset_instantiate_probe_state()
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path, include_generic_target=True)
@@ -306,7 +306,7 @@ def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -
 
     assert (
         main(
-            ["validate", str(config_path), "--check-targets", "--format", "json"],
+            ["validate", str(config_path), "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )
@@ -314,13 +314,14 @@ def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["warnings"][0]["code"] == "validate.target_constructors_may_run"
-    assert payload["result"]["target_count"] == 4
+    assert payload["schema_version"] == "loom.cli.validate.v3"
+    assert payload["warnings"] == []
+    assert set(payload["result"]) == {"config_path", "pipeline_name", "stage_count"}
     assert stderr.getvalue() == ""
-    assert construction_event_log == ["service-child", "parent"]
+    assert construction_event_log == []
 
 
-def test_cli_validate_check_targets_preserves_stage_owned_target_data(
+def test_cli_validate_keeps_nested_project_targets_as_data(
     tmp_path: Path,
 ) -> None:
     reset_instantiate_probe_state()
@@ -335,7 +336,7 @@ def test_cli_validate_check_targets_preserves_stage_owned_target_data(
 
     assert (
         main(
-            ["validate", str(config_path), "--check-targets", "--format", "json"],
+            ["validate", str(config_path), "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )
@@ -343,12 +344,13 @@ def test_cli_validate_check_targets_preserves_stage_owned_target_data(
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["result"]["target_count"] == 4
-    assert construction_event_log == ["service-child", "parent"]
+    assert payload["schema_version"] == "loom.cli.validate.v3"
+    assert payload["warnings"] == []
+    assert construction_event_log == []
     assert stderr.getvalue() == ""
 
 
-def test_cli_validate_check_targets_rejects_invalid_outer_factory(
+def test_cli_validate_defers_invalid_stage_factory_to_execution(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "pipeline.yaml"
@@ -359,19 +361,41 @@ def test_cli_validate_check_targets_rejects_invalid_outer_factory(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["validate", str(config_path), "--check-targets"],
-            stdout=stdout,
-            stderr=stderr,
+    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
+    assert stdout.getvalue() == f"OK validate {config_path}: 2 stages\n"
+    assert stderr.getvalue() == ""
+
+    run_uri = path_to_run_uri(tmp_path / "runs" / "invalid-stage")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 5
         )
-        == 4
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["status"] == "FAILED"
+    assert (
+        "did not construct a Stage-compatible object"
+        in payload["result"]["failure_summary"]["message"]
     )
-    assert stdout.getvalue() == ""
-    assert "did not construct a Stage-compatible object" in stderr.getvalue()
+    assert stderr.getvalue() == ""
 
 
-def test_cli_validate_check_targets_rejects_invalid_generic_target(
+def test_cli_validate_does_not_reject_invalid_generic_target(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "pipeline.yaml"
@@ -383,16 +407,9 @@ def test_cli_validate_check_targets_rejects_invalid_generic_target(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["validate", str(config_path), "--check-targets"],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == 3
-    )
-    assert stdout.getvalue() == ""
-    assert "is not callable" in stderr.getvalue()
+    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
+    assert stdout.getvalue() == f"OK validate {config_path}: 2 stages\n"
+    assert stderr.getvalue() == ""
 
 
 def test_cli_run_default_and_explicit_run_uri(
@@ -528,7 +545,13 @@ def test_cli_run_default_and_explicit_run_uri(
         explicit_stderr = io.StringIO()
         assert (
             main(
-                ["run", str(config_path), "--run-uri", explicit_run_uri, *authority_args],
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    explicit_run_uri,
+                    *authority_args,
+                ],
                 stdout=explicit_stdout,
                 stderr=explicit_stderr,
             )
