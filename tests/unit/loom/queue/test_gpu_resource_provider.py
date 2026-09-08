@@ -11,6 +11,8 @@ from loom.queue._managed_local import (
     ManagedAssignment,
     ObserveRequest,
     ResourceAvailabilityStatus,
+    SQLiteAgentJournal,
+    AssignmentState,
 )
 from loom.queue.gpu.occupancy import (
     GpuOccupancyMonitor,
@@ -175,7 +177,7 @@ def test_eight_selected_gpus_yield_disjoint_claims_and_the_ninth_waits() -> None
         assert provider.release(command).outcome is ClaimOutcome.RELEASED
 
 
-def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe() -> None:
+def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(tmp_path) -> None:
     planner = GpuResourcePlanner()
     atoms = tuple(
         CapacityAtom("gpu", key, ExactQuantity(1), "count", ExactQuantity(1))
@@ -245,6 +247,23 @@ def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe()
     assert result.outcome is ClaimOutcome.DECLINED
     assert result.detail == "external_process_detected"
     assert observer.calls == 3
+
+    journal_path = tmp_path / "journal.sqlite"
+    journal = SQLiteAgentJournal(journal_path)
+    assignment = command.assignment
+    journal.persist_request(assignment, {"request": "durable"})
+    assert journal.prepare_composite(assignment, (command,), {"gpu": provider}) is AssignmentState.DECLINED
+    assert journal.read_decline_reason(assignment.assignment_id) == "external_process_detected"
+    journal.release_declined(assignment.assignment_id, "after-decline")
+    probe_count = observer.calls
+    observer.observations = tuple(
+        GpuProcessObservation(uuid, True, False, "available") for uuid in ("GPU-a", "GPU-b")
+    )
+    reopened = SQLiteAgentJournal(journal_path)
+    assert reopened.prepare_composite(assignment, (command,), {"gpu": provider}) is AssignmentState.DECLINED
+    assert reopened.read_decline_reason(assignment.assignment_id) == "external_process_detected"
+    assert reopened.read_result(assignment.assignment_id) is None
+    assert observer.calls == probe_count
 
 
 def test_resource_availability_status_excludes_timestamp_from_decision() -> None:

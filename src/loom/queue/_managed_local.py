@@ -87,6 +87,32 @@ class ManagedLocalError(ValueError):
     """An assignment, journal, or provider invariant was violated."""
 
 
+GPU_DECLINE_REASONS = frozenset(
+    {
+        "external_process_detected",
+        "observation_unavailable",
+        "observation_stale",
+        "device_missing",
+        "loom_claimed",
+    }
+)
+
+
+def _read_decline_reason(
+    conn: sqlite3.Connection, table: str, assignment_id: str
+) -> str | None:
+    row = conn.execute(
+        f"SELECT payload_json FROM {table} WHERE assignment_id = ? AND event_id = ?",
+        (assignment_id, f"{assignment_id}:definitive_decline"),
+    ).fetchone()
+    if row is None:
+        return None
+    reason = json.loads(str(row[0])).get("reason_code")
+    if not isinstance(reason, str) or reason not in GPU_DECLINE_REASONS:
+        raise ManagedLocalError("assignment decline reason is invalid")
+    return reason
+
+
 class ManagedProcessStartError(ManagedLocalError):
     """The launcher proved that no managed root was created or can later run."""
 
@@ -1216,7 +1242,7 @@ class SQLiteAgentJournal:
                     item.outcome is ClaimOutcome.RELEASED for item in aborts
                 )
                 if result.outcome is ClaimOutcome.DECLINED and aborts_complete:
-                    return self._set_declined(assignment.assignment_id)
+                    return self._set_declined(assignment.assignment_id, result.detail)
                 return self._set_state(
                     assignment.assignment_id, AssignmentState.PREPARE_UNKNOWN
                 )
@@ -1483,33 +1509,37 @@ class SQLiteAgentJournal:
     ) -> int:
         if not event_id:
             raise ManagedLocalError("event ID is required")
-        encoded = _json(payload)
         with self._transaction() as conn:
-            self._assignment(conn, assignment_id)
-            existing = conn.execute(
-                "SELECT sequence, payload_json FROM events "
-                "WHERE assignment_id = ? AND event_id = ?",
-                (assignment_id, event_id),
-            ).fetchone()
-            if existing is not None:
-                if existing["payload_json"] != encoded:
-                    raise ManagedLocalError("event replay conflicts")
-                return cast(int, existing["sequence"])
-            sequence = cast(
-                int,
-                conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events "
-                    "WHERE assignment_id = ?",
-                    (assignment_id,),
-                ).fetchone()[0],
-            )
+            return self._append_event(conn, assignment_id, event_id, _json(payload))
+
+    def _append_event(
+        self, conn: sqlite3.Connection, assignment_id: str, event_id: str, encoded: str
+    ) -> int:
+        self._assignment(conn, assignment_id)
+        existing = conn.execute(
+            "SELECT sequence, payload_json FROM events "
+            "WHERE assignment_id = ? AND event_id = ?",
+            (assignment_id, event_id),
+        ).fetchone()
+        if existing is not None:
+            if existing["payload_json"] != encoded:
+                raise ManagedLocalError("event replay conflicts")
+            return cast(int, existing["sequence"])
+        sequence = cast(
+            int,
             conn.execute(
-                "INSERT INTO events "
-                "(assignment_id, sequence, event_id, payload_json, acknowledged_sequence) "
-                "VALUES (?, ?, ?, ?, NULL)",
-                (assignment_id, sequence, event_id, encoded),
-            )
-            return sequence
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()[0],
+        )
+        conn.execute(
+            "INSERT INTO events "
+            "(assignment_id, sequence, event_id, payload_json, acknowledged_sequence) "
+            "VALUES (?, ?, ?, ?, NULL)",
+            (assignment_id, sequence, event_id, encoded),
+        )
+        return sequence
 
     def acknowledge(self, assignment_id: str, sequence: int) -> int:
         with self._transaction() as conn:
@@ -1683,6 +1713,13 @@ class SQLiteAgentJournal:
             value = self._assignment(conn, assignment_id)["availability_revision"]
         return None if value is None else str(value)
 
+    def read_decline_reason(self, assignment_id: str) -> str | None:
+        """Read the bounded reason retained at definitive pre-grant refusal."""
+
+        with self._transaction() as conn:
+            self._assignment(conn, assignment_id)
+            return _read_decline_reason(conn, "events", assignment_id)
+
     def read_result(self, assignment_id: str) -> StageWorkerResult | None:
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
@@ -1855,9 +1892,16 @@ class SQLiteAgentJournal:
             )
         return state
 
-    def _set_declined(self, assignment_id: str) -> AssignmentState:
+    def _set_declined(
+        self, assignment_id: str, detail: str | None = None
+    ) -> AssignmentState:
         with self._transaction() as conn:
             self._assignment(conn, assignment_id)
+            if detail in GPU_DECLINE_REASONS:
+                self._append_event(
+                    conn, assignment_id, f"{assignment_id}:definitive_decline",
+                    _json({"kind": "definitive_decline", "reason_code": detail}),
+                )
             conn.execute(
                 "UPDATE assignments SET state = ?, declined = 1 "
                 "WHERE assignment_id = ?",
@@ -2623,6 +2667,12 @@ class SQLiteCoordinatorAssignments:
             )
             return sequence
 
+    def read_decline_reason(self, assignment_id: str) -> str | None:
+        """Read a durable physical refusal independently of current availability."""
+
+        with self._transaction() as conn:
+            return _read_decline_reason(conn, "coordinator_events", assignment_id)
+
     def retained_assignments(
         self, *, agent_id: str
     ) -> tuple[tuple[ManagedAssignment, Mapping[str, PlainData]], ...]:
@@ -3302,6 +3352,12 @@ def run_managed_local_assignment(
             operation="declined",
             release=journal.release_declined,
         )
+        reason_code = journal.read_decline_reason(assignment.assignment_id)
+        if reason_code is not None:
+            _emit_assignment_event(
+                journal, coordinator, assignment.assignment_id, "definitive_decline",
+                {"reason_code": reason_code},
+            )
         _emit_assignment_event(
             journal,
             coordinator,

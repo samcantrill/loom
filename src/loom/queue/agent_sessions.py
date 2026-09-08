@@ -33,7 +33,11 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
-from ._managed_local import ResourceAvailabilityStatus, _provider_group_descriptor
+from ._managed_local import (
+    GPU_DECLINE_REASONS,
+    ResourceAvailabilityStatus,
+    _provider_group_descriptor,
+)
 from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -1660,11 +1664,13 @@ class AgentSessionView:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).decline_assignment(
             session_id,
             assignment_id,
             availability_revision=availability_revision,
+            reason_code=reason_code,
         )
 
     def confirm_started(
@@ -3205,9 +3211,14 @@ class AgentSessionService:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
         rule, policy_revision = self._authorize("decline")
         _identifier(availability_revision, "availability_revision")
+        if reason_code is not None and (
+            not isinstance(reason_code, str) or reason_code not in GPU_DECLINE_REASONS
+        ):
+            raise QueueServiceError("remote decline reason is invalid")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             session = self._require_remote_session(
@@ -3222,7 +3233,12 @@ class AgentSessionService:
                     "remote assignment cannot be definitively declined"
                 )
             if str(row["state"]) == "RELEASED":
-                if row["next_availability_revision"] != availability_revision:
+                if (
+                    row["next_availability_revision"] != availability_revision
+                    or self._remote_execution().coordinator.read_decline_reason(
+                        assignment_id
+                    ) != reason_code
+                ):
                     raise QueueConflictError("remote decline replay conflicts")
                 return AgentSession(
                     session.session_id,
@@ -3238,7 +3254,7 @@ class AgentSessionService:
                     session.pools,
                     session.state,
                 )
-        self._remote_execution().remote_decline(assignment_id)
+        self._remote_execution().remote_decline(assignment_id, reason_code=reason_code)
         resumed = AgentSession(
             session.session_id,
             session.coordinator_id,

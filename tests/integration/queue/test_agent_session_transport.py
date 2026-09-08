@@ -127,7 +127,7 @@ from loom.scheduling import (
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
 )
-from loom.serialization import PlainData, json_dumps_pretty
+from loom.serialization import PlainData, freeze_plain_data, json_dumps_pretty
 from tests.support.mutual_tls import (
     certificate_fingerprint as _fingerprint,
     mutual_tls_credentials as _credentials,
@@ -5707,6 +5707,35 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
                 wait_timeout_ms=1000,
             )
             assert declined["state"] == "DECLINED"
+            assert declined["reason_code"] == "external_process_detected"
+            declined_session = declined["session"]
+            assert isinstance(declined_session, Mapping)
+            assignment_id = str(declined["assignment_id"])
+            # An exact lost-response replay retains the reason and revision.
+            replayed = agent.decline_assignment(
+                session.session_id, assignment_id,
+                availability_revision=str(declined_session["availability_revision"]),
+                reason_code="external_process_detected",
+            )
+            assert freeze_plain_data(replayed.value(), path="replayed decline") == declined_session
+            with pytest.raises(QueueConflictError, match="protocol conflict"):
+                agent.decline_assignment(
+                    session.session_id, assignment_id,
+                    availability_revision=replayed.availability_revision,
+                    reason_code="observation_unavailable",
+                )
+            admission = coordinator.admission_for_queue_item("occupancy-item")
+            owners = coordinator.admission(admission.admission_id).owners
+            assignment_owner = owners["assignment"]
+            assert isinstance(assignment_owner, Mapping)
+            records = assignment_owner["assignments"]
+            assert isinstance(records, (tuple, list))
+            assert any(
+                isinstance(item, Mapping)
+                and item["assignment_id"] == assignment_id
+                and item["decline_reason_code"] == "external_process_detected"
+                for item in records
+            )
             agent.refresh_resource_offer()
             session = agent.active_session()
             assert session is not None

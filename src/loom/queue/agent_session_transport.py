@@ -3236,6 +3236,7 @@ class LocalDaemonAgentHttpClient:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
         self._replay_pending_resource_mutation(session_id)
         session = _session_from_value(
@@ -3245,6 +3246,7 @@ class LocalDaemonAgentHttpClient:
                     "session_id": session_id,
                     "assignment_id": assignment_id,
                     "availability_revision": availability_revision,
+                    "reason_code": reason_code,
                 },
             )
         )
@@ -3565,6 +3567,7 @@ class LocalDaemonAgentHttpClient:
         workspace.accept()
         prepared = execution_journal.prepare_composite(assignment, commands, providers)
         if prepared is AssignmentState.DECLINED:
+            reason_code = execution_journal.read_decline_reason(assignment.assignment_id)
             next_revision = self._availability_revision(
                 session, request.assignment_id, providers
             )
@@ -3578,6 +3581,7 @@ class LocalDaemonAgentHttpClient:
                         session_id,
                         request.assignment_id,
                         availability_revision=next_revision,
+                        reason_code=reason_code,
                     ),
                 ),
             )
@@ -3586,6 +3590,7 @@ class LocalDaemonAgentHttpClient:
                     "result": "assignment",
                     "assignment_id": request.assignment_id,
                     "state": "DECLINED",
+                    "reason_code": reason_code,
                     "session": released_session.value(),
                 },
                 path="remote execution decline",
@@ -4925,14 +4930,16 @@ def _dispatch(
             request_digest=_string(value, "request_digest"),
         )
     if operation == "decline":
+        value = {"reason_code": None, **value}
         _exact(
             value,
-            {"session_id", "assignment_id", "availability_revision"},
+            {"session_id", "assignment_id", "availability_revision", "reason_code"},
         )
         return view.decline_assignment(
             _string(value, "session_id"),
             _string(value, "assignment_id"),
             availability_revision=_string(value, "availability_revision"),
+            reason_code=cast(str | None, value["reason_code"]),
         ).value()
     if operation == "started":
         _exact(

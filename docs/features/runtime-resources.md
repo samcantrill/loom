@@ -1243,3 +1243,13 @@ built-in NVIDIA inventory uses UUID strings as those keys.
 This is cooperative admission on a shared host. Another program can start after
 the final observation, and Loom cannot prevent that race. Strong exclusion
 requires all users to share an enforcing host scheduler or isolation mechanism.
+
+
+A GPU refusal before a grant retains its bounded `reason_code` in the agent's
+assignment journal and the coordinator's assignment events. Exact retries keep
+that original reason even when a later observation shows the GPU idle. Remote
+`execute_one()` decline receipts include `reason_code`; admission inspection
+exposes it as `owners.assignment.assignments[].decline_reason_code` for both
+embedded and remote assignments. Arbitrary provider diagnostics and process
+details are not copied into that field. A refusal still leaves the stage pending
+without consuming an execution retry.

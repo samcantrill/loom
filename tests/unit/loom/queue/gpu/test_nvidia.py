@@ -416,3 +416,40 @@ def test_process_observer_does_not_treat_unsupported_output_as_idle(
     result = observer.observe()["GPU-a"]
     assert not result.query_succeeded
     assert result.reason_code == "query_incomplete"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_reason"),
+    [
+        (subprocess.TimeoutExpired("nvidia-smi", 2), "query_timeout"),
+        (PermissionError("private diagnostic"), "query_permission_denied"),
+        (subprocess.CompletedProcess(["nvidia-smi"], 1, "", "private diagnostic"), "query_failed"),
+    ],
+)
+def test_process_observation_command_failures_withhold_every_selected_gpu(
+    failure: Exception | subprocess.CompletedProcess[str], expected_reason: str
+) -> None:
+    def run(argv: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        assert argv[-1] == "--id=GPU-a,GPU-b"
+        assert timeout == 2
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    observations = NvidiaSmiGpuProcessObserver(("GPU-a", "GPU-b"), command_runner=run).observe()
+    assert set(observations) == {"GPU-a", "GPU-b"}
+    assert all(not item.query_succeeded for item in observations.values())
+    assert {item.reason_code for item in observations.values()} == {expected_reason}
+    assert "private diagnostic" not in repr(observations)
+
+
+def test_process_observation_ignores_unselected_gpu_processes() -> None:
+    runner = _ProcessRunner(_process_result(
+        "<nvidia_smi_log><gpu><uuid>GPU-a</uuid><processes/></gpu>"
+        "<gpu><uuid>GPU-b</uuid><processes><process_info>"
+        "<type>C</type><pid>123</pid></process_info></processes></gpu></nvidia_smi_log>"
+    ))
+    observations = NvidiaSmiGpuProcessObserver(("GPU-a",), command_runner=runner).observe()
+    assert set(observations) == {"GPU-a"}
+    assert observations["GPU-a"].query_succeeded
+    assert not observations["GPU-a"].has_gpu_process

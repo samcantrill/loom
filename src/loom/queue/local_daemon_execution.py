@@ -56,6 +56,7 @@ from loom.queue._managed_local import (
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     _assignment_from_dict,
+    _read_decline_reason,
     _compose_agent_resource_providers,
     run_managed_local_assignment,
 )
@@ -4807,16 +4808,26 @@ class LocalDaemonExecution:
             raise QueueConflictError("remote start permit fence conflicts")
         return True
 
-    def remote_decline(self, assignment_id: str) -> None:
+    def remote_decline(self, assignment_id: str, *, reason_code: str | None = None) -> None:
         """Release a pre-grant assignment after definitive physical decline."""
 
         record = self._remote_assignment_record(assignment_id)
         authority = self._remote_authority(str(record["run_uri"]))
         state = self.coordinator.state(assignment_id)
         if state == "released":
+            if self.coordinator.read_decline_reason(assignment_id) != reason_code:
+                raise QueueConflictError("remote decline reason replay conflicts")
             return
         if state != "bound":
             raise QueueConflictError("only a bound remote assignment can be declined")
+        saved_reason = self.coordinator.read_decline_reason(assignment_id)
+        if saved_reason is not None and saved_reason != reason_code:
+            raise QueueConflictError("remote decline reason replay conflicts")
+        if reason_code is not None:
+            self.coordinator.record_event(
+                assignment_id, 1, f"{assignment_id}:definitive_decline",
+                {"kind": "definitive_decline", "reason_code": reason_code},
+            )
         authority.unbind_prepared_attempt(
             str(record["run_uri"]),
             assignment_id=assignment_id,
@@ -5533,6 +5544,9 @@ def build_local_daemon_owner_views(
                         "session_id": str(row[6]),
                         "offer_id": str(row[7]),
                         "claim_id": str(row[8]),
+                        "decline_reason_code": _read_decline_reason(
+                            conn, "coordinator_events", assignment.assignment_id
+                        ),
                         "receipt_digest": hashlib.sha256(
                             str(row[9]).encode("utf-8")
                         ).hexdigest(),
