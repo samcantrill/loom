@@ -151,6 +151,19 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 - Independent review: required after implementation and both local gates.
 - PR, merge and cleanup: pending; correction validation is recorded below.
 
+Manager pre-submit verification: corrected revision
+`c4f9120645e14b1dce8b8e8685b40371256b5e48`, tree
+`5d9e1a88b43d59551b3df869e281c839968f314e`, has both required passing gates.
+The delta to executor completion `5f964b0d1f23bc8869d6f359ec05fb45b45f878c` is this
+card only. Manager inspected both raw gate logs and parsed the six JUnit groups:
+3,179 passes, no failures/errors and 18 opt-in container skips. All damage
+variants, diagnostic tests and both real endpoint/client/CLI parameter cases
+executed successfully. Scope, import direction and the correction diff align
+with the fixed contract; no runtime change accompanied the test correction.
+Fetched Loom develop remains `d444284`, with no source/dependency drift. This
+receipt and the manifest update are documentation-only. Independent actual-PR
+review is the remaining pre-merge gate.
+
 ### Manager Pre-submit Correction
 
 The real socket assertions added by the implementation exercise an available

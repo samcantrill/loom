@@ -23,6 +23,10 @@ reopen the canonical planning packet.
 - Contract owner: FR-81-29, DD-81-23, EX-81-17 and VAL-81-02 in the canonical
   diagnostic card linked by the phase plan. CLI validation result deliberately
   cuts to `loom.cli.validate.v3`; no compatibility no-op flag.
+- P12 consumes FR-81-31/DD-81-24 at its linked phase plan: one additive owner
+  member, bounded private inspection-failure diagnostics and strict public
+  rendering. Existing application failures, admission state and complete-or-
+  unavailable behavior remain unchanged.
 - Preserve composition, explicit plugins, graph/resource/runtime checks, real
   construction, domain-neutral imports and current lifecycle ownership.
 - Keep rphys science, Stage 85 deployment, P8 reference pinning,
@@ -69,4 +73,4 @@ reserve placeholder execution plans.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 11 | [#287](https://github.com/samcantrill/loom/pull/287), merge `aa49475f5e086c6647e93c4f3635635e25e30959` | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent review passed at `d222e7b`, no findings; final `c35faf1` adds evidence only | deliberate CLI/API removal; downstream adoption follows separately | exact clean worktree and local/remote phase branch removed; evidence retained at the phase-card path |
-| 12 | pending | setup only; no runtime validation claimed | private diagnostic text requires existing authorized endpoint access | retain until merged |
+| 12 | pending | implementation `bc270a4`, test correction `c4f9120`; both Loom gates passed, 3,179 passes and 18 opt-in skips; independent PR review next | private diagnostic text requires existing authorized endpoint access | retain until merged |
