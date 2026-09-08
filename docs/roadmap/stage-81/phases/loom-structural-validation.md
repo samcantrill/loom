@@ -2,11 +2,12 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: rphys 81, Loom owner phase 11
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: `agent/stage-81-p11-loom-structural-validation`
 - Worktree: `/nas/home/can134/work/loom-worktrees/stage-81-p11-loom-structural-validation`
+  (retired after verified merge; generated evidence retained below)
 - Base revision: published Loom `cf9e2850476e4526c4884e34412c26e38de08b6e`
 - PR target: `develop` in `samcantrill/loom`
 - PR title: `Stage 81 Causal Failure Propagation And Deferred Retained Smoke - Phase 11: Loom Structural Validation Ownership`
@@ -158,8 +159,15 @@ revision-bound validation evidence. Manager owns PR/review/delivery and metadata
   directly related repair.
 - Independent review: passed with no findings on actual PR #287 head
   `d222e7b9186bb3954e4f2da10798344512a3aae7`, base `cf9e285`.
-- PR: [#287](https://github.com/samcantrill/loom/pull/287), open, non-draft,
-  mergeable, exact approved title and target `develop`; merge and cleanup pending.
+- PR: [#287](https://github.com/samcantrill/loom/pull/287), verified merged to
+  `develop` on 2026-09-08 at 11:19:09 UTC, merge
+  `aa49475f5e086c6647e93c4f3635635e25e30959`; final published head
+  `c35faf15504c6779502e0cedd85217b8a2559f10` differed from independent review only
+  in the two owner documents. The merge tree exactly matches that final head.
+- Cleanup: both assigned agents terminal; exact clean phase worktree removed,
+  remote phase branch deleted with the expected-head lease, and sole local
+  branch containing that phase head retired. Clean control fast-forwarded to
+  the verified merge. Original dirty Loom and all other worktrees preserved.
 
 Manager pre-submit verification: the corrected source/test revision is
 `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`, tree
@@ -221,4 +229,4 @@ gate evidence follows.
 | Final gates and validated tree | Historical `badf364a02f2d2cdaf2f8d657763708ad44ebe18` receipt is superseded for validation by clean corrected revision `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`. On that revision, `make validate-pr` passed Ruff, Pyright (0 errors), default harness (`3,011 passed`, `155 deselected`), config-extra harness (`161 passed`, `18 skipped`, `3,014 deselected`), and `uv build`, producing `dist/loom-0.1.0.tar.gz` and `dist/loom-0.1.0-py3-none-any.whl`. `make test-summary` passed: 3,172 passed, 0 failed, 0 errors, 18 skipped, and 3,148 deselected (3,190 total). No physical, container, GPU, or SLURM acceptance gate was run or required. |
 | Raw reports and logs | Summary: `build/test-summary.md`. JUnit: `build/test-summary/package/junit.xml`, `build/test-summary/unit/junit.xml`, `build/test-summary/contract/junit.xml`, `build/test-summary/integration/junit.xml`, `build/test-summary/e2e/junit.xml`, and `build/test-summary/config-extra/junit.xml`. Coverage JSON: `build/test-summary/package/coverage.json`, `build/test-summary/unit/coverage.json`, `build/test-summary/contract/coverage.json`, `build/test-summary/integration/coverage.json`, `build/test-summary/e2e/coverage.json`, and `build/test-summary/config-extra/coverage.json`; raw coverage data is in the matching six `.coverage` paths. `make validate-pr` has no persistent raw-log artifact; its build outputs above are retained as ignored local evidence. |
 | Validation-relevant changes after evidence | `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1` adds only the approved fresh-target test oracle. All final evidence above was refreshed after that change; this completion-record update is documentation-only. |
-| Residual risk and blocker | No implementation blocker. The deliberate incompatible CLI/API removal requires separate downstream adoption; independent review remains required before manager PR delivery. |
+| Residual risk and blocker | Independent review and remote merge are complete; no phase blocker remains. The deliberate incompatible CLI/API removal requires separate downstream adoption. Generated evidence is preserved at the verified copy path above after exact phase cleanup. |

@@ -1,10 +1,10 @@
 # Rphys Stage 81: Loom Owner Implementation
 
-Status: Phase 11 approved for merge
+Status: Phase 11 merged and cleaned
 Roadmap stage: rphys 81, external owner contribution
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 11 — Loom Structural Validation Ownership
+Current phase: none; Phase 11 complete, later Loom contributions require their own admission
 Blockers: none
 
 This directory records Loom's contribution to the approved rphys Stage 81 plan,
@@ -37,7 +37,7 @@ reopen the canonical planning packet.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 11 | loom-structural-validation | approved | [plan](phases/loom-structural-validation.md) | agent/stage-81-p11-loom-structural-validation | [#287](https://github.com/samcantrill/loom/pull/287) | Loom pipeline/CLI validation | remove eager construction checks atomically |
+| 11 | loom-structural-validation | merged | [plan](phases/loom-structural-validation.md) | agent/stage-81-p11-loom-structural-validation (cleaned) | [#287](https://github.com/samcantrill/loom/pull/287) | Loom pipeline/CLI validation | remove eager construction checks atomically |
 
 Later contributions are admitted in the canonical rphys order, after predecessor
 merge and synchronization. This manifest does not create additional phases or
@@ -61,4 +61,4 @@ reserve placeholder execution plans.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 11 | [#287](https://github.com/samcantrill/loom/pull/287), merge pending | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent review passed at `d222e7b`, no findings | deliberate CLI/API removal; downstream adoption follows separately | retained evidence copy verified; worktree retained until merged |
+| 11 | [#287](https://github.com/samcantrill/loom/pull/287), merge `aa49475f5e086c6647e93c4f3635635e25e30959` | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent review passed at `d222e7b`, no findings; final `c35faf1` adds evidence only | deliberate CLI/API removal; downstream adoption follows separately | exact clean worktree and local/remote phase branch removed; evidence retained at the phase-card path |
