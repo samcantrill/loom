@@ -13,7 +13,7 @@
 - Dependencies: approved rphys diagnostic amendment; P11 PR #287 remotely merged,
   completion metadata published and exact phase cleanup verified.
 - Workflow: one executor, both local gates and required independent PR review.
-- Blockers: none; no dependency on Stage 85's rphys adoption or resource policy.
+- Blockers: none; no Stage 85 adoption or resource-policy dependency.
 
 ## Objective And Contract Owner
 
@@ -144,10 +144,47 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 ## Workflow State And Completion
 
 - Manager setup: complete on clean published base; canonical readiness reused.
-- Implementation: complete at `bc270a4362271796d592d1f93f68d870af1657cf`.
-- Optional planner/refiner: unused; corrections 0/3.
+- Implementation: complete at `c4f9120645e14b1dce8b8e8685b40371256b5e48`;
+  the initial implementation is `bc270a4362271796d592d1f93f68d870af1657cf`.
+- Optional planner/refiner: unused; correction 1/3 completed for the boundary
+  evidence gap by the same executor.
 - Independent review: required after implementation and both local gates.
-- PR, merge and cleanup: pending; no runtime validation claimed.
+- PR, merge and cleanup: pending; correction validation is recorded below.
+
+### Manager Pre-submit Correction
+
+The real socket assertions added by the implementation exercise an available
+view whose `diagnostic_failure` is null. Unavailable diagnostics are checked
+only through direct owner assembly, and admission text/JSON uses a mocked
+socket client. This does not yet prove the accepted non-null nested diagnostic
+survives the actual endpoint boundary. The damage variants other than authority
+failure assert only nonempty type/message, so a generic replacement would pass
+instead of each original missing/corrupt/read reason. These are gaps in the
+approved Endpoint And Admission CLI and Complete Failure Owner oracles, not
+new product criteria.
+
+Smallest correction: extend the existing actual socket fixture to return an
+unavailable owner view with a real captured nested reason; inspect it with the
+real client and admission CLI, checking that `failures` remains empty and the
+specific cause survives text/JSON transport. Strengthen the existing damage
+variants' reason assertions. Keep successful/empty and ordinary application
+failure cases. Also make the existing limit test render/serialize its projected
+128-node value: manager read-only probes already pass direct rendering, plain
+conversion, freezing and JSON round-trip, but that accepted boundary is not
+asserted by the test. Do not create a backend matrix or alter runtime semantics
+without a demonstrated regression.
+
+Localized documentation correction in the same scoped pass: move the new
+inspection paragraph out of the middle of the existing cancellation paragraph
+in `docs/features/queue.md`, preserving both meanings and Stage 85's separate
+preparation ownership. Preserve initial evidence as historical; run the focused
+owner/endpoint/CLI/diagnostic tests and refresh both final Loom gates on the
+stable corrected tree. No new public API or planning decision is required.
+
+Resolved at `c4f9120645e14b1dce8b8e8685b40371256b5e48`: the actual
+socket/client/CLI unavailable-diagnostic oracle, distinct damage-reason
+assertions, and 128-node serialization/render assertion now cover this bounded
+gap; the queue documentation paragraph is in the admission section.
 
 ## Completion Record
 
@@ -156,35 +193,54 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
   `run_result.diagnostic_failure` member and authority-cause handoff in local
   daemon owner assembly, rendered it only for admission text output while
   retaining the generic JSON envelope, and documented the existing authorized
-  disclosure boundary in `docs/features/queue.md`.
+  disclosure boundary in `docs/features/queue.md`. The admitted correction
+  added only boundary assertions and relocated that documentation; it made no
+  runtime change.
 - Commits: `bc270a4362271796d592d1f93f68d870af1657cf` (`Add Loom inspection
-  failure diagnostics`).
+  failure diagnostics`), `c4f9120645e14b1dce8b8e8685b40371256b5e48`
+  (`Strengthen inspection diagnostic boundary tests`).
 - Tests added or updated by suite: diagnostics projection/strict-renderer unit
   coverage; queue CLI text/JSON presentation unit coverage; local-daemon
   owner-view, authority-cause, actual socket, and eight-owner-key integration
-  coverage; diagnostics public-import coverage.
-- Targeted validation: `uv run pytest`
+  coverage; diagnostics public-import coverage. The correction adds an actual
+  socket/client/admission-CLI unavailable-diagnostic oracle, exact
+  missing/corrupt/read/authority damage-reason assertions, and the projected
+  128-node plain-data/JSON/render round trip.
+- Initial targeted validation: `uv run pytest`
   `tests/unit/loom/diagnostics/test_diagnostic_failure.py`
   `tests/package/test_import.py::test_import_loom_diagnostics_public_api`
   `tests/unit/loom/cli/test_queue.py::test_queue_daemon_admission_renders_private_diagnostic_failure`
   `tests/integration/queue/test_local_daemon_production.py::test_run_result_owner_projects_complete_failures_or_fails_closed`
   `tests/integration/queue/test_local_daemon_production.py::test_daemon_projects_stage_failure_to_authority_run_and_admission`
   passed 15 tests. Changed-path Ruff and Pyright both passed.
-- Final `make validate-pr` result: passed at the validated revision. Default
+- Correction targeted validation: `uv run pytest`
+  `tests/unit/loom/diagnostics/test_diagnostic_failure.py`
+  `tests/unit/loom/cli/test_queue.py::test_queue_daemon_admission_renders_private_diagnostic_failure`
+  `tests/integration/queue/test_local_daemon_production.py::test_run_result_owner_projects_complete_failures_or_fails_closed`
+  `tests/integration/queue/test_local_daemon_production.py::test_daemon_projects_stage_failure_to_authority_run_and_admission`
+  passed 14 tests. Changed-path Ruff and Pyright both passed.
+- Initial `make validate-pr` result: passed at the initial validated revision.
+  Default lane: 3,018 passed, 155 opt-in deselections; config-extra: 161
+  passed, 18 expected opt-in skips; package build passed. Raw receipt retained
+  at `build/phase-12-validation/validate-pr.log`.
+- Corrected `make validate-pr` result: passed at the corrected revision. Default
   lane: 3,018 passed, 155 opt-in deselections; config-extra: 161 passed, 18
   expected opt-in skips; package build passed. Raw receipt retained at
-  `build/phase-12-validation/validate-pr.log`.
-- Final `make test-summary` and `build/test-summary.md`: passed at the
-  validated revision. Package 122, unit 2,149, contract 300, integration 379,
+  `build/phase-12-validation/validate-pr-correction-1.log`.
+- Initial `make test-summary`: passed at the initial validated revision; raw
+  gate log: `build/phase-12-validation/test-summary.log`.
+- Corrected `make test-summary` and `build/test-summary.md`: passed at the
+  corrected revision. Package 122, unit 2,149, contract 300, integration 379,
   e2e 68, and config-extra 161 passed; config-extra retained 18 expected
   opt-in skips. Summary: `build/test-summary.md`; raw JUnit/coverage receipts:
   `build/test-summary/{package,unit,contract,integration,e2e,config-extra}/`;
-  raw gate log: `build/phase-12-validation/test-summary.log`.
+  raw gate log: `build/phase-12-validation/test-summary-correction-1.log`.
 - Validated revision or tree state: clean source/test/configuration tree at
-  `bc270a4362271796d592d1f93f68d870af1657cf` before this completion-record-only
-  edit.
-- Later validation-relevant changes: none; the pending completion-record edit
-  changes no source, tests, dependencies, build, or validation configuration.
+  `c4f9120645e14b1dce8b8e8685b40371256b5e48` before this completion-record-only
+  edit; the initial gate evidence at
+  `bc270a4362271796d592d1f93f68d870af1657cf` remains historical above.
+- Later validation-relevant changes: none; this completion-record edit changes
+  no source, tests, dependencies, build, or validation configuration.
 - Scope or fixed-contract variance: none.
 - Residual blocker or risk: no blocker. Physical/container acceptance remains
   opt-in and outside P12; its 18 config-extra skips are explicitly reported
