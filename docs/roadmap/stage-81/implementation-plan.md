@@ -5,7 +5,7 @@ Roadmap stage: rphys 81, external owner contribution
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 12 — Loom Inspection Diagnostics
-Blockers: none
+Blockers: P12 independent review requires its implicit-context test; scoped correction underway
 
 This directory records Loom's contribution to the approved rphys Stage 81 plan,
 not a separately proposed Loom milestone. The authoritative requirements,
@@ -42,7 +42,7 @@ reopen the canonical planning packet.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 11 | loom-structural-validation | merged | [plan](phases/loom-structural-validation.md) | agent/stage-81-p11-loom-structural-validation (cleaned) | [#287](https://github.com/samcantrill/loom/pull/287) | Loom pipeline/CLI validation | remove eager construction checks atomically |
-| 12 | loom-inspection-diagnostics | in_progress | [plan](phases/loom-inspection-diagnostics.md) | agent/stage-81-p12-loom-inspection-diagnostics | pending | Loom diagnostics, owner assembly and admission CLI | explain unavailable failure inspection without losing original read causes |
+| 12 | loom-inspection-diagnostics | pr_open | [plan](phases/loom-inspection-diagnostics.md) | agent/stage-81-p12-loom-inspection-diagnostics | [#288](https://github.com/samcantrill/loom/pull/288) | Loom diagnostics, owner assembly and admission CLI | explain unavailable failure inspection without losing original read causes |
 
 Later contributions are admitted in the canonical rphys order, after predecessor
 merge and synchronization. This manifest does not create additional phases or

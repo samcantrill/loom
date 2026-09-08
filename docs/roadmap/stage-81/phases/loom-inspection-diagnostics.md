@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: rphys 81, Loom owner phase 12
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: `agent/stage-81-p12-loom-inspection-diagnostics`
@@ -13,7 +13,8 @@
 - Dependencies: approved rphys diagnostic amendment; P11 PR #287 remotely merged,
   completion metadata published and exact phase cleanup verified.
 - Workflow: one executor, both local gates and required independent PR review.
-- Blockers: none; no Stage 85 adoption or resource-policy dependency.
+- Blockers: independent review requires the accepted implicit-context test;
+  manager correction 2/3 is underway. No Stage 85 adoption or resource-policy dependency.
 
 ## Objective And Contract Owner
 
@@ -146,10 +147,30 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 - Manager setup: complete on clean published base; canonical readiness reused.
 - Implementation: complete at `c4f9120645e14b1dce8b8e8685b40371256b5e48`;
   the initial implementation is `bc270a4362271796d592d1f93f68d870af1657cf`.
-- Optional planner/refiner: unused; correction 1/3 completed for the boundary
-  evidence gap by the same executor.
-- Independent review: required after implementation and both local gates.
-- PR, merge and cleanup: pending; correction validation is recorded below.
+- Optional planner/refiner: unused; correction 1/3 completed by the executor;
+  correction 2/3 admitted manager-locally for implicit-context coverage.
+- Independent review: actual PR #288 head `3d8e53a2a6616e73d3a088ff457ab0fd856e9c17`
+  reviewed; one accepted coverage blocker, no other findings.
+- PR: [#288](https://github.com/samcantrill/loom/pull/288), correct title/target,
+  open and non-draft. Merge remains blocked until the scoped correction and
+  refreshed required gates pass; cleanup pending.
+
+### Independent Review Correction
+
+The configured independent Loom reviewer inspected the actual PR head above and
+both full gate receipts. It found one product-acceptance coverage blocker:
+native implicit context is a supported cause/context path under DD-81-24, but
+the test only set context alongside a winning explicit cause. The implementation's
+context-link branch therefore remained unexecuted. A regression discarding the
+preceding read error could pass the suite with a valid-looking diagnostic.
+
+Smallest correction 2/3: one real nested-raise test asserts no explicit cause,
+the original implicit context identity, exact projected context link and rendered
+explanation. The manager adds this test without runtime changes and refreshes
+both required gates. The reviewer otherwise found runtime semantics, disclosure,
+public format, strict rendering, imports and real endpoint/CLI evidence correct;
+it requested no further independent review loop. Manager will verify the scoped
+test and validation delta rather than claim review of unseen runtime changes.
 
 Manager pre-submit verification: corrected revision
 `c4f9120645e14b1dce8b8e8685b40371256b5e48`, tree

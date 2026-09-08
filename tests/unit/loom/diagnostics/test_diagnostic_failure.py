@@ -61,6 +61,40 @@ def test_projection_preserves_native_causality_groups_and_shared_occurrences() -
     assert "suppressed context" not in rendered
 
 
+def test_projection_preserves_implicit_native_context() -> None:
+    original = OSError("cannot read run metadata")
+    with pytest.raises(RuntimeError) as failure:
+        try:
+            raise original
+        except OSError:
+            # Exercise native implicit context rather than an explicit cause.
+            raise RuntimeError("cannot inspect run")
+
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is original
+    projected = project_diagnostic_failure(failure.value)
+    assert projected == {
+        "schema": "loom.diagnostic.v1",
+        "type": "builtins.RuntimeError",
+        "message": "cannot inspect run",
+        "links": [
+            {
+                "relation": "context",
+                "record": {
+                    "type": "builtins.OSError",
+                    "message": "cannot read run metadata",
+                    "links": [],
+                },
+            }
+        ],
+    }
+    assert render_diagnostic_failure(projected).splitlines() == [
+        "builtins.RuntimeError: cannot inspect run",
+        "  context:",
+        "    builtins.OSError: cannot read run metadata",
+    ]
+
+
 def test_projection_marks_cycles_and_limits_and_guards_messages() -> None:
     cycle = ValueError("cycle")
     cycle.__cause__ = cycle
