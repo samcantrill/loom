@@ -252,16 +252,48 @@ class ManagedExecutionReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class _ProbeClaimOwner:
+    """Diagnostic ownership keys for the existing provider command contract.
+
+    A probe has no run, attempt, coordinator grant, or worker result. Providers
+    address its local ownership scope through their existing command keys.
+    """
+
+    probe_id: str
+    agent_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.probe_id, str) or not self.probe_id.startswith(
+            "diagnostic-probe:"
+        ):
+            raise ManagedLocalError("diagnostic probe identity is invalid")
+        if not isinstance(self.agent_id, str) or not self.agent_id:
+            raise ManagedLocalError("diagnostic probe agent is invalid")
+
+    @property
+    def assignment_id(self) -> str:
+        return self.probe_id
+
+    @property
+    def session_id(self) -> str:
+        return self.probe_id
+
+    @property
+    def claim_id(self) -> str:
+        return self.probe_id
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimCommand:
     """Idempotent provider command; its operation ID is stable across replay."""
 
-    assignment: ManagedAssignment
+    assignment: ManagedAssignment | _ProbeClaimOwner
     operation_id: str
     claim: ResourceClaim
     provider_descriptor: SchedulingComponentDescriptor
 
     def __post_init__(self) -> None:
-        if not isinstance(self.assignment, ManagedAssignment):
+        if not isinstance(self.assignment, ManagedAssignment | _ProbeClaimOwner):
             raise ManagedLocalError("command assignment is invalid")
         if not isinstance(self.operation_id, str) or not self.operation_id:
             raise ManagedLocalError("operation_id must be a non-empty string")
@@ -1145,6 +1177,72 @@ class SQLiteAgentJournal:
             conn.row_factory = sqlite3.Row
             _require_agent_journal_schema(conn)
 
+    def reserve_probe(self, command: ClaimCommand) -> None:
+        """Persist exact diagnostic ownership before any provider activation."""
+        owner = command.assignment
+        if not isinstance(owner, _ProbeClaimOwner):
+            raise ManagedLocalError("diagnostic probe owner is required")
+        with self._transaction() as conn:
+            if (
+                conn.execute(
+                    "SELECT 1 FROM diagnostic_probes WHERE probe_id = ?",
+                    (owner.probe_id,),
+                ).fetchone()
+                is not None
+            ):
+                raise ManagedLocalError("diagnostic probe cannot be relaunched")
+            conn.execute(
+                "INSERT INTO diagnostic_probes (probe_id, agent_id, command_json, state) "
+                "VALUES (?, ?, ?, 'reserved')",
+                (owner.probe_id, owner.agent_id, _json(_claim_command_dict(command))),
+            )
+
+    def mark_probe_launch_intent(self, probe_id: str) -> None:
+        """Make launch intent durable before invoking the one process creator."""
+        self._advance_probe(probe_id, ("reserved",), "launch_intent")
+
+    def mark_probe_contained(self, probe_id: str) -> None:
+        """Record the owned runner's proof that no created process is uncertain."""
+        self._advance_probe(probe_id, ("reserved", "launch_intent"), "contained")
+
+    def release_probe(
+        self, probe_id: str, providers: Mapping[str, AgentResourceProvider]
+    ) -> bool:
+        """Release only a contained probe, retaining indeterminate provider release."""
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM diagnostic_probes WHERE probe_id = ?", (probe_id,)
+            ).fetchone()
+            if row is None:
+                raise ManagedLocalError("diagnostic probe is missing")
+            command = _probe_command_from_row(row)
+            if row["state"] == "released":
+                return True
+            if row["state"] != "contained":
+                raise ManagedLocalError("diagnostic probe cleanup is unproven")
+        provider = providers.get(command.claim.resource_kind)
+        if provider is None:
+            raise ManagedLocalError("diagnostic probe provider is unavailable")
+        result = _provider_call(
+            provider.release, _operation_command(command, "release")
+        )
+        if result.outcome is not ClaimOutcome.RELEASED:
+            return False
+        self._advance_probe(probe_id, ("contained",), "released")
+        return True
+
+    def _advance_probe(self, probe_id: str, prior: tuple[str, ...], state: str) -> None:
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT state FROM diagnostic_probes WHERE probe_id = ?", (probe_id,)
+            ).fetchone()
+            if row is None or row["state"] not in prior:
+                raise ManagedLocalError("diagnostic probe lifecycle conflicts")
+            conn.execute(
+                "UPDATE diagnostic_probes SET state = ? WHERE probe_id = ?",
+                (state, probe_id),
+            )
+
     def persist_request(
         self, assignment: ManagedAssignment, request: Mapping[str, PlainData]
     ) -> AssignmentState:
@@ -1774,6 +1872,11 @@ class SQLiteAgentJournal:
                         "WHERE claims_json IS NOT NULL"
                     )
                 )
+                probes = tuple(
+                    conn.execute(
+                        "SELECT * FROM diagnostic_probes WHERE state != 'released'"
+                    )
+                )
             except sqlite3.DatabaseError as exc:
                 raise ManagedLocalError(
                     "agent journal retained-claim read failed"
@@ -1788,6 +1891,7 @@ class SQLiteAgentJournal:
             if cast(str, row["state"]) in released:
                 continue
             retained.extend(_claim_commands_from_row(row))
+        retained.extend(_probe_command_from_row(row) for row in probes)
         return tuple(retained)
 
     def assignment_claim_commands(self, assignment_id: str) -> tuple[ClaimCommand, ...]:
@@ -1850,6 +1954,12 @@ class SQLiteAgentJournal:
                 )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS events (assignment_id TEXT NOT NULL, sequence INTEGER NOT NULL, event_id TEXT NOT NULL, payload_json TEXT NOT NULL, acknowledged_sequence INTEGER, PRIMARY KEY (assignment_id, sequence), UNIQUE (assignment_id, event_id))"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS diagnostic_probes ("
+                "probe_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, "
+                "command_json TEXT NOT NULL, state TEXT NOT NULL "
+                "CHECK (state IN ('reserved','launch_intent','contained','released')))"
             )
             try:
                 yield conn
@@ -2990,6 +3100,12 @@ def _connect_sqlite(
 
 
 def _require_agent_journal_schema(conn: sqlite3.Connection) -> None:
+    _require_sqlite_columns(
+        conn,
+        "diagnostic_probes",
+        {"probe_id", "agent_id", "command_json", "state"},
+        "agent journal",
+    )
     _require_sqlite_columns(
         conn,
         "assignments",
@@ -4415,7 +4531,7 @@ def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
 
 
 def _claim_command_from_dict(
-    assignment: ManagedAssignment, data: object
+    assignment: ManagedAssignment | _ProbeClaimOwner, data: object
 ) -> ClaimCommand:
     expected = {
         "assignment_id",
@@ -4461,6 +4577,16 @@ def _claim_command_from_dict(
         claim,
         provider_descriptor,
     )
+
+
+def _probe_command_from_row(row: sqlite3.Row) -> ClaimCommand:
+    if row["state"] not in {"reserved", "launch_intent", "contained", "released"}:
+        raise ManagedLocalError("diagnostic probe state is invalid")
+    try:
+        owner = _ProbeClaimOwner(row["probe_id"], row["agent_id"])
+        return _claim_command_from_dict(owner, json.loads(row["command_json"]))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ManagedLocalError("diagnostic probe claim is invalid") from exc
 
 
 def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:

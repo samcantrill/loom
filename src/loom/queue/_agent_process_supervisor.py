@@ -51,6 +51,7 @@ class ResidentWorkerLaunchProfile:
     python_executable: Path
     descriptor: Mapping[str, PlainData]
     environment: Mapping[str, str] = field(default_factory=dict)
+    readiness_identity: str | None = None
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).resolve()
@@ -75,6 +76,14 @@ class ResidentWorkerLaunchProfile:
         ):
             raise AgentProcessSupervisorError("resident profile environment is invalid")
         object.__setattr__(self, "environment", environment)
+        if self.readiness_identity is not None and (
+            not isinstance(self.readiness_identity, str)
+            or len(self.readiness_identity) != 64
+            or any(item not in "0123456789abcdef" for item in self.readiness_identity)
+        ):
+            raise AgentProcessSupervisorError(
+                "resident profile readiness identity is invalid"
+            )
 
     @property
     def fingerprint(self) -> str:
@@ -84,6 +93,7 @@ class ResidentWorkerLaunchProfile:
                 "python_executable": str(self.python_executable),
                 "descriptor": self.descriptor,
                 "environment": self.environment,
+                "readiness_identity": self.readiness_identity,
             }
         )
 
@@ -591,6 +601,7 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "python_executable": str(profile.python_executable),
         "descriptor": profile.descriptor,
         "environment": dict(profile.environment),
+        "readiness_identity": profile.readiness_identity,
     }
 
 
@@ -600,6 +611,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         "python_executable",
         "descriptor",
         "environment",
+        "readiness_identity",
     }:
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
@@ -607,6 +619,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         python_executable=Path(cast(str, value["python_executable"])),
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),
         environment=cast(Mapping[str, str], value["environment"]),
+        readiness_identity=cast(str | None, value["readiness_identity"]),
     )
 
 

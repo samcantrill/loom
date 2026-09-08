@@ -165,13 +165,15 @@ def test_preflight_failure_writes_text_result_and_returns_pipeline_exit(
     assert stderr.getvalue() == ""
 
 
-def test_preflight_unknown_check_group_is_cli_usage_error() -> None:
+@pytest.mark.parametrize("groups", [("unknown",), ("python",), ("config", "python")])
+def test_preflight_unknown_check_group_is_cli_usage_error(groups: tuple[str, ...]) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
+    check_arguments = [argument for group in groups for argument in ("--check", group)]
 
     assert (
         main(
-            ["preflight", "base.yaml", "--check", "unknown", "--format", "json"],
+            ["preflight", "base.yaml", *check_arguments, "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )

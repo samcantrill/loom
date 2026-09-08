@@ -52,6 +52,11 @@ from .local_daemon import (
 )
 from .coordinator_authority import CoordinatorAuthorityFactory
 from .resources import EffectiveAgentCapacity
+from .resident_readiness import (
+    ResidentReadinessRequirements,
+    ResidentReadinessResult,
+    qualified_resident_profile,
+)
 from .gpu.occupancy import GpuOccupancyPolicy
 
 
@@ -69,6 +74,8 @@ class CoordinatorServiceConfig:
     active_fingerprint: str
     environment_path: Path | None = None
     effective_capacity: EffectiveAgentCapacity | None = None
+    resident_readiness: ResidentReadinessResult | None = None
+    local_agent: LocalAgentServiceConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +122,8 @@ class RunInspectionClientConfig:
 
 
 def load_coordinator_service_config(
-    path: str | Path, *, env_file: str | Path | None = None
+    path: str | Path, *, env_file: str | Path | None = None,
+    _allow_unready: bool = False,
 ) -> CoordinatorServiceConfig:
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
@@ -143,7 +151,7 @@ def load_coordinator_service_config(
     payload = _normalize_coordinator_payload(payload)
     base = source.parent
     root = _path(payload, "deployment_root", base)
-    local_agent = _local_agent_service(payload["local_agent"], base)
+    local_agent = _local_agent_service(payload["local_agent"], base, allow_unready=_allow_unready)
     fingerprint = _canonical_fingerprint(
         {
             "coordinator": _coordinator_immutable_projection(payload),
@@ -223,11 +231,16 @@ def load_coordinator_service_config(
         effective_capacity=None
         if local_agent is None
         else local_agent.effective_capacity,
+        resident_readiness=None
+        if local_agent is None
+        else local_agent.profile.readiness_result,
+        local_agent=local_agent,
     )
 
 
 def load_outbound_agent_service_config(
-    path: str | Path, *, env_file: str | Path | None = None
+    path: str | Path, *, env_file: str | Path | None = None,
+    _allow_unready: bool = False,
 ) -> OutboundAgentServiceConfig:
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
@@ -251,18 +264,24 @@ def load_outbound_agent_service_config(
     )
     _header(payload, "loom.outbound-agent-service")
     payload = _normalize_outbound_agent_payload(payload)
-    fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     base = source.parent
     profiles = tuple(
         _resident_profile(
             _mapping_value(value, f"resident_profiles[{index}]"),
             base,
             f"resident_profiles[{index}]",
+            allow_unready=_allow_unready,
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
     if not profiles:
         raise QueueConfigError("resident_profiles must not be empty")
+    authored_profiles = _sequence(payload, "resident_profiles")
+    payload = {**payload, "resident_profiles": [
+        {**_mapping_value(value, "resident profile"), "descriptor": profile.descriptor.to_dict()}
+        for value, profile in zip(authored_profiles, profiles, strict=True)
+    ]}
+    fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     resource_inventory, effective_capacity = _agent_resource_inventory(
         payload.get("resources")
     )
@@ -628,7 +647,7 @@ def _normalize_coordinator_payload(
     return normalized
 
 
-def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig | None:
+def _local_agent_service(value: object, base: Path, *, allow_unready: bool = False) -> LocalAgentServiceConfig | None:
     """Load the optional protected agent role used by a local coordinator."""
 
     if value is None:
@@ -654,6 +673,7 @@ def _local_agent_service(value: object, base: Path) -> LocalAgentServiceConfig |
             _mapping_value(item, f"resident_profiles[{index}]"),
             agent_source.parent,
             f"resident_profiles[{index}]",
+            allow_unready=allow_unready,
         )
         for index, item in enumerate(_sequence(payload, "resident_profiles"))
     )
@@ -1159,13 +1179,23 @@ def _local_agent_active_projection(
 
 
 def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+    # Qualification controls select the observation, while the derived
+    # descriptor records the software actually offered to the coordinator.
+    profiles = [
+        {
+            key: item
+            for key, item in _mapping_value(value, "resident profile").items()
+            if key != "readiness"
+        }
+        for value in _sequence(payload, "resident_profiles")
+    ]
     return cast(
         dict[str, object],
         _without_paths(
             {
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
-                "resident_profiles": payload["resident_profiles"],
+                "resident_profiles": profiles,
                 "provider_factory": payload.get("provider_factory"),
             }
         ),
@@ -1209,9 +1239,13 @@ def _header(
 
 
 def _resident_profile(
-    value: Mapping[str, object], base: Path, label: str
+    value: Mapping[str, object],
+    base: Path,
+    label: str,
+    *,
+    allow_unready: bool = False,
 ) -> ResidentExecutionProfile:
-    _exact(
+    _required_allowed(
         value,
         {
             "descriptor",
@@ -1222,6 +1256,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
+        {"readiness"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1241,14 +1276,89 @@ def _resident_profile(
     environment = _mapping(value, "environment")
     if any(not isinstance(item, str) for item in environment.values()):
         raise QueueConfigError(f"{label}.environment values must be strings")
-    return ResidentExecutionProfile(
-        _profile_descriptor(_mapping(value, "descriptor")),
+    requirements = _resident_readiness_requirements(value.get("readiness"))
+    profile = ResidentExecutionProfile(
+        _resident_descriptor_declaration(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
         _executable_path(value, "python_executable", base),
         _positive_int(value, "cpu_capacity"),
         _non_negative_int(value, "memory_capacity_bytes"),
         tuple(devices),
         cast(Mapping[str, str], environment),
+        requirements,
+    )
+    profile = qualified_resident_profile(profile)
+    result = profile.readiness_result
+    assert result is not None
+    if not result.ok and not allow_unready:
+        failed = next(item for item in result.checks if item.status == "FAIL")
+        raise QueueConfigError(
+            f"resident profile readiness failed ({failed.check_id}): {failed.message}"
+        )
+    return profile
+
+
+def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirements:
+    if value is None:
+        return ResidentReadinessRequirements()
+    readiness = _mapping_value(value, "resident readiness")
+    sequence_fields = {
+        "imports",
+        "distributions",
+        "source_roots",
+        "required_environment",
+        "required_programs",
+    }
+    mapping_fields = {"import_roots", "distribution_versions"}
+    string_fields = {
+        "python_version",
+        "python_implementation",
+        "python_abi",
+        "lockfile",
+    }
+    _required_allowed(
+        readiness,
+        set(),
+        sequence_fields | mapping_fields | string_fields | {"timeout_seconds"},
+        "resident readiness",
+    )
+    fields: dict[str, Any] = {}
+    for name in sequence_fields & readiness.keys():
+        fields[name] = _strings(readiness, name)
+    for name in mapping_fields & readiness.keys():
+        mapping = _mapping(readiness, name)
+        if any(not isinstance(item, str) or not item for item in mapping.values()):
+            raise QueueConfigError(
+                "resident compatibility values must be nonempty strings"
+            )
+        fields[name] = dict(mapping)
+    for name in string_fields & readiness.keys():
+        fields[name] = _string(readiness, name)
+    if "timeout_seconds" in readiness:
+        fields["timeout_seconds"] = _positive_number(readiness, "timeout_seconds")
+    try:
+        return ResidentReadinessRequirements(**fields)
+    except ValueError as exc:
+        raise QueueConfigError("resident readiness requirements are invalid") from exc
+
+
+def _resident_descriptor_declaration(
+    value: Mapping[str, object],
+) -> ResidentProfileDescriptor:
+    _required_allowed(
+        value,
+        {"profile_id", "revision"},
+        {"project_fingerprint", "environment_fingerprint", "executor_fingerprint"},
+        "resident descriptor",
+    )
+    # Software fingerprints are derived from the selected installation. Existing
+    # full declarations remain readable; their authored values are not evidence.
+    return ResidentProfileDescriptor(
+        _string(value, "profile_id"),
+        _string(value, "revision"),
+        "unqualified",
+        "unqualified",
+        "unqualified",
     )
 
 

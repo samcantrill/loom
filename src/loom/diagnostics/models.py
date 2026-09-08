@@ -39,6 +39,11 @@ class PreflightSeverity(StrEnum):
 
 class PreflightGroup(StrEnum):
     CONFIG = "config"
+    SERVICE = "service"
+    PYTHON = "python"
+    PACKAGES = "packages"
+    ENVIRONMENT = "environment"
+    IDENTITY = "identity"
     PIPELINE = "pipeline"
     SELECTORS = "selectors"
     RUNTIME = "runtime"
@@ -373,6 +378,8 @@ class PreflightRequest:
 def normalize_groups(
     groups: Iterable[str | PreflightGroup] | None,
 ) -> tuple[PreflightGroup, ...]:
+    """Normalize groups supported by generic pipeline preflight."""
+
     if groups is None:
         return DEFAULT_PREFLIGHT_GROUPS
     selected = tuple(groups)
@@ -386,6 +393,9 @@ def normalize_groups(
             normalized.add(_coerce_group(raw))
         except PreflightError:
             unknown.append(str(raw))
+    unknown.extend(
+        group.value for group in normalized if group not in ALL_PREFLIGHT_GROUPS
+    )
     if unknown:
         names = ", ".join(sorted(unknown))
         allowed = ", ".join(group.value for group in ALL_PREFLIGHT_GROUPS)

@@ -17,7 +17,13 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from .resident_readiness import (
+        ResidentReadinessRequirements,
+        ResidentReadinessResult,
+    )
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
@@ -386,7 +392,11 @@ class AgentResourceInventory:
         _identifier(agent_id, "agent_id")
         atoms = [
             CapacityAtom(
-                "cpu", f"{agent_id}:cpu", ExactQuantity(self.cpu_capacity), "count", ExactQuantity(1)
+                "cpu",
+                f"{agent_id}:cpu",
+                ExactQuantity(self.cpu_capacity),
+                "count",
+                ExactQuantity(1),
             )
         ]
         if self.memory_capacity_bytes:
@@ -417,6 +427,11 @@ class ResidentExecutionProfile:
     memory_capacity_bytes: int = 0
     gpu_devices: tuple[ResidentGpuDevice, ...] = ()
     environment: Mapping[str, str] = field(default_factory=dict)
+    readiness_requirements: "ResidentReadinessRequirements" = field(
+        default_factory=lambda: _default_readiness_requirements()
+    )
+    readiness_identity: str | None = None
+    readiness_result: "ResidentReadinessResult | None" = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -454,6 +469,21 @@ class ResidentExecutionProfile:
         ):
             raise QueueServiceError("resident execution environment is invalid")
         object.__setattr__(self, "environment", environment)
+        from .resident_readiness import ResidentReadinessRequirements
+
+        if not isinstance(self.readiness_requirements, ResidentReadinessRequirements):
+            raise QueueServiceError("resident readiness requirements are invalid")
+        if self.readiness_identity is not None and (
+            not isinstance(self.readiness_identity, str)
+            or len(self.readiness_identity) != 64
+            or any(item not in "0123456789abcdef" for item in self.readiness_identity)
+        ):
+            raise QueueServiceError("resident readiness identity is invalid")
+        if self.readiness_result is not None:
+            from .resident_readiness import ResidentReadinessResult
+
+            if not isinstance(self.readiness_result, ResidentReadinessResult):
+                raise QueueServiceError("resident readiness result is invalid")
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
         return AgentResourceInventory(
@@ -468,7 +498,14 @@ class ResidentExecutionProfile:
             python_executable=self.python_executable,
             descriptor=self.descriptor.to_dict(),
             environment=self.environment,
+            readiness_identity=self.readiness_identity,
         )
+
+
+def _default_readiness_requirements() -> "ResidentReadinessRequirements":
+    from .resident_readiness import ResidentReadinessRequirements
+
+    return ResidentReadinessRequirements()
 
 
 @dataclass(frozen=True, slots=True)

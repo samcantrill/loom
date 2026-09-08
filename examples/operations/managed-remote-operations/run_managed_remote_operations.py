@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any, cast
 
 
 OPERATIONS_ROOT = Path(__file__).resolve().parents[1]
@@ -33,16 +34,22 @@ def main() -> None:
     coordinator_config = root / "coordinator.yaml"
     agent_config = root / "agent.yaml"
     checkout = Path(__file__).resolve().parents[3]
+    write_protected(agent_config, _agent_yaml(root, checkout, port))
+    readiness = recorder.cli("queue", "agent-check", str(agent_config))
+    descriptor = next(
+        check["details"]["evidence"]["descriptor"]
+        for check in cast(list[dict[str, Any]], readiness["checks"])
+        if check["check_id"] == "execution.identity"
+    )
     write_protected(
         coordinator_config,
         _coordinator_yaml(
             root,
-            checkout,
+            descriptor,
             port,
             certificate_fingerprint(credentials["agent"].with_suffix(".crt")),
         ),
     )
-    write_protected(agent_config, _agent_yaml(root, checkout, port))
     recorder.cli("queue", "daemon-init", str(coordinator_config))
     recorder.cli("queue", "agent-init", str(agent_config))
 
@@ -62,7 +69,9 @@ def main() -> None:
             "queue", "daemon-agent", "--endpoint", str(endpoint), "machine-B"
         )
         if detail["session_id"] != projection["session_id"]:
-            raise RuntimeError("agent detail did not preserve the discovered session fence")
+            raise RuntimeError(
+                "agent detail did not preserve the discovered session fence"
+            )
 
         drain = recorder.cli(
             "queue",
@@ -130,9 +139,10 @@ def main() -> None:
             "--timeout",
             "15",
         )
-        if resume["state"] not in {"pending_delivery", "applied"} or resumed[
-            "kind"
-        ] != "TERMINAL":
+        if (
+            resume["state"] not in {"pending_delivery", "applied"}
+            or resumed["kind"] != "TERMINAL"
+        ):
             raise RuntimeError("remote agent did not apply the guarded resume")
     finally:
         try:
@@ -181,24 +191,21 @@ def _available_agent(
     return None
 
 
-def _coordinator_yaml(root: Path, checkout: Path, port: int, fingerprint: str) -> str:
+def _coordinator_yaml(
+    root: Path, descriptor: dict[str, object], port: int, fingerprint: str
+) -> str:
     return f"""
 schema_version: 3
 kind: loom.coordinator-service
-deployment_root: {_quoted(root / 'deployment')}
-run_store_root: {_quoted(root / 'runs')}
+deployment_root: {_quoted(root / "deployment")}
+run_store_root: {_quoted(root / "runs")}
 machine_id: local-machine
 poll_interval_seconds: 0.05
 max_accepted_time_step_seconds: 3600
 authority:
   kind: embedded
 local_agent: null
-remote_profiles:
-  - profile_id: remote-default
-    revision: v1
-    project_fingerprint: example-project-v1
-    environment_fingerprint: example-environment-v1
-    executor_fingerprint: local-executor-v1
+remote_profiles: {json.dumps([descriptor])}
 agent_policy:
   revision: policy-1
   agents:
@@ -216,9 +223,9 @@ agent_policy:
 agent_server:
   host: localhost
   port: {port}
-  certificate_path: {_quoted(root / 'tls' / 'server.crt')}
-  private_key_path: {_quoted(root / 'tls' / 'server.key')}
-  client_ca_path: {_quoted(root / 'tls' / 'ca.crt')}
+  certificate_path: {_quoted(root / "tls" / "server.crt")}
+  private_key_path: {_quoted(root / "tls" / "server.key")}
+  client_ca_path: {_quoted(root / "tls" / "ca.crt")}
   credential_fingerprints:
     {json.dumps(fingerprint)}: remote-agent-certificate
 """
@@ -228,25 +235,24 @@ def _agent_yaml(root: Path, checkout: Path, port: int) -> str:
     return f"""
 schema_version: 3
 kind: loom.outbound-agent-service
-agent_root: {_quoted(root / 'outbound-agent')}
+agent_root: {_quoted(root / "outbound-agent")}
 url: https://localhost:{port}
-server_ca_path: {_quoted(root / 'tls' / 'ca.crt')}
-certificate_path: {_quoted(root / 'tls' / 'agent.crt')}
-private_key_path: {_quoted(root / 'tls' / 'agent.key')}
+server_ca_path: {_quoted(root / "tls" / "ca.crt")}
+certificate_path: {_quoted(root / "tls" / "agent.crt")}
+private_key_path: {_quoted(root / "tls" / "agent.key")}
 reconnect_seconds: 0.05
 resident_profiles:
   - descriptor:
       profile_id: remote-default
       revision: v1
-      project_fingerprint: example-project-v1
-      environment_fingerprint: example-environment-v1
-      executor_fingerprint: local-executor-v1
     project_root: {_quoted(checkout)}
-    python_executable: {_quoted(Path(sys.executable))}
+    python_executable: {json.dumps(str(Path(sys.executable).absolute()))}
     cpu_capacity: 1
     memory_capacity_bytes: 0
     gpu_devices: []
     environment: {{}}
+    readiness:
+      source_roots: [src/loom]
 registration:
   config_revision: remote-config-v1
   inventory_revision: remote-inventory-v1

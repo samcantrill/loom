@@ -387,6 +387,23 @@ def _default_remote_providers(
     return tuple(result[kind] for kind in sorted(result))
 
 
+def _configured_remote_provider_members(
+    config: AgentTlsClientConfig,
+    agent_id: str,
+    profile: ResidentExecutionProfile,
+) -> tuple[AgentResourceProvider, ...]:
+    """Construct the configured members for live execution or idle qualification."""
+
+    factory = config.agent_resource_provider_factory
+    if factory is None:
+        raise QueueServiceError("remote agent provider composition is missing")
+    if factory is _default_remote_providers:
+        return _default_remote_providers(
+            agent_id, profile, occupancy_policy=config.gpu_occupancy_policy
+        )
+    return tuple(factory(agent_id, profile))
+
+
 def _resident_provider_descriptors(
     profile: ResidentExecutionProfile,
     agent_id: str,
@@ -2820,6 +2837,23 @@ class LocalDaemonAgentHttpClient:
                     return self._unchanged_control_effect(
                         control, session, "retained_work"
                     )
+                if self._trusted_config_loader is not None and any(
+                    profile.readiness_identity is not None
+                    for profile in self._config.resident_profiles
+                ):
+                    try:
+                        replacement = self._trusted_config_loader()
+                        self._validate_reload_config(replacement, retained_work=False)
+                        if _agent_active_fingerprint(
+                            replacement
+                        ) != _agent_active_fingerprint(self._config):
+                            raise QueueConflictError(
+                                "changed role requires explicit reload"
+                            )
+                    except (QueueError, OSError, TypeError, ValueError):
+                        return self._unchanged_control_effect(
+                            control, session, "reload_rejected"
+                        )
                 self._retained_profiles.clear()
                 self._reset_runtime_providers()
                 self._drained = False
@@ -3417,7 +3451,8 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("contained assignment claim is unavailable")
         assignment = commands[0].assignment
         if (
-            assignment.assignment_id != assignment_id
+            not isinstance(assignment, ManagedAssignment)
+            or assignment.assignment_id != assignment_id
             or assignment.session_id != session_id
             or any(command.assignment != assignment for command in commands)
         ):
@@ -4371,17 +4406,8 @@ class LocalDaemonAgentHttpClient:
         self, agent_id: str, capacity_profile: ResidentExecutionProfile
     ) -> dict[str, AgentResourceProvider]:
         if self._configured_provider_members is None:
-            factory = self._config.agent_resource_provider_factory
-            if factory is None:
-                raise QueueServiceError("remote agent provider composition is missing")
-            members = (
-                _default_remote_providers(
-                    agent_id,
-                    capacity_profile,
-                    occupancy_policy=self._config.gpu_occupancy_policy,
-                )
-                if factory is _default_remote_providers
-                else tuple(factory(agent_id, capacity_profile))
+            members = _configured_remote_provider_members(
+                self._config, agent_id, capacity_profile
             )
             try:
                 providers = _compose_agent_resource_providers(members)

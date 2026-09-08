@@ -1999,6 +1999,11 @@ class LocalDaemon:
             coordinator_id=coordinator_id,
             agent_id=self._agent_id,
         )
+        local_profile_ready = (
+            self.config.agent_root is None
+            or self._execution is None
+            or self._execution.local_profile_ready
+        )
         as_of = self._clock()
         parse_timestamp(as_of)
         local_status = tuple(
@@ -2024,6 +2029,7 @@ class LocalDaemon:
                 and time_health == "healthy"
                 and owners_available
                 and assignment_counts_available
+                and local_profile_ready
                 else "degraded"
             ),
             service_diagnostic=(
@@ -2035,7 +2041,11 @@ class LocalDaemon:
                     else (
                         "owner_status_unavailable"
                         if not owners_available or not assignment_counts_available
-                        else self._service_error
+                        else (
+                            "resident_profile_unready"
+                            if not local_profile_ready
+                            else self._service_error
+                        )
                     )
                 )
             ),
@@ -2752,6 +2762,8 @@ class LocalDaemon:
                     request.operation_id, candidate_fingerprint
                 )
             except Exception:
+                if self._execution is not None:
+                    self._execution.local_profile_ready = False
                 if replacement_fingerprint is not None:
                     return self._pending_scheduling_reload(request.operation_id)
                 return self._reject_scheduling_reload(
@@ -2765,6 +2777,7 @@ class LocalDaemon:
                         replacement, next_epoch
                     )
                 except Exception:
+                    execution.local_profile_ready = False
                     if replacement_fingerprint is not None:
                         return self._pending_scheduling_reload(request.operation_id)
                     return self._reject_scheduling_reload(
