@@ -160,6 +160,17 @@ revision-bound validation evidence. Manager owns PR/review/delivery and metadata
 - PR, merge and cleanup: pending; corrected-tree local validation is recorded
   below.
 
+Manager pre-submit verification: the corrected source/test revision is
+`e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`, tree
+`3ce81dcb2413cb3982dda46c65bc472712cef3b4`. The delta to executor completion
+`646224d2580b349b75e376b704fe2c15a52c8303` is this card only. Manager parsed the
+six raw JUnit reports: 3,172 passes, no failures/errors, the same 18 opt-in
+physical/container skips, and both new fresh-target cases executed successfully.
+The correction closes the named acceptance gap without runtime changes. Current
+Loom `origin/develop` remains `cf9e285`; no dependency/build or other source drift
+invalidates the gates. Scope and removal search passed; independent PR review
+is the remaining pre-merge gate. These receipt edits are validation-irrelevant.
+
 ### Manager Pre-submit Correction
 
 The initial static tests observe constructors in modules already imported by the

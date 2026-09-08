@@ -61,4 +61,4 @@ reserve placeholder execution plans.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 11 | pending | pending | deliberate CLI/API removal; downstream adoption follows separately | retain until merged |
+| 11 | pending | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent PR review next | deliberate CLI/API removal; downstream adoption follows separately | retain until merged |
