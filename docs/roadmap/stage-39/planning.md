@@ -3,7 +3,7 @@
 Status: evidence-backed draft; detailed design and independent review pending
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
-at `0e14d503cc2932207aece0765cb2da111cf2154b`, branch
+at published source `cf9e2850476e4526c4884e34412c26e38de08b6e`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
@@ -323,6 +323,18 @@ Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
 current binding evidence and Stage 85 readiness ownership; an experiment's
 no-enforcement choice must not weaken the probe's existing contract.
+
+Source reconciliation includes published Loom PR #286 (`cf9e285`), merged into
+this draft without conflicts. Its lifecycle changes do not alter demand,
+runtime policy, placement, container limits or `_worker_environment`, but do
+change remote application suspension, cancellation and terminal settlement.
+Preserve these current contracts when adding policy at launch: stopping the
+agent application suspends observation rather than cancelling supervised jobs;
+claims and fences survive reconnect; missing worker results are settled only
+with continuous containment evidence; cancellation and provider release remain
+durable ordered operations. No-enforcement must not disable any of these owners.
+The existing lifecycle tests are regression obligations in the final full Loom
+gate, not evidence of resource enforcement or authorization for physical work.
 
 Coverage must distinguish actual serial lease selection, local managed launch
 environment, remote-agent launch environment and retained-launch reconstruction.
