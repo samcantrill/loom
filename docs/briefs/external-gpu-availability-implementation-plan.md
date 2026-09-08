@@ -1,22 +1,18 @@
-# External GPU availability: implementation proposal
+# External GPU availability: implementation plan
 
-Status: approved for implementation by the attached user request; implementation in progress.
-The maintainer has accepted the behaviour: an agent configured for GPUs 0 and 1
-must withdraw GPU 0 from new placements when an external job uses it, explain
-why, and restore it when it becomes free. Implementation choices below are
-recommendations for review. This is a feature proposal, not an amendment to a
-numbered roadmap stage or permission to execute another stage.
+Status: implemented and merged into `develop` through
+[PR #283](https://github.com/samcantrill/loom/pull/283).
+An agent configured for GPUs 0 and 1 withdraws GPU 0 from new placements when an
+external process uses it, reports the reason, and restores it after a successful
+idle observation. The approved design and rationale follow; final delivery and
+validation evidence appear in the execution record at the end.
 
-Evidence: clean Loom `develop` at
-`09ece202ea6bcafb9e0cdeeabb6e2cbbcb5278f6`, inspected in
-`/nas/home/can134/work/loom-worktrees/stage-85-control`. The older original Loom
-checkout contains preserved unrelated changes and was not used as the runtime
-baseline. The active resident-readiness worktree overlaps deployment and
-transport; rebase this proposal's implementation on its published contracts
-and reread those changed owners before editing them.
-
-All Python and JSON examples below describe proposed behaviour. They are
-illustrations, not existing APIs or patches ready to paste into Loom.
+The design baseline was Loom `develop` at
+`09ece202ea6bcafb9e0cdeeabb6e2cbbcb5278f6`. The owner comparison below describes
+that baseline and the changes implemented from it. Code and JSON snippets are
+illustrations of the contracts, not complete copy-and-paste APIs. See
+[runtime resource documentation](../features/runtime-resources.md#gpus-occupied-by-work-outside-loom)
+for deployed configuration and inspection fields.
 
 **1. The result we want and its limits**
 
@@ -68,9 +64,9 @@ MIG, fractional allocation, MPS client attribution, and enforced VRAM sharing ar
 outside this first implementation; unsupported observation environments must
 not be presented as verified idle devices.
 
-**2. What exists, and where the changes belong**
+**2. Existing owners and the implementation changes**
 
-| Current owner | Existing behaviour | Proposed change and reason |
+| Owner | Behaviour before implementation | Change and reason |
 | --- | --- | --- |
 | [`queue/gpu/nvidia.py`](../../src/loom/queue/gpu/nvidia.py) | Explicit `nvidia-smi` inventory discovery, index selection, UUID binding, model and total VRAM. No process query. | Add a separate process observation operation. Inventory and rapidly changing occupancy have different lifetimes. |
 | [`queue/_managed_local.py`](../../src/loom/queue/_managed_local.py): `GpuResourceProvider`, `AtomResourceProvider` | Subtracts Loom claims and provides exact private worker bindings. `prepare()` re-observes configured remaining capacity. | Give the GPU provider an injected occupancy observer and use it in observation and fresh claim preparation. Keep the existing claim journal and lock. |
@@ -532,8 +528,7 @@ test implementation of the set subtraction.
 
 Run the smallest relevant test files through Loom's locked development
 environment first, then `make validate-pr` and `make test-summary` for implementation
-PR evidence. These are planned checks, not executed receipts. No runtime tests
-are needed merely to store this proposal. A later optional physical smoke can use
+PR evidence. The completed receipts are recorded below. An optional physical smoke can use
 two explicitly authorized GPUs and one owned external CUDA process; it must not
 interfere with another user's process and is not a substitute for deterministic
 race and failure tests.
@@ -547,49 +542,12 @@ validation evidence. The residual external-start race remains explicit.
 
 **Implementation execution record**
 
-- Approved scope: all behaviour and deliverables in this plan and the user attachment.
-- Branch/worktree: `agent/external-gpu-availability`, `/nas/home/can134/work/loom-worktrees/external-gpu-availability`.
-- Base: published `develop` `09ece202ea6bcafb9e0cdeeabb6e2cbbcb5278f6`.
-- Delivery: one cohesive feature PR to `develop`; the three suggested slices are implementation order within that PR. This approved feature has no assigned numbered roadmap stage.
-- Control and unrelated readiness work are preserved. Reconcile new published develop changes before final validation/merge; do not consume unpublished readiness changes.
-- Workflow: one bounded executor for observation/provider work; manager owns deployment, protocol, transport, projections, composed evidence and publication.
-- Manager quality gate: scope and source owners verified; the user approved the detailed behaviour and directed implementation and publication. Private names/wiring remain discretionary.
-- Independent review: completed at `d96a63e`. The reviewer found one localized omission (durable decline reasons) and one validation gap (observer command failures and unselected GPUs). Manager verification covers both corrections; no remaining product finding. The reviewed offer/session, delivery/replay, reload and retained-claim boundaries conform to the approved design.
-- Corrections: 3/3. The first preserves monitoring ownership across reload and withholds unsupported process output (8 regression checks passed). The second atomically retains bounded refusal reasons in existing assignment events, replays them through the decline operation and admission-owner inspection, and adds missing observer failure/selection coverage. Embedded refusal/unbind/release replay and both composed GPU routes pass (4 checks); the journal restart test preserves the original reason without a new query. No durable table/schema migration was needed. The third correction replaces an old empty-JSON offer fixture with a valid `AgentOffer`: status inspection now decodes the offer to project resource evidence. Runtime behavior is unchanged by this fixture repair.
-- Validation: 55 NVIDIA/provider/journal unit checks and 4 composed/decline-replay integration checks passed. Full Ruff and Pyright passed. The first completed full test run had 2,907 passes and one failure in the obsolete empty-JSON offer fixture; that fixture is corrected. Fresh full gates remain required before merge.
-- PR/merge: [PR #283](https://github.com/samcantrill/loom/pull/283) targets `develop`; merge pending validation and review.
-
-**Executor packet: observation and resource provider**
-
-Own `src/loom/queue/gpu/nvidia.py`, one necessary private GPU occupancy value/cache module, `src/loom/queue/_managed_local.py`, and directly corresponding NVIDIA/provider/composition tests. Read sections 1, 3, 4, 5 and the test table. The manager owns deployment, agent session protocol/transport, daemon scheduling and status, operator docs, and full-gate publication. Do not edit those manager files. You are not alone in the codebase; preserve others' edits and accommodate the manager's interface use. Do not delegate.
-
-Implement the complete provider behaviour, not just parsing. Supply immutable per-resource statuses, a timeout-bounded selected-UUID XML process observer, a shared per-provider cache with monotonic age, atomic claim overlay, explicit fresh preparation checks, replay/restore preservation, composition propagation, reason detail persistence in the existing assignment journal where needed, and deterministic tests. Keep CPU/synthetic providers import-light and NVIDIA-free by default. GPU monitoring is opt-in at the low-level constructor, enabled by manager wiring for configured built-in NVIDIA resources.
-
-Integration contract to expose (private names can be adapted with a concise interface handoff): `GpuOccupancyPolicy` immutable timing defaults 5/15/2 with validation and `to_dict`; `NvidiaSmiGpuProcessObserver` callable or `observe()` returning UUID-keyed observations with fixed reasons, injectable runner; `GpuOccupancyMonitor` providing `refresh(force=False)` and cached per-UUID status without querying on reads; `GpuResourceProvider` optional monitor injection and an explicit refresh method; `ObserveResult.resource_status` default-empty tuple; `ResourceAvailabilityStatus` immutable resource kind/local capacity key/available/reason/observed UTC time, safe serializers and decision-content projection excluding time. Avoid importing the GPU provider from the observer module. Full details of status keys, observation failure categories and lifecycle are in approved sections.
-
-For the provider constructor use optional keyword `occupancy_monitor`; monitor maps exact private NVIDIA binding UUIDs to observations, provider maps those to existing safe atom keys. Generic status value owns only safe keys. The manager can import the low-level types directly without new public package-root exports. Do not alter the provider's configured descriptor fingerprint using sample state; preserve retained claim identity. No process query while holding a claim lock; forced preparation probes outside that lock and rechecks exact replay/claims under it. Ordinary observe reads cache only.
-
-Run directly affected tests under the locked Python 3.12/dev setup and any necessary static checks. Make coherent commits for owned changes only. Update this packet's result line with paths, interfaces, and evidence after completion. Stop at a terminal handoff or a specific blocker needing a public-contract decision; do not open PRs or merge. The manager will review and integrate all required behaviour.
-
-Executor result: implemented `gpu/occupancy.py` (policy, UUID-keyed NVIDIA XML observer and serialized monotonic cache), `_managed_local.py` status/composition/provider filtering and forced preparation refresh; `GpuResourceProvider(..., occupancy_monitor=...)` exposes `refresh_occupancy(force=False)`. Focused evidence: `uv run --no-sync pytest tests/unit/loom/queue/gpu/test_nvidia.py tests/unit/loom/queue/test_gpu_resource_provider.py tests/unit/loom/queue/test_managed_local.py -q` (48 passed) and focused Ruff passed. No executor blocker.
-
-### Reviewer packet: external GPU availability
-
-Review this approved feature against sections 1–10 and the validation table in
-this document. Worktree: the `external-gpu-availability` sibling of the control
-checkout; branch `agent/external-gpu-availability`, base `develop`. Read
-`.codex/prompts/pull-request-review.md` and the PR body for the current published
-head. This is one feature PR, not a numbered roadmap phase.
-
-The independent-review risk is the mutable boundary between resource reports,
-session revisions, targeted/delivered assignments, exact mutation replay and
-retained GPU claims. Also inspect the NVIDIA observation/cache and embedded
-inventory path. Scope is read-only; do not edit, delegate, or create a review
-sidecar. Return classified findings with exact source evidence and the smallest
-in-scope fixes, plus merge eligibility and residual risk. Do not invent criteria
-beyond the approved behaviour. Full validation runs under manager ownership.
-
-Current evidence: provider owner tests 48 passed; targeted GPU/session/deployment
-and transport tests 15 passed, including both composed two-device routes,
-response-loss/reopen, reporting during a real worker, fresh-prepare decline,
-query failure, and retained CPU/GPU roots. Full gates pending.
+- Status: merged. [PR #283](https://github.com/samcantrill/loom/pull/283) was squash-merged into `develop` as `f870dd8a8f31e0140be8a3046085df6544cabe16` on 2026-09-08. Its tree exactly matches tested commit `029e2315347dffe93d40824c3da0b3ffba9b5152`.
+- Scope: all approved behaviour is implemented in one feature PR: selected-UUID observation, shared cache and claim ownership, fresh pre-grant refusal, embedded and standalone maintenance, atomic offer/session updates and exact replay, safe status and durable refusal reasons, configuration, compatibility and composed acceptance evidence.
+- Implementation owners: `queue/gpu/occupancy.py`, `_managed_local.py`, deployment, session/transport, daemon scheduling and existing inspection projections. Durable refusal reasons use the existing assignment event journals; state schema 12 and retained claim identities are preserved. Wire protocol is 11.
+- Review: one independent review completed. Its missing durable-refusal reason and observer-failure coverage findings were corrected and verified manager-locally. Reload ownership and unsupported XML cases are covered. Three scoped corrections were used, including replacement of an obsolete empty-JSON test offer with a valid serialized offer. No remaining review blocker.
+- `make validate-pr`: passed at the tested commit. Full Ruff and Pyright passed; default tests: 2,908 passed; configuration tests: 161 passed, 18 skipped; source distribution and wheel built successfully.
+- `make test-summary`: passed. Package 122, unit 2,060, contract 300, integration 358, end-to-end 68 and configuration 161 passed; total 3,069 passed, zero failures/errors, 18 container-runtime tests skipped. The report and command logs are retained under `build/external-gpu-availability/` in the control checkout.
+- Acceptance: both deployment routes cover idle -> external use -> alternate placement -> recovery using real workers and injected NVIDIA observations. Tests cover stale-offer refusal before launch, reporting during a worker, failed and stale queries, rollback, lost-response/reopen replay, retained claims, reload ownership and durable refusal inspection. Refusal leaves the stage pending without consuming an execution retry.
+- Qualification: no physical GPU smoke test was run. The external-start race after the final observation remains an explicit cooperative-admission limit. Upgrade the coordinator and agents together for protocol 11.
+- Delivery and cleanup: control `develop` was fast-forwarded to the verified merge; the original planning document was preserved. The feature worktree and local/remote feature branches were removed. Unrelated worktrees and changes were preserved.
