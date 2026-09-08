@@ -16,13 +16,14 @@ The maintainer's 2026-09-08 implementation request includes generic separation
 of resource demand, scheduling accounting and enforcement. This is separate from
 rphys Stage 81's causal diagnostics and Stage 85's deployment ownership. Existing
 Stage 38 delivery and the original dirty Loom checkout remain preserved.
-This work is not a prerequisite for the managed CPU diagnostic proof. A physical
-experiment can depend on it only through an explicit published prerequisite.
+This work is not a prerequisite for the managed CPU diagnostic proof, now merged
+in rphys PR #597 (`410b1eb3`). A physical experiment can depend on it only through
+an explicit published prerequisite; that proof grants no physical authority.
 
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Resolve concrete current runtime/placement/adapter propagation |
-| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners and retained-work boundaries traced below | Confirm the new-job default and finalize the proposed hard cut, raw-queue disposition and control receipts |
+| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners, retained-work boundaries and raw-queue selection/binding producers traced below | Confirm the new-job default and review the proposed typed raw-queue extension, its exact compatibility boundary and control receipts |
 | Validation / phase shaping | Distinguish selections through real admission/command boundaries | Complete finite supported matrix and independently reviewable phase cards |
 | Quality / implementation | Not ready; no runtime edits | Expanded design/plan review, then normal Loom phase workflow |
 
@@ -451,17 +452,91 @@ returning them. The local adapter therefore cannot safely infer which resource
 produced a variable. Neither parsing names such as `CUDA_VISIBLE_DEVICES` nor
 reading the provider's display-only `safe_evidence` is an authoritative mapping.
 
-The raw-queue disposition must explicitly choose its supported policy boundary
-before implementation: either a reviewed typed attribution/selection extension
-at those existing owners, or an explicitly documented legacy boundary with a
-clear policy-aware replacement route. Do not silently claim coverage or silently
-drop this route from the accepted work. Any proposed extension must preserve
-arbitrary logical resources, assignment leases/renewal/release and enqueue replay;
-it must not reinterpret immutable opaque argv. The existing assignment and local
-adapter tests must distinguish retaining a reservation from adding its binding.
-This unresolved scope/compatibility disposition remains visible for design
-agreement; no queue-format cut is authorized merely by the pipeline hard-cut
-proposal above.
+#### Raw Whole-Run Queue — Recommended Typed Extension
+
+Recommend extending the existing whole-run owners rather than silently excluding
+this maintained route. This is a design proposal awaiting agreement/review, not
+an approved queue-format migration. Preserve arbitrary logical resources,
+assignment leases/renewal/release and enqueue replay; never reinterpret saved
+opaque argv or treat a pipeline option as authority over an arbitrary command.
+
+The bounded producer inventory shows that binding attribution can use current
+logical names, without a registry or device-name inference:
+
+| Current binding producer | Existing authoritative logical identity | Required extension |
+| --- | --- | --- |
+| `StaticSlotAssignmentProvider.acquire` | `slot.resource_name` and matching `EnvironmentListBinding.resource_name`; constructor already requires unique environment names | Preserve the logical resource associated with each emitted variable before flattening values |
+| `gpu.local._LocalGpuAssignmentProvider._assignment` | The provider's configured plan `resource_name`, distinct from physical device keys | Attribute its visibility binding to that logical resource; keep tokens out of public evidence |
+| Maintained `PairedMemberAssignmentProvider._assignment` example | The provider's requested `_resource_name` for the indivisible bundle | Attribute the aggregate binding to the bundle, not to the physical member names appearing in display evidence |
+| `NoOpResourceAssignmentProvider` | No concrete assignment binding | Emit no fabricated control; an explicit unsupported binding request cannot be reported as applied |
+
+Extend `LaunchEnvironmentBindings` at its current public boundary with immutable
+logical-resource attribution for its emitted environment values. Keep live
+bindings separate from `safe_evidence`, and preserve attribution through provider
+renewal. The exact field representation remains for design review; the observable
+contract is that selection is based on producer-owned logical identity, never a
+variable name or physical slot label. All maintained producers above must migrate
+together. Missing attribution from an external provider needs a documented
+compatibility/error disposition, not guessed ownership or a silent fallback.
+
+Propose carrying the same independent policy value through `QueueEnqueueRequest`
+and its authoritative `LaunchContract`, resolved and persisted at enqueue. Keep
+the full existing integer demand mapping as its only amount authority. On this
+API the selection namespace is that mapping's logical pool keys; pipeline APIs
+continue to use their existing semantic resource-kind keys. Document the boundary
+explicitly: a key such as `lab-accelerators` is not implicitly translated to `gpu`.
+Do not introduce another global name mapping, duplicate demand schema or a second
+adapter-specific policy. Existing authored launch environment/argv stays immutable;
+the queue policy governs only Loom-owned accounting and added assignment bindings.
+It does not remove an authored container flag or an inherited scheduler mask.
+
+Filtering only final argv would also leave earlier queue scheduling incorrect.
+These exact current consumers all read `LaunchContract.resources` and need the
+same selected accounting view while full demand remains available for provenance:
+
+| Current consumer | Policy-sensitive behavior |
+| --- | --- |
+| `selection._is_eligible` | Excluded demand must not fail the advisory capacity filter before dispatch |
+| `selection._evaluate_selection` / `QueueSelectionCandidate.resources` | The injected selection-policy candidate must receive the same accounting meaning as built-in eligibility |
+| `QueueController._advisory_available_resources` | Subtract only accounted demand for claimed/dispatched items, not the whole declaration |
+| `local._resource_admission_request` | Acquire scalar capacity leases only for selected demand |
+| `LocalQueueDispatchAdapter.dispatch` / `ResourceAssignmentRequest.resources` | Do not reacquire excluded resources as concrete assignments after scalar admission |
+| `local._merge_assignment_environment` | Select attributed added bindings independently; unchanged reservations still renew/release when enforcement is empty |
+
+An explicit binding request still requires an authoritative concrete assignment
+or inherited allocation. Excluding a resource from accounting must not secretly
+reserve it just to manufacture a binding. If this route cannot supply the
+selected control from its existing evidence, fail with actionable guidance;
+do not claim resource isolation or parse the opaque command to invent support.
+Readiness/probe behavior and delegated SLURM prepared-command ownership remain
+outside this raw local binding policy.
+
+An empty accounting selection also reaches a concrete current edge: the GPU and
+paired-bundle providers reject an empty acquisition request. The adapter must
+reuse the existing no-assignment path when nothing is requested, not call those
+providers with a newly invalid request or invent a reservation to satisfy them.
+Queue claim, process supervision, cancellation and cleanup remain required.
+Cover this through the configured-provider dispatch boundary, not just selector
+normalization.
+
+Minimal new comparisons belong to existing `test_assignments.py`,
+`test_local_gpu_assignment_provider.py`, `test_example_paired_assignment_provider.py`,
+`test_local_adapter.py`, `test_scheduler.py`, queue-record contracts and SQLite
+repository tests. Distinguish GPU/logical-bundle accounting with no added binding,
+an independently selected binding, unchanged authored environment, real lease
+release, and enqueue/replay of the exact policy. A combined controller case must
+prove an excluded capacity demand does not prevent selection and is not subtracted
+from later advisory capacity; a final-launch-only test would miss this defect.
+
+Compatibility remains a material design item: `LaunchContract` currently shares
+`QUEUE_RECORD_SCHEMA_VERSION = 2` with other queue records, while SQLite separately
+owns `QUEUE_DB_SCHEMA_VERSION = 2`. Do not bump all records or the database merely
+to add this one contract, and do not silently accept old executable items under
+new defaults. The expanded review must choose the narrow supported executable
+boundary, old-provider disposition and inspection/readability consequences before
+phase cards or implementation. The pipeline hard-cut proposal above does not
+authorize this queue migration. The maintainer's unanswered new-job default
+question is unchanged.
 
 Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
