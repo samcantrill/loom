@@ -2991,6 +2991,21 @@ domain-failure transport are excluded.
 - [Planning and upstream audit](roadmap/stage-38/planning.md)
 - [Implementation manifest](roadmap/stage-38/implementation-plan.md)
 
+## v39 - Independent Resource Accounting And Enforcement
+
+Status: functionality/default approved; independent design and plan reviews passed.
+The two-phase packet awaits final approval. Separate agent capacity, one job-demand representation,
+Loom accounting selection and execution controls. Support explicit no additional
+enforcement, truthful backend/SLURM delegation, and unchanged lifecycle cleanup.
+Replace adapter-specific CPU/RAM policy only after its consumers migrate.
+
+This work is independent of rphys Stage 81's failure transport and Stage 85's
+deployment configuration. It does not authorize host-setting changes, scientific
+changes or protected physical execution.
+
+- [Current planning and design tasks](roadmap/stage-39/planning.md)
+- [Implementation manifest](roadmap/stage-39/implementation-plan.md)
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
