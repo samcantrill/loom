@@ -199,7 +199,8 @@ Before `daemon-check`, `agent-check`, initialization, serving, or explicit
 reload offers a resident profile, Loom runs the selected worker Python with the
 same cwd and allowlisted environment used for workers. A profile may add a
 finite `readiness` mapping with `imports`, `distributions`, `source_roots`, and
-`timeout_seconds`; without declarations it verifies only the selected Python.
+`timeout_seconds`; defaults verify the selected Python, import `loom`, and inspect
+its installed distribution.
 The probe does not install packages, build a project, inherit daemon secrets, create a
 deployment, or claim a GPU. Its narrow identity includes the selected Python,
 declared installation facts, and declared source contents. It excludes absolute

@@ -76,6 +76,9 @@ for root_name in request["source_roots"]:
         result["sources"].append(None)
         continue
     digest = hashlib.sha256()
+    # Bind contents to their project-relative location before combining roots.
+    location = pathlib.Path(os.path.relpath(root.resolve(), pathlib.Path.cwd())).as_posix().encode()
+    digest.update(len(location).to_bytes(8, "big") + location)
     excluded = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "datasets", "caches", "runs", "build", "dist"}
     for directory, names, files in members:
         names[:] = sorted(name for name in names if name not in excluded and not pathlib.Path(directory, name).is_symlink())
@@ -137,6 +140,7 @@ class ResidentReadinessRequirements:
     """Finite installation requirements; versions are exact, Python may be a prefix.
 
     Source/import roots and the optional lockfile resolve against the project.
+    Source identity includes each root's resolved project-relative location.
     Import roots assert the expected location without adding absolute paths to
     portable identity. Declared distributions alone require presence; entries in
     distribution_versions additionally require an exact installed version.

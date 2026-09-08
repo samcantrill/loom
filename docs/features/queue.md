@@ -971,8 +971,9 @@ An agent-check report's `execution.identity` finding includes the portable
 that complete observed descriptor; the coordinator does not inspect a remote
 agent's filesystem. The managed remote example demonstrates this handoff.
 
-Declare source files or directories narrowly. Digests include relative member names and
-contents, including untracked files, and exclude Git metadata, virtualenvs,
+Declare source files or directories narrowly. Digests include each root's resolved
+project-relative location, relative member names and contents, including untracked
+files. They exclude Git metadata, virtualenvs,
 bytecode, conventional dataset/cache/run/build directories and symlink members.
 An optional `lockfile` (default `uv.lock`) supplies a provenance digest when
 present. It does not affect observed identity or prove that all installed

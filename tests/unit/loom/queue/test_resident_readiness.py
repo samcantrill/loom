@@ -15,6 +15,7 @@ from loom.queue._remote_stage_execution import (
 )
 from loom.queue.resident_readiness import (
     ResidentReadinessRequirements,
+    qualified_resident_profile,
     qualify_resident_profile,
 )
 
@@ -75,6 +76,45 @@ def test_identity_tracks_declared_source_not_path_or_unrelated_files(
     (second / "source" / "module.py").write_text("value = 2\n", encoding="utf-8")
     changed = qualify_resident_profile(_profile(second, profile_requirements))
     assert changed.identity != moved.identity
+
+
+def test_source_identity_preserves_package_locations_across_relocation(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for root in (first, second):
+        for package, value in (("pkg_a", 1), ("pkg_b", 2)):
+            (root / package).mkdir(parents=True)
+            (root / package / "__init__.py").write_text(f"VALUE = {value}\n")
+
+    requirements = ResidentReadinessRequirements(
+        imports=("loom", "pkg_a", "pkg_b"), source_roots=("pkg_a", "pkg_b")
+    )
+    initial = qualified_resident_profile(_profile(first, requirements))
+    relocated = qualified_resident_profile(
+        _profile(
+            second,
+            replace(
+                requirements,
+                source_roots=(str(second / "pkg_b"), "./pkg_a"),
+            ),
+        )
+    )
+    assert initial.readiness_result is not None and initial.readiness_result.ok
+    assert relocated.readiness_result is not None and relocated.readiness_result.ok
+    assert relocated.readiness_identity == initial.readiness_identity
+    assert relocated.descriptor == initial.descriptor
+
+    (first / "pkg_a" / "__init__.py").write_text("VALUE = 2\n")
+    (first / "pkg_b" / "__init__.py").write_text("VALUE = 1\n")
+    swapped = qualified_resident_profile(_profile(first, requirements))
+    assert swapped.readiness_result is not None and swapped.readiness_result.ok
+    assert swapped.readiness_identity != initial.readiness_identity
+    assert (
+        swapped.descriptor.project_fingerprint != initial.descriptor.project_fingerprint
+    )
+    assert swapped.launch_profile.fingerprint != initial.launch_profile.fingerprint
 
 
 def test_profile_probe_timeout_is_a_stable_failure(tmp_path: Path) -> None:
