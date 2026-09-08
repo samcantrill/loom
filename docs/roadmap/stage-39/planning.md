@@ -7,8 +7,8 @@ at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: functionality accepted; source reconciliation and minimum design
-Blockers: new-job enforcement default requested from the maintainer; exact design/readiness not yet claimed
+Current gate: functionality and new-job default approved; minimum design and expanded review
+Blockers: no unanswered default decision; detailed compatibility/control design and independent readiness review remain
 
 ## Current State
 
@@ -23,7 +23,7 @@ an explicit published prerequisite; that proof grants no physical authority.
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Resolve concrete current runtime/placement/adapter propagation |
-| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners, retained-work boundaries and raw-queue selection/binding producers traced below | Confirm the new-job default and review the proposed typed raw-queue extension, its exact compatibility boundary and control receipts |
+| Minimum design | Approved new-job defaults: account for all declared resources, no additional enforcement; reuse existing demand, claims, capabilities, timeout and backend mappers | Finalize and review the typed raw-queue extension, exact compatibility boundary and control receipts |
 | Validation / phase shaping | Distinguish selections through real admission/command boundaries | Complete finite supported matrix and independently reviewable phase cards |
 | Quality / implementation | Not ready; no runtime edits | Expanded design/plan review, then normal Loom phase workflow |
 
@@ -97,6 +97,12 @@ allows oversubscription; this is deliberate and must be reported honestly.
 Unmapped demand imposes no extra restriction. Selecting no additional enforcement
 cannot remove inherited host or scheduler constraints. Actual control support is
 backend-specific and must not be guessed from a generic resource label.
+
+The maintainer explicitly approved the outstanding default question: new jobs
+account for all declared resources and apply no additional resource enforcement
+unless configured. Job timeout remains separately configurable through existing
+reliability policy. This approval resolves the default, not permission to modify
+host settings, erase retained work, or execute a protected physical/GPU smoke.
 
 ## Behavior Baseline And Design Questions
 
@@ -179,9 +185,9 @@ duration validity; resource tests need only prove the selected timeout reaches
 that owner without disturbing cancellation and cleanup.
 
 The proposed public vocabulary below resolves the invocation shape for design
-review. New-job defaults, the narrow old-runtime/placement admission rule, raw
-whole-run local queue disposition and complete executor/control receipts remain
-unfinished. No phase cards or runtime changes are admitted yet.
+review. The new-job default is approved. The narrow old-runtime/placement
+admission rule, raw whole-run local queue compatibility and complete control
+receipts still require finalized design. No runtime changes are admitted yet.
 
 ### Proposed Configurable Policy Shape
 
@@ -221,8 +227,8 @@ An empty policy mapping changes neither axis. Authored `null` is not a second
 spelling for explicit none. The immutable Python representation preserves missing
 axes until composition finishes; its exact private representation is discretionary.
 Resolve the approved new-job defaults only after composition, then record concrete
-effective choices before admission. The pending default decision below still
-applies; this proposal does not silently decide it.
+effective choices before admission: `account_for: all`, `enforce: []` when no
+earlier explicit selection supplies that axis. Timeout keeps its separate owner.
 
 Resolve selections against the full normalized demand after existing semantic
 refinement. `all` means all effective demand kinds for that stage, not a fabricated
@@ -278,8 +284,8 @@ replay paths without the same executable-version decision. Use one runtime-owned
 policy decoder at these actual process/serialization boundaries; do not add a
 parallel remote policy envelope or infer choices from claim-provider data.
 
-New, unversioned authored configurations continue to compose under the new-job
-default once the maintainer chooses it. They are new invocations, not retained
+New, unversioned authored configurations compose under the approved new-job
+default. They are new invocations, not retained
 execution records. Migration documentation must show explicit selections for
 users who want to preserve an earlier backend's controls; maintained examples
 must declare their intended choice. Existing explicit adapter-specific controls
@@ -303,21 +309,21 @@ and preserve saved state. Extend the existing runtime-options, placement,
 owners. Keep the preserved cause plus actionable next step at the reader error
 boundary. Version constants above are based on the recorded source revision;
 reconcile then-current owners before implementation, without rewriting unrelated
-formats. This proposed boundary does not settle the pending new-job default or
-the separate legacy opaque `LaunchContract` disposition.
+formats. This proposed boundary implements the approved new-job default without
+silently reinterpreting retained work; the separate opaque `LaunchContract`
+compatibility boundary still requires final design.
 
 ### Default Decision And Backend Boundary Evidence
 
-One material default question is with the maintainer: should new jobs account
-for all declared resources but apply no additional resource enforcement unless
-explicitly selected, or retain each backend's current enforcement defaults?
-The recommendation is the former, with unchanged explicit timeout ownership.
-It makes enforcement deliberate and avoids requiring unavailable host cgroups
-merely because useful demand was declared. The tradeoff is an intentional
-change from direct container CPU/RAM defaults; neither retained jobs nor old
-authored configuration may silently acquire this new meaning. Finalize the
-version/admission rule together with the answer, not independently. This question
-does not block the independent rphys diagnostic phases.
+Approved default: account for all declared resources, but apply no additional
+resource enforcement unless explicitly selected. Existing timeout ownership is
+unchanged. This makes enforcement deliberate and avoids requiring unavailable
+host cgroups merely because useful demand was declared. It intentionally changes
+direct container CPU/RAM defaults for new invocations. Migration documentation
+must explain how old unversioned authored configs become new invocations under
+this default and how to retain earlier controls explicitly; retained executable
+records must not silently acquire new meaning. Finalize that version/admission
+boundary as part of the reviewed design.
 
 The source distinguishes the following backend behaviors that the design must
 preserve or deliberately migrate, rather than treating one capability label as
@@ -535,8 +541,8 @@ to add this one contract, and do not silently accept old executable items under
 new defaults. The expanded review must choose the narrow supported executable
 boundary, old-provider disposition and inspection/readability consequences before
 phase cards or implementation. The pipeline hard-cut proposal above does not
-authorize this queue migration. The maintainer's unanswered new-job default
-question is unchanged.
+authorize this queue migration. Apply the approved new-job default only at its
+documented new-invocation boundary, never as an old-record recovery fallback.
 
 Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
