@@ -2993,8 +2993,8 @@ domain-failure transport are excluded.
 
 ## v39 - Independent Resource Accounting And Enforcement
 
-Status: accepted functionality, evidence-backed design draft; not yet ready for
-runtime implementation. Separate agent capacity, one job-demand representation,
+Status: functionality/default approved and independent design review passed;
+two-phase packet awaits plan review and final approval. Separate agent capacity, one job-demand representation,
 Loom accounting selection and execution controls. Support explicit no additional
 enforcement, truthful backend/SLURM delegation, and unchanged lifecycle cleanup.
 Replace adapter-specific CPU/RAM policy only after its consumers migrate.
@@ -3004,6 +3004,7 @@ deployment configuration. It does not authorize host-setting changes, scientific
 changes or protected physical execution.
 
 - [Current planning and design tasks](roadmap/stage-39/planning.md)
+- [Implementation manifest](roadmap/stage-39/implementation-plan.md)
 
 ## Deferred Integration Candidates
 

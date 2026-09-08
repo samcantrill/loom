@@ -1,14 +1,14 @@
 # Roadmap Stage 39 Planning: Independent Resource Accounting And Enforcement
 
-Status: evidence-backed draft; detailed design and independent review pending
+Status: design review passed; complete phase packet awaiting plan review and approval
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
 at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: functionality and new-job default approved; minimum design and expanded review
-Blockers: no unanswered default decision; candidate compatibility/control design awaits expanded review and final plan approval
+Current gate: functionality/default approved and design independently confirmed; phase packet prepared
+Blockers: independent plan review and final concrete migration/phase approval
 
 ## Current State
 
@@ -22,10 +22,10 @@ an explicit published prerequisite; that proof grants no physical authority.
 
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
-| Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Resolve concrete current runtime/placement/adapter propagation |
-| Minimum design | Approved new-job defaults: account for all declared resources, no additional enforcement; reuse existing demand, claims, capabilities, timeout and backend mappers | Finalize and review the typed raw-queue extension, exact compatibility boundary and control receipts |
-| Validation / phase shaping | Distinguish selections through real admission/command boundaries | Complete finite supported matrix and independently reviewable phase cards |
-| Quality / implementation | Not ready; no runtime edits | Expanded design/plan review, then normal Loom phase workflow |
+| Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Approved; no unanswered default |
+| Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Final concrete migration approval |
+| Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards | Independent packet review |
+| Quality / implementation | Design review passed; no runtime edits | Plan review and approval, then normal Loom phase workflow |
 
 ## Evidence And Scope
 
@@ -279,7 +279,7 @@ does not rewrite an existing run to make it executable. The queue feature spec
 also documents hard cuts for its existing persisted formats. Reuse this design,
 not a new compatibility engine.
 
-Recommended version boundary, still subject to the expanded design review:
+Design-reviewed version boundary, subject to final concrete plan approval:
 
 | Existing executable owner | Proposed change | Old-data behavior |
 | --- | --- | --- |
@@ -475,9 +475,9 @@ reading the provider's display-only `safe_evidence` is an authoritative mapping.
 
 #### Raw Whole-Run Queue — Recommended Typed Extension
 
-Recommend extending the existing whole-run owners rather than silently excluding
-this maintained route. This is a design proposal awaiting agreement/review, not
-an approved queue-format migration. Preserve arbitrary logical resources,
+Extend the existing whole-run owners rather than silently exclude this maintained
+route. This design has passed independent review; queue-format migration still
+requires final concrete plan approval. Preserve arbitrary logical resources,
 assignment leases/renewal/release and enqueue replay; never reinterpret saved
 opaque argv or treat a pipeline option as authority over an arbitrary command.
 
@@ -494,7 +494,7 @@ logical names, without a registry or device-name inference:
 Extend `LaunchEnvironmentBindings` at its current public boundary with immutable
 logical-resource attribution for its emitted environment values. Keep live
 bindings separate from `safe_evidence`, and preserve attribution through provider
-renewal. The exact field representation remains for design review; the observable
+renewal. The exact field is specified in the compatibility rule below; the observable
 contract is that selection is based on producer-owned logical identity, never a
 variable name or physical slot label. All maintained producers above must migrate
 together. Missing attribution from an external provider follows the candidate
@@ -808,42 +808,54 @@ to finish/cancel it, as the migration guidance states.
 
 ### Design Review State
 
-Initial removal-first review found two qualified design blockers; the bounded
-correction above is now prepared and awaiting targeted confirmation. The
-approved default is not reopened. The public selector, whole-run attribution,
-existing-owner evidence and hard executable cuts are proportionate once the two
-handoff/lifecycle gaps below are corrected; optional host measurement, new
+Initial removal-first review found two qualified design blockers; targeted
+confirmation accepts the bounded correction above. The approved default is not
+reopened. The public selector, whole-run attribution, existing-owner evidence and
+hard executable cuts are proportionate with the two handoff/lifecycle gaps
+resolved; optional host measurement, new
 mechanism registries and broader migration tooling remain deferred.
 
 | ID | Disposition | Accepted contract / current consumer | Finding and smallest correction | Status |
 | --- | --- | --- | --- | --- |
-| EDR-39-01 | clarify one owner | FR-39-01, FR-39-02, FR-39-03 and FR-39-08; `local_daemon_runtime._runtime_payload` calls `resolve_run_runtime` before `resolve_stage_placement`, while placement alone knows authored demand, planner defaults and semantic refinement | The draft requires concrete effective choices before admission but assigns them to the pre-placement resolved-runtime handoff as well as schema-3 placement. `account_for: all` cannot be expanded truthfully there: the current default CPU and planner-refined demand do not exist yet, and independent reconstruction risks placement/worker drift. Keep `ResourcePolicy` as the composed selector only. Name the post-demand-resolution projection as the sole owner of concrete selected identifiers, persist that result with the full demand, and require the worker/command handoff to consume or compare that exact projection rather than resolve `all` again. No second effective-policy type or store is needed. | blocker: bounded design correction |
-| EDR-39-02 | correct legacy disposition | FR-39-08 and the narrow read-only rule; persisted schema-2 `QueueItem` values remain decodable, and `_evaluate_selection` currently treats every queued item as eligible before `_select_and_acquire_for_pool` claims it | “Reject before queue claim” has no current transition or durable result. A legacy queued item can therefore be selected repeatedly, abort a cycle, or occupy the bounded candidate page while newer schema-3 work waits. Use the existing controller lifecycle: claim only queue ownership, then return the existing invalid/unsupported, not-started result with cleanup not required, persist `FAILED`, and continue the cycle before scalar admission, assignment or spawn. Preserve the nested schema-2 launch contract and admission digest unchanged. Direct adapter dispatch retains its public pre-effect guard. | blocker: bounded design correction |
+| EDR-39-01 | clarify one owner | FR-39-01, FR-39-02, FR-39-03 and FR-39-08; `local_daemon_runtime._runtime_payload` calls `resolve_run_runtime` before `resolve_stage_placement`, while placement alone knows authored demand, planner defaults and semantic refinement | The draft requires concrete effective choices before admission but assigns them to the pre-placement resolved-runtime handoff as well as schema-3 placement. `account_for: all` cannot be expanded truthfully there: the current default CPU and planner-refined demand do not exist yet, and independent reconstruction risks placement/worker drift. Keep `ResourcePolicy` as the composed selector only. Name the post-demand-resolution projection as the sole owner of concrete selected identifiers, persist that result with the full demand, and require the worker/command handoff to consume or compare that exact projection rather than resolve `all` again. No second effective-policy type or store is needed. | resolved: placement-owned post-demand projection and exact handoff comparison confirmed |
+| EDR-39-02 | correct legacy disposition | FR-39-08 and the narrow read-only rule; persisted schema-2 `QueueItem` values remain decodable, and `_evaluate_selection` currently treats every queued item as eligible before `_select_and_acquire_for_pool` claims it | “Reject before queue claim” has no current transition or durable result. A legacy queued item can therefore be selected repeatedly, abort a cycle, or occupy the bounded candidate page while newer schema-3 work waits. Use the existing controller lifecycle: claim only queue ownership, then return the existing invalid/unsupported, not-started result with cleanup not required, persist `FAILED`, and continue the cycle before scalar admission, assignment or spawn. Preserve the nested schema-2 launch contract and admission digest unchanged. Direct adapter dispatch retains its public pre-effect guard. | resolved: bounded claim-to-FAILED disposition before resource/launch effects confirmed |
 | EDR-39-03 | keep | FR-39-01 through FR-39-04; whole-run selection, advisory capacity, scalar admission, concrete assignment and binding merge all currently consume `LaunchContract.resources` | The typed whole-run extension is not future-only: leaving it unchanged would violate the approved default and make final-launch filtering too late. Reuse the same selector value, existing amount map and producer-owned binding attribution; add no logical-to-semantic name registry. | pass |
 | EDR-39-04 | keep | FR-39-04, FR-39-06 and FR-39-07; capability/preflight, container launch metadata and SLURM submission receipts are current inspection consumers | The bounded `resource_controls` projection is justified, provided each existing emission point reports only what it can establish and absence remains unreported rather than verified none. It is not a lifecycle store or proof of measured kernel enforcement. | pass |
 
 Domain neutrality, import direction, timeout ownership, provider compatibility,
 examples and non-Cartesian validation otherwise pass. Manager verification read
 the concrete `_runtime_payload`/placement/intent-loader/worker preparation join
-and the bounded queue selection/claim/NOT_STARTED-to-FAILED transition. Both
-findings are supported and addressed by the named correction; the same reviewer's
-single targeted confirmation remains before phase shaping. No runtime test is
-claimed by this design-only verification.
+and the bounded queue selection/claim/NOT_STARTED-to-FAILED transition. Targeted
+confirmation found both corrections complete: default CPU and planner refinement
+precede the single concrete projection, retained worker paths compare that saved
+projection, and legacy demand beyond capacity cannot bypass the compatibility
+disposition or block later current work. No runtime test is claimed by this
+design-only verification.
 
 ## Phase Shaping And Quality Gate
 
-Do not create execution cards before the named minimum-design tasks are resolved.
-Likely merge boundaries are a complete managed accounting/config/replay change,
-then generic executor controls and adapter migration, with SLURM delegation
-kept separate only if each prior state remains supported. No preferred phase
-count overrides atomic durable migration or a usable current consumer.
+The minimum-design tasks are resolved. The compact
+[implementation manifest](implementation-plan.md) links two vertical phases:
+
+1. [Pipeline resource policy](phases/pipeline-resource-policy.md): compose policy,
+   resolve/select full demand, admit it, preserve exact local/remote worker
+   handoffs and migrate all container/SLURM consumers with truthful diagnostics.
+2. [Whole-run queue policy](phases/queued-resource-policy.md): reuse those policy
+   semantics at the distinct opaque-command/logical-resource API; migrate every
+   selection/admission/binding consumer and its retained-contract boundary.
+
+Pipeline composition, admission and executor migration stay atomic: otherwise
+the approved no-enforcement default would coexist with implicit old controls.
+The whole-run API keeps its old behavior until its complete Phase 2 migration;
+Phase 1 documentation explicitly scopes its new default. Phase 2 starts after
+Phase 1 remotely merges. Neither phase is foundation-only or tests-only.
 
 Required local gates for each implemented Loom phase remain `make validate-pr`
 and `make test-summary`; independent correctness review is required for these
 public/durable/runtime changes. Hosted CI remains disabled. Normal Loom isolated
 phase branches/PRs target develop, with verified merge and exact cleanup.
 
-Current quality gate: the one bounded EDR-39-01/02 correction is prepared;
-targeted confirmation remains. No runtime tests or resource guarantees are
-claimed. Next action is confirmation, phase shaping, independent plan review
-and final approval of the concrete migration and phase packet.
+Current quality gate: expanded design review passed after one bounded correction
+and targeted confirmation; manifest and both phase cards are prepared. No runtime
+tests or resource guarantees are claimed. Independent plan review and final
+approval of the concrete migration and phase packet remain before implementation.
