@@ -2993,8 +2993,8 @@ domain-failure transport are excluded.
 
 ## v39 - Independent Resource Accounting And Enforcement
 
-Status: functionality/default approved; independent design and plan reviews passed.
-The two-phase packet awaits final approval. Separate agent capacity, one job-demand representation,
+Status: complete two-phase plan and migration rules approved after independent
+design and plan reviews; Phase 1 in progress. Separate agent capacity, one job-demand representation,
 Loom accounting selection and execution controls. Support explicit no additional
 enforcement, truthful backend/SLURM delegation, and unchanged lifecycle cleanup.
 Replace adapter-specific CPU/RAM policy only after its consumers migrate.

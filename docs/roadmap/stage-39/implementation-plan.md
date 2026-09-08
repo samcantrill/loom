@@ -1,12 +1,12 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: draft; design and independent plan review passed, final approval pending
+Status: approved; Phase 1 in progress
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: none; final concrete plan approval precedes execution
-Blockers: maintainer approval of this phase/migration packet
+Current phase: 1 — pipeline-resource-policy
+Blockers: none
 
 ## Summary
 
@@ -14,8 +14,9 @@ Blockers: maintainer approval of this phase/migration packet
   and which additional controls it requests, and report the actual control owner.
 - Approved behavior: FR-39-01 through FR-39-08 in planning.md; new invocations
   default to `account_for: all`, `enforce: []`. Timeout retains its separate
-  reliability owner. The default approval does not approve retained-data migration
-  or protected physical execution.
+  reliability owner. The maintainer subsequently approved the complete two-phase
+  plan and its documented compatibility cuts. Protected physical execution is
+  still not authorized.
 - Design: the existing runtime policy composes selectors; a single post-demand
   projection resolves concrete identifiers. EDR-39-01 fixes the managed handoff;
   EDR-39-02 uses the existing terminal lifecycle for incompatible queued work.
@@ -75,7 +76,7 @@ Blockers: maintainer approval of this phase/migration packet
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | pending | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -89,7 +90,10 @@ Blockers: maintainer approval of this phase/migration packet
 - Independent plan review: passed after one qualified cross-machine replay finding.
 - Plan correction: complete; Phase 1 now cuts the independently versioned
   `SlurmStageDelivery` and requires old-writer/current round-trip coverage.
-- Ready for implementation: no; final concrete plan approval remains required.
+- Ready for implementation: yes; maintainer approved both phases and their
+  concrete migration rules. Phase 1 starts on published develop `214f242c`;
+  its preparation API addition preserves the same runtime owner and is included
+  in the phase's regression obligations. No contract reopening is required.
 - Accepted risks: no additional enforcement can expose more host resources than
   reservation bookkeeping suggests; excluded accounting permits oversubscription.
   No claim of isolation. Hard cuts require pinned old environments for old live work.

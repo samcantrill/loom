@@ -2,18 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
 - Worktree: `stage-39-p1-pipeline-resource-policy` under the manifest's root
-- Base revision: latest published develop at execution; planning source
-  `719e016c6fe5e1ec3e70994bca6b3716964fc200`
+- Base revision: published develop `214f242c10bc32e4c06156da1f1c9b3a183adb45`;
+  approved planning packet imported without conflicts from `6c1a0edc`
 - PR target: develop
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
-- Dependencies: final reviewed Stage 39 plan and concrete migration approval
+- Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: final approval; no phase branch or runtime changes yet
+- Blockers: none
 
 ## Objective And Context
 
@@ -46,6 +46,16 @@ default to the migrated pipeline API, not claim the whole-run migration is done.
   `diagnostics/preflight.py`, current runtime metadata and inspection renderers.
 - Harness: Python 3.12, locked `uv` environment, existing test harness and final
   Make gates. Public imports must not acquire optional config/GPU dependencies.
+
+Startup reconciliation: upstream PR #289 at `214f242c` adds
+`prepare_managed_run` for trusted already-composed inputs and explicit execution
+requirements; the embedded-local facade delegates to it. Preserve both entry
+points, coordinator-only preparation, no recomposition or local-agent discovery,
+exact requirement coverage and immutable replay. Both use the unchanged
+`_runtime_for_service` and managed payload owner, so policy flows through that
+shared path. Extend its existing preparation/public-import tests; do not fork
+preparation or change the approved resource/durable contracts. Manager verified
+the five-file upstream diff; no additional phase-planner pass is needed.
 
 ## Scope
 
@@ -196,7 +206,7 @@ claimed by this planning-only packet.
 - Plan review found one qualified replay gap: the retained flattened SLURM delivery
   could otherwise stamp a current worker schema around old runtime data. The added
   delivery codec cut and discriminating integration coverage resolve that finding;
-  no other qualified plan blocker remains before final approval.
+  no other qualified plan blocker remains; final approval is recorded.
 - Required expanded independent implementation review follows manager pre-submit
   checks. Use the canonical phase budget: one executor, at most one qualified
   refiner and three total scoped blocker corrections; no speculative hardening.
@@ -218,10 +228,13 @@ gate/review/merge ownership follows the canonical phase workflow.
 
 ## Workflow State
 
-- Manager preparation: source reconciliation and design review complete; phase not started
+- Manager preparation: approval recorded; isolated phase worktree created from
+  published develop `214f242c`; upstream preparation addition reconciled
 - Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
-  passed after the bounded `SlurmStageDelivery` replay correction; final approval pending
-- Implementation / refiner / pre-submit / independent implementation review: not started
+  passed after the bounded `SlurmStageDelivery` replay correction; final plan approved
+- Additional phase planning: not needed; current contracts and upstream join are explicit
+- Implementation: executor handoff prepared
+- Refiner / pre-submit / independent implementation review: not started
 - Blocker corrections: 0/3
 - PR and merge: pending
 
@@ -234,4 +247,4 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Validated revision/tree state and evidence | no runtime evidence |
 | Validation-relevant changes after evidence | not applicable |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | physical proof deferred; no phase worktree yet |
+| Residual risk and cleanup | physical proof deferred; phase worktree active |

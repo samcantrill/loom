@@ -1,14 +1,14 @@
 # Roadmap Stage 39 Planning: Independent Resource Accounting And Enforcement
 
-Status: design and plan review passed; complete phase packet awaiting final approval
+Status: complete plan approved; implementation tracked by the manifest and phase cards
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
 at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: functionality/default approved; design and phase packet independently reviewed
-Blockers: final concrete migration/phase approval
+Current gate: functionality/default and complete migration/phase packet approved after independent review
+Blockers: none at planning exit
 
 ## Current State
 
@@ -23,9 +23,9 @@ an explicit published prerequisite; that proof grants no physical authority.
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Approved; no unanswered default |
-| Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Final concrete migration approval |
-| Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards; plan review passed after bounded SLURM delivery correction | Final approval |
-| Quality / implementation | Design and plan review passed; no runtime edits | Approval, then normal Loom phase workflow |
+| Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Approved |
+| Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards; plan review passed after bounded SLURM delivery correction | Approved |
+| Quality / implementation | Design and plan review passed; concrete plan approved | Normal Loom phase workflow; current state in manifest |
 
 ## Evidence And Scope
 
@@ -279,7 +279,7 @@ does not rewrite an existing run to make it executable. The queue feature spec
 also documents hard cuts for its existing persisted formats. Reuse this design,
 not a new compatibility engine.
 
-Design-reviewed version boundary, subject to final concrete plan approval:
+Design-reviewed and maintainer-approved version boundary:
 
 | Existing executable owner | Proposed change | Old-data behavior |
 | --- | --- | --- |
@@ -487,8 +487,8 @@ reading the provider's display-only `safe_evidence` is an authoritative mapping.
 #### Raw Whole-Run Queue — Recommended Typed Extension
 
 Extend the existing whole-run owners rather than silently exclude this maintained
-route. This design has passed independent review; queue-format migration still
-requires final concrete plan approval. Preserve arbitrary logical resources,
+route. This design and queue-format migration have passed independent review
+and final concrete plan approval. Preserve arbitrary logical resources,
 assignment leases/renewal/release and enqueue replay; never reinterpret saved
 opaque argv or treat a pipeline option as authority over an arbitrary command.
 
@@ -873,5 +873,6 @@ SLURM delivery cut; its bounded correction adds the existing delivery codec's
 oracles. Manager verification confirms the source path and corrected card.
 No other qualified plan findings remain. Documentation diff, links and targeted
 test paths pass mechanical checks; no runtime tests or resource guarantees are
-claimed. Final approval of the concrete migration and phase packet remains
-before implementation.
+claimed. The maintainer approved the concrete migration and two-phase packet;
+implementation can proceed through the linked manifest and canonical workflow.
+This approval does not authorize physical/GPU runs or host configuration changes.
