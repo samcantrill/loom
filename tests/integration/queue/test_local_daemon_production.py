@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import pytest
 
 import loom.queue._managed_local as managed_local
 from loom.pipeline import PipelineSpec, parse_resource_request
+from loom.cli.main import main
 from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
@@ -450,6 +452,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "state",
             "freshness",
             "diagnostic",
+            "diagnostic_failure",
         ):
             assert socket_result[field] == direct_result[field]
         assert list(cast(tuple[object, ...], socket_result["failures"])) == cast(
@@ -463,6 +466,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "observed_at",
             "freshness",
             "diagnostic",
+            "diagnostic_failure",
             "failures",
         }
         assert direct_result["owner"] == "run-store"
@@ -2211,13 +2215,81 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
             terminal = socket_client.wait(submitted.queue_item_id, timeout_seconds=10)
             assert terminal.state is LocalDaemonAdmissionState.FAILED
             detail = socket_client.admission(submitted.admission_id)
+
+            def unavailable_authority(_run_uri: str) -> Never:
+                raise OSError("socket authority read failure")
+
+            daemon.config = replace(
+                config, coordinator_authority_factory=unavailable_authority
+            )
+            unavailable_detail = socket_client.admission(submitted.admission_id)
+            unavailable_view = cast(
+                Mapping[str, object], unavailable_detail.owners["run_result"]
+            )
+            assert unavailable_view["availability"] == "unavailable"
+            assert unavailable_view["diagnostic"] == "run_store_unavailable"
+            assert unavailable_view["failures"] == ()
+            diagnostic_failure = cast(
+                Mapping[str, object], unavailable_view["diagnostic_failure"]
+            )
+            assert diagnostic_failure["type"] == "loom.queue.errors.QueueServiceError"
+            links = cast(tuple[Mapping[str, object], ...], diagnostic_failure["links"])
+            assert links[0]["relation"] == "cause"
+            assert cast(Mapping[str, object], links[0]["record"])["message"] == (
+                "socket authority read failure"
+            )
+
+            text_stdout = io.StringIO()
+            assert (
+                main(
+                    [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                    ],
+                    stdout=text_stdout,
+                    stderr=io.StringIO(),
+                )
+                == 0
+            )
+            assert "failed-stage authority is unavailable" in text_stdout.getvalue()
+            assert "socket authority read failure" in text_stdout.getvalue()
+
+            json_stdout = io.StringIO()
+            assert (
+                main(
+                    [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                        "--format",
+                        "json",
+                    ],
+                    stdout=json_stdout,
+                    stderr=io.StringIO(),
+                )
+                == 0
+            )
+            json_view = json.loads(json_stdout.getvalue())["result"]["owners"][
+                "run_result"
+            ]
+            assert json_view["failures"] == []
+            assert json_view["diagnostic_failure"] == thaw_plain_data(
+                diagnostic_failure
+            )
         finally:
+            daemon.config = config
             server.stop()
         view = cast(Mapping[str, object], detail.owners["run_result"])
         assert view["availability"] == "available"
         assert view["state"] == "populated"
         assert view["freshness"] == "current"
         assert view["diagnostic"] is None
+        assert view["diagnostic_failure"] is None
         persisted = store.read_stage_failure(run_uri, "build")
         assert persisted is not None
         assert thaw_plain_data(view["failures"]) == [persisted]
@@ -2349,6 +2421,7 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         "observed_at": view["observed_at"],
         "freshness": "current",
         "diagnostic": None,
+        "diagnostic_failure": None,
         "failures": failures,
     }
 
@@ -2390,8 +2463,40 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         "observed_at": unavailable["observed_at"],
         "freshness": "unavailable",
         "diagnostic": "run_store_unavailable",
+        "diagnostic_failure": unavailable["diagnostic_failure"],
         "failures": [],
     }
+    diagnostic_failure = cast(Mapping[str, object], unavailable["diagnostic_failure"])
+    assert diagnostic_failure["schema"] == "loom.diagnostic.v1"
+    expected = {
+        "missing": (
+            "loom.queue.errors.QueueServiceError",
+            "failed stage has no persisted failure",
+        ),
+        "corrupt": (
+            "loom.pipeline.execution.errors.RunRequestError",
+            "ExecutionFailure.from_dict: $: unknown field(s): unknown",
+        ),
+        "read_error": ("builtins.OSError", "injected unreadable failure"),
+        "missing_status_and_failure": (
+            "loom.queue.errors.QueueServiceError",
+            "failed stage has no persisted failure",
+        ),
+        "authority_unavailable": (
+            "loom.queue.errors.QueueServiceError",
+            "failed-stage authority is unavailable",
+        ),
+    }
+    assert (diagnostic_failure["type"], diagnostic_failure["message"]) == expected[
+        damage
+    ]
+    from loom.diagnostics import render_diagnostic_failure
+
+    rendered = render_diagnostic_failure(diagnostic_failure)
+    if damage == "corrupt":
+        assert "loom.serialization.errors.SchemaVersionError" in rendered
+    if damage == "authority_unavailable":
+        assert "injected authority read failure" in rendered
 
 
 @pytest.mark.parametrize(

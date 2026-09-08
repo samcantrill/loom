@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         RunInspectionTruncation,
         RunLocationReachability,
     )
+    from .diagnostic_failure import DiagnosticFailureError
     from loom.serialization import PlainData
 
 
@@ -72,6 +73,13 @@ def projection_callable(
     return _projection_callable(**kwargs)
 
 
+def render_diagnostic_failure(value: object) -> str:
+    """Validate and render private Loom inspection-failure diagnostics."""
+    from .diagnostic_failure import render_diagnostic_failure as _render
+
+    return _render(value)
+
+
 def __getattr__(name: str) -> object:
     if name in {
         "BackendCapabilitiesResult",
@@ -84,6 +92,10 @@ def __getattr__(name: str) -> object:
         from . import backend
 
         return getattr(backend, name)
+    if name == "DiagnosticFailureError":
+        from .diagnostic_failure import DiagnosticFailureError
+
+        return DiagnosticFailureError
     if name in {
         "RunInspectionAxis",
         "RunInspectionAxisName",
@@ -135,4 +147,6 @@ __all__ = [
     "inspect_run",
     "decode_run_inspection_response",
     "projection_callable",
+    "DiagnosticFailureError",
+    "render_diagnostic_failure",
 ]
