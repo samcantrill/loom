@@ -378,6 +378,28 @@ evidence and are not a condition for the managed CPU diagnostic proof. Exact
 metadata keys and any necessary existing-owner codec changes remain part of the
 expanded design review, not an additional policy or lifecycle API.
 
+The public `build_apptainer_exec_command` and `build_docker_run_command` functions
+also serve callers without a pipeline executor. They currently accept container
+intent and adapter options, not `RunOptions`; a policy stored only on the executor
+would leave these maintained APIs using the old implicit controls. Pass the
+effective policy explicitly through the existing builder boundary and consume
+only its enforcement selection there. Builders cannot claim to perform capacity
+accounting. Use the same policy value/decoder, not a second adapter-specific mode
+or resource-amount representation. Direct callers must have a documented default
+and migration matching the approved new-job decision.
+
+Migrate both executor call sites, SLURM's inner-container call and the Apptainer
+preflight projection at `diagnostics/preflight.py` together with the builder
+change. Preflight currently calls the public builder and extracts CPU/RAM flags;
+it must not report old implicit limits after the execution path stops adding them.
+The executor's existing `_with_runtime_resources` selects runtime demand when
+present and otherwise uses container intent. Preserve that authoritative
+precedence while resolving policy against the effective demand once; do not
+filter away full demand before preserving provenance, or reintroduce the
+fallback after an explicit empty enforcement selection. Existing command contract,
+executor and preflight tests must assert matching selections and flags. These
+are current supported consumers, not additional backend capability.
+
 ### Admission And Managed Binding Coverage
 
 The serial pipeline runner has its own authority-lease admission in addition to
