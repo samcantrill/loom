@@ -1,4 +1,4 @@
-"""Preparation facade for the standalone embedded managed-local journey."""
+"""Trusted preparation for managed runs and the embedded-local facade."""
 
 from __future__ import annotations
 
@@ -59,12 +59,43 @@ def prepare_managed_local_run(
 
     service = load_coordinator_service_config(coordinator_config)
     _validate_embedded_service(service)
-    run_name_text = _validate_run_name(run_name)
     composed = _compose_pipeline_config(pipeline_config)
     resolved = _resolved_mapping(composed)
     pipeline = _pipeline_from_resolved(resolved)
-    run_uri, options = _runtime_for_service(service, resolved, pipeline, run_name_text)
     requirements = _execution_requirements(service, pipeline)
+    return prepare_managed_run(
+        service,
+        composed,
+        run_name,
+        execution_requirements=requirements,
+    )
+
+
+def prepare_managed_run(
+    service: CoordinatorServiceConfig,
+    composed: object,
+    run_name: str,
+    *,
+    execution_requirements: Mapping[str, ExecutionRequirement],
+) -> ManagedLocalPreparationReceipt:
+    """Prepare one managed run from trusted resolved inputs.
+
+    ``service`` is a resolved coordinator-role snapshot and ``composed`` is one
+    already-composed pipeline configuration. The caller supplies the exact
+    requirement for each stage, so coordinator-only preparation neither needs a
+    local installation nor discovers a live agent offer. This function never
+    reads or recomposes either supplied input.
+
+    A matching complete run is an immutable replay. Any other existing path is
+    deliberately left untouched so an operator can inspect or remove it.
+    """
+
+    _validate_preparation_service(service)
+    run_name_text = _validate_run_name(run_name)
+    resolved = _resolved_mapping(composed)
+    pipeline = _pipeline_from_resolved(resolved)
+    requirements = _validated_execution_requirements(pipeline, execution_requirements)
+    run_uri, options = _runtime_for_service(service, resolved, pipeline, run_name_text)
     store = LocalRunStore(service.daemon.run_store_root)
 
     if store.run_uri_exists(run_uri):
@@ -139,6 +170,16 @@ def _validate_embedded_service(service: CoordinatorServiceConfig) -> None:
         raise QueueServiceError("managed-local preparation requires embedded authority")
 
 
+def _validate_preparation_service(service: CoordinatorServiceConfig) -> None:
+    """Keep preparation within the existing embedded-authority runtime family."""
+
+    daemon = service.daemon
+    if daemon.slurm_profiles:
+        raise QueueServiceError("managed preparation does not support SLURM profiles")
+    if daemon.coordinator_authority_factory is not embedded_coordinator_authority:
+        raise QueueServiceError("managed preparation requires embedded authority")
+
+
 def _validate_run_name(value: str) -> str:
     if (
         not isinstance(value, str)
@@ -211,6 +252,21 @@ def _execution_requirements(
     except (KeyError, TypeError, ValueError) as exc:
         raise QueueServiceError("embedded resident descriptor is invalid") from exc
     return {name: requirement for name in pipeline.stage_names}
+
+
+def _validated_execution_requirements(
+    pipeline: PipelineSpec,
+    requirements: Mapping[str, ExecutionRequirement],
+) -> dict[str, ExecutionRequirement]:
+    """Snapshot explicit stage requirements before creating durable state."""
+
+    if set(requirements) != set(pipeline.stage_names) or any(
+        not isinstance(value, ExecutionRequirement) for value in requirements.values()
+    ):
+        raise QueueServiceError(
+            "managed preparation execution requirements must exactly cover the pipeline"
+        )
+    return {name: requirements[name] for name in pipeline.stage_names}
 
 
 def _persist_composed_config(
@@ -371,4 +427,8 @@ def _plain_mapping(value: object) -> dict[str, PlainData]:
     return cast(dict[str, PlainData], dict(value))
 
 
-__all__ = ["ManagedLocalPreparationReceipt", "prepare_managed_local_run"]
+__all__ = [
+    "ManagedLocalPreparationReceipt",
+    "prepare_managed_local_run",
+    "prepare_managed_run",
+]

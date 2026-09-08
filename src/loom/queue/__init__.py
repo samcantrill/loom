@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from .local_daemon_runtime import prepare_managed_local_runtime_record
     from .managed_local_preparation import (
         ManagedLocalPreparationReceipt,
+        prepare_managed_run,
         prepare_managed_local_run,
     )
     from .agent_sessions import LocalOwnerOperatorPolicy
@@ -228,7 +229,11 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
-    if name in {"ManagedLocalPreparationReceipt", "prepare_managed_local_run"}:
+    if name in {
+        "ManagedLocalPreparationReceipt",
+        "prepare_managed_run",
+        "prepare_managed_local_run",
+    }:
         from . import managed_local_preparation
 
         return getattr(managed_local_preparation, name)
@@ -297,6 +302,7 @@ __all__ = [
     "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
     "ManagedLocalPreparationReceipt",
+    "prepare_managed_run",
     "prepare_managed_local_run",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
