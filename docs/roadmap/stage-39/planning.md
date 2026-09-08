@@ -8,7 +8,7 @@ at `0e14d503cc2932207aece0765cb2da111cf2154b`, branch
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
 Current gate: functionality accepted; source reconciliation and minimum design
-Blockers: no user decision requested; design/readiness not yet claimed
+Blockers: new-job enforcement default requested from the maintainer; exact design/readiness not yet claimed
 
 ## Current State
 
@@ -22,7 +22,7 @@ experiment can depend on it only through an explicit published prerequisite.
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Resolve concrete current runtime/placement/adapter propagation |
-| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers | Finalize defaults, public shape and retained-run migration from the observed source |
+| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners resolved below | Confirm the new-job default, finalize public shape and retained-run migration |
 | Validation / phase shaping | Distinguish selections through real admission/command boundaries | Complete finite supported matrix and independently reviewable phase cards |
 | Quality / implementation | Not ready; no runtime edits | Expanded design/plan review, then normal Loom phase workflow |
 
@@ -178,6 +178,37 @@ that owner without disturbing cancellation and cleanup.
 Remaining design work is exact new-policy defaults and public vocabulary,
 the narrow old-runtime/placement admission rule, and complete executor/control
 receipt propagation. No phase cards or runtime changes are admitted yet.
+
+### Default Decision And Backend Boundary Evidence
+
+One material default question is with the maintainer: should new jobs account
+for all declared resources but apply no additional resource enforcement unless
+explicitly selected, or retain each backend's current enforcement defaults?
+The recommendation is the former, with unchanged explicit timeout ownership.
+It makes enforcement deliberate and avoids requiring unavailable host cgroups
+merely because useful demand was declared. The tradeoff is an intentional
+change from direct container CPU/RAM defaults; neither retained jobs nor old
+authored configuration may silently acquire this new meaning. Finalize the
+version/admission rule together with the answer, not independently. This question
+does not block the independent rphys diagnostic phases.
+
+The source distinguishes the following backend behaviors that the design must
+preserve or deliberately migrate, rather than treating one capability label as
+evidence of actual isolation:
+
+| Current owner | Observed behavior | Required policy consequence |
+| --- | --- | --- |
+| `runtime/capabilities.py` built-in descriptors | Local execution reports CPU/RAM/GPU not enforced; direct Apptainer CPU/RAM/GPU are best-effort; Docker CPU/RAM are mapped but GPU unsupported; SLURM currently labels directive mapping enforced | Explicit controls must be checked against their real owner; disabled/unselected controls cannot trigger unsupported-enforcement errors; scheduler mapping is delegated intent, not observed host enforcement |
+| `executors/apptainer/commands.py::_append_resource_limits` | Direct CPU/RAM entries produce cgroup flags unless the adapter-specific scheduling-only switch is set | Select the generic control subset before command construction and migrate the old switch atomically with callers; preserve the full demand in provenance |
+| `executors/docker/commands.py::_resource_flags` | Iterates all container intent entries and rejects unsupported GPU mapping | Accounting-only GPU demand must not become a Docker enforcement request; explicit Docker GPU enforcement remains an actionable unsupported-control failure, not newly implemented GPU support |
+| `executors/gpu_visibility.py`, Apptainer executor | Bare GPU demand currently enables NVIDIA passthrough and validates/forwards allocation-visible tokens | Distinguish driver/device access from additional visibility restriction. Do not invent tokens or a host-device selection when no authoritative binding exists; explicit binding needs existing allocation/host evidence or a clear unsupported/unavailable result |
+| SLURM `container.py` and `rendering.py::_gpu_allocation_lines` | Removes direct CPU/RAM limits and forwards allocation visibility into a clean-environment container | Preserve inherited allocation constraints and access while avoiding duplicate Loom limits. No-enforcement cannot erase scheduler-provided visibility or promise access outside the allocation |
+
+The existing GPU projection accepts an attribute-free count, not arbitrary GPU
+share/VRAM semantics. A generic resource label must not widen that implementation
+silently. Current supported demand normalization remains owned by resource
+validators/planners; control capability is checked separately. Keep GPU-only
+accounting, GPU binding and driver passthrough distinct in examples and tests.
 
 ## Complexity Delta
 
