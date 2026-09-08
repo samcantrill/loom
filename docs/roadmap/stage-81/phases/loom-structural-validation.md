@@ -150,7 +150,18 @@ revision-bound validation evidence. Manager owns PR/review/delivery and metadata
 
 - Manager preparation: complete at published base; canonical readiness reused.
 - Expanded planning: not needed; no affected contract drift.
-- Implementation: pending executor assignment.
+- Implementation: complete at `badf364a02f2d2cdaf2f8d657763708ad44ebe18`.
 - Refiner: unused; blocker corrections 0/3.
 - Independent review: required after implementation and local gates.
 - PR, merge and cleanup: pending; no runtime validation claimed yet.
+
+## Executor Completion Record
+
+| Item | Evidence |
+| --- | --- |
+| Implementation and changed paths | `badf364a02f2d2cdaf2f8d657763708ad44ebe18` removes `--check-targets`, the eager pipeline checker and exports, its exclusive CLI option/warning/helpers, and removed validation-result fields. `loom validate` now emits `loom.cli.validate.v3`, preserves composition, graph and resource/runtime validation, and directs construction/readiness to project execution. Updated paths are `src/loom/{cli/{options.py,results.py,validate.py},pipeline/{__init__.py,validation.py}}`, their affected unit/package/integration/e2e tests, `README.md`, and `docs/features/cli.md`. |
+| Boundary coverage | Focused default selection passed: `65 passed` across validate/options/pipeline API and execution construction owners. Focused config-extra selection passed: `19 passed` across config-backed validate and CLI e2e owners. The added boundary cases prove static validation leaves generic and nested target-shaped values untouched, an invalid project target remains statically valid, and real execution retains the informative stage-interface failure. |
+| Final gates and validated tree | On clean implementation revision `badf364a02f2d2cdaf2f8d657763708ad44ebe18`, `make validate-pr` passed Ruff, Pyright, default/config-extra harnesses, and `uv build`; it produced `dist/loom-0.1.0.tar.gz` and `dist/loom-0.1.0-py3-none-any.whl`. `make test-summary` passed: 3,170 passed, 0 failed, 0 errors, 18 skipped, and 3,147 deselected (3,188 total). No physical, container, GPU, or SLURM acceptance gate was run or required. |
+| Raw reports and logs | Summary: `build/test-summary.md`. JUnit: `build/test-summary/package/junit.xml`, `build/test-summary/unit/junit.xml`, `build/test-summary/contract/junit.xml`, `build/test-summary/integration/junit.xml`, `build/test-summary/e2e/junit.xml`, and `build/test-summary/config-extra/junit.xml`. Coverage JSON: `build/test-summary/package/coverage.json`, `build/test-summary/unit/coverage.json`, `build/test-summary/contract/coverage.json`, `build/test-summary/integration/coverage.json`, `build/test-summary/e2e/coverage.json`, and `build/test-summary/config-extra/coverage.json`; raw coverage data is in the matching six `.coverage` paths. `make validate-pr` has no persistent raw-log artifact; its build outputs above are retained as ignored local evidence. |
+| Validation-relevant changes after evidence | None. This completion-record update is documentation-only and does not alter the validated source/test/dependency/build configuration tree. |
+| Residual risk and blocker | No implementation blocker. The deliberate incompatible CLI/API removal requires separate downstream adoption; independent review remains required before manager PR delivery. |
