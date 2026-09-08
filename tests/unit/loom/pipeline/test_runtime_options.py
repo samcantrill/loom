@@ -14,6 +14,7 @@ from loom.pipeline import (
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
+    ResourcePolicy,
     RunStoreOptions,
     StageEnvironmentRequest,
     StageRuntimeOptions,
@@ -53,9 +54,23 @@ def test_run_options_defaults_round_trip() -> None:
             "unset_variables": [],
         },
         "adapter_options": {},
+        "resource_policy": {"account_for": "all", "enforce": []},
     }
     assert RunOptions.from_dict(options.to_dict()) == options
     assert parse_run_options(None) == options
+
+
+def test_resource_policy_is_strict_and_selects_only_present_kinds() -> None:
+    policy = ResourcePolicy(account_for=["gpu"], enforce=["memory", "gpu"])
+
+    assert policy.to_dict() == {"account_for": ["gpu"], "enforce": ["gpu", "memory"]}
+    assert policy.select(["cpu", "gpu"]) == {
+        "account_for": ("gpu",),
+        "enforce": ("gpu",),
+    }
+    assert ResourcePolicy.from_dict(policy.to_dict()) == policy
+    with pytest.raises(RuntimeResourceError):
+        ResourcePolicy.from_dict({"account_for": None, "enforce": []})
 
 
 def test_run_options_populated_round_trip_freezes_inputs_and_sorts_mappings() -> None:

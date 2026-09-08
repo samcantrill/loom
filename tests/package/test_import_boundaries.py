@@ -684,7 +684,9 @@ def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modul
     assert result.stdout.strip() == "ok"
 
 
-def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> None:
+def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> (
+    None
+):
     script = dedent(
         """
         import sys
@@ -1212,7 +1214,8 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
             "CONTINUE_INDEPENDENT_FAILURE_POLICY",
             "DEFAULT_FAILURE_POLICY",
-            "DEFAULT_MAX_PARALLEL_STAGES",
+                "DEFAULT_MAX_PARALLEL_STAGES",
+                "ALL_RESOURCES",
             "RUNTIME_CONFIG_SECTION",
             "RUNTIME_METADATA_SCHEMA_VERSION",
             "RUNTIME_PROFILES_CONFIG_SECTION",
@@ -1236,7 +1239,8 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION",
             "ResourceCapability",
             "ResourceEnforcementExpectation",
-            "ResourceSupportLevel",
+                "ResourceSupportLevel",
+                "ResourcePolicy",
             "RuntimeConfigSections",
             "RuntimeMetadata",
             "MemoryResourcePlanner",

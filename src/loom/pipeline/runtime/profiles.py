@@ -38,6 +38,7 @@ from loom.pipeline.runtime.options import (
     _validate_stage_id,
     validate_stage_runtime_options,
 )
+from loom.pipeline.runtime.resource_policy import coerce_resource_policy
 
 _RUN_SOURCE_FIELDS = frozenset(
     {
@@ -56,6 +57,7 @@ _RUN_SOURCE_FIELDS = frozenset(
         "environment",
         "adapter_options",
         "run_store",
+        "resource_policy",
     }
 )
 _PROFILE_CORE_FIELDS = _RUN_SOURCE_FIELDS - {"schema_version", "profile"}
@@ -68,7 +70,14 @@ _RESUME_FIELDS = frozenset({"enabled"})
 _ENVIRONMENT_FIELDS = frozenset({"inherit", "set_variables", "unset_variables"})
 _EXECUTION_FIELDS = frozenset({"settings"})
 _STAGE_RUNTIME_FIELDS = frozenset(
-    {"resources", "execution", "environment", "reliability", "adapter_options"}
+    {
+        "resources",
+        "execution",
+        "environment",
+        "reliability",
+        "adapter_options",
+        "resource_policy",
+    }
 )
 
 
@@ -386,6 +395,8 @@ def _normalize_run_field(
         return list(_str_tuple(value, path=path))
     if key == "reliability":
         return _normalize_reliability(value, path=path)
+    if key == "resource_policy":
+        return _normalize_resource_policy(value, path=path)
     if key == "selectors":
         return _normalize_selectors(value, path=path)
     if key == "resume":
@@ -511,6 +522,10 @@ def _normalize_stage_runtime(
                 item,
                 path=f"{path}.adapter_options",
             )
+        elif key == "resource_policy":
+            normalized[key] = _normalize_resource_policy(
+                item, path=f"{path}.resource_policy"
+            )
     return normalized
 
 
@@ -527,6 +542,10 @@ def _normalize_resources(
             for kind, entry in cast(ResourceRequest, request).entries.items()
         }
     }
+
+
+def _normalize_resource_policy(value: object, *, path: str) -> dict[str, object]:
+    return dict(coerce_resource_policy(value, path=path).to_dict())
 
 
 def _plain_adapter_mapping(value: object, *, path: str) -> dict[str, PlainData]:
@@ -571,6 +590,8 @@ def _merge_run_source(target: dict[str, object], source: Mapping[str, object]) -
                 cast(Mapping[str, object], value),
                 path="reliability",
             )
+        elif key == "resource_policy":
+            target[key] = value
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
 
@@ -592,6 +613,8 @@ def _merge_stage_runtime_source(
                 cast(Mapping[str, object], value),
                 path="reliability",
             )
+        elif key == "resource_policy":
+            target[key] = value
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
 

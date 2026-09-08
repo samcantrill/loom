@@ -35,6 +35,7 @@ from loom.pipeline.runtime.options import (
     parse_run_options,
     validate_stage_runtime_options,
 )
+from loom.pipeline.runtime.resource_policy import ResourcePolicy, coerce_resource_policy
 
 RUNTIME_METADATA_SCHEMA_VERSION = 1
 
@@ -52,6 +53,9 @@ class ResolvedStageRuntimeOptions:
         default_factory=ExecutionOptions
     )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
+    resource_policy: ResourcePolicy | Mapping[str, object] = field(
+        default_factory=ResourcePolicy
+    )
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
@@ -86,6 +90,14 @@ class ResolvedStageRuntimeOptions:
         )
         object.__setattr__(
             self,
+            "resource_policy",
+            coerce_resource_policy(
+                self.resource_policy,
+                path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_policy",
+            ),
+        )
+        object.__setattr__(
+            self,
             "run_environment",
             _coerce_run_environment(self.run_environment),
         )
@@ -105,6 +117,7 @@ class ResolvedStageRuntimeOptions:
         execution = cast(ExecutionOptions, self.execution)
         run_environment = cast(RunEnvironmentRequest, self.run_environment)
         stage_environment = cast(StageEnvironmentRequest, self.stage_environment)
+        resource_policy = cast(ResourcePolicy, self.resource_policy)
         return {
             "stage_id": self.stage_id,
             "executor": self.executor,
@@ -120,6 +133,7 @@ class ResolvedStageRuntimeOptions:
                 "stage": stage_environment.to_safe_metadata(),
             },
             "adapter_options": _adapter_metadata(self.adapter_options),
+            "resource_policy": resource_policy.to_dict(),
         }
 
 
@@ -151,6 +165,7 @@ class RuntimeMetadata:
         execution = cast(ExecutionOptions, options.execution)
         run_environment = cast(RunEnvironmentRequest, options.environment)
         reliability = cast(ReliabilityPolicy | None, options.reliability)
+        resource_policy = cast(ResourcePolicy, options.resource_policy)
         stages = cast(Mapping[str, ResolvedStageRuntimeOptions], self.stages)
         return {
             "schema_version": self.schema_version,
@@ -167,6 +182,7 @@ class RuntimeMetadata:
             "execution": execution.to_safe_metadata(),
             "environment": run_environment.to_safe_metadata(),
             "adapter_options": _adapter_metadata(options.adapter_options),
+            "resource_policy": resource_policy.to_dict(),
             "stages": {
                 stage_id: stage.to_safe_metadata() for stage_id, stage in stages.items()
             },
@@ -189,6 +205,7 @@ def resolve_run_runtime(
     run_execution = cast(ExecutionOptions, normalized.execution)
     run_reliability = cast(ReliabilityPolicy | None, normalized.reliability)
     run_environment = cast(RunEnvironmentRequest, normalized.environment)
+    run_resource_policy = cast(ResourcePolicy, normalized.resource_policy)
     executor = normalized.executor or "local"
     resolved: dict[str, ResolvedStageRuntimeOptions] = {}
     for stage_id in stage_id_tuple:
@@ -206,6 +223,9 @@ def resolve_run_runtime(
             normalized.adapter_options,
             stage_runtime.adapter_options,
         )
+        stage_resource_policy = cast(
+            ResourcePolicy | None, stage_runtime.resource_policy
+        )
         resolved[stage_id] = ResolvedStageRuntimeOptions(
             stage_id=stage_id,
             executor=executor,
@@ -217,6 +237,7 @@ def resolve_run_runtime(
                 }
             ),
             reliability=resolved_reliability,
+            resource_policy=stage_resource_policy or run_resource_policy,
             run_environment=run_environment,
             stage_environment=stage_runtime.environment,
             adapter_options=stage_adapter_options,

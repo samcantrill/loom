@@ -286,11 +286,16 @@ class ResourceLimitReconciliationResult:
 
 def resource_requests_from_runtime(
     resources: ResourceRequest,
+    *,
+    account_for: tuple[str, ...] | None = None,
 ) -> tuple[ResourceLeaseRequest, ...]:
     """Return positive integer resource lease requests from runtime resources."""
 
     requests: list[ResourceLeaseRequest] = []
+    selected = set(account_for) if account_for is not None else None
     for key, entry in resources.entries.items():
+        if selected is not None and key not in selected:
+            continue
         if entry.amount == 0:
             continue
         if not isinstance(entry.amount, int):
@@ -573,7 +578,9 @@ def _non_negative_int(value: object, field: str) -> int:
     return value
 
 
-def _plain_mapping(value: Mapping[str, PlainData], field: str) -> Mapping[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], field: str
+) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(dict(value), path=field)
     except (PlainDataError, ValueError) as exc:

@@ -29,11 +29,12 @@ from loom.pipeline.runtime.environment import (
     RunEnvironmentRequest,
     StageEnvironmentRequest,
 )
+from loom.pipeline.runtime.resource_policy import ResourcePolicy, coerce_resource_policy
 
 if TYPE_CHECKING:
     from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
 
-RUN_OPTIONS_SCHEMA_VERSION = 1
+RUN_OPTIONS_SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL_STAGES = 1
 DEFAULT_FAILURE_POLICY = "stop_on_first_failure"
 CONTINUE_INDEPENDENT_FAILURE_POLICY = "continue_independent"
@@ -60,13 +61,21 @@ _RUN_OPTIONS_FIELDS = frozenset(
         "environment",
         "adapter_options",
         "reliability",
+        "resource_policy",
         "run_store",
     }
 )
 _EXECUTION_OPTIONS_FIELDS = frozenset({"settings"})
 _RUN_STORE_OPTIONS_FIELDS = frozenset({"root"})
 _STAGE_RUNTIME_OPTIONS_FIELDS = frozenset(
-    {"resources", "execution", "environment", "reliability", "adapter_options"}
+    {
+        "resources",
+        "execution",
+        "environment",
+        "reliability",
+        "adapter_options",
+        "resource_policy",
+    }
 )
 
 
@@ -206,6 +215,7 @@ class StageRuntimeOptions:
         default_factory=StageEnvironmentRequest
     )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
     validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
@@ -243,6 +253,14 @@ class StageRuntimeOptions:
                 self.reliability, path="StageRuntimeOptions.reliability"
             ),
         )
+        if self.resource_policy is not None:
+            object.__setattr__(
+                self,
+                "resource_policy",
+                coerce_resource_policy(
+                    self.resource_policy, path="StageRuntimeOptions.resource_policy"
+                ),
+            )
         object.__setattr__(
             self,
             "adapter_options",
@@ -257,6 +275,7 @@ class StageRuntimeOptions:
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(StageEnvironmentRequest, self.environment)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
+        resource_policy = cast(ResourcePolicy | None, self.resource_policy)
         payload: dict[str, PlainData] = {
             "resources": resources.to_dict(),
             "execution": execution.to_dict(),
@@ -268,6 +287,8 @@ class StageRuntimeOptions:
         }
         if reliability is not None:
             payload["reliability"] = reliability.to_dict()
+        if resource_policy is not None:
+            payload["resource_policy"] = resource_policy.to_dict()
         return payload
 
     @classmethod
@@ -301,6 +322,14 @@ class StageRuntimeOptions:
                 mapping.get("reliability"),
                 path="StageRuntimeOptions.reliability",
             ),
+            resource_policy=(
+                coerce_resource_policy(
+                    mapping["resource_policy"],
+                    path="StageRuntimeOptions.resource_policy",
+                )
+                if "resource_policy" in mapping
+                else None
+            ),
             adapter_options=_plain_mapping(
                 mapping.get("adapter_options", {}),
                 path="StageRuntimeOptions.adapter_options",
@@ -313,6 +342,7 @@ class StageRuntimeOptions:
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(StageEnvironmentRequest, self.environment)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
+        resource_policy = cast(ResourcePolicy | None, self.resource_policy)
         return {
             "resources": _safe_resource_metadata(resources),
             "execution": execution.to_safe_metadata(),
@@ -323,6 +353,11 @@ class StageRuntimeOptions:
                 else {}
             ),
             "adapter_options": _safe_adapter_metadata(self.adapter_options),
+            **(
+                {"resource_policy": resource_policy.to_dict()}
+                if resource_policy is not None
+                else {}
+            ),
         }
 
 
@@ -354,6 +389,9 @@ class RunOptions:
     run_store: RunStoreOptions | Mapping[str, object] | None = None
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
+    resource_policy: ResourcePolicy | Mapping[str, object] = field(
+        default_factory=ResourcePolicy
+    )
     schema_version: int = RUN_OPTIONS_SCHEMA_VERSION
     validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
@@ -435,6 +473,13 @@ class RunOptions:
             "reliability",
             _coerce_reliability(self.reliability, path="RunOptions.reliability"),
         )
+        object.__setattr__(
+            self,
+            "resource_policy",
+            coerce_resource_policy(
+                self.resource_policy, path="RunOptions.resource_policy"
+            ),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         selectors = cast("PlanSelectors", self.selectors)
@@ -443,6 +488,7 @@ class RunOptions:
         environment = cast(RunEnvironmentRequest, self.environment)
         run_store = cast(RunStoreOptions | None, self.run_store)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
+        resource_policy = cast(ResourcePolicy, self.resource_policy)
         return {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
@@ -471,6 +517,7 @@ class RunOptions:
             "adapter_options": _thaw_mapping(
                 self.adapter_options, path="RunOptions.adapter_options"
             ),
+            "resource_policy": resource_policy.to_dict(),
         }
 
     @classmethod
@@ -522,6 +569,10 @@ class RunOptions:
                 mapping.get("reliability"),
                 path="RunOptions.reliability",
             ),
+            resource_policy=coerce_resource_policy(
+                mapping.get("resource_policy", ResourcePolicy().to_dict()),
+                path="RunOptions.resource_policy",
+            ),
             adapter_options=_plain_mapping(
                 mapping.get("adapter_options", {}),
                 path="RunOptions.adapter_options",
@@ -542,6 +593,7 @@ class RunOptions:
         selectors = cast("PlanSelectors", self.selectors)
         resume = cast("ResumeOptions", self.resume)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
+        resource_policy = cast(ResourcePolicy, self.resource_policy)
         return {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
@@ -568,6 +620,7 @@ class RunOptions:
             ),
             "reliability": reliability.to_dict() if reliability is not None else None,
             "adapter_options": _safe_adapter_metadata(self.adapter_options),
+            "resource_policy": resource_policy.to_dict(),
         }
 
 

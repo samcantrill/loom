@@ -99,6 +99,28 @@ make dry-run and preflight paths use the same normalized options as execution
 `ResourceRequest` is the scheduler-neutral declaration of resources requested
 by a stage.
 
+## Pipeline Accounting And Additional Controls
+
+`ResourcePolicy` is the pipeline-runtime selector applied after the complete
+semantic request has been normalized.  New pipeline invocations use
+`account_for: all` and `enforce: []`: Loom accounts for all present demand while
+requesting no additional container controls.  Each axis is independent; a list
+replaces that axis and an empty list deliberately selects nothing.  Null is not
+valid configuration.  Stage policy inherits the run policy when omitted.
+
+```yaml
+runtime:
+  resource_policy:
+    account_for: [gpu]
+    enforce: [gpu]
+```
+
+The saved placement retains the full normalized request and the resulting
+`resource_selection`.  Admission consumes only `account_for`; `enforce` never
+creates a reservation by itself.  Absent or zero demand is absent from either
+selection.  This configured-pipeline surface does not change the older
+whole-run queue API.
+
 Current behavior:
 
 ```text

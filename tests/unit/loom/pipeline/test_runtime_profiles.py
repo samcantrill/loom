@@ -14,6 +14,7 @@ from loom.pipeline import (
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
+    ResourcePolicy,
     RunStoreOptions,
     RuntimeProfile,
     RuntimeProfileCollection,
@@ -28,6 +29,20 @@ from loom.pipeline import (
 )
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 from loom.pipeline.errors import RuntimeResourceError
+
+
+def test_resource_policy_stage_override_replaces_run_policy_independently() -> None:
+    result = merge_run_options(
+        base={"resource_policy": {"account_for": ["cpu"], "enforce": ["cpu"]}},
+        explicit={
+            "stage_options": {
+                "train": {"resource_policy": {"account_for": [], "enforce": ["gpu"]}}
+            }
+        },
+    )
+
+    resolved = resolve_run_runtime(result, stage_ids=["train"])["train"]
+    assert resolved.resource_policy == ResourcePolicy(account_for=[], enforce=["gpu"])
 
 
 def test_runtime_profile_serializes_sparse_core_fields_and_adapter_sections() -> None:
@@ -277,9 +292,7 @@ def test_scheduling_only_profile_and_exact_stage_override_preserve_resources() -
     options = merge_run_options(
         base={
             "profile": "scheduling-only",
-            "adapter_options": {
-                "container": {"image": {"reference": "analysis.sif"}}
-            },
+            "adapter_options": {"container": {"image": {"reference": "analysis.sif"}}},
         },
         profiles={
             "scheduling-only": {

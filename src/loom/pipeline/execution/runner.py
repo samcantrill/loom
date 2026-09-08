@@ -28,6 +28,7 @@ from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.offline_evidence import write_offline_evidence_manifest
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy
 from loom.pipeline.runtime import (
+    ResourcePolicy,
     ExecutionOptions,
     ParallelExecutionOptions,
     ResolvedStageRuntimeOptions,
@@ -1938,7 +1939,12 @@ class PipelineRunner:
         resolved_runtime: ResolvedStageRuntimeOptions,
     ) -> ResourceAdmissionDecision | None:
         resources = resource_requests_from_runtime(
-            cast("ResourceRequest", resolved_runtime.resources)
+            cast("ResourceRequest", resolved_runtime.resources),
+            account_for=tuple(
+                cast("ResourcePolicy", resolved_runtime.resource_policy).select(
+                    cast("ResourceRequest", resolved_runtime.resources).entries
+                )["account_for"]
+            ),
         )
         if not resources:
             return None

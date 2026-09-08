@@ -189,6 +189,7 @@ def _runtime_payload(
                 preference_scorers=preference_scorers,
             ),
             planners=planners,
+            resource_policy=exact.resource_policy,
         ).to_dict()
     return {
         "schema_version": _SCHEMA_VERSION,
