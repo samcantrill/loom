@@ -8,7 +8,7 @@ at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
 Current gate: functionality and new-job default approved; minimum design and expanded review
-Blockers: no unanswered default decision; detailed compatibility/control design and independent readiness review remain
+Blockers: no unanswered default decision; candidate compatibility/control design awaits expanded review and final plan approval
 
 ## Current State
 
@@ -184,10 +184,10 @@ CPU/RAM claims stay absent for GPU-only accounting. Existing timeout tests own
 duration validity; resource tests need only prove the selected timeout reaches
 that owner without disturbing cancellation and cleanup.
 
-The proposed public vocabulary below resolves the invocation shape for design
-review. The new-job default is approved. The narrow old-runtime/placement
-admission rule, raw whole-run local queue compatibility and complete control
-receipts still require finalized design. No runtime changes are admitted yet.
+The sections below supply the candidate design for expanded review. The new-job
+default is approved; executable hard cuts, the narrow raw-queue read-only legacy
+path and public control receipts are proposed together for final plan approval.
+No runtime changes or phase execution are admitted by this draft.
 
 ### Proposed Configurable Policy Shape
 
@@ -253,6 +253,20 @@ tests own selection shape, independent inheritance/clearing, absent-demand
 behavior and correct controls. Add no selector grammar, priorities, policy
 plugins or per-control amounts for hypothetical future consumers.
 
+The public `loom.pipeline.runtime.ResourcePolicy` owns the two selection axes
+and their strict plain-data codec. Its constructor accepts keyword-only
+`account_for` and `enforce`; omitted values remain unspecified for composition.
+Explicit lists are immutable/detached, unique and canonicalized by identifier;
+`all` is the only special string. Normalize defaults at the new-invocation
+boundary, not inside each backend or when decoding retained executable data.
+An effective policy has both axes present. Preserve the resolved selection
+alongside the existing full demand; derive actual claim keys by intersection
+at the admission owner. Keep explicit absent identifiers available for honest
+not-applicable reporting. No amount duplication or implicit name conversion.
+The shared value may live in a small private runtime module to keep queue and
+command-builder imports lightweight; the public facade and meaning are fixed,
+not its private file/helper layout.
+
 ### Retained Work Boundary — Proposed Hard Cut
 
 Current executable readers already reject unsupported versions instead of
@@ -274,6 +288,7 @@ Recommended version boundary, still subject to the expanded design review:
 | Exact managed runtime record schema 2 | Schema 3 embeds the new invocation and placements with concrete effective selections | Reject schema 2 before admission; never rewrite the saved record during replay |
 | `StageWorkerRequest` schema 1 | Schema 2 requires the resolved policy in its existing `resolved_runtime` mapping | Reject old prepared requests before launch instead of substituting new defaults |
 | Resident assignment bundle schema 3 | Schema 4 carries and validates that same resolved runtime | Reject old retained bundles; local/remote launch cannot reinterpret omitted policy |
+| Whole-run `LaunchContract` schema 2 | A dedicated launch-contract schema 3 includes the effective policy; other queue record and DB versions stay 2 | Read schema 2 for unchanged inspection only; reject new admission/re-execution before queue claims or resource effects |
 
 The worker and resident boundaries are material, not additional copies of the
 policy. Current `StageWorkerRequest.__post_init__` only checks the nested runtime's
@@ -310,8 +325,8 @@ owners. Keep the preserved cause plus actionable next step at the reader error
 boundary. Version constants above are based on the recorded source revision;
 reconcile then-current owners before implementation, without rewriting unrelated
 formats. This proposed boundary implements the approved new-job default without
-silently reinterpreting retained work; the separate opaque `LaunchContract`
-compatibility boundary still requires final design.
+silently reinterpreting retained work; the narrow opaque `LaunchContract`
+read-only compatibility rule is specified below.
 
 ### Default Decision And Backend Boundary Evidence
 
@@ -381,9 +396,9 @@ container executor tests: an unselected unsupported control is not an error;
 selecting it produces an actionable failure; a preflight or failed launch does
 not claim applied enforcement; a successful fake launcher proves supplied argv
 and environment only. Actual host-limit guarantees require separate physical
-evidence and are not a condition for the managed CPU diagnostic proof. Exact
-metadata keys and any necessary existing-owner codec changes remain part of the
-expanded design review, not an additional policy or lifecycle API.
+evidence and are not a condition for the managed CPU diagnostic proof. The exact
+candidate metadata shape is owned by Public Inspection And Execution Evidence
+below and remains subject to expanded review, not a separate lifecycle API.
 
 The public `build_apptainer_exec_command` and `build_docker_run_command` functions
 also serve callers without a pipeline executor. They currently accept container
@@ -482,8 +497,8 @@ bindings separate from `safe_evidence`, and preserve attribution through provide
 renewal. The exact field representation remains for design review; the observable
 contract is that selection is based on producer-owned logical identity, never a
 variable name or physical slot label. All maintained producers above must migrate
-together. Missing attribution from an external provider needs a documented
-compatibility/error disposition, not guessed ownership or a silent fallback.
+together. Missing attribution from an external provider follows the candidate
+Narrow Whole-Run Compatibility Rule below, not guessed ownership or a fallback.
 
 Propose carrying the same independent policy value through `QueueEnqueueRequest`
 and its authoritative `LaunchContract`, resolved and persisted at enqueue. Keep
@@ -534,15 +549,12 @@ release, and enqueue/replay of the exact policy. A combined controller case must
 prove an excluded capacity demand does not prevent selection and is not subtracted
 from later advisory capacity; a final-launch-only test would miss this defect.
 
-Compatibility remains a material design item: `LaunchContract` currently shares
-`QUEUE_RECORD_SCHEMA_VERSION = 2` with other queue records, while SQLite separately
-owns `QUEUE_DB_SCHEMA_VERSION = 2`. Do not bump all records or the database merely
-to add this one contract, and do not silently accept old executable items under
-new defaults. The expanded review must choose the narrow supported executable
-boundary, old-provider disposition and inspection/readability consequences before
-phase cards or implementation. The pipeline hard-cut proposal above does not
-authorize this queue migration. Apply the approved new-job default only at its
-documented new-invocation boundary, never as an old-record recovery fallback.
+The Narrow Whole-Run Compatibility Rule below proposes an isolated launch-contract
+version and read-only legacy path; other queue record/DB versions stay unchanged.
+The expanded review and final plan approval cover its executable rejection,
+old-provider disposition and inspection consequences. The pipeline hard cut alone
+does not authorize this queue migration. Apply the approved new-job default only
+at the documented new-invocation boundary, never as old-record recovery fallback.
 
 Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
@@ -608,6 +620,121 @@ axes meet at admission or launch. A fixture for a real supported no-cgroup
 container smoke may prove launch and timeout behavior; it does not prove hard
 CPU/RAM enforcement on the host. Live SLURM and hard GPU isolation are not claimed.
 
+## Candidate Design Decisions For Expanded Review
+
+These complete the proposed contracts above. The default is maintainer-approved;
+the concrete compatibility changes remain part of final plan approval. Review
+may correct a qualified gap without reopening the approved default or adding
+future resource mechanisms.
+
+### Supported Control Boundaries
+
+| Route | Additional controls supported by this change | Explicit unsupported control | Required preserved behavior |
+| --- | --- | --- | --- |
+| Native serial process | No new CPU/RAM/GPU mechanism | Fail before application execution, with guidance to a supported adapter or empty enforcement | Independent capacity admission; authored/inherited environment, timeout/cancel/cleanup |
+| Managed local and remote agent | Existing attributed provider GPU/other binding with authoritative admitted assignment | Fail when a requested binding has no supported provider/evidence; do not secretly add a reservation | Claims, renewal, fencing, reconnect, termination and provider release |
+| Direct Apptainer/Singularity | Existing CPU/RAM flags and supported allocation-visible GPU binding | Existing unmappable demand/absent binding evidence fails only when that control is selected | GPU driver access is distinct from a new visibility restriction; no cgroups under empty enforcement |
+| Direct Docker | Existing CPU/RAM flags | GPU enforcement remains unsupported; a GPU declaration without selected enforcement does not trigger that control error | Full demand provenance; no additional flags under empty enforcement |
+| SLURM planning/ready-stage allocation | Existing full allocation-demand mapping delegated to SLURM | Unsupported hard allocation requests still fail before submission, regardless of inner policy | Existing SBATCH identity/digest and inherited allocation constraints; no duplicate inner CPU/RAM cgroups |
+| Whole-run local opaque command | Attributed bindings from the existing assignment provider | No inferred CPU/RAM flags or arbitrary argv rewrite; missing selected binding support fails | Exact authored snapshot and independent selected logical-resource leases |
+
+All routes use the existing reliability timeout, not another resource selector
+for time. Job timeout disabled does not disable control-plane/cleanup deadlines.
+The table is a support matrix, not permission to add new host enforcement.
+
+### Public Inspection And Execution Evidence
+
+Existing runtime/placement metadata includes `resource_policy` with both resolved
+selection axes. Extend the existing command/attempt/launch metadata with
+`resource_controls`, an ordered plain-data list whose entries have exactly:
+
+```json
+{
+  "resource": "cpu",
+  "owner": "apptainer",
+  "mechanism": "container_cpu_flag",
+  "disposition": "requested"
+}
+```
+
+`resource` is the existing declaration identifier (semantic kind or whole-run
+logical key). `owner` and `mechanism` are owner-authored diagnostic identifiers,
+not dynamic import targets or registered mechanism plugins. `mechanism` is null
+when no mechanism applies. Sort by resource, owner and mechanism for reproducible
+presentation. Dispositions are `not_requested`, `not_applicable`, `requested`,
+`applied`, `delegated`, `unavailable` or `failed`. These are evidence descriptions
+at existing emission points, not a persisted resource-control lifecycle.
+
+Prepared argv/preflight can report only requested support, not applied controls.
+`applied` means that the actual launch owner supplied that additional binding or
+flag to a launched process, never measured kernel enforcement. A known setup or
+container-creation failure is `failed`, not applied; ordinary application failure
+after a launched job does not erase the launch evidence. Use existing process
+result/error evidence to distinguish them and do not infer inner-container
+success merely from a non-null outer command result. When evidence cannot
+establish application, retain requested/failed status rather than overclaiming.
+
+SLURM allocation evidence is owned by the existing request/submission receipt:
+resource policy does not suppress those directives. `delegated` describes that
+allocation request, while a separate inner-owner entry can be `not_requested`.
+This permits truthful reporting of inherited scheduler controls with no extra
+Loom limits. Existing claim/lease facts remain the only reservation evidence;
+do not copy raw lease capabilities, device tokens or environment values into
+this list. Existing diagnostic failures preserve the actionable underlying reason.
+
+No new store, endpoint, report file or global schema is required. These values
+extend existing metadata mappings and use their current plain-data boundary.
+Older inspection records missing these keys remain readable as unreported;
+absence must not be presented as verified no enforcement. Control constructors,
+serialization and the renderer share the same definition rather than validating
+ad hoc copies at every private helper.
+
+### Narrow Whole-Run Compatibility Rule
+
+Give only `LaunchContract` its new executable version, 3. Keep
+`QUEUE_RECORD_SCHEMA_VERSION` and `QUEUE_DB_SCHEMA_VERSION` at 2. Its public
+codec accepts the exact old schema-2 shape for inspection and preserves its
+original `to_dict()` bytes/fields, including the absence of policy, so enclosing
+queue-item admission digests remain valid. A legacy record carries no effective
+policy; it must never be passed through new-job default normalization.
+
+All fresh constructors/enqueue requests produce version 3 with the resolved
+policy, included in existing admission/replay identity. `QueueService._admit`
+rejects supplied old launch contracts before repository writes. The controller
+rejects old executable candidates before its queue claim/resource admission,
+and direct adapter dispatch repeats that guard at its public execution boundary.
+The error names the incompatible launch version and instructs the operator to
+finish/cancel active work in the compatible pinned environment, preserve the
+old artifacts, and enqueue a fresh identity with explicit policy. Do not rewrite
+old items or restart/recover them under new defaults. Ordinary read-only queue
+inspection remains usable; no new migration command or automatic live adoption.
+
+The existing `LaunchEnvironmentBindings` gains authoritative attribution as
+`resource_names: Mapping[str, str]`, keyed by emitted environment name and valued
+by its declaration's logical resource key. The environment and attribution are
+both immutable/detached. Supplied attribution must refer to existing environment
+keys; unattributed values remain representable for existing external providers.
+At a new policy-aware launch, no requested enforcement ignores those values
+without dropping their assignment leases. A selected binding requires matching
+attribution and a supported request; otherwise fail before spawn and perform
+existing pre-start release/cleanup. Do not guess that all raw values belong to
+the one requested GPU. Maintained static/GPU/paired providers populate the field
+and preserve it on renewal. No new provider protocol or amount field is needed.
+
+The old-provider compatibility comparison is deliberate: a flat external
+provider remains usable with the approved no-enforcement default, while opting
+into binding requires adding attribution. Documentation names that small update
+and the unavailable-control error. Enqueue/replay, old-schema read-only digest
+preservation, pre-claim rejection, direct-dispatch rejection and actual binding
+selection each have a current consumer and a discriminating existing test owner.
+
+### Design Review State
+
+Expanded design review: not yet run. Review the minimum public policy, whole-run
+scope, narrow version/read-only boundary, provider compatibility, actual evidence
+semantics and atomic delivery implications. No stage implementation card is
+admitted until qualified findings and material agreement items are resolved.
+
 ## Phase Shaping And Quality Gate
 
 Do not create execution cards before the named minimum-design tasks are resolved.
@@ -622,5 +749,6 @@ public/durable/runtime changes. Hosted CI remains disabled. Normal Loom isolated
 phase branches/PRs target develop, with verified merge and exact cleanup.
 
 Current quality gate: draft, not implementation-ready. No runtime tests or
-resource guarantees are claimed. Next action is concrete current-owner design,
-then the expanded independent design/plan review and approved phase packet.
+resource guarantees are claimed. Next action is the expanded design review of
+the candidate below, then phase shaping, independent plan review and final
+approval of the concrete migration and phase packet.
