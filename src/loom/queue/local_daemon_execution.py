@@ -56,6 +56,7 @@ from loom.queue._managed_local import (
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     _assignment_from_dict,
+    _read_decline_reason,
     _compose_agent_resource_providers,
     run_managed_local_assignment,
 )
@@ -601,7 +602,9 @@ def local_daemon_owner_stores_available(
         agent_revision = True
         if agent_id is not None:
             with _connect_existing_sqlite(config.agent_journal) as conn:
-                _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
+                _verify_owner_store_binding(
+                    conn, role="local-agent", stable_id=agent_id
+                )
                 agent_revision = conn.execute(
                     "SELECT revision FROM local_daemon_status_revision"
                 ).fetchone()
@@ -1247,7 +1250,9 @@ class LocalDaemonExecution:
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
         # coordinator state without that claim is unsafe to reconstruct.
-        retained = () if self.journal is None else self.journal.retained_claim_commands()
+        retained = (
+            () if self.journal is None else self.journal.retained_claim_commands()
+        )
         retained_assignment_ids = {
             command.assignment.assignment_id for command in retained
         }
@@ -1258,7 +1263,9 @@ class LocalDaemonExecution:
         if missing and (
             agent_root is None
             or any(
-                not _ResidentAssignmentWorkspace(agent_root, assignment_id).has_request()
+                not _ResidentAssignmentWorkspace(
+                    agent_root, assignment_id
+                ).has_request()
                 for assignment_id in missing
             )
         ):
@@ -3318,7 +3325,8 @@ class LocalDaemonExecution:
         replacement_local_capacity = replacement.agent_resource_capacity
         replacement_capacity = _coordinator_capacity(replacement)
         provider_changed = (
-            replacement_local_capacity != self.local_capacity
+            replacement.gpu_occupancy_policy != self.config.gpu_occupancy_policy
+            or replacement_local_capacity != self.local_capacity
             or replacement_capacity != self.capacity
             or _provider_composition_fingerprint(replacement_providers)
             != _provider_composition_fingerprint(self.providers)
@@ -3326,7 +3334,9 @@ class LocalDaemonExecution:
         if provider_changed:
             try:
                 retained_claims = (
-                    () if self.journal is None else self.journal.retained_claim_commands()
+                    ()
+                    if self.journal is None
+                    else self.journal.retained_claim_commands()
                 )
                 with sqlite3.connect(self.config.execution_database) as conn:
                     retained_assignment = conn.execute(
@@ -4114,11 +4124,27 @@ class LocalDaemonExecution:
                     (self.coordinator_epoch, self.coordinator_epoch),
                 )
             )
+            pending_claims: dict[str, set[str]] = {}
+            for pending in conn.execute(
+                "SELECT a.session_id, d.request_json FROM remote_assignments a "
+                "JOIN agent_deliveries d ON d.assignment_id = a.assignment_id "
+                "WHERE a.state != 'RELEASED'"
+            ):
+                request = json.loads(str(pending["request_json"]))
+                pending_claims.setdefault(str(pending["session_id"]), set()).add(
+                    str(request["claim_id"])
+                )
         targets: dict[str, tuple[Candidate, _RemoteCandidateTarget]] = {}
         for row in rows:
             if str(row["expires_at"]) < accepted_time:
                 continue
             offer = AgentOffer.from_value(json.loads(str(row["offer_json"])))
+            # A successor observation never consumes an unresolved admission.
+            # Once reflected, provider availability already excludes that claim.
+            if pending_claims.get(str(row["session_id"]), set()) - set(
+                offer.reflected_claim_ids
+            ):
+                continue
             matching = tuple(
                 profile
                 for profile in offer.resident_profiles
@@ -4782,16 +4808,26 @@ class LocalDaemonExecution:
             raise QueueConflictError("remote start permit fence conflicts")
         return True
 
-    def remote_decline(self, assignment_id: str) -> None:
+    def remote_decline(self, assignment_id: str, *, reason_code: str | None = None) -> None:
         """Release a pre-grant assignment after definitive physical decline."""
 
         record = self._remote_assignment_record(assignment_id)
         authority = self._remote_authority(str(record["run_uri"]))
         state = self.coordinator.state(assignment_id)
         if state == "released":
+            if self.coordinator.read_decline_reason(assignment_id) != reason_code:
+                raise QueueConflictError("remote decline reason replay conflicts")
             return
         if state != "bound":
             raise QueueConflictError("only a bound remote assignment can be declined")
+        saved_reason = self.coordinator.read_decline_reason(assignment_id)
+        if saved_reason is not None and saved_reason != reason_code:
+            raise QueueConflictError("remote decline reason replay conflicts")
+        if reason_code is not None:
+            self.coordinator.record_event(
+                assignment_id, 1, f"{assignment_id}:definitive_decline",
+                {"kind": "definitive_decline", "reason_code": reason_code},
+            )
         authority.unbind_prepared_attempt(
             str(record["run_uri"]),
             assignment_id=assignment_id,
@@ -5508,6 +5544,9 @@ def build_local_daemon_owner_views(
                         "session_id": str(row[6]),
                         "offer_id": str(row[7]),
                         "claim_id": str(row[8]),
+                        "decline_reason_code": _read_decline_reason(
+                            conn, "coordinator_events", assignment.assignment_id
+                        ),
                         "receipt_digest": hashlib.sha256(
                             str(row[9]).encode("utf-8")
                         ).hexdigest(),
@@ -5592,7 +5631,9 @@ def build_local_daemon_owner_views(
         try:
             with _connect_existing_sqlite(config.agent_journal) as conn:
                 conn.execute("BEGIN")
-                _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
+                _verify_owner_store_binding(
+                    conn, role="local-agent", stable_id=agent_id
+                )
                 revision_row = conn.execute(
                     "SELECT revision FROM local_daemon_status_revision"
                 ).fetchone()
@@ -5634,7 +5675,9 @@ def build_local_daemon_owner_views(
                             "process_execution_id": (
                                 None if row[3] is None else str(row[3])
                             ),
-                            "execution_fence": (None if row[4] is None else str(row[4])),
+                            "execution_fence": (
+                                None if row[4] is None else str(row[4])
+                            ),
                             "availability_revision": (
                                 None if row[5] is None else str(row[5])
                             ),

@@ -1169,3 +1169,87 @@ resource recommendation reports
 ```
 
 These should be added after post-v0 runtime/resource mappings are stable.
+
+## GPUs occupied by work outside Loom
+
+The built-in NVIDIA resource configuration monitors the explicitly selected
+GPUs for compute **and** graphics processes. For example, selecting `0,1`
+keeps both devices in the configured inventory. If another program uses GPU 0,
+the provider removes GPU 0 from offered capacity and reports
+`external_process_detected`; GPU 1 can still receive work. GPU 0 returns after
+a successful idle observation. GPU utilization and allocated-memory thresholds
+are not used: a process can reserve a GPU while temporarily doing no computation.
+
+Use the same resource block in an embedded local-agent or standalone agent role:
+
+```yaml
+resources:
+  cpu_capacity: 4
+  memory_capacity_bytes: 0
+  gpu:
+    provider: nvidia
+    devices: "0,1"
+    occupancy:
+      poll_interval_seconds: 5
+      max_observation_age_seconds: 15
+      query_timeout_seconds: 2
+```
+
+These are the defaults when `occupancy` is omitted. All values must be finite
+and positive; maximum age must exceed the polling interval plus query timeout.
+The settings follow the role's existing protected reload rules. Omitted and
+explicit defaults have the same configuration identity. The default admission
+policy preserves existing root and provider identities; an override changes the
+active role configuration. CPU-only roles (`devices: none`) launch no NVIDIA
+query. A custom provider composition cannot be combined with built-in NVIDIA
+occupancy configuration; it owns its own physical admission policy. Explicit
+Python/synthetic GPU providers can still be constructed without a monitor.
+
+Inventory discovery resolves indices to UUIDs. The process observer queries
+only those UUIDs using structured `nvidia-smi --query --xml-format --id=...`
+output and a timeout. One cache and one claim domain are shared across an
+agent's execution profiles. Status reads use that cache and do not run commands.
+A failed, malformed or incomplete query withholds affected unclaimed GPUs; a
+missing device is also unavailable. Cache age uses the local monotonic clock.
+
+The GPU provider forces another query immediately before preparing a **new**
+claim. An externally occupied or unverified GPU causes a definite pre-grant
+decline. The existing composite admission releases any partially prepared
+claims, and this decline does not consume an execution retry. Exact claim
+replays and restored claims retain their existing ownership. A GPU held by
+Loom is reported as `loom_claimed`; monitoring never releases or kills a job.
+
+The embedded daemon refreshes outside its scheduling lock. The standalone agent
+refreshes between work polls, while supervising a running job, and between
+transfer chunks. A changed decision advances the session and offer availability
+revision atomically. An unchanged decision renews the existing offer with fresh
+observation metadata. A lost response is retried with its original mutation
+identity before later session changes. Pending deliveries retain their original
+assignment identity, and an unreflected reservation still blocks new admission.
+
+Use `loom queue daemon-agent` / `daemon-agents` for remote agents and
+`loom queue daemon-status` for the embedded agent. Their JSON projections expose
+`resource_status` and `local_resource_status`, respectively, with safe capacity
+keys, `available`, `reason_code`, and `observed_at`. Reasons include `available`,
+`external_process_detected`, `loom_claimed`, `observation_unavailable`,
+`observation_stale`, and `device_missing`. Observation time is display metadata,
+not a scheduling revision. Remote reports expire under the existing offer TTL;
+expired reports display unavailable/stale. Agent-level `available` still means
+an active offer exists, so it can be true when every GPU is busy. Raw process
+IDs, commands, usernames, and additional private binding fields are absent from
+these projections. Status reuses the existing public inventory keys; the
+built-in NVIDIA inventory uses UUID strings as those keys.
+
+This is cooperative admission on a shared host. Another program can start after
+the final observation, and Loom cannot prevent that race. Strong exclusion
+requires all users to share an enforcing host scheduler or isolation mechanism.
+
+
+A GPU refusal before a grant retains its bounded `reason_code` in the agent's
+assignment journal and the coordinator's assignment events. Exact retries keep
+that original reason even when a later observation shows the GPU idle. Remote
+`execute_one()` decline receipts include `reason_code`; admission inspection
+exposes it as `owners.assignment.assignments[].decline_reason_code` for both
+embedded and remote assignments. Arbitrary provider diagnostics and process
+details are not copied into that field. A refusal still leaves the stage pending
+without consuming an execution retry.

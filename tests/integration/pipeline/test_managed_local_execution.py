@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from dataclasses import replace
 import sqlite3
 import sys
 import time
@@ -274,14 +275,15 @@ def _offer_snapshot(
 
 
 @pytest.mark.parametrize(
-    "release_crash_point",
-    ("availability_published", "final_event_acknowledged"),
+    ("release_crash_point", "reason_code"),
+    (("availability_published", "external_process_detected"), ("final_event_acknowledged", None)),
 )
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
     release_crash_point: str,
+    reason_code: str | None,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
@@ -633,14 +635,15 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
 
 
 @pytest.mark.parametrize(
-    "release_crash_point",
-    ("availability_published", "final_event_acknowledged"),
+    ("release_crash_point", "reason_code"),
+    (("availability_published", "external_process_detected"), ("final_event_acknowledged", None)),
 )
 def test_definitive_decline_replays_after_unbind_response_is_lost(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
     release_crash_point: str,
+    reason_code: str | None,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "declined-run")
@@ -746,6 +749,11 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
             resident_launch_profile=launch_profile,
         )
 
+    if reason_code is not None:
+        prepare = provider.prepare
+        monkeypatch.setattr(
+            provider, "prepare", lambda command: replace(prepare(command), detail=reason_code)
+        )
     with pytest.raises(TimeoutError, match="unbind response was lost"):
         execute()
     assert coordinator.state(assignment.assignment_id) == "bound"
@@ -801,6 +809,8 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     with pytest.raises(ManagedLocalError, match="definitively declined"):
         execute()
     assert coordinator.state(assignment.assignment_id) == "released"
+    assert coordinator.read_decline_reason(assignment.assignment_id) == reason_code
+    assert journal.read_decline_reason(assignment.assignment_id) == reason_code
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
     assert (
         journal.read_availability_revision(assignment.assignment_id) == saved_revision
