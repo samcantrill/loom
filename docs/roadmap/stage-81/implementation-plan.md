@@ -5,7 +5,7 @@ Roadmap stage: rphys 81, external owner contribution
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 12 — Loom Inspection Diagnostics
-Blockers: P12 independent review requires its implicit-context test; scoped correction underway
+Blockers: none; P12 review correction and both refreshed local gates pass
 
 This directory records Loom's contribution to the approved rphys Stage 81 plan,
 not a separately proposed Loom milestone. The authoritative requirements,
@@ -73,4 +73,4 @@ reserve placeholder execution plans.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 11 | [#287](https://github.com/samcantrill/loom/pull/287), merge `aa49475f5e086c6647e93c4f3635635e25e30959` | corrected implementation `e4150d1`; both Loom gates passed, 3,172 passes and 18 opt-in skips; independent review passed at `d222e7b`, no findings; final `c35faf1` adds evidence only | deliberate CLI/API removal; downstream adoption follows separately | exact clean worktree and local/remote phase branch removed; evidence retained at the phase-card path |
-| 12 | pending | implementation `bc270a4`, test correction `c4f9120`; both Loom gates passed, 3,179 passes and 18 opt-in skips; independent PR review next | private diagnostic text requires existing authorized endpoint access | retain until merged |
+| 12 | [#288](https://github.com/samcantrill/loom/pull/288), merge pending | implementation `bc270a4`, final test correction `150bbbc`; both Loom gates passed, 3,180 passes and 18 opt-in skips; independent review at `3d8e53a` had one test-only finding, now manager-verified and resolved with no runtime delta | private diagnostic text requires existing authorized endpoint access | retain until merged and final evidence copied |

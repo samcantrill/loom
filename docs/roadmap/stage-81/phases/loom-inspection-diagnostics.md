@@ -13,8 +13,8 @@
 - Dependencies: approved rphys diagnostic amendment; P11 PR #287 remotely merged,
   completion metadata published and exact phase cleanup verified.
 - Workflow: one executor, both local gates and required independent PR review.
-- Blockers: independent review requires the accepted implicit-context test;
-  manager correction 2/3 is underway. No Stage 85 adoption or resource-policy dependency.
+- Blockers: none; the independent-review correction and both refreshed local
+  gates pass. No Stage 85 adoption or resource-policy dependency.
 
 ## Objective And Contract Owner
 
@@ -145,15 +145,16 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 ## Workflow State And Completion
 
 - Manager setup: complete on clean published base; canonical readiness reused.
-- Implementation: complete at `c4f9120645e14b1dce8b8e8685b40371256b5e48`;
+- Implementation: complete at `150bbbc32d8f62dc8a4bcbd2dea498fdb513b3d1`;
   the initial implementation is `bc270a4362271796d592d1f93f68d870af1657cf`.
 - Optional planner/refiner: unused; correction 1/3 completed by the executor;
-  correction 2/3 admitted manager-locally for implicit-context coverage.
+  correction 2/3 completed manager-locally for implicit-context coverage.
 - Independent review: actual PR #288 head `3d8e53a2a6616e73d3a088ff457ab0fd856e9c17`
-  reviewed; one accepted coverage blocker, no other findings.
+  reviewed; its sole coverage finding is resolved by the test-only correction
+  and refreshed gates below. No runtime changes followed that review.
 - PR: [#288](https://github.com/samcantrill/loom/pull/288), correct title/target,
-  open and non-draft. Merge remains blocked until the scoped correction and
-  refreshed required gates pass; cleanup pending.
+  open and non-draft. Scope, local evidence and review are merge-ready;
+  publish the corrected head and recheck remote identity before merge. Cleanup pending.
 
 ### Independent Review Correction
 
@@ -164,26 +165,35 @@ the test only set context alongside a winning explicit cause. The implementation
 context-link branch therefore remained unexecuted. A regression discarding the
 preceding read error could pass the suite with a valid-looking diagnostic.
 
-Smallest correction 2/3: one real nested-raise test asserts no explicit cause,
+Correction 2/3 is complete: one real nested-raise test asserts no explicit cause,
 the original implicit context identity, exact projected context link and rendered
-explanation. The manager adds this test without runtime changes and refreshes
-both required gates. The reviewer otherwise found runtime semantics, disclosure,
+explanation. The manager verified the test-only diff and both refreshed gates.
+The reviewer otherwise found runtime semantics, disclosure,
 public format, strict rendering, imports and real endpoint/CLI evidence correct;
-it requested no further independent review loop. Manager will verify the scoped
-test and validation delta rather than claim review of unseen runtime changes.
+it requested no further independent review loop. The manager's affected-delta
+verification closes this finding without claiming independent review of unseen
+runtime changes; there are none.
 
-Manager pre-submit verification: corrected revision
-`c4f9120645e14b1dce8b8e8685b40371256b5e48`, tree
-`5d9e1a88b43d59551b3df869e281c839968f314e`, has both required passing gates.
-The delta to executor completion `5f964b0d1f23bc8869d6f359ec05fb45b45f878c` is this
-card only. Manager inspected both raw gate logs and parsed the six JUnit groups:
-3,179 passes, no failures/errors and 18 opt-in container skips. All damage
-variants, diagnostic tests and both real endpoint/client/CLI parameter cases
-executed successfully. Scope, import direction and the correction diff align
-with the fixed contract; no runtime change accompanied the test correction.
-Fetched Loom develop remains `d444284`, with no source/dependency drift. This
-receipt and the manifest update are documentation-only. Independent actual-PR
-review is the remaining pre-merge gate.
+Final manager verification: corrected revision
+`150bbbc32d8f62dc8a4bcbd2dea498fdb513b3d1`, tree
+`3e5ba52621ea788d62dbcdecd1be190eea90e8fe`, has both required passing gates.
+`make validate-pr` passes Ruff, Pyright, 3,019 default tests, 161 config-extra
+tests and both distribution builds. `make test-summary` exits zero and reports
+3,180 passes, no failures/errors, 18 opt-in container skips and 3,156 deselections.
+The manager parsed all six JUnit groups and verified the implicit-context test,
+128-node round trip, all five damage variants, both actual endpoint/client/CLI
+parameter cases and admission renderer case executed successfully. The reviewed
+runtime source is unchanged. Fetched develop remains `d444284`, with no source
+or dependency drift. Subsequent manifest/card receipts are documentation-only.
+
+Final evidence: `build/test-summary.md` generated `2026-09-08T14:12:43+00:00`,
+six JUnit/coverage groups under `build/test-summary/`, and raw gate logs
+`build/phase-12-validation/validate-pr-correction-2.log` and
+`build/phase-12-validation/test-summary-correction-2.log`. The focused diagnostic
+selection passed seven tests; its receipt is
+`build/phase-12-validation/implicit-context-junit.xml`. Preserve this final
+evidence outside the phase worktree before cleanup. The 18 skipped physical
+container cases remain outside P12; none of the required diagnostic cases skipped.
 
 ### Manager Pre-submit Correction
 
@@ -220,7 +230,10 @@ socket/client/CLI unavailable-diagnostic oracle, distinct damage-reason
 assertions, and 128-node serialization/render assertion now cover this bounded
 gap; the queue documentation paragraph is in the admission section.
 
-## Completion Record
+## Initial And First-Correction Evidence
+
+The receipts below are historical. The final validated revision, review
+disposition and evidence are recorded above.
 
 - Implementation and changed paths: added the detached `loom.diagnostic.v1`
   projector/strict renderer under `src/loom/diagnostics`, added the eighth
