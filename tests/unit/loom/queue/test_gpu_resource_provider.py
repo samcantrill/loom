@@ -251,6 +251,7 @@ def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(t
     journal_path = tmp_path / "journal.sqlite"
     journal = SQLiteAgentJournal(journal_path)
     assignment = command.assignment
+    assert isinstance(assignment, ManagedAssignment)
     journal.persist_request(assignment, {"request": "durable"})
     assert journal.prepare_composite(assignment, (command,), {"gpu": provider}) is AssignmentState.DECLINED
     assert journal.read_decline_reason(assignment.assignment_id) == "external_process_detected"

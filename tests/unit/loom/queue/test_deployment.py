@@ -1714,18 +1714,23 @@ def test_gpu_probe_reports_unavailable_device_without_blocking_free_sibling(
         tmp_path, monkeypatch, role, occupancy_observer=observe
     )
     report = run_role_preflight(source, role=role, probe_gpu=True)
-    checks = {
-        item.details["evidence"]["device_id"]: item
-        for item in report.checks
-        if item.check_id == "resources.gpu_compute"
-    }
+    checks = {}
+    for item in report.checks:
+        if item.check_id == "resources.gpu_compute":
+            evidence = item.details["evidence"]
+            assert isinstance(evidence, dict)
+            device_id = evidence["device_id"]
+            assert isinstance(device_id, str)
+            checks[device_id] = item
     assert set(checks) == {"GPU-a", "GPU-b"}, report.to_dict()
     unavailable = checks["GPU-a"]
     assert unavailable.status == (
         "SKIP" if reason == "external_process_detected" else "FAIL"
     )
-    assert unavailable.details["evidence"]["reason_code"] == reason
-    assert "probe_id" not in unavailable.details["evidence"]
+    evidence = unavailable.details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["reason_code"] == reason
+    assert "probe_id" not in evidence
     assert checks["GPU-b"].status == "PASS"
     assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-b"]
     journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
@@ -1770,9 +1775,14 @@ def test_gpu_probe_classifies_fresh_admission_refusal_after_releasing_reservatio
         assert item.status == (
             "SKIP" if reason == "external_process_detected" else "FAIL"
         )
-        assert item.details["evidence"]["reason_code"] == reason
-    assert checks[0].details["evidence"]["claim_retained"] is False
-    assert "probe_id" not in checks[1].details["evidence"]
+        evidence = item.details["evidence"]
+        assert isinstance(evidence, dict)
+        assert evidence["reason_code"] == reason
+    first_evidence = checks[0].details["evidence"]
+    second_evidence = checks[1].details["evidence"]
+    assert isinstance(first_evidence, dict) and isinstance(second_evidence, dict)
+    assert first_evidence["claim_retained"] is False
+    assert "probe_id" not in second_evidence
     assert not (tmp_path / "gpu-calls").exists()
     journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
     assert journal.retained_claim_commands() == ()
@@ -1819,15 +1829,14 @@ def test_gpu_probe_retains_refused_reservation_when_release_is_uncertain(
         item for item in report.checks if item.check_id == "resources.gpu_compute"
     ]
     assert len(checks) == 1 and checks[0].status == "FAIL", report.to_dict()
-    assert checks[0].details["evidence"]["claim_retained"] is True
+    evidence = checks[0].details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["claim_retained"] is True
     assert not (tmp_path / "gpu-calls").exists()
     journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
     retained = journal.retained_claim_commands()
     assert len(retained) == 1
-    assert (
-        checks[0].details["evidence"]["probe_id"]
-        == retained[0].assignment.assignment_id
-    )
+    assert evidence["probe_id"] == retained[0].assignment.assignment_id
 
     queries.clear()
     again = run_role_preflight(source, role=role, probe_gpu=True)
