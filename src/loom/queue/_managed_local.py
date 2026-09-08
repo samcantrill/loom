@@ -49,7 +49,9 @@ from loom.scheduling import (
     SchedulingComponentDescriptor,
 )
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
-from loom.timestamps import utc_timestamp
+from loom.timestamps import parse_timestamp, utc_timestamp
+
+from .gpu.occupancy import GpuOccupancyMonitor, GpuOccupancySnapshot
 
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
@@ -83,6 +85,32 @@ from ._remote_stage_execution import (
 
 class ManagedLocalError(ValueError):
     """An assignment, journal, or provider invariant was violated."""
+
+
+GPU_DECLINE_REASONS = frozenset(
+    {
+        "external_process_detected",
+        "observation_unavailable",
+        "observation_stale",
+        "device_missing",
+        "loom_claimed",
+    }
+)
+
+
+def _read_decline_reason(
+    conn: sqlite3.Connection, table: str, assignment_id: str
+) -> str | None:
+    row = conn.execute(
+        f"SELECT payload_json FROM {table} WHERE assignment_id = ? AND event_id = ?",
+        (assignment_id, f"{assignment_id}:definitive_decline"),
+    ).fetchone()
+    if row is None:
+        return None
+    reason = json.loads(str(row[0])).get("reason_code")
+    if not isinstance(reason, str) or reason not in GPU_DECLINE_REASONS:
+        raise ManagedLocalError("assignment decline reason is invalid")
+    return reason
 
 
 class ManagedProcessStartError(ManagedLocalError):
@@ -311,11 +339,83 @@ class ObserveRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceAvailabilityStatus:
+    """Safe decision for one configured resource capacity key.
+
+    ``observed_at`` is display metadata only.  It is intentionally absent from
+    :meth:`decision_dict` so a timestamp-only probe cannot change scheduling
+    identity.
+    """
+
+    resource_kind: str
+    local_capacity_key: str
+    available: bool
+    reason_code: str
+    observed_at: str | None
+
+    def __post_init__(self) -> None:
+        for name in ("resource_kind", "local_capacity_key", "reason_code"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ManagedLocalError(
+                    f"resource status {name} must be a non-empty string"
+                )
+        if not isinstance(self.available, bool):
+            raise ManagedLocalError("resource status availability must be boolean")
+        if self.observed_at is not None:
+            if not isinstance(self.observed_at, str):
+                raise ManagedLocalError("resource status observation time is invalid")
+            try:
+                parse_timestamp(self.observed_at)
+            except ValueError as exc:
+                raise ManagedLocalError(
+                    "resource status observation time is invalid"
+                ) from exc
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "resource_kind": self.resource_kind,
+            "local_capacity_key": self.local_capacity_key,
+            "available": self.available,
+            "reason_code": self.reason_code,
+            "observed_at": self.observed_at,
+        }
+
+    def decision_dict(self) -> dict[str, PlainData]:
+        return {
+            "resource_kind": self.resource_kind,
+            "local_capacity_key": self.local_capacity_key,
+            "available": self.available,
+            "reason_code": self.reason_code,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ResourceAvailabilityStatus":
+        expected = {
+            "resource_kind",
+            "local_capacity_key",
+            "available",
+            "reason_code",
+            "observed_at",
+        }
+        if not isinstance(value, Mapping) or set(value) != expected:
+            raise ManagedLocalError("resource status fields are invalid")
+        return cls(
+            cast(str, value["resource_kind"]),
+            cast(str, value["local_capacity_key"]),
+            cast(bool, value["available"]),
+            cast(str, value["reason_code"]),
+            cast(str | None, value["observed_at"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ObserveResult:
     operation_id: str
     availability_revision: str
     atoms: tuple[CapacityAtom, ...]
     live_claim_ids: tuple[str, ...]
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.operation_id, str) or not self.operation_id:
@@ -333,6 +433,18 @@ class ObserveResult:
             raise ManagedLocalError("live claim IDs must be non-empty strings")
         if len(set(self.live_claim_ids)) != len(self.live_claim_ids):
             raise ManagedLocalError("live claim IDs must be unique")
+        if any(
+            not isinstance(value, ResourceAvailabilityStatus)
+            for value in self.resource_status
+        ):
+            raise ManagedLocalError("resource statuses must be availability statuses")
+        if len(
+            {
+                (value.resource_kind, value.local_capacity_key)
+                for value in self.resource_status
+            }
+        ) != len(self.resource_status):
+            raise ManagedLocalError("resource status keys must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +637,8 @@ class _CompositeAgentResourceProvider:
             owners: dict[tuple[str, str], int] = {}
             atoms: list[CapacityAtom] = []
             live_claim_ids: set[str] = set()
+            statuses: list[ResourceAvailabilityStatus] = []
+            status_owners: dict[tuple[str, str], int] = {}
             for index, member in enumerate(self._members):
                 result = member.observe(
                     ObserveRequest(
@@ -537,6 +651,14 @@ class _CompositeAgentResourceProvider:
                     raise ManagedLocalError("provider observation is invalid")
                 observations.append((member, result))
                 live_claim_ids.update(result.live_claim_ids)
+                for status in result.resource_status:
+                    key = (status.resource_kind, status.local_capacity_key)
+                    if key in status_owners:
+                        raise ManagedLocalError(
+                            "same-kind providers expose overlapping resource statuses"
+                        )
+                    status_owners[key] = index
+                    statuses.append(status)
                 for atom in result.atoms:
                     if atom.owner_resource_kind != self.descriptor.kind:
                         raise ManagedLocalError(
@@ -564,6 +686,12 @@ class _CompositeAgentResourceProvider:
                 f"composite-{self.descriptor.kind}-{revision}",
                 tuple(sorted(atoms, key=lambda item: item.key)),
                 tuple(sorted(live_claim_ids)),
+                tuple(
+                    sorted(
+                        statuses,
+                        key=lambda item: (item.resource_kind, item.local_capacity_key),
+                    )
+                ),
             )
 
     def restore_capacity_holding(self, command: ClaimCommand) -> None:
@@ -1212,7 +1340,7 @@ class SQLiteAgentJournal:
                     item.outcome is ClaimOutcome.RELEASED for item in aborts
                 )
                 if result.outcome is ClaimOutcome.DECLINED and aborts_complete:
-                    return self._set_declined(assignment.assignment_id)
+                    return self._set_declined(assignment.assignment_id, result.detail)
                 return self._set_state(
                     assignment.assignment_id, AssignmentState.PREPARE_UNKNOWN
                 )
@@ -1479,33 +1607,37 @@ class SQLiteAgentJournal:
     ) -> int:
         if not event_id:
             raise ManagedLocalError("event ID is required")
-        encoded = _json(payload)
         with self._transaction() as conn:
-            self._assignment(conn, assignment_id)
-            existing = conn.execute(
-                "SELECT sequence, payload_json FROM events "
-                "WHERE assignment_id = ? AND event_id = ?",
-                (assignment_id, event_id),
-            ).fetchone()
-            if existing is not None:
-                if existing["payload_json"] != encoded:
-                    raise ManagedLocalError("event replay conflicts")
-                return cast(int, existing["sequence"])
-            sequence = cast(
-                int,
-                conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events "
-                    "WHERE assignment_id = ?",
-                    (assignment_id,),
-                ).fetchone()[0],
-            )
+            return self._append_event(conn, assignment_id, event_id, _json(payload))
+
+    def _append_event(
+        self, conn: sqlite3.Connection, assignment_id: str, event_id: str, encoded: str
+    ) -> int:
+        self._assignment(conn, assignment_id)
+        existing = conn.execute(
+            "SELECT sequence, payload_json FROM events "
+            "WHERE assignment_id = ? AND event_id = ?",
+            (assignment_id, event_id),
+        ).fetchone()
+        if existing is not None:
+            if existing["payload_json"] != encoded:
+                raise ManagedLocalError("event replay conflicts")
+            return cast(int, existing["sequence"])
+        sequence = cast(
+            int,
             conn.execute(
-                "INSERT INTO events "
-                "(assignment_id, sequence, event_id, payload_json, acknowledged_sequence) "
-                "VALUES (?, ?, ?, ?, NULL)",
-                (assignment_id, sequence, event_id, encoded),
-            )
-            return sequence
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()[0],
+        )
+        conn.execute(
+            "INSERT INTO events "
+            "(assignment_id, sequence, event_id, payload_json, acknowledged_sequence) "
+            "VALUES (?, ?, ?, ?, NULL)",
+            (assignment_id, sequence, event_id, encoded),
+        )
+        return sequence
 
     def acknowledge(self, assignment_id: str, sequence: int) -> int:
         with self._transaction() as conn:
@@ -1678,6 +1810,13 @@ class SQLiteAgentJournal:
         with self._transaction() as conn:
             value = self._assignment(conn, assignment_id)["availability_revision"]
         return None if value is None else str(value)
+
+    def read_decline_reason(self, assignment_id: str) -> str | None:
+        """Read the bounded reason retained at definitive pre-grant refusal."""
+
+        with self._transaction() as conn:
+            self._assignment(conn, assignment_id)
+            return _read_decline_reason(conn, "events", assignment_id)
 
     def read_result(self, assignment_id: str) -> StageWorkerResult | None:
         with self._transaction() as conn:
@@ -1863,9 +2002,16 @@ class SQLiteAgentJournal:
             )
         return state
 
-    def _set_declined(self, assignment_id: str) -> AssignmentState:
+    def _set_declined(
+        self, assignment_id: str, detail: str | None = None
+    ) -> AssignmentState:
         with self._transaction() as conn:
             self._assignment(conn, assignment_id)
+            if detail in GPU_DECLINE_REASONS:
+                self._append_event(
+                    conn, assignment_id, f"{assignment_id}:definitive_decline",
+                    _json({"kind": "definitive_decline", "reason_code": detail}),
+                )
             conn.execute(
                 "UPDATE assignments SET state = ?, declined = 1 "
                 "WHERE assignment_id = ?",
@@ -2631,6 +2777,12 @@ class SQLiteCoordinatorAssignments:
             )
             return sequence
 
+    def read_decline_reason(self, assignment_id: str) -> str | None:
+        """Read a durable physical refusal independently of current availability."""
+
+        with self._transaction() as conn:
+            return _read_decline_reason(conn, "coordinator_events", assignment_id)
+
     def retained_assignments(
         self, *, agent_id: str
     ) -> tuple[tuple[ManagedAssignment, Mapping[str, PlainData]], ...]:
@@ -3316,6 +3468,12 @@ def run_managed_local_assignment(
             operation="declined",
             release=journal.release_declined,
         )
+        reason_code = journal.read_decline_reason(assignment.assignment_id)
+        if reason_code is not None:
+            _emit_assignment_event(
+                journal, coordinator, assignment.assignment_id, "definitive_decline",
+                {"reason_code": reason_code},
+            )
         _emit_assignment_event(
             journal,
             coordinator,
@@ -3445,6 +3603,16 @@ def run_managed_local_assignment(
                 status=worker_result.status,
                 reason=_worker_terminal_reason(worker_result),
             )
+            if worker_result.status is StageStatus.FAILED:
+                failure = cast(ExecutionFailure, worker_result.failure)
+                # Publish diagnostic files only after the authority accepts the
+                # fenced result, and before terminal admission becomes visible.
+                run_store.write_stage_failure(
+                    assignment.run_uri,
+                    assignment.stage_name,
+                    failure.to_dict(),
+                    attempt=assignment.attempt,
+                )
         coordinator.advance(
             assignment.assignment_id,
             expected=coordinator_expected,
@@ -3765,9 +3933,7 @@ def _project_resident_result(
                 "resident output is outside its stage artifact directory"
             ) from exc
         target = target_root / relative
-        aliases[relative] = (
-            workspace.root / "retained-outputs" / item.logical_name
-        )
+        aliases[relative] = workspace.root / "retained-outputs" / item.logical_name
         retained.append((item, target))
 
     if retained:
@@ -3780,10 +3946,7 @@ def _project_resident_result(
 
     outputs: dict[str, ArtifactRef] = {}
     for item, target in retained:
-        if (
-            _regular_file_size_and_digest(target)
-            != (item.size_bytes, item.digest)
-        ):
+        if _regular_file_size_and_digest(target) != (item.size_bytes, item.digest):
             raise ManagedLocalError(
                 "published resident output conflicts with retained bytes"
             )
@@ -3868,9 +4031,7 @@ def _publish_regular_file_tree(
 
     target_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = Path(
-        tempfile.mkdtemp(
-            prefix=f".{target_root.name}.managed-", dir=target_root.parent
-        )
+        tempfile.mkdtemp(prefix=f".{target_root.name}.managed-", dir=target_root.parent)
     )
     try:
         for relative, source in sorted(
@@ -3979,7 +4140,9 @@ def _regular_file_size_and_digest(path: Path) -> tuple[int, str]:
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise ManagedLocalError("resident artifact is not a readable regular file") from exc
+        raise ManagedLocalError(
+            "resident artifact is not a readable regular file"
+        ) from exc
     digest = hashlib.sha256()
     try:
         details = os.fstat(descriptor)
@@ -3996,7 +4159,9 @@ def _regular_file_size_and_digest(path: Path) -> tuple[int, str]:
 def _fsync_local_tree(root: Path) -> None:
     directories = [root]
     directories.extend(path for path in root.rglob("*") if path.is_dir())
-    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+    for directory in sorted(
+        directories, key=lambda path: len(path.parts), reverse=True
+    ):
         _fsync_local_directory(directory)
 
 
@@ -4151,6 +4316,7 @@ class GpuResourceProvider(AtomResourceProvider):
         atoms: Sequence[CapacityAtom],
         *,
         bindings: Mapping[str, str],
+        occupancy_monitor: GpuOccupancyMonitor | None = None,
     ) -> None:
         super().__init__(
             _configured_provider_descriptor("gpu", atoms, bindings=bindings),
@@ -4162,6 +4328,135 @@ class GpuResourceProvider(AtomResourceProvider):
             raise ManagedLocalError("GPU bindings must exactly cover configured atoms")
         if any(not value or "\0" in value for value in self._bindings.values()):
             raise ManagedLocalError("GPU binding values are invalid")
+        if occupancy_monitor is not None and not isinstance(
+            occupancy_monitor, GpuOccupancyMonitor
+        ):
+            raise ManagedLocalError("GPU occupancy monitor is invalid")
+        if occupancy_monitor is not None and set(
+            occupancy_monitor.selected_uuids
+        ) != set(self._bindings.values()):
+            raise ManagedLocalError(
+                "GPU occupancy monitor UUIDs conflict with bindings"
+            )
+        self._occupancy_monitor = occupancy_monitor
+        self._occupancy_decision: tuple[tuple[str, bool, str], ...] | None = None
+
+    @property
+    def configured_atoms(self) -> tuple[CapacityAtom, ...]:
+        """Stable device capacity for inventory and coordinator upper bounds."""
+        return tuple(sorted(self._capacity.values(), key=lambda atom: atom.key))
+
+    def refresh_occupancy(self, force: bool = False) -> GpuOccupancySnapshot | None:
+        """Refresh the optional local process cache without holding claim state."""
+
+        if self._occupancy_monitor is None:
+            return None
+        return self._occupancy_monitor.refresh(force=force)
+
+    def _observe(self, request: ObserveRequest) -> ObserveResult:
+        base = super()._observe(request)
+        if self._occupancy_monitor is None:
+            return base
+        snapshot = self._occupancy_monitor.cached_snapshot()
+        held_keys = {
+            atom.local_capacity_key
+            for command, outcome in self._claims.values()
+            if outcome in {ClaimOutcome.PREPARED, ClaimOutcome.ACTIVE}
+            for atom in command.claim.atoms
+        }
+        available_by_key = {atom.local_capacity_key: atom for atom in base.atoms}
+        statuses: list[ResourceAvailabilityStatus] = []
+        filtered: list[CapacityAtom] = []
+        for key, uuid in sorted(self._bindings.items()):
+            observed_at = snapshot.observed_at if snapshot is not None else None
+            if key in held_keys:
+                available, reason = False, "loom_claimed"
+            elif snapshot is None:
+                available, reason = False, "observation_unavailable"
+            elif not self._occupancy_monitor.snapshot_is_fresh(snapshot):
+                available, reason = False, "observation_stale"
+            else:
+                observed = snapshot.for_uuid(uuid)
+                if observed is None or observed.reason_code == "device_missing":
+                    available, reason = False, "device_missing"
+                elif not observed.query_succeeded:
+                    available, reason = False, "observation_unavailable"
+                elif observed.has_gpu_process:
+                    available, reason = False, "external_process_detected"
+                else:
+                    available, reason = True, "available"
+            statuses.append(
+                ResourceAvailabilityStatus("gpu", key, available, reason, observed_at)
+            )
+            if available and key in available_by_key:
+                filtered.append(available_by_key[key])
+        decision = tuple(
+            (item.local_capacity_key, item.available, item.reason_code)
+            for item in statuses
+        )
+        if decision != self._occupancy_decision:
+            self._occupancy_decision = decision
+            self._revision += 1
+        return ObserveResult(
+            request.operation_id,
+            (
+                f"provider-{self.descriptor.kind}-"
+                f"{self.descriptor.configuration_fingerprint}-{self._revision}"
+            ),
+            tuple(filtered),
+            base.live_claim_ids,
+            tuple(statuses),
+        )
+
+    def prepare(self, command: ClaimCommand) -> ClaimResult:
+        if self._occupancy_monitor is None:
+            return super().prepare(command)
+        with self._lock:
+            identity_error = self._provider_identity_error(command)
+            if identity_error is not None:
+                return identity_error
+            prior = self._claims.get(command.assignment.assignment_id)
+            if prior is not None:
+                if prior[0].claim.fingerprint != command.claim.fingerprint:
+                    return ClaimResult(
+                        ClaimOutcome.INDETERMINATE,
+                        command.operation_id,
+                        command.claim.fingerprint,
+                        "assignment claim conflicts",
+                    )
+                return ClaimResult(
+                    prior[1], command.operation_id, command.claim.fingerprint
+                )
+        self.refresh_occupancy(force=True)
+        with self._lock:
+            result = self._prepare(command)
+            if result.outcome is not ClaimOutcome.DECLINED:
+                return result
+            observed = self._observe(
+                ObserveRequest(
+                    command.assignment.agent_id,
+                    command.assignment.session_id,
+                    f"{command.operation_id}:decision",
+                )
+            )
+            status_by_key = {
+                item.local_capacity_key: item for item in observed.resource_status
+            }
+            reason = next(
+                (
+                    status_by_key[atom.local_capacity_key].reason_code
+                    for atom in command.claim.atoms
+                    if atom.local_capacity_key in status_by_key
+                    and not status_by_key[atom.local_capacity_key].available
+                ),
+                result.detail,
+            )
+            return ClaimResult(
+                result.outcome,
+                result.operation_id,
+                result.claim_fingerprint,
+                reason,
+            )
 
     def binding_for_claim(self, command: ClaimCommand) -> tuple[str, ...]:
         """Return private worker bindings only for the exact active claim."""
@@ -4709,6 +5004,7 @@ __all__ = [
     "GpuResourceProvider",
     "ObserveRequest",
     "ObserveResult",
+    "ResourceAvailabilityStatus",
     "SQLiteAgentJournal",
     "SQLiteCoordinatorAssignments",
     "grant_and_start_managed_assignment",

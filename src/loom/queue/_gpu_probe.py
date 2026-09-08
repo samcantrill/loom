@@ -22,9 +22,11 @@ from ._managed_local import (
     AgentResourceProvider,
     ClaimCommand,
     ClaimOutcome,
+    GpuResourceProvider,
     ManagedLocalError,
     ObserveRequest,
     SQLiteAgentJournal,
+    _CompositeAgentResourceProvider,
     _ProbeClaimOwner,
     _compose_agent_resource_providers,
     _operation_command,
@@ -62,6 +64,7 @@ def _finding(
     *,
     applicability: str = "requested active probe",
     evidence: Mapping[str, PlainData] | None = None,
+    repair: str = "Initialize first, stop the owning service and settle retained work. Use the declared resident GPU runtime; preserve uncertain claims for verified recovery.",
 ) -> PreflightCheckResult:
     return readiness_check(
         "resources.gpu_compute",
@@ -70,10 +73,42 @@ def _finding(
         message,
         owner="agent GPU provider and journal",
         consequence="Only a completed owned kernel and cleanup qualify GPU compute; uncertain claims retain capacity.",
-        repair="Initialize first, stop the owning service and settle retained work. Use the declared resident GPU runtime; preserve uncertain claims for verified recovery.",
+        repair=repair,
         applicability=applicability,
         evidence=evidence,
     )
+
+
+def _occupancy_refusal_finding(
+    reason: str | None, evidence: Mapping[str, PlainData]
+) -> PreflightCheckResult | None:
+    if reason in {"external_process_detected", "loom_claimed"}:
+        return _finding(
+            Status.SKIP,
+            "GPU capacity is busy; compute qualification is deferred.",
+            applicability="busy/deferred",
+            evidence={**evidence, "reason_code": reason},
+            repair="Wait for the selected GPU's current owner to finish, then retry during agent maintenance.",
+        )
+    if reason in {"observation_unavailable", "observation_stale", "device_missing"}:
+        return _finding(
+            Status.FAIL,
+            "Current GPU availability could not be established; compute qualification did not run.",
+            evidence={**evidence, "reason_code": reason},
+            repair="Check the selected GPU identities and NVIDIA process-query access, then retry during agent maintenance.",
+        )
+    return None
+
+
+def _refresh_probe_gpu_occupancy(provider: AgentResourceProvider) -> None:
+    members = (
+        provider.members
+        if isinstance(provider, _CompositeAgentResourceProvider)
+        else (provider,)
+    )
+    for member in members:
+        if isinstance(member, GpuResourceProvider):
+            member.refresh_occupancy(force=True)
 
 
 def run_role_gpu_probes(
@@ -160,7 +195,11 @@ def _probe_owner(
     configuration: CoordinatorServiceConfig | OutboundAgentServiceConfig,
     profiles: tuple[ResidentExecutionProfile, ...],
 ) -> Iterator[tuple[str, SQLiteAgentJournal, dict[str, AgentResourceProvider]]]:
-    from .agent_session_transport import _RemoteAgentJournal, _agent_active_fingerprint
+    from .agent_session_transport import (
+        _RemoteAgentJournal,
+        _agent_active_fingerprint,
+        _configured_remote_provider_members,
+    )
     from .deployment import CoordinatorServiceConfig
     from .errors import QueueServiceError
     from .local_daemon import _acquire_lock, _open_root, _validate_deployment_binding
@@ -209,11 +248,10 @@ def _probe_owner(
             root_id = control.root_id
             session = control.active_session()
             agent_id = root_id if session is None else session.agent_id
-            factory = client.agent_resource_provider_factory
-            if factory is None:
-                raise ManagedLocalError("GPU provider factory is missing")
             providers = _compose_agent_resource_providers(
-                tuple(factory(agent_id, client.capacity_profile))
+                _configured_remote_provider_members(
+                    client, agent_id, client.capacity_profile
+                )
             )
             extra_retained = control.has_unresolved_assignment_references()
 
@@ -257,11 +295,21 @@ def _probe_device(
             evidence=evidence,
         )
     owner = _ProbeClaimOwner(f"diagnostic-probe:{uuid4().hex}", agent_id)
+    _refresh_probe_gpu_occupancy(provider)
     observed = provider.observe(
         ObserveRequest(agent_id, owner.session_id, f"{owner.probe_id}:observe")
     )
     if observed.live_claim_ids:
         raise _ProbeBusy
+    for status in observed.resource_status:
+        if (
+            status.resource_kind == "gpu"
+            and status.local_capacity_key == f"{agent_id}:{device_id}"
+            and not status.available
+        ):
+            refusal = _occupancy_refusal_finding(status.reason_code, evidence)
+            if refusal is not None:
+                return refusal
     atom = next(
         (
             item
@@ -304,7 +352,9 @@ def _probe_device(
                     released = journal.release_probe(owner.probe_id, providers)
                     evidence["claim_retained"] = not released
                     if released:
-                        return _finding(
+                        return _occupancy_refusal_finding(
+                            result.detail, evidence
+                        ) or _finding(
                             Status.SKIP,
                             "GPU provider capacity is busy; probing is deferred.",
                             applicability="busy/deferred",

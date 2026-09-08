@@ -10,6 +10,7 @@ from loom.pipeline import (
     StageFactorySpec,
     StageSpec,
 )
+from loom.pipeline.execution import StageReportedFailure
 from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.planning import (
@@ -113,6 +114,26 @@ def test_local_executor_returns_structured_failure(tmp_path: Path) -> None:
     assert result.failure is not None
     assert result.failure.failure_type == "stage_exception"
     assert result.traceback_path is not None
+
+
+def test_local_executor_preserves_reported_failure_without_traceback(
+    tmp_path: Path,
+) -> None:
+    class ReportedFailureStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            del context, inputs
+            raise StageReportedFailure({"schema": "domain.failure.v1", "value": [1]})
+
+    result = LocalExecutor().execute(_request(tmp_path, ReportedFailureStage()))
+
+    assert result.status is StageStatus.FAILED
+    assert result.traceback_path is None
+    assert result.failure is not None
+    assert result.failure.message == "stage reported a domain failure"
+    assert result.failure.exception_type == "loom.pipeline.execution.StageReportedFailure"
+    assert result.failure.details == {
+        "domain_failure": {"schema": "domain.failure.v1", "value": (1,)}
+    }
 
 
 def test_local_executor_reports_reliability_timeout_as_unsupported(

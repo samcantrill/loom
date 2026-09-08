@@ -24,6 +24,7 @@ from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.provenance.models import ProvenanceCaptureOptions
+from loom.serialization import json_dumps_pretty
 
 
 def _spec(
@@ -39,7 +40,9 @@ def _spec(
                     "name": "build",
                     "factory": {"_target_": target},
                     "config": stage_config or {"value": 123},
-                    "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+                    "outputs": {
+                        "data": {"artifact_type": "json", "codec_key": "json.v1"}
+                    },
                 }
             ],
         }
@@ -145,9 +148,7 @@ def test_subprocess_executor_success_parent_finalizes_stage(tmp_path: Path) -> N
         result = PipelineRunner(
             run_store=store,
             executor=SubprocessExecutor(run_store=store),
-        ).run(
-            _request("tests.support.pipeline_execution_stages.JsonProducerStage")
-        )
+        ).run(_request("tests.support.pipeline_execution_stages.JsonProducerStage"))
 
     assert result.status == RunStatus.SUCCEEDED
 
@@ -164,9 +165,7 @@ def test_subprocess_executor_runs_against_service_authority(
         result = PipelineRunner(
             run_store=store,
             executor=SubprocessExecutor(run_store=store),
-        ).run(
-            _request("tests.support.pipeline_execution_stages.JsonProducerStage")
-        )
+        ).run(_request("tests.support.pipeline_execution_stages.JsonProducerStage"))
 
         assert result.status == RunStatus.SUCCEEDED
         snapshot = store.authority_store.snapshot(result.run_uri)
@@ -177,7 +176,10 @@ def test_subprocess_executor_runs_against_service_authority(
         assert outputs is not None
         artifact_store = LocalArtifactStore(store.local_artifact_root(result.run_uri))
         assert artifact_store.load(outputs["data"]) == {"value": 123}
-        assert store.read_stage_worker_result(result.run_uri, "build", attempt=1) is not None
+        assert (
+            store.read_stage_worker_result(result.run_uri, "build", attempt=1)
+            is not None
+        )
         provenance = store.read_stage_provenance(result.run_uri, "build")
         assert provenance is not None
         executor_metadata = cast(dict[str, object], provenance["executor_metadata"])
@@ -185,8 +187,10 @@ def test_subprocess_executor_runs_against_service_authority(
         assert executor_metadata["returncode"] == 0
 
 
+@pytest.mark.parametrize("reported", [False, True])
 def test_subprocess_executor_failure_parent_finalizes_failed_run(
     tmp_path: Path,
+    reported: bool,
 ) -> None:
     with LocalAuthorityService.start() as service:
         store = create_authority_backed_serial_run_store(
@@ -198,7 +202,10 @@ def test_subprocess_executor_failure_parent_finalizes_failed_run(
             run_store=store,
             executor=SubprocessExecutor(run_store=store),
         ).run(
-            _request("tests.support.pipeline_execution_stages.FailingStage")
+            _request(
+                "tests.support.pipeline_execution_stages."
+                + ("ReportedFailureStage" if reported else "FailingStage")
+            )
         )
 
         assert result.status == RunStatus.FAILED
@@ -212,7 +219,26 @@ def test_subprocess_executor_failure_parent_finalizes_failed_run(
         failure = cast(ExecutionFailure, result.failure)
         assert failure.executor == "subprocess"
         assert failure.failure_type == "stage_exception"
-        assert "stage failed intentionally" in failure.message
+        if reported:
+            assert failure.message == "stage reported a domain failure"
+            expected = {"record": {"items": [1, None, "safe"]}}
+            wire = failure.to_dict()
+            details = cast(dict[str, object], wire["details"])
+            assert details["domain_failure"] == expected
+            nested = cast(dict[str, object], details["worker_failure"])
+            assert (
+                cast(dict[str, object], nested["details"])["domain_failure"] == expected
+            )
+            assert persisted_failure == wire
+            assert failure.traceback_path is None
+            root = store.local_run_dir(result.run_uri)
+            assert not list(root.rglob("traceback.txt"))
+            assert "private-native-" not in json_dumps_pretty(worker_result)
+            for path in root.rglob("*"):
+                if path.is_file() and path.suffix in {".json", ".txt", ".log"}:
+                    assert "private-native-" not in path.read_text(encoding="utf-8")
+        else:
+            assert "stage failed intentionally" in failure.message
         assert failure.exit_code == 1
         status = store.read_run_status(result.run_uri)
         assert status is not None
@@ -237,9 +263,7 @@ def test_subprocess_timeout_kills_the_real_worker_before_failed_result(
         run_uri=run_uri,
         options={
             "executor": "subprocess",
-            "reliability": {
-                "timeout": {"enabled": True, "duration_seconds": 2}
-            },
+            "reliability": {"timeout": {"enabled": True, "duration_seconds": 2}},
         },
         provenance_options=ProvenanceCaptureOptions(
             capture_git=False,

@@ -929,7 +929,7 @@ register an agent, or submit a job to obtain probe ownership.
 
 Only a `PASS` for `resources.gpu_compute` proves that the assigned computation
 and cleanup completed. `SKIP` with `busy/deferred` means the agent is running,
-has retained work, or its provider declined capacity; retry after that condition
+has retained work, or its provider declined busy capacity; retry after that condition
 is resolved. CPU-only agents and pure coordinators report `inapplicable` without
 NVIDIA discovery or Torch imports. An unrequested probe reports `SKIP`. A requested
 GPU probe fails if the root is uninitialized, the declared Torch runtime is
@@ -938,8 +938,22 @@ not initialized by checking it. The overall report can remain successful when
 GPU compute is skipped; inspect the individual finding when compute qualification
 is required.
 
+Both agent setups use their configured providers and NVIDIA occupancy policy.
+The explicit probe refreshes occupancy before checking each selected device;
+the provider also rechecks during claim preparation. An externally occupied GPU
+reports `SKIP` with `external_process_detected`. An unavailable or stale observation,
+or a missing selected device, reports `FAIL` with its existing reason code and
+does not establish hardware failure. Other selected devices can still qualify.
+Default checks do not perform this active occupancy refresh.
+
+Initial busy/unavailable observations create no diagnostic reservation and launch
+no computation for that device. A definite refusal during claim preparation
+settles its already-recorded reservation before reporting busy versus unavailable.
+Uncertain release remains retained even if a later GPU observation appears free.
+
 Unlike default inspection, this explicit probe persists diagnostic ownership in
-the existing agent journal. Findings include a probe ID for correlation. It uses
+the existing agent journal when it reserves a device. Findings with a reservation
+include a probe ID for correlation. It uses
 no coordinator assignment, execution grant, training result, or separate database.
 
 | Last durable fact | Meaning on interruption or restart |
@@ -1201,6 +1215,30 @@ changed = client.wait_admission(
 )
 ```
 
+After a terminal wait, `client.admission(admission_id).owners["run_result"]`
+is the opaque run-store failure view. It has exactly `owner`, `availability`,
+`state`, `observed_at`, `freshness`, `diagnostic`, and `failures`. A readable
+view is `available` and `current`; it is `populated` when it contains the full
+pipeline-ordered list of schema-v1 `ExecutionFailure` mappings and `empty`
+otherwise. Every mapping retains its persisted attempt identity. The timestamp
+is the observation time, not a cross-owner snapshot or failure time.
+
+The native local managed route publishes the complete worker failure into the
+existing run-store failure file after fenced authority acceptance and before
+releasing the terminal assignment. Failed-stage and latest-attempt identity
+come from the authority snapshot already read for admission, not diagnostic
+status files. An unavailable snapshot also makes the result view unavailable.
+The authority remains the sole lifecycle owner; no new status mirror or
+historical backfill is introduced.
+
+Loom fails that entire view closed on a run-store read, corruption, or required
+failed-stage evidence error: it reports `unavailable`,
+`run_store_unavailable`, and an empty failures list rather than returning a
+partial result. Applications may raise
+`loom.pipeline.execution.StageReportedFailure` to retain one validated opaque
+plain-data payload at `failure.details["domain_failure"]`; Loom neither
+interprets nor renders that payload.
+
 `daemon-status` remains constant-size and includes `accepted_time_revision` as
 the fence for clock recovery. Operation detail returns a typed `kind`, `state`,
 `code`, and bounded `result`; ready-stage SLURM waits remain open after scheduler
@@ -1267,8 +1305,14 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v5 CLI result shape, agent protocol 10, and coordinator/agent
-state version 12. Loom does not upgrade or dual-read a previous control schema.
+roots for older control schemas and use the v5 CLI result shape,
+agent protocol 11, and coordinator/agent state version 12. The GPU availability
+update preserves roots already using state version 12. Upgrade agent and
+coordinator together: protocol 10 peers are rejected at handshake. Historical
+offers without GPU status decode as unverified and contribute no GPU capacity;
+existing assignment and release evidence remains intact. See
+[external GPU availability](runtime-resources.md#gpus-occupied-by-work-outside-loom)
+for monitoring defaults, status fields, and admission behaviour.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,

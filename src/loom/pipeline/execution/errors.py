@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from loom.errors import ExecutionError, PipelineError, ValidationError
-from loom.serialization import PlainData
+from loom.serialization import PlainData, ensure_plain_data
 
 
 class PipelineExecutionError(ExecutionError, PipelineError):
@@ -24,6 +24,16 @@ class LifecycleError(PipelineExecutionError):
 
 class StageExecutionRuntimeError(PipelineExecutionError):
     """Raised for runtime stage execution infrastructure failures."""
+
+
+class StageReportedFailure(PipelineExecutionError):
+    """Opt in to opaque application failure transport through Loom execution."""
+
+    def __init__(self, domain_failure: PlainData) -> None:
+        self.domain_failure = ensure_plain_data(
+            domain_failure, path="StageReportedFailure.domain_failure"
+        )
+        super().__init__("stage reported a domain failure")
 
 
 class ParallelExecutionUnsupportedError(RunRequestError):
@@ -60,6 +70,7 @@ __all__ = [
     "RunRequestError",
     "PlanExecutionError",
     "LifecycleError",
+    "StageReportedFailure",
     "ParallelExecutionUnsupportedError",
     "StageExecutionRuntimeError",
     "OutputValidationError",

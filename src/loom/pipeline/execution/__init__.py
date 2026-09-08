@@ -10,6 +10,7 @@ if TYPE_CHECKING:
         PipelineExecutionError,
         PlanExecutionError,
         RunRequestError,
+        StageReportedFailure,
         StageExecutionRuntimeError,
     )
     from loom.pipeline.execution.continuation import (
@@ -98,6 +99,7 @@ def __getattr__(name: str) -> object:
         "PreparedRunContinueResult",
         "RunRequest",
         "RunRequestError",
+        "StageReportedFailure",
         "RunResult",
         "RuntimeServices",
         "ResourceAdmissionDecision",
@@ -153,6 +155,7 @@ def __getattr__(name: str) -> object:
             PipelineExecutionError,
             PlanExecutionError,
             RunRequestError,
+            StageReportedFailure,
             StageExecutionRuntimeError,
         )
         from loom.pipeline.execution.models import (
@@ -228,6 +231,7 @@ def __getattr__(name: str) -> object:
             "PreparedRunContinueResult": PreparedRunContinueResult,
             "RunRequest": RunRequest,
             "RunRequestError": RunRequestError,
+            "StageReportedFailure": StageReportedFailure,
             "RunResult": RunResult,
             "RuntimeServices": RuntimeServices,
             "ResourceAdmissionDecision": ResourceAdmissionDecision,
@@ -291,6 +295,7 @@ __all__ = [
     "PreparedRunContinueResult",
     "RunRequest",
     "RunRequestError",
+    "StageReportedFailure",
     "RunResult",
     "RuntimeServices",
     "ResourceAdmissionDecision",

@@ -35,6 +35,7 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "PreparedRunContinueResult",
         "RunRequest",
         "RunRequestError",
+        "StageReportedFailure",
         "RunResult",
         "RuntimeServices",
         "ResourceAdmissionDecision",

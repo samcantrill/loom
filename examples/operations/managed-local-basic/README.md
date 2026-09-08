@@ -46,5 +46,8 @@ agent with a declared Torch runtime, and before starting its owning service, run
 Use the role files produced or copied for your deployment. A running or retained
 agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
 cleanup. The existing agent journal retains any uncertain claim across restart.
+The configured NVIDIA occupancy check defers an externally busy GPU and reports
+failed qualification when availability cannot be established. Other selected
+devices can still be tested; a later free observation never clears an uncertain claim.
 The CPU journey does not provide physical GPU evidence. See the
 [GPU qualification lifecycle](../../../docs/features/queue.md#optional-gpu-compute-qualification).

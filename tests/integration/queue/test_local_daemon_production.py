@@ -40,7 +40,7 @@ from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime import CpuResourcePlanner, scheduling_entry_view
 from loom.pipeline.runtime.options import ExecutionOptions
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import (
     CancellationEpochRequest,
     CoordinatorAdmissionRequest,
@@ -48,6 +48,7 @@ from loom.pipeline.stores import (
     LocalRunStore,
     path_to_run_uri,
 )
+from loom.pipeline.execution import ExecutionFailure
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     CapacityAtom,
@@ -86,7 +87,7 @@ from loom.queue.agent_sessions import (
     AgentPolicyConfig,
     TransportPrincipalPolicy,
 )
-from loom.serialization import PlainData, json_dumps_pretty
+from loom.serialization import PlainData, json_dumps_pretty, thaw_plain_data
 from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
     LocalDaemonExecutionOutcome,
@@ -441,6 +442,32 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             assert cast(int, socket_axis["revision"]) >= cast(
                 int, direct_axis["revision"]
             )
+        direct_result = cast(Mapping[str, object], owner_view["run_result"])
+        socket_result = cast(Mapping[str, object], socket_view["run_result"])
+        for field in (
+            "owner",
+            "availability",
+            "state",
+            "freshness",
+            "diagnostic",
+        ):
+            assert socket_result[field] == direct_result[field]
+        assert list(cast(tuple[object, ...], socket_result["failures"])) == cast(
+            list[object], direct_result["failures"]
+        )
+        assert str(socket_result["observed_at"]) >= str(direct_result["observed_at"])
+        assert set(direct_result) == {
+            "owner",
+            "availability",
+            "state",
+            "observed_at",
+            "freshness",
+            "diagnostic",
+            "failures",
+        }
+        assert direct_result["owner"] == "run-store"
+        assert direct_result["availability"] == "available"
+        assert direct_result["state"] == "empty"
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -1940,18 +1967,17 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         try:
             daemon.reconcile_once()
             settling = client.admission(submitted.admission_id)
-            assignment_view = cast(
-                Mapping[str, object], settling.owners["assignment"]
-            )
+            assignment_view = cast(Mapping[str, object], settling.owners["assignment"])
             assignments = cast(
                 list[Mapping[str, object]], assignment_view["assignments"]
             )
             assert settling.admission.state is LocalDaemonAdmissionState.ACTIVE
             assert len(assignments) == 1
             assert assignments[0]["state"] == "logical_released"
-            assert SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).stages[
-                0
-            ].status is StageStatus.FAILED
+            assert (
+                SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).stages[0].status
+                is StageStatus.FAILED
+            )
         finally:
             release_allowed.set()
         terminal = client.wait("lost-worker-item", timeout_seconds=10)
@@ -2131,13 +2157,18 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         daemon.stop()
 
 
+@pytest.mark.parametrize("reported", [False, True])
 def test_daemon_projects_stage_failure_to_authority_run_and_admission(
     tmp_path: Path,
+    reported: bool,
 ) -> None:
     run_root = tmp_path / "runs"
-    _store, run_uri, _pipeline = _persist_single_stage_run(
+    store, run_uri, _pipeline = _persist_single_stage_run(
         run_root,
-        factory_target="tests.support.pipeline_execution_stages.FailingStage",
+        factory_target=(
+            "tests.support.pipeline_execution_stages."
+            + ("ReportedFailureStage" if reported else "FailingStage")
+        ),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -2154,13 +2185,199 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        client.submit(LocalDaemonAdmissionRequest("failed-item", run_uri))
+        submitted = client.submit(LocalDaemonAdmissionRequest("failed-item", run_uri))
         completed = client.wait("failed-item", timeout_seconds=10)
 
         assert completed.state is LocalDaemonAdmissionState.FAILED
         assert authority.open_run(run_uri).status is RunStatus.FAILED
+        server = LocalDaemonSocketServer(daemon, config.endpoint)
+        server.start()
+        try:
+            socket_client = LocalDaemonSocketClient(config.endpoint)
+            terminal = socket_client.wait(submitted.queue_item_id, timeout_seconds=10)
+            assert terminal.state is LocalDaemonAdmissionState.FAILED
+            detail = socket_client.admission(submitted.admission_id)
+        finally:
+            server.stop()
+        view = cast(Mapping[str, object], detail.owners["run_result"])
+        assert view["availability"] == "available"
+        assert view["state"] == "populated"
+        assert view["freshness"] == "current"
+        assert view["diagnostic"] is None
+        persisted = store.read_stage_failure(run_uri, "build")
+        assert persisted is not None
+        assert thaw_plain_data(view["failures"]) == [persisted]
+        failure = ExecutionFailure.from_dict(persisted)
+        assert failure.run_uri == run_uri
+        assert failure.stage_name == "build"
+        assert failure.attempt == 1
+        if reported:
+            assert failure.to_dict()["details"] == {
+                "domain_failure": {"record": {"items": [1, None, "safe"]}}
+            }
+            assert failure.traceback_path is None
+            assert "private-native-" not in json_dumps_pretty(detail.to_dict())
+            assert not list(store.local_run_dir(run_uri).rglob("traceback.txt"))
+        else:
+            assert "domain_failure" not in failure.details
+            assert "stage failed intentionally" in failure.message
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "corrupt",
+        "read_error",
+        "missing_status_and_failure",
+        "authority_unavailable",
+    ],
+)
+def test_run_result_owner_projects_complete_failures_or_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
+    store.create_run(run_uri)
+    pipeline = {
+        "name": "failed-stages",
+        "stages": [
+            {
+                "name": name,
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.FailingStage"
+                },
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+            }
+            for name in ("zeta", "alpha")
+        ],
+    }
+    plan = plan_pipeline(
+        PipelineSpec.from_config(pipeline),
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    assert plan.stage_order == ("zeta", "alpha")
+    store.write_config_snapshot(
+        run_uri, "resolved", json_dumps_pretty({"pipeline": pipeline})
+    )
+    config = _daemon_config(tmp_path)
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=run_uri,
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.FAILED,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+    )
+    failures = []
+    for stage_name in plan.stage_order:
+        allocation = authority.allocate_stage_attempt(
+            run_uri, stage_name, owner_id="fixture", lease_ttl_seconds=30
+        )
+        authority.transition_stage(
+            run_uri,
+            stage_name,
+            from_status=StageStatus.RUNNING,
+            to_status=StageStatus.FAILED,
+        )
+        assert allocation.lease is not None
+        authority.release_lease(
+            allocation.lease.lease_id,
+            owner_id="fixture",
+            fencing_token=allocation.lease.fencing_token,
+        )
+        store.write_stage_status(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            status=StageStatusRecord(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=StageStatus.FAILED,
+                attempt=1,
+                updated_at="2020-01-01T00:00:01Z",
+            ),
+        )
+        failure = ExecutionFailure(
+            schema_version=1,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=1,
+            failed_at="2020-01-01T00:00:02Z",
+            executor="local",
+            failure_type="stage_exception",
+            message="stage failed",
+            details={} if stage_name == "zeta" else {"domain_failure": None},
+        )
+        failures.append(failure.to_dict())
+        store.write_stage_failure(run_uri, stage_name, failure.to_dict(), attempt=1)
+
+    view = cast(
+        Mapping[str, object],
+        build_local_daemon_owner_views(config, (admission,))[0]["run_result"],
+    )
+
+    assert view == {
+        "owner": "run-store",
+        "availability": "available",
+        "state": "populated",
+        "observed_at": view["observed_at"],
+        "freshness": "current",
+        "diagnostic": None,
+        "failures": failures,
+    }
+
+    if damage in {"missing", "missing_status_and_failure"}:
+        store.local_stage_dir(run_uri, "alpha").joinpath("failure.json").unlink()
+        if damage == "missing_status_and_failure":
+            store.local_stage_dir(run_uri, "alpha").joinpath("status.json").unlink()
+    elif damage == "corrupt":
+        store.write_stage_failure(
+            run_uri, "alpha", {**failures[-1], "unknown": True}, attempt=1
+        )
+    elif damage == "authority_unavailable":
+
+        def unavailable_authority(run_uri: str) -> Never:
+            raise OSError("injected authority read failure")
+
+        config = replace(config, coordinator_authority_factory=unavailable_authority)
+    else:
+        read_failure = LocalRunStore.read_stage_failure
+
+        def fail_later_read(
+            self: LocalRunStore,
+            run_uri: str,
+            stage_name: str,
+        ) -> dict[str, PlainData] | None:
+            if stage_name == "alpha":
+                raise OSError("injected unreadable failure")
+            return read_failure(self, run_uri, stage_name)
+
+        monkeypatch.setattr(LocalRunStore, "read_stage_failure", fail_later_read)
+    unavailable = cast(
+        Mapping[str, object],
+        build_local_daemon_owner_views(config, (admission,))[0]["run_result"],
+    )
+    assert unavailable == {
+        "owner": "run-store",
+        "availability": "unavailable",
+        "state": "unavailable",
+        "observed_at": unavailable["observed_at"],
+        "freshness": "unavailable",
+        "diagnostic": "run_store_unavailable",
+        "failures": [],
+    }
 
 
 @pytest.mark.parametrize(
@@ -2225,12 +2442,15 @@ def test_terminal_settlement_exempts_only_guarded_recovery_retention(
     execution = _execution(config)
     terminal = LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.FAILED)
     try:
-        assert execution._settled_terminal_outcome(  # noqa: SLF001
-            command.assignment.run_uri,
-            terminal,
-            slurm_in_flight=False,
-            slurm_diagnostic=None,
-        ).state is LocalDaemonAdmissionState.ACTIVE
+        assert (
+            execution._settled_terminal_outcome(  # noqa: SLF001
+                command.assignment.run_uri,
+                terminal,
+                slurm_in_flight=False,
+                slurm_diagnostic=None,
+            ).state
+            is LocalDaemonAdmissionState.ACTIVE
+        )
 
         monkeypatch.setattr(
             execution,

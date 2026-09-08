@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import os
+import json
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
@@ -472,9 +473,25 @@ def test_management_agent_and_operation_reads_are_current_and_typed(
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
             )
+            expired_offer = AgentOffer(
+                session_id="session-current",
+                coordinator_epoch=daemon._epoch or "",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                cpu=1,
+                memory_bytes=0,
+                ttl_seconds=1,
+                provider_composition=(
+                    AgentProviderDescriptor(
+                        CpuResourcePlanner.descriptor,
+                        CpuResourcePlanner.claim_contracts,
+                    ),
+                ),
+            )
             conn.execute(
-                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', '{}', '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
-                (daemon._epoch,),
+                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', ?, '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
+                (daemon._epoch, json.dumps(expired_offer.value())),
             )
             conn.commit()
 
@@ -2190,5 +2207,88 @@ def test_scoped_view_rejects_client_principal_for_operator_action(
         )
         with pytest.raises(QueueServiceError, match="not authorized"):
             operator.status()
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("change_policy", (False, True))
+def test_gpu_monitoring_follows_execution_owners_across_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change_policy: bool
+) -> None:
+    from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
+    from loom.queue._managed_local import GpuResourceProvider
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    busy = False
+    observed_policies: list[GpuOccupancyPolicy] = []
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        observed_policies.append(observer.policy)
+        return {
+            uuid: GpuProcessObservation(
+                uuid, True, busy, "external_process_detected" if busy else "available"
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    first_policy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    config = replace(
+        _config(tmp_path),
+        agent_resource_providers=None,
+        gpu_devices=(
+            ConfiguredGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        ),
+        gpu_occupancy_policy=first_policy,
+    )
+    next_policy = GpuOccupancyPolicy(0.02, 2, 0.1) if change_policy else first_policy
+    replacement = replace(
+        config, agent_resource_providers=None, gpu_occupancy_policy=next_policy
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        original = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        original.refresh_occupancy(force=True)
+        assert daemon.status().local_resource_status[0].available
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        receipt = operator.reload_scheduling(
+            CoordinatorSchedulingReload(
+                "gpu-reload", before.scheduling_epoch, "update monitoring"
+            )
+        )
+        assert receipt["state"] == "applied"
+        installed = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        assert (installed is original) is (not change_policy)
+        busy = True
+        # The daemon cycle must refresh the same cache that owns admission.
+        status = daemon.status().local_resource_status[0]
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            daemon.reconcile_once()
+            status = daemon.status().local_resource_status[0]
+            if status.reason_code == "external_process_detected":
+                break
+            time.sleep(0.02)
+        assert status.reason_code == "external_process_detected"
+        assert not status.available
+        assert observed_policies[-1] == next_policy
     finally:
         daemon.stop()

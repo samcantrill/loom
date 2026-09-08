@@ -88,6 +88,61 @@ def test_probe_release_requires_containment_and_creates_no_assignment(
         )
 
 
+def test_probe_refreshes_existing_composite_gpu_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.queue._gpu_probe import _refresh_probe_gpu_occupancy
+    from loom.queue._managed_local import _compose_agent_resource_providers
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyMonitor,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    queried = []
+
+    def observe(observer):
+        queried.append(observer.selected_uuids)
+        return {
+            uuid: GpuProcessObservation(
+                uuid,
+                True,
+                uuid == "GPU-a",
+                "external_process_detected" if uuid == "GPU-a" else "available",
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    members = tuple(
+        GpuResourceProvider(
+            GpuResourcePlanner.claim_contracts,
+            (
+                CapacityAtom(
+                    "gpu", f"agent:{uuid}", ExactQuantity(1), "count", ExactQuantity(1)
+                ),
+            ),
+            bindings={f"agent:{uuid}": uuid},
+            occupancy_monitor=GpuOccupancyMonitor((uuid,)),
+        )
+        for uuid in ("GPU-a", "GPU-b")
+    )
+    provider = _compose_agent_resource_providers(members)["gpu"]
+    request = ObserveRequest("agent", "maintenance", "observe")
+    assert provider.observe(request).atoms == () and queried == []
+    _refresh_probe_gpu_occupancy(provider)
+    observation = provider.observe(request)
+    assert set(queried) == {("GPU-a",), ("GPU-b",)}
+    assert [atom.local_capacity_key for atom in observation.atoms] == ["agent:GPU-b"]
+    assert {
+        item.local_capacity_key: item.reason_code
+        for item in observation.resource_status
+    } == {
+        "agent:GPU-a": "external_process_detected",
+        "agent:GPU-b": "available",
+    }
+
+
 @pytest.mark.parametrize("last_fact", ("reserved", "launch_intent", "contained"))
 def test_unreleased_probe_survives_reopen_and_withholds_capacity(
     tmp_path: Path, last_fact: str

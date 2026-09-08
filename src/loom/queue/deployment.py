@@ -38,7 +38,6 @@ from ._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
 )
 from .agent_sessions import (
-    AgentOffer,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
@@ -58,6 +57,7 @@ from .resident_readiness import (
     ResidentReadinessResult,
     qualified_resident_profile,
 )
+from .gpu.occupancy import GpuOccupancyPolicy
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3
@@ -89,6 +89,7 @@ class LocalAgentServiceConfig:
     source_path: Path
     environment_path: Path | None = None
     effective_capacity: EffectiveAgentCapacity | None = None
+    gpu_occupancy_policy: GpuOccupancyPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +217,9 @@ def load_coordinator_service_config(
             None if local_agent is None else cast(Any, local_agent.providers)
         ),
         slurm_profiles=cast(Any, slurm_profiles),
+        gpu_occupancy_policy=None
+        if local_agent is None
+        else local_agent.gpu_occupancy_policy,
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -281,10 +285,21 @@ def load_outbound_agent_service_config(
     resource_inventory, effective_capacity = _agent_resource_inventory(
         payload.get("resources")
     )
+    occupancy_policy = _gpu_occupancy_policy(payload.get("resources"))
+    if occupancy_policy is not None and payload.get("provider_factory") is not None:
+        raise QueueConfigError(
+            "NVIDIA occupancy cannot be bypassed by a custom provider factory"
+        )
     active_fingerprint = _canonical_fingerprint(
         {
             "authored": _outbound_active_projection(payload),
             "observed_resources": _resource_inventory_projection(resource_inventory),
+            **(
+                {"gpu_occupancy": occupancy_policy.to_dict()}
+                if occupancy_policy is not None
+                and occupancy_policy != GpuOccupancyPolicy()
+                else {}
+            ),
         }
     )
     registration_value = _mapping(payload, "registration")
@@ -321,6 +336,7 @@ def load_outbound_agent_service_config(
         agent_root=_path(payload, "agent_root", base),
         resident_profiles=profiles,
         resource_inventory=resource_inventory,
+        gpu_occupancy_policy=occupancy_policy,
         agent_resource_provider_factory=cast(Any, provider_factory),
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
@@ -453,59 +469,11 @@ def run_outbound_agent_service(
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
-                profile = active.client.capacity_profile
-                gpu_descriptors = tuple(item.descriptor for item in profile.gpu_devices)
-                (
-                    provider_descriptors,
-                    capacity_atoms,
-                    reflected_claim_ids,
-                ) = client._offer_provider_snapshot(  # noqa: SLF001
-                    session_id=session.session_id,
-                    availability_revision=session.availability_revision,
-                    capacity_profile=profile,
-                )
-                gpu_atoms = tuple(
-                    atom for atom in capacity_atoms if atom.owner_resource_kind == "gpu"
-                )
-                offer = AgentOffer(
-                    session.session_id,
-                    session.coordinator_epoch,
-                    session.config_revision,
-                    session.inventory_revision,
-                    session.availability_revision,
-                    sum(
-                        atom.amount.numerator
-                        for atom in capacity_atoms
-                        if atom.owner_resource_kind == "cpu"
-                    ),
-                    sum(
-                        atom.amount.numerator
-                        for atom in capacity_atoms
-                        if atom.owner_resource_kind == "memory"
-                    ),
-                    _OUTBOUND_OFFER_TTL_SECONDS,
-                    provider_descriptors,
-                    pools=session.pools,
-                    reflected_claim_ids=reflected_claim_ids,
-                    resident_profiles=tuple(
-                        item.descriptor for item in active.client.resident_profiles
-                    ),
-                    gpu_devices=gpu_descriptors,
-                    gpu_atoms=gpu_atoms,
-                    capacity_atoms=capacity_atoms,
-                )
-                # Availability revisions publish a new offer.  An unchanged
-                # revision retains that offer identity and only renews its TTL.
-                if client.renew_current_offer(session.session_id) is None:
-                    client.publish_offer(
-                        offer,
-                        idempotency_key=_operation_id(
-                            "offer",
-                            session.session_id,
-                            session.coordinator_epoch,
-                            session.availability_revision,
-                        ),
-                    )
+                client._resource_maintenance_enabled = True  # noqa: SLF001
+                client.refresh_resource_offer(ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS)
+                session = client.active_session()
+                if session is None:
+                    raise QueueServiceError("agent session ended without retirement")
                 sequence = client.next_poll_sequence(session.session_id)
                 client.execute_one(
                     session.session_id,
@@ -723,6 +691,11 @@ def _local_agent_service(value: object, base: Path, *, allow_unready: bool = Fal
             memory_capacity_bytes=resource_inventory.memory_capacity_bytes,
             gpu_devices=resource_inventory.gpu_devices,
         )
+    occupancy_policy = _gpu_occupancy_policy(payload.get("resources"))
+    if occupancy_policy is not None and provider_configuration is not None:
+        raise QueueConfigError(
+            "NVIDIA occupancy cannot be bypassed by custom providers"
+        )
     providers = _embedded_provider_composition(provider_configuration)
     return LocalAgentServiceConfig(
         _path(payload, "agent_root", agent_source.parent),
@@ -732,6 +705,7 @@ def _local_agent_service(value: object, base: Path, *, allow_unready: bool = Fal
         agent_source,
         environment_path,
         effective_capacity=effective_capacity,
+        gpu_occupancy_policy=occupancy_policy,
     )
 
 
@@ -766,7 +740,9 @@ def _agent_resource_inventory(
         "agent resources",
     )
     gpu = _mapping(resources, "gpu")
-    _exact(gpu, {"provider", "devices"}, "agent GPU resources")
+    _required_allowed(
+        gpu, {"provider", "devices"}, {"occupancy"}, "agent GPU resources"
+    )
     provider = _string(gpu, "provider")
     selection = _string(gpu, "devices")
     if provider != "nvidia":
@@ -810,6 +786,30 @@ def _agent_resource_inventory(
     except QueueServiceError as exc:
         raise QueueConfigError("agent resources exceed effective capacity") from exc
     return inventory, effective_capacity
+
+
+def _gpu_occupancy_policy(value: object) -> GpuOccupancyPolicy | None:
+    """Normalize authored NVIDIA observation policy without querying occupancy."""
+    if value is None:
+        return None
+    gpu = _mapping(_mapping_value(value, "agent resources"), "gpu")
+    authored = _mapping_value(gpu.get("occupancy", {}), "GPU occupancy")
+    fields = {
+        "poll_interval_seconds",
+        "max_observation_age_seconds",
+        "query_timeout_seconds",
+    }
+    _required_allowed(authored, set(), fields, "GPU occupancy")
+    defaults = GpuOccupancyPolicy().to_dict()
+    normalized = {
+        name: _positive_number({name: authored.get(name, defaults[name])}, name)
+        for name in fields
+    }
+    try:
+        policy = GpuOccupancyPolicy(**normalized)
+    except (ValueError, TypeError) as exc:
+        raise QueueConfigError("GPU occupancy timing policy is invalid") from exc
+    return None if gpu.get("devices") == "none" else policy
 
 
 def _resource_inventory_projection(
@@ -1169,6 +1169,12 @@ def _local_agent_active_projection(
             for item in profile.gpu_devices
         ],
         "providers": local_agent.provider_configuration,
+        **(
+            {"gpu_occupancy": local_agent.gpu_occupancy_policy.to_dict()}
+            if local_agent.gpu_occupancy_policy is not None
+            and local_agent.gpu_occupancy_policy != GpuOccupancyPolicy()
+            else {}
+        ),
     }
 
 

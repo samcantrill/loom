@@ -7,8 +7,12 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
+from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
+from ._managed_local import ResourceAvailabilityStatus
+
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from uuid import uuid4
 import fcntl
 import hashlib
 import http.client
@@ -200,6 +204,7 @@ class AgentTlsClientConfig:
     deployment_configuration_fingerprint: str | None = None
     active_configuration_fingerprint: str | None = None
     resource_inventory: AgentResourceInventory | None = None
+    gpu_occupancy_policy: GpuOccupancyPolicy | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -235,7 +240,9 @@ class AgentTlsClientConfig:
         if inventory is not None and not isinstance(inventory, AgentResourceInventory):
             raise QueueServiceError("agent resource inventory is invalid")
         if inventory is not None and not profiles:
-            raise QueueServiceError("agent resource inventory requires a resident profile")
+            raise QueueServiceError(
+                "agent resource inventory requires a resident profile"
+            )
         if inventory is None and len(capacity_domains) > 1:
             raise QueueServiceError(
                 "agent resident profiles must share one capacity domain"
@@ -270,7 +277,9 @@ class AgentTlsClientConfig:
         """Project the one agent capacity domain through an executable profile."""
 
         if not self.resident_profiles:
-            raise QueueServiceError("agent resource inventory requires a resident profile")
+            raise QueueServiceError(
+                "agent resource inventory requires a resident profile"
+            )
         inventory = self.resource_inventory
         if inventory is None:
             return self.resident_profiles[0]
@@ -327,7 +336,10 @@ class RunInspectionTlsClientConfig:
 
 
 def _default_remote_providers(
-    agent_id: str, profile: ResidentExecutionProfile
+    agent_id: str,
+    profile: ResidentExecutionProfile,
+    *,
+    occupancy_policy: GpuOccupancyPolicy | None = None,
 ) -> tuple[AgentResourceProvider, ...]:
     """Protected compatibility composition for one resident profile."""
 
@@ -364,8 +376,32 @@ def _default_remote_providers(
                 and atom.local_capacity_key in bindings
             ),
             bindings=bindings,
+            occupancy_monitor=(
+                None
+                if occupancy_policy is None
+                else GpuOccupancyMonitor(
+                    tuple(bindings.values()), policy=occupancy_policy
+                )
+            ),
         )
     return tuple(result[kind] for kind in sorted(result))
+
+
+def _configured_remote_provider_members(
+    config: AgentTlsClientConfig,
+    agent_id: str,
+    profile: ResidentExecutionProfile,
+) -> tuple[AgentResourceProvider, ...]:
+    """Construct the configured members for live execution or idle qualification."""
+
+    factory = config.agent_resource_provider_factory
+    if factory is None:
+        raise QueueServiceError("remote agent provider composition is missing")
+    if factory is _default_remote_providers:
+        return _default_remote_providers(
+            agent_id, profile, occupancy_policy=config.gpu_occupancy_policy
+        )
+    return tuple(factory(agent_id, profile))
 
 
 def _resident_provider_descriptors(
@@ -666,8 +702,7 @@ class _RemoteAgentJournal:
                 (fingerprint,),
             )
             conn.execute(
-                "UPDATE agent_sessions_local SET value_json = ? "
-                "WHERE session_id = ?",
+                "UPDATE agent_sessions_local SET value_json = ? WHERE session_id = ?",
                 (_canonical_json(updated.value()), updated.session_id),
             )
             conn.execute(
@@ -691,7 +726,9 @@ class _RemoteAgentJournal:
         if not rows:
             return
         if len(rows) != 1:
-            raise QueueServiceError("multiple protected agent reload intents are active")
+            raise QueueServiceError(
+                "multiple protected agent reload intents are active"
+            )
         row = rows[0]
         if str(row["replacement_fingerprint"]) != _agent_active_fingerprint(config):
             raise QueueConflictError(
@@ -895,17 +932,63 @@ class _RemoteAgentJournal:
                 raise QueueServiceError("remote agent session evidence is unavailable")
             conn.commit()
 
-    def prepare_offer(self, offer: AgentOffer, operation_id: str) -> None:
+    def pending_resource_mutation(
+        self, session_id: str
+    ) -> tuple[str, str, Mapping[str, PlainData]] | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT operation, operation_id, request_json FROM agent_mutation_intents "
+                "WHERE operation IN ('offer', 'renew') AND result_json IS NULL "
+                "AND json_extract(request_json, '$.session_id') = ? ORDER BY rowid LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (
+            str(row["operation"]),
+            str(row["operation_id"]),
+            json.loads(str(row["request_json"])),
+        )
+
+    def current_resource_offer(self, session_id: str) -> AgentOffer | None:
+        session = self.session(session_id)
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json FROM agent_mutation_intents WHERE operation = 'offer' "
+                "AND result_json IS NOT NULL AND json_extract(request_json, '$.session_id') = ? "
+                "AND json_extract(request_json, '$.availability_revision') = ? ORDER BY rowid DESC LIMIT 1",
+                (session_id, session.availability_revision),
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(str(row["request_json"]))
+        value.pop("expected_availability_revision", None)
+        return AgentOffer.from_value(value)
+
+    def prepare_offer(
+        self,
+        offer: AgentOffer,
+        operation_id: str,
+        expected_availability_revision: str | None = None,
+    ) -> None:
         session = self.session(offer.session_id)
         if (
             offer.coordinator_epoch != session.coordinator_epoch
             or offer.config_revision != session.config_revision
             or offer.inventory_revision != session.inventory_revision
-            or offer.availability_revision != session.availability_revision
+            or (
+                offer.availability_revision
+                if expected_availability_revision is None
+                else expected_availability_revision
+            )
+            != session.availability_revision
             or offer.pools != session.pools
         ):
             raise QueueConflictError("offer does not match the durable agent session")
-        self._persist_mutation("offer", operation_id, offer.value())
+        value = offer.value()
+        if expected_availability_revision is not None:
+            value["expected_availability_revision"] = expected_availability_revision
+        self._persist_mutation("offer", operation_id, value)
         with self._connection() as conn:
             conn.execute(
                 "INSERT INTO agent_offers_local(session_id, availability_revision, state) VALUES (?, ?, 'PENDING') ON CONFLICT(session_id) DO UPDATE SET availability_revision = excluded.availability_revision, state = 'PENDING'",
@@ -1083,8 +1166,12 @@ class _RemoteAgentJournal:
             ).fetchone()
             if row is None:
                 raise QueueServiceError("agent mutation intent is unavailable")
-            if row["result_json"] is not None and str(row["result_json"]) != encoded:
-                raise QueueConflictError("mutation replay returned a different result")
+            if row["result_json"] is not None:
+                if str(row["result_json"]) != encoded:
+                    raise QueueConflictError(
+                        "mutation replay returned a different result"
+                    )
+                return
             conn.execute(
                 "UPDATE agent_mutation_intents SET result_json = ? "
                 "WHERE operation = ? AND operation_id = ?",
@@ -1097,6 +1184,27 @@ class _RemoteAgentJournal:
                 session_id = request.get("session_id")
                 if not isinstance(session_id, str):
                     raise QueueServiceError("agent offer intent is invalid")
+                returned_session = result.get("session")
+                if returned_session is not None:
+                    if not isinstance(returned_session, Mapping):
+                        raise QueueServiceError(
+                            "agent offer session receipt is invalid"
+                        )
+                    updated_session = _session_from_value(
+                        cast(Mapping[str, PlainData], returned_session)
+                    )
+                    if (
+                        updated_session.session_id != session_id
+                        or updated_session.availability_revision
+                        != request.get("availability_revision")
+                    ):
+                        raise QueueConflictError(
+                            "agent offer session receipt conflicts"
+                        )
+                    conn.execute(
+                        "UPDATE agent_sessions_local SET value_json = ? WHERE session_id = ?",
+                        (_canonical_json(updated_session.value()), session_id),
+                    )
                 conn.execute(
                     "UPDATE agent_offers_local SET state = 'ACTIVE' WHERE session_id = ?",
                     (session_id,),
@@ -1112,6 +1220,13 @@ class _RemoteAgentJournal:
                     "VALUES (?, ?, ?, 0, '', NULL) ON CONFLICT(session_id) DO UPDATE SET "
                     "offer_id = excluded.offer_id, availability_revision = excluded.availability_revision, sequence = 0, digest = '', result_json = NULL",
                     (session_id, offer_id, availability_revision),
+                )
+            if operation == "renew":
+                # The bounded renewal row owns completed sequence replay. Keep
+                # only a pending full request here to recover a lost response.
+                conn.execute(
+                    "DELETE FROM agent_mutation_intents WHERE operation = ? AND operation_id = ?",
+                    (operation, operation_id),
                 )
             conn.commit()
 
@@ -1227,10 +1342,7 @@ class _RemoteAgentJournal:
                     if not isinstance(value, Mapping):
                         raise QueueServiceError("agent control effect is invalid")
                     return AgentControlEffect.from_value(value)
-                if (
-                    replacement_fingerprint is not None
-                    and existing_fingerprint is None
-                ):
+                if replacement_fingerprint is not None and existing_fingerprint is None:
                     conn.execute(
                         "UPDATE agent_controls_local SET replacement_fingerprint = ? "
                         "WHERE operation_id = ?",
@@ -2012,6 +2124,8 @@ class LocalDaemonAgentHttpClient:
         ) = None,
     ) -> None:
         self._config = config
+        self._resource_maintenance_enabled = False
+        self._next_resource_maintenance = 0.0
         self._trusted_config_loader = trusted_config_loader
         self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
@@ -2157,7 +2271,10 @@ class LocalDaemonAgentHttpClient:
                 )
                 conn.execute(
                     "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
-                    ("active_configuration_fingerprint", _agent_active_fingerprint(config)),
+                    (
+                        "active_configuration_fingerprint",
+                        _agent_active_fingerprint(config),
+                    ),
                 )
                 conn.execute(
                     "INSERT INTO root_metadata(key, value) VALUES "
@@ -2270,7 +2387,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v10",
+                    "agent-sessions-v11",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -2309,7 +2426,12 @@ class LocalDaemonAgentHttpClient:
         return session
 
     def publish_offer(
-        self, offer: AgentOffer, *, idempotency_key: str
+        self,
+        offer: AgentOffer,
+        *,
+        idempotency_key: str,
+        expected_availability_revision: str | None = None,
+        _observed_snapshot: bool = False,
     ) -> Mapping[str, PlainData]:
         if self._drained:
             raise QueueConflictError("drained agent cannot advertise capacity")
@@ -2363,10 +2485,11 @@ class LocalDaemonAgentHttpClient:
                 self._require_journal().session(offer.session_id).agent_id,
                 capacity,
             )
-            self._validate_offer_provider_capacity(
-                offer,
-                self._require_journal().session(offer.session_id).agent_id,
-            )
+            if not _observed_snapshot:
+                self._validate_offer_provider_capacity(
+                    offer,
+                    self._require_journal().session(offer.session_id).agent_id,
+                )
             members = self._configured_provider_members
             if members is None:
                 raise QueueConflictError("remote agent provider composition is missing")
@@ -2386,9 +2509,14 @@ class LocalDaemonAgentHttpClient:
                     "offer provider identity differs from resident configuration"
                 )
         journal = self._require_journal()
-        journal.prepare_offer(offer, idempotency_key)
+        journal.prepare_offer(offer, idempotency_key, expected_availability_revision)
         result = self._call(
-            "offer", {"offer": offer.value(), "idempotency_key": idempotency_key}
+            "offer",
+            {
+                "offer": offer.value(),
+                "idempotency_key": idempotency_key,
+                "expected_availability_revision": expected_availability_revision,
+            },
         )
         journal.complete_mutation("offer", idempotency_key, result)
         return result
@@ -2397,12 +2525,140 @@ class LocalDaemonAgentHttpClient:
         if self._drained or self._restart_with_retained_work:
             raise QueueConflictError("agent cannot renew executable capacity")
         journal = self._require_journal()
+        operation_id = f"{renewal.session_id}:{renewal.offer_id}:{renewal.sequence}"
+        journal._persist_mutation("renew", operation_id, renewal.value())
         replay = journal.prepare_offer_renewal(renewal)
         if replay is not None:
+            journal.complete_mutation("renew", operation_id, replay)
             return replay
         result = self._call("renew", {"renewal": renewal.value()})
         journal.complete_offer_renewal(renewal, result)
+        journal.complete_mutation("renew", operation_id, result)
         return result
+
+    def refresh_resource_offer(
+        self, *, ttl_seconds: int = 30
+    ) -> Mapping[str, PlainData] | None:
+        """Refresh cached host facts and report one serial, replayable resource view."""
+        journal = self._require_journal()
+        session = journal.active_session()
+        if session is None or self._drained or self._restart_with_retained_work:
+            return None
+        self._replay_pending_resource_mutation(session.session_id)
+        session = journal.session(session.session_id)
+        profile = self._config.capacity_profile
+        self._provider_composition(session.agent_id, profile)
+        for provider in self._configured_provider_members or ():
+            if isinstance(provider, GpuResourceProvider):
+                provider.refresh_occupancy()
+        descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
+            session_id=session.session_id,
+            availability_revision=session.availability_revision,
+            capacity_profile=profile,
+        )
+        offer = AgentOffer(
+            session_id=session.session_id,
+            coordinator_epoch=session.coordinator_epoch,
+            config_revision=session.config_revision,
+            inventory_revision=session.inventory_revision,
+            availability_revision=session.availability_revision,
+            cpu=sum(
+                atom.amount.numerator
+                for atom in atoms
+                if atom.owner_resource_kind == "cpu"
+            ),
+            memory_bytes=sum(
+                atom.amount.numerator
+                for atom in atoms
+                if atom.owner_resource_kind == "memory"
+            ),
+            ttl_seconds=ttl_seconds,
+            provider_composition=descriptors,
+            pools=session.pools,
+            reflected_claim_ids=claims,
+            resident_profiles=tuple(
+                item.descriptor for item in self._config.resident_profiles
+            ),
+            gpu_devices=tuple(item.descriptor for item in profile.gpu_devices),
+            gpu_atoms=tuple(
+                atom for atom in atoms if atom.owner_resource_kind == "gpu"
+            ),
+            capacity_atoms=atoms,
+            resource_status=statuses,
+        )
+        current = journal.current_resource_offer(session.session_id)
+        renewal = journal.next_offer_renewal(session.session_id)
+        if (
+            current is not None
+            and current.decision_value() == offer.decision_value()
+            and renewal is not None
+        ):
+            return self.renew_offer(replace(renewal, resource_status=statuses))
+        expected = None
+        if current is not None:
+            expected = session.availability_revision
+            offer = replace(offer, availability_revision=f"availability-{uuid4()}")
+        return self.publish_offer(
+            offer,
+            idempotency_key=f"offer-{uuid4()}",
+            expected_availability_revision=expected,
+            _observed_snapshot=True,
+        )
+
+    def _replay_pending_resource_mutation(self, session_id: str) -> None:
+        """Resolve the exact report before another operation changes session state."""
+        journal = self._require_journal()
+        pending = journal.pending_resource_mutation(session_id)
+        if pending is None:
+            return
+        operation, operation_id, value = pending
+        try:
+            if operation == "renew":
+                renewal = AgentOfferRenewal.from_value(value)
+                result = self._call("renew", {"renewal": renewal.value()})
+            else:
+                offered = dict(value)
+                expected = offered.pop("expected_availability_revision", None)
+                result = self._call(
+                    "offer",
+                    {
+                        "offer": offered,
+                        "idempotency_key": operation_id,
+                        "expected_availability_revision": expected,
+                    },
+                )
+        except _IndeterminateAgentProtocolError:
+            raise
+        except (QueueConflictError, QueueServiceError):
+            # A definite rejection cannot later change capacity. Unknown transport
+            # outcomes keep the exact intent for retry.
+            with journal._connection() as conn:
+                conn.execute(
+                    "DELETE FROM agent_mutation_intents WHERE operation = ? "
+                    "AND operation_id = ? AND result_json IS NULL",
+                    (operation, operation_id),
+                )
+                conn.commit()
+            return
+        if operation == "renew":
+            journal.complete_offer_renewal(AgentOfferRenewal.from_value(value), result)
+        journal.complete_mutation(operation, operation_id, result)
+
+    def _maintain_resource_offer(self) -> None:
+        """Keep control/supervision running when a report response is unavailable."""
+        if not self._resource_maintenance_enabled:
+            return
+        now = monotonic()
+        if now < self._next_resource_maintenance:
+            return
+        policy = self._config.gpu_occupancy_policy
+        interval = 5.0 if policy is None else policy.poll_interval_seconds
+        self._next_resource_maintenance = now + interval
+        try:
+            self.refresh_resource_offer()
+        except QueueError:
+            # Its exact pending mutation is retried; no worker is released.
+            pass
 
     def renew_current_offer(self, session_id: str) -> Mapping[str, PlainData] | None:
         renewal = self._require_journal().next_offer_renewal(session_id)
@@ -2452,6 +2708,7 @@ class LocalDaemonAgentHttpClient:
         return result
 
     def poll_control(self, session_id: str) -> AgentControl | None:
+        self._replay_pending_resource_mutation(session_id)
         journal = self._require_journal()
         pending = journal.next_unacknowledged_control()
         if pending is not None:
@@ -2530,9 +2787,7 @@ class LocalDaemonAgentHttpClient:
             if control.kind.value in {"drain", "reload"}:
                 self._drained = True
             if prepared_error is not None:
-                return self._unchanged_control_effect(
-                    control, session, prepared_error
-                )
+                return self._unchanged_control_effect(control, session, prepared_error)
             if (
                 control.cancel_active
                 and not cancellation_prepared
@@ -2631,10 +2886,7 @@ class LocalDaemonAgentHttpClient:
         next_retained_profiles = dict(self._retained_profiles)
         if retained:
             next_retained_profiles.update(
-                {
-                    _resident_profile_key(item): item
-                    for item in self._profiles.values()
-                }
+                {_resident_profile_key(item): item for item in self._profiles.values()}
             )
 
         def install_role() -> None:
@@ -2643,9 +2895,7 @@ class LocalDaemonAgentHttpClient:
         if self._prepare_role_reload is not None:
             install_role = self._prepare_role_reload(replacement)
             if not callable(install_role):
-                raise QueueServiceError(
-                    "trusted agent role reload plan is unavailable"
-                )
+                raise QueueServiceError("trusted agent role reload plan is unavailable")
         return _PreparedAgentReload(
             replacement=replacement,
             profiles=next_profiles,
@@ -2714,8 +2964,7 @@ class LocalDaemonAgentHttpClient:
             for retained in existing:
                 if (
                     retained_work
-                    and
-                    retained.descriptor == candidate.descriptor
+                    and retained.descriptor == candidate.descriptor
                     and _resident_profile_key(retained)
                     != _resident_profile_key(candidate)
                 ):
@@ -2735,6 +2984,8 @@ class LocalDaemonAgentHttpClient:
         )
 
     def _reset_runtime_providers(self) -> None:
+        self._configured_provider_members = None
+        self._configured_provider_agent_id = None
         self._runtime_agent_id = None
         self._runtime_provider_key = None
         self._providers = {}
@@ -3019,7 +3270,9 @@ class LocalDaemonAgentHttpClient:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
+        self._replay_pending_resource_mutation(session_id)
         session = _session_from_value(
             self._call(
                 "decline",
@@ -3027,6 +3280,7 @@ class LocalDaemonAgentHttpClient:
                     "session_id": session_id,
                     "assignment_id": assignment_id,
                     "availability_revision": availability_revision,
+                    "reason_code": reason_code,
                 },
             )
         )
@@ -3141,6 +3395,7 @@ class LocalDaemonAgentHttpClient:
         fence: str,
         availability_revision: str,
     ) -> AgentSession:
+        self._replay_pending_resource_mutation(session_id)
         journal = self._require_journal()
         execution_journal = self._execution_journal
         if execution_journal is None:
@@ -3341,11 +3596,13 @@ class LocalDaemonAgentHttpClient:
                     final=final,
                 )
                 offset = next_offset
+                self._maintain_resource_offer()
                 if final:
                     break
         workspace.accept()
         prepared = execution_journal.prepare_composite(assignment, commands, providers)
         if prepared is AssignmentState.DECLINED:
+            reason_code = execution_journal.read_decline_reason(assignment.assignment_id)
             next_revision = self._availability_revision(
                 session, request.assignment_id, providers
             )
@@ -3359,6 +3616,7 @@ class LocalDaemonAgentHttpClient:
                         session_id,
                         request.assignment_id,
                         availability_revision=next_revision,
+                        reason_code=reason_code,
                     ),
                 ),
             )
@@ -3367,6 +3625,7 @@ class LocalDaemonAgentHttpClient:
                     "result": "assignment",
                     "assignment_id": request.assignment_id,
                     "state": "DECLINED",
+                    "reason_code": reason_code,
                     "session": released_session.value(),
                 },
                 path="remote execution decline",
@@ -3554,6 +3813,7 @@ class LocalDaemonAgentHttpClient:
                 if receipt.state is SupervisorLaunchState.UNKNOWN:
                     raise QueueConflictError("remote supervisor continuity is unknown")
                 self.poll_assignment_control(session_id)
+                self._maintain_resource_offer()
                 sleep(0.05)
         elif not result_path.is_file():
             raise QueueConflictError(
@@ -3828,6 +4088,7 @@ class LocalDaemonAgentHttpClient:
                 offset = cast(
                     int, cast(Mapping[str, PlainData], response)["received_bytes"]
                 )
+                self._maintain_resource_offer()
                 if final:
                     break
         self._assignment_call(
@@ -4145,10 +4406,9 @@ class LocalDaemonAgentHttpClient:
         self, agent_id: str, capacity_profile: ResidentExecutionProfile
     ) -> dict[str, AgentResourceProvider]:
         if self._configured_provider_members is None:
-            factory = self._config.agent_resource_provider_factory
-            if factory is None:
-                raise QueueServiceError("remote agent provider composition is missing")
-            members = tuple(factory(agent_id, capacity_profile))
+            members = _configured_remote_provider_members(
+                self._config, agent_id, capacity_profile
+            )
             try:
                 providers = _compose_agent_resource_providers(members)
             except Exception as exc:
@@ -4172,6 +4432,7 @@ class LocalDaemonAgentHttpClient:
         tuple[AgentProviderDescriptor, ...],
         tuple[CapacityAtom, ...],
         tuple[str, ...],
+        tuple[ResourceAvailabilityStatus, ...],
     ]:
         """Observe the configured factory once and project its safe wire facts."""
 
@@ -4179,6 +4440,7 @@ class LocalDaemonAgentHttpClient:
         providers = self._provider_composition(session.agent_id, capacity_profile)
         atoms: list[CapacityAtom] = []
         live_claim_ids: set[str] = set()
+        statuses: list[ResourceAvailabilityStatus] = []
         for kind, provider in sorted(providers.items()):
             observed = provider.observe(
                 ObserveRequest(
@@ -4191,6 +4453,14 @@ class LocalDaemonAgentHttpClient:
                 _wire_capacity_atom(atom, session.agent_id) for atom in observed.atoms
             )
             live_claim_ids.update(observed.live_claim_ids)
+            prefix = f"{session.agent_id}:"
+            statuses.extend(
+                replace(
+                    item,
+                    local_capacity_key=item.local_capacity_key.removeprefix(prefix),
+                )
+                for item in observed.resource_status
+            )
         members = self._configured_provider_members
         if members is None:
             raise QueueConflictError("remote agent provider composition is missing")
@@ -4208,6 +4478,12 @@ class LocalDaemonAgentHttpClient:
             ),
             tuple(sorted(atoms, key=lambda item: item.key)),
             tuple(sorted(live_claim_ids)),
+            tuple(
+                sorted(
+                    statuses,
+                    key=lambda item: (item.resource_kind, item.local_capacity_key),
+                )
+            ),
         )
 
     def _validate_offer_provider_capacity(
@@ -4606,12 +4882,18 @@ def _dispatch(
             idempotency_key=_string(value, "idempotency_key"),
         ).value()
     if operation == "offer":
-        _exact(value, {"offer", "idempotency_key"})
+        value = {"expected_availability_revision": None, **value}
+        _exact(value, {"offer", "idempotency_key", "expected_availability_revision"})
+        expected = value["expected_availability_revision"]
+        if expected is not None and not isinstance(expected, str):
+            raise QueueServiceError("offer expected availability revision is invalid")
         offer = value["offer"]
         if not isinstance(offer, Mapping):
             raise QueueServiceError("agent offer is invalid")
         return view.publish_offer(
-            _offer(offer), idempotency_key=_string(value, "idempotency_key")
+            _offer(offer),
+            idempotency_key=_string(value, "idempotency_key"),
+            expected_availability_revision=expected,
         )
     if operation == "renew":
         _exact(value, {"renewal"})
@@ -4674,14 +4956,16 @@ def _dispatch(
             request_digest=_string(value, "request_digest"),
         )
     if operation == "decline":
+        value = {"reason_code": None, **value}
         _exact(
             value,
-            {"session_id", "assignment_id", "availability_revision"},
+            {"session_id", "assignment_id", "availability_revision", "reason_code"},
         )
         return view.decline_assignment(
             _string(value, "session_id"),
             _string(value, "assignment_id"),
             availability_revision=_string(value, "availability_revision"),
+            reason_code=cast(str | None, value["reason_code"]),
         ).value()
     if operation == "started":
         _exact(
@@ -5412,6 +5696,12 @@ def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
         {
             "config": _agent_config_revision(config),
             "inventory": _agent_inventory_revision(config),
+            **(
+                {"gpu_occupancy": config.gpu_occupancy_policy.to_dict()}
+                if config.gpu_occupancy_policy is not None
+                and config.gpu_occupancy_policy != GpuOccupancyPolicy()
+                else {}
+            ),
         },
     )
 

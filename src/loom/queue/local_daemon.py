@@ -7,6 +7,14 @@ saga. Clients provide only a queue identity and run URI.
 
 from __future__ import annotations
 
+from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
+from ._managed_local import (
+    ResourceAvailabilityStatus,
+    ObserveRequest,
+    GpuResourceProvider,
+    _CompositeAgentResourceProvider,
+)
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -39,6 +47,7 @@ from loom.scheduling import (
 
 from .agent_sessions import (
     AgentControl,
+    AgentOffer,
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
@@ -647,6 +656,7 @@ class LocalDaemonConfig:
     deployment_configuration_fingerprint: str | None = None
     active_configuration_fingerprint: str | None = None
     coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
+    gpu_occupancy_policy: GpuOccupancyPolicy | None = None
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -697,7 +707,9 @@ class LocalDaemonConfig:
                     "resident worker launch profile is invalid"
                 ) from exc
             if descriptor.to_dict() != profile.descriptor:
-                raise QueueServiceError("resident worker launch descriptor must be exact")
+                raise QueueServiceError(
+                    "resident worker launch descriptor must be exact"
+                )
         if agent is not None and coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
@@ -732,7 +744,9 @@ class LocalDaemonConfig:
             or gpu_devices
             or self.agent_resource_providers not in (None, ())
         ):
-            raise QueueServiceError("coordinator-only configuration has local agent state")
+            raise QueueServiceError(
+                "coordinator-only configuration has local agent state"
+            )
         if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
             raise QueueServiceError("gpu_devices must be configured GPU devices")
         if len({item.descriptor.device_id for item in gpu_devices}) != len(gpu_devices):
@@ -747,7 +761,6 @@ class LocalDaemonConfig:
             # never to the daemon runtime.  Deployments that need a different
             # physical provider pass the complete composition explicitly.
             from ._managed_local import (
-                GpuResourceProvider,
                 AtomResourceProvider,
                 _configured_provider_descriptor,
             )
@@ -833,6 +846,18 @@ class LocalDaemonConfig:
                                 for device in gpu_devices
                                 if device.descriptor.healthy
                             },
+                            occupancy_monitor=(
+                                None
+                                if self.gpu_occupancy_policy is None
+                                else GpuOccupancyMonitor(
+                                    tuple(
+                                        device.binding_value
+                                        for device in gpu_devices
+                                        if device.descriptor.healthy
+                                    ),
+                                    policy=self.gpu_occupancy_policy,
+                                )
+                            ),
                         ),
                     )
                     if gpu_devices
@@ -851,7 +876,10 @@ class LocalDaemonConfig:
             raise QueueServiceError("agent resource providers are invalid")
         provider_capacity: tuple[CapacityAtom, ...] = ()
         if agent is not None:
-            from ._managed_local import ObserveRequest, _compose_agent_resource_providers
+            from ._managed_local import (
+                ObserveRequest,
+                _compose_agent_resource_providers,
+            )
 
             try:
                 provider_owners = _compose_agent_resource_providers(providers)
@@ -866,6 +894,15 @@ class LocalDaemonConfig:
                         )
                     ).atoms
                 )
+                # A busy/unverified device remains configured inventory. Its
+                # live provider observation alone owns current availability.
+                configured = {atom.key: atom for atom in provider_capacity}
+                for member in providers:
+                    if isinstance(member, GpuResourceProvider):
+                        configured.update(
+                            (atom.key, atom) for atom in member.configured_atoms
+                        )
+                provider_capacity = tuple(configured[key] for key in sorted(configured))
             except Exception as exc:
                 raise QueueServiceError(
                     "agent resource provider capacity is invalid"
@@ -1133,7 +1170,7 @@ class LocalDaemonAdmissionDetail:
 
 @dataclass(frozen=True, slots=True)
 class DaemonStatus:
-    """Constant-size, redacted coordinator health summary.
+    """Bounded, redacted coordinator health and configured local resources.
 
     Detailed admissions deliberately live behind ``admissions()`` and
     ``admission()``.  Keeping the summary separate prevents a status read from
@@ -1152,6 +1189,7 @@ class DaemonStatus:
     accepted_time_health: str
     accepted_time_diagnostic: str | None
     accepted_time_revision: int
+    local_resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     @property
     def scheduling_ready(self) -> bool:
@@ -1174,10 +1212,14 @@ class DaemonStatus:
             "accepted_time_health": self.accepted_time_health,
             "accepted_time_diagnostic": self.accepted_time_diagnostic,
             "accepted_time_revision": self.accepted_time_revision,
+            "local_resource_status": [
+                item.to_dict() for item in self.local_resource_status
+            ],
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "DaemonStatus":
+        data = {"local_resource_status": [], **data}
         _exact_fields(
             data,
             {
@@ -1194,10 +1236,14 @@ class DaemonStatus:
                 "accepted_time_health",
                 "accepted_time_diagnostic",
                 "accepted_time_revision",
+                "local_resource_status",
             },
             "local daemon status",
         )
         return cls(
+            local_resource_status=_resource_status_from_value(
+                data["local_resource_status"]
+            ),
             coordinator_id=_required_string(data, "coordinator_id"),
             coordinator_epoch=_required_string(data, "coordinator_epoch"),
             as_of=_required_string(data, "as_of"),
@@ -1275,6 +1321,7 @@ class AgentProjection:
     pools: tuple[str, ...]
     capabilities: tuple[str, ...]
     available: bool
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -1288,10 +1335,12 @@ class AgentProjection:
             "pools": list(self.pools),
             "capabilities": list(self.capabilities),
             "available": self.available,
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
+        data = {"resource_status": [], **data}
         _exact_fields(
             data,
             {
@@ -1305,6 +1354,7 @@ class AgentProjection:
                 "pools",
                 "capabilities",
                 "available",
+                "resource_status",
             },
             "agent projection",
         )
@@ -1320,6 +1370,7 @@ class AgentProjection:
         ):
             raise QueueServiceError("agent projection is invalid")
         return cls(
+            resource_status=_resource_status_from_value(data["resource_status"]),
             agent_id=_required_string(data, "agent_id"),
             session_id=_required_string(data, "session_id"),
             state=_required_string(data, "state"),
@@ -1481,7 +1532,9 @@ class LocalDaemon:
             )
             binding = {
                 "schema_version": 3,
-                "role_kind": "coordinator" if agent_id is None else "coordinator-bundle",
+                "role_kind": "coordinator"
+                if agent_id is None
+                else "coordinator-bundle",
                 "coordinator_id": coordinator_id,
                 "immutable_fingerprint": (staged.deployment_configuration_fingerprint),
             }
@@ -1953,7 +2006,19 @@ class LocalDaemon:
         )
         as_of = self._clock()
         parse_timestamp(as_of)
+        local_status = tuple(
+            status
+            for provider in self._local_resource_providers()
+            for status in provider.observe(
+                ObserveRequest(
+                    self.config.machine_id,
+                    self._epoch or "status",
+                    "status:cached-resources",
+                )
+            ).resource_status
+        )
         return DaemonStatus(
+            local_resource_status=local_status,
             coordinator_id=coordinator_id,
             coordinator_epoch=self._epoch or "",
             as_of=as_of,
@@ -2096,7 +2161,9 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(conn.execute(query, (*values, limit + 1)))
             values_out = tuple(
-                _agent_projection(conn, row, coordinator_epoch=self._epoch)
+                _agent_projection(
+                    conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+                )
                 for row in rows[:limit]
             )
         next_cursor = (
@@ -2117,7 +2184,9 @@ class LocalDaemon:
             ).fetchone()
             if row is None:
                 raise QueueServiceError("managed agent was not found")
-            return _agent_projection(conn, row, coordinator_epoch=self._epoch)
+            return _agent_projection(
+                conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+            )
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
         """Read the one typed durable operation receipt without a history scan."""
@@ -2234,11 +2303,31 @@ class LocalDaemon:
                 )
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
+    def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
+        """Read the installed execution owners, including owners retained by reload."""
+        execution = self._execution
+        if execution is None:
+            return tuple(self.config.agent_resource_providers or ())
+        return tuple(
+            member
+            for owner in execution.providers.values()
+            for member in (
+                owner.members
+                if isinstance(owner, _CompositeAgentResourceProvider)
+                else (owner,)
+            )
+        )
+
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
+        for provider in self._local_resource_providers():
+            if isinstance(provider, GpuResourceProvider):
+                provider.refresh_occupancy()
         with self._cycle_lock:
+            # A reload may replace providers while the bounded query runs.
+            # Its new provider starts unknown and is refreshed next cycle.
             time_healthy = self._sample_clock_health()
             execution = self._execution
             if execution is None:
@@ -4051,7 +4140,9 @@ def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
         raise QueueServiceError("coordinator deployment binding is invalid") from exc
     expected: dict[str, object] = {
         "schema_version": 3,
-        "role_kind": "coordinator" if config.agent_root is None else "coordinator-bundle",
+        "role_kind": "coordinator"
+        if config.agent_root is None
+        else "coordinator-bundle",
         "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
         "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
@@ -4177,11 +4268,22 @@ def _decode_agent_cursor(cursor: str) -> str:
     return value
 
 
+def _resource_status_from_value(
+    value: object,
+) -> tuple[ResourceAvailabilityStatus, ...]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, Mapping) for item in value
+    ):
+        raise QueueServiceError("resource status projection is invalid")
+    return tuple(ResourceAvailabilityStatus.from_dict(item) for item in value)
+
+
 def _agent_projection(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
     *,
     coordinator_epoch: str | None,
+    as_of: str,
 ) -> AgentProjection:
     pools = json.loads(str(row["pools_json"]))
     capabilities = json.loads(str(row["capabilities_json"]))
@@ -4190,7 +4292,8 @@ def _agent_projection(
     accepted = conn.execute(
         "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
     ).fetchone()
-    accepted_at = None if accepted is None else str(accepted["value"])
+    parse_timestamp(as_of)
+    accepted_at = as_of if accepted is None else max(as_of, str(accepted["value"]))
     offered = None
     if (
         accepted_at is not None
@@ -4213,7 +4316,33 @@ def _agent_projection(
         isinstance(item, str) and item for item in capabilities
     ):
         raise QueueStorageError("agent session projection is invalid")
+    latest = conn.execute(
+        "SELECT offer_id, offer_json, availability_revision FROM agent_offers WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+        (str(row["session_id"]),),
+    ).fetchone()
+    statuses: tuple[ResourceAvailabilityStatus, ...] = ()
+    if latest is not None:
+        statuses = AgentOffer.from_value(
+            json.loads(str(latest["offer_json"]))
+        ).resource_status
+        renewal = conn.execute(
+            "SELECT result_json FROM agent_offer_renewals WHERE session_id = ?",
+            (str(row["session_id"]),),
+        ).fetchone()
+        if renewal is not None:
+            receipt = json.loads(str(renewal["result_json"]))
+            if (
+                receipt.get("offer_id") == str(latest["offer_id"])
+                and "resource_status" in receipt
+            ):
+                statuses = _resource_status_from_value(receipt["resource_status"])
+        if offered is None:
+            statuses = tuple(
+                replace(item, available=False, reason_code="observation_stale")
+                for item in statuses
+            )
     return AgentProjection(
+        resource_status=statuses,
         agent_id=str(row["agent_id"]),
         session_id=str(row["session_id"]),
         state=str(row["state"]),
@@ -4388,6 +4517,11 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             item.to_dict() for item in config.scheduling_components.descriptors
         ],
     }
+    if (
+        config.gpu_occupancy_policy is not None
+        and config.gpu_occupancy_policy != GpuOccupancyPolicy()
+    ):
+        payload["gpu_occupancy"] = config.gpu_occupancy_policy.to_dict()
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()
