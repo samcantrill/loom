@@ -3,7 +3,7 @@
 Status: evidence-backed draft; detailed design and independent review pending
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
-at published source `cf9e2850476e4526c4884e34412c26e38de08b6e`, branch
+at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
@@ -479,6 +479,14 @@ with continuous containment evidence; cancellation and provider release remain
 durable ordered operations. No-enforcement must not disable any of these owners.
 The existing lifecycle tests are regression obligations in the final full Loom
 gate, not evidence of resource enforcement or authorization for physical work.
+
+The draft also incorporates published P11/P12 owner delivery through `719e016`.
+Their changes remove eager factory checking and add inspection diagnostics;
+the runtime options, resource admission/placement, container command mappers and
+managed preparation owners traced here are unchanged. Keep Loom's structural,
+resource-semantic and transport checks, but do not reintroduce project factory
+construction as resource preflight. This reconciliation supplies current source,
+not design approval, a new runtime-policy implementation or physical evidence.
 
 Coverage must distinguish actual serial lease selection, local managed launch
 environment, remote-agent launch environment and retained-launch reconstruction.
