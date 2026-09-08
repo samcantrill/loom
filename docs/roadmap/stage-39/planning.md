@@ -131,6 +131,54 @@ behavior and durable migration must be fully specified and independently reviewe
 before writing runtime code. A new amount field for the same demand is not an
 acceptable solution to an adapter handoff gap.
 
+### Current-Owner Design Resolution
+
+The replacement continuation attachment confirms this workstream, including
+design, review, implementation and normal PR/merge delivery. It does not turn
+this draft into an implementation-ready packet or authorize physical execution.
+
+Source reconciliation at the recorded Loom base establishes these owners:
+
+- `runtime/options.py` owns `RunOptions` and `StageRuntimeOptions`; their strict
+  field sets, constructors, `to_dict`/`from_dict` and metadata are the invocation
+  boundary. Introduce typed resource policy there, not in the open-ended
+  `ExecutionOptions.settings` bag or the separate pipeline `RuntimeRequest`.
+- `runtime/profiles.py` owns source normalization and run/stage override merging.
+  It has separate allowed-field sets and merge paths; adding a constructor field
+  alone would lose policy from composed profiles. An omitted stage selection
+  inherits, whereas an explicit empty selection clears that axis. Do not merge
+  selection lists by union or conflate an empty list with no override.
+- `runtime/metadata.py::resolve_run_runtime` is the resolved per-stage handoff.
+  Thread the effective policy through this owner before preparation or executor
+  mapping, so persisted intent and the selected launch use the same choice.
+- `reliability/_models.py::TimeoutPolicy` already owns `enabled` and
+  `duration_seconds`; enabled requires a positive duration. `ReliabilityPolicy`
+  defaults to no timeout, and its merge replaces an explicitly supplied timeout
+  object while inheriting an omitted one. Keep this existing schema and use
+  `reliability.timeout: {enabled: false}` to disable an inherited job timeout.
+  Do not add `timeout_seconds`, a second duration or a resource-policy timer.
+- `ResolvedStagePlacement` currently requires the resource, scheduling-request,
+  validator and planner key sets to match. Its schema and fingerprint need an
+  explicit accounting selection: retain full normalized demand and its semantic
+  identities while allowing scheduling requests to be the selected subset.
+  The decoder must reconstruct exactly that subset, not all declared demands.
+- `_runtime_payload` persists both normalized invocation and placements and
+  reuses their exact content for replay. Any introduced policy default or
+  schema upgrade must be resolved before this payload is admitted; a restart
+  must not re-resolve an old job using a changed implicit policy.
+
+Focused coverage follows the existing runtime-options/profile integration,
+reliability model and managed placement/preparation/recovery owners. A combined
+profile test must prove independent per-stage clearing and inheritance. A
+prepared-placement round trip must prove full demand remains inspectable while
+CPU/RAM claims stay absent for GPU-only accounting. Existing timeout tests own
+duration validity; resource tests need only prove the selected timeout reaches
+that owner without disturbing cancellation and cleanup.
+
+Remaining design work is exact new-policy defaults and public vocabulary,
+the narrow old-runtime/placement admission rule, and complete executor/control
+receipt propagation. No phase cards or runtime changes are admitted yet.
+
 ## Complexity Delta
 
 | Addition | Current necessity | Simpler alternative / disposition |
