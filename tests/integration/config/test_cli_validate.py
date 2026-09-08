@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
-from tests.support.config_samples import construction_event_log, reset_instantiate_probe_state
+from tests.support.config_samples import (
+    construction_event_log,
+    reset_instantiate_probe_state,
+)
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -38,21 +41,7 @@ def _write_valid_config(path: Path) -> None:
     )
 
 
-def test_validate_static_default_does_not_construct_targets(tmp_path: Path) -> None:
-    reset_instantiate_probe_state()
-    config_path = tmp_path / "pipeline.yaml"
-    _write_valid_config(config_path)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
-
-    assert stdout.getvalue() == f"OK validate {config_path}: 1 stage\n"
-    assert stderr.getvalue() == ""
-    assert construction_event_log == []
-
-
-def test_validate_check_targets_constructs_stage_and_generic_targets(tmp_path: Path) -> None:
+def test_validate_static_does_not_construct_project_targets(tmp_path: Path) -> None:
     reset_instantiate_probe_state()
     config_path = tmp_path / "pipeline.yaml"
     _write_valid_config(config_path)
@@ -61,20 +50,25 @@ def test_validate_check_targets_constructs_stage_and_generic_targets(tmp_path: P
 
     assert (
         main(
-            ["validate", str(config_path), "--check-targets", "--format", "json"],
+            ["validate", str(config_path), "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )
         == 0
     )
 
+    assert json.loads(stdout.getvalue()) == {
+        "schema_version": "loom.cli.validate.v3",
+        "ok": True,
+        "warnings": [],
+        "result": {
+            "config_path": str(config_path),
+            "pipeline_name": "demo",
+            "stage_count": 1,
+        },
+    }
     assert stderr.getvalue() == ""
-    payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.validate.v2"
-    assert payload["warnings"][0]["code"] == "validate.target_constructors_may_run"
-    assert payload["result"]["stage_count"] == 1
-    assert payload["result"]["target_count"] == 3
-    assert construction_event_log == ["service-child", "parent"]
+    assert construction_event_log == []
 
 
 def test_validate_invalid_pipeline_returns_pipeline_error(tmp_path: Path) -> None:

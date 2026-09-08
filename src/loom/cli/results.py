@@ -63,8 +63,6 @@ class ValidationCliResult:
     config_path: Path
     pipeline_name: str | None = None
     stage_count: int | None = None
-    check_targets: bool = False
-    target_count: int | None = None
 
     def to_dict(self) -> dict[str, PlainCliData]:
         """Return the result as plain data."""
@@ -73,8 +71,6 @@ class ValidationCliResult:
             "config_path": str(self.config_path),
             "pipeline_name": self.pipeline_name,
             "stage_count": self.stage_count,
-            "check_targets": self.check_targets,
-            "target_count": self.target_count,
         }
 
 

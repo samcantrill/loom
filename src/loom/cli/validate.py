@@ -12,29 +12,18 @@ from loom.cli.formatting import format_json_envelope, format_validation_text
 from loom.cli.options import (
     ConfigCliOptions,
     OutputFormat,
-    ValidateCliOptions,
     add_plugin_option,
     output_format_from_namespace,
 )
-from loom.cli.results import CliWarning, ValidationCliResult
+from loom.cli.results import ValidationCliResult
 
 if TYPE_CHECKING:
     from weave.api import ComposedConfig
-    from weave.target_checks import TargetCheckResult
-    from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.resources import ResourceValidatorRegistry
-    from loom.pipeline.validation import (
-        PipelineTargetCheckResult,
-        PipelineValidationResult,
-    )
+    from loom.pipeline.validation import PipelineValidationResult
 
 
-VALIDATE_RESULT_SCHEMA_VERSION = "loom.cli.validate.v2"
-TARGET_CHECK_WARNING = CliWarning(
-    code="validate.target_constructors_may_run",
-    message="--check-targets imports and constructs trusted project targets.",
-    details={"consent_boundary": "--check-targets"},
-)
+VALIDATE_RESULT_SCHEMA_VERSION = "loom.cli.validate.v3"
 
 
 def register_subparser(
@@ -42,7 +31,14 @@ def register_subparser(
 ) -> None:
     """Register the validate subcommand."""
 
-    parser = subparsers.add_parser("validate", help="validate a pipeline config")
+    parser = subparsers.add_parser(
+        "validate",
+        help="validate Loom-owned pipeline structure",
+        description=(
+            "Validate Loom-owned pipeline structure and runtime/resource settings. "
+            "Project owners perform construction and readiness checks during execution."
+        ),
+    )
     parser.add_argument("config", metavar="CONFIG", help="pipeline config path")
     parser.add_argument(
         "--overlay",
@@ -58,11 +54,6 @@ def register_subparser(
         default=None,
         metavar="KEY=VALUE",
         help="config override expression",
-    )
-    parser.add_argument(
-        "--check-targets",
-        action="store_true",
-        help="instantiate configured targets for an opt-in readiness check",
     )
     parser.add_argument(
         "--format",
@@ -85,9 +76,7 @@ def handle(namespace: argparse.Namespace) -> int:
     """Handle ``loom validate``."""
 
     config_options = ConfigCliOptions.from_namespace(namespace)
-    validate_options = ValidateCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
-    warnings: list[CliWarning] = []
 
     validator_registry: ResourceValidatorRegistry | None = None
     if getattr(namespace, "plugin", None):
@@ -118,37 +107,17 @@ def handle(namespace: argparse.Namespace) -> int:
         known_stage_ids=pipeline_result.spec.stage_names,
         registry=validator_registry,
     )
-    target_count: int | None = None
-
-    if validate_options.check_targets:
-        warnings.append(TARGET_CHECK_WARNING)
-        if output_format is OutputFormat.TEXT:
-            _write_text_warnings(warnings)
-        try:
-            pipeline_target_result = _check_pipeline_stage_targets(pipeline_result.spec)
-            generic_target_result = _check_config_targets(
-                _generic_target_validation_view(composed.resolved), skip_paths=()
-            )
-        except Exception as exc:
-            _attach_cli_warnings(exc, warnings)
-            raise
-        target_count = (
-            pipeline_target_result.target_count + generic_target_result.target_count
-        )
-
     result = ValidationCliResult(
         config_path=config_options.config_path,
         pipeline_name=pipeline_result.pipeline_name,
         stage_count=pipeline_result.stage_count,
-        check_targets=validate_options.check_targets,
-        target_count=target_count,
     )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(
                 schema_version=VALIDATE_RESULT_SCHEMA_VERSION,
                 ok=True,
-                warnings=warnings,
+                warnings=[],
                 payload_name="result",
                 payload=result.to_dict(),
             )
@@ -196,45 +165,7 @@ def _validate_runtime_options(
     )
 
 
-def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckResult":
-    from loom.pipeline import check_pipeline_stage_targets
-
-    return check_pipeline_stage_targets(spec)
-
-
-def _check_config_targets(
-    config: Mapping[str, object], *, skip_paths: Sequence[str] = ()
-) -> "TargetCheckResult":
-    from weave import check_config_targets
-
-    return check_config_targets(config, skip_paths=tuple(skip_paths))
-
-
-def _generic_target_validation_view(config: Mapping[str, object]) -> dict[str, object]:
-    """Return the non-pipeline portion of a composed config for generic checks.
-
-    Pipeline mappings are interpreted by pipeline-owned validation and stage
-    construction.  Their target-shaped values are data, rather than generic
-    construction requests.
-    """
-
-    return {key: value for key, value in config.items() if key != "pipeline"}
-
-
-def _write_text_warnings(warnings: Sequence[CliWarning]) -> None:
-    for warning in warnings:
-        sys.stderr.write(f"warning: {warning.message}\n")
-
-
-def _attach_cli_warnings(error: BaseException, warnings: Sequence[CliWarning]) -> None:
-    try:
-        setattr(error, "cli_warnings", tuple(warnings))
-    except Exception:
-        pass
-
-
 __all__ = [
-    "TARGET_CHECK_WARNING",
     "VALIDATE_RESULT_SCHEMA_VERSION",
     "handle",
     "register_subparser",
