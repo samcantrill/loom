@@ -6,6 +6,7 @@ import sys
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from multiprocessing.connection import Client
 from time import monotonic, sleep
 from typing import Any, cast
 
@@ -19,6 +20,8 @@ from loom.queue._agent_process_supervisor import (
     ResidentWorkerLaunch,
     ResidentWorkerLaunchProfile,
     SupervisorLaunchState,
+    SupervisorLaunchConfiguration,
+    _launch_value,
 )
 
 
@@ -274,6 +277,50 @@ def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) ->
         with pytest.raises(AgentProcessSupervisorError, match="reinitialization"):
             AgentProcessSupervisorClient(agent, changed)
     finally:
+        client.shutdown_for_test()
+
+
+@pytest.mark.parametrize("before_request", [True, False])
+def test_client_disconnect_preserves_supervisor_and_its_running_worker(
+    tmp_path: Path, before_request: bool
+) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    executable = tmp_path / "sleeping-worker"
+    executable.write_text(
+        f"#!{sys.executable}\nimport time\ntime.sleep(30)\n", encoding="utf-8"
+    )
+    executable.chmod(0o700)
+    profile = replace(_profile(), python_executable=executable)
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=SupervisorLaunchConfiguration("agent-A", (profile,))
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = replace(_launch(client, workspace), profile=profile)
+    try:
+        started = client.launch(launch)
+        identity = client.status()
+        connection = Client(
+            str(client._endpoint), family="AF_UNIX", authkey=client._secret
+        )
+        if before_request:
+            connection.close()
+        else:
+            with sqlite3.connect(agent / "supervisor" / "supervisor.sqlite") as conn:
+                # Hold query processing until the peer has closed its reply socket.
+                conn.execute("BEGIN EXCLUSIVE")
+                connection.send({"operation": "query", "value": _launch_value(launch)})
+                connection.close()
+                conn.rollback()
+        assert client.status() == identity
+        replay = client.launch(launch)
+        assert replay.process_id == started.process_id
+        assert client.query(launch).state is SupervisorLaunchState.RUNNING
+        with sqlite3.connect(agent / "supervisor" / "supervisor.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+    finally:
+        client.contain(launch)
         client.shutdown_for_test()
 
 
