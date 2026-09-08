@@ -320,6 +320,83 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
     assert payload["result"]["service_health"] == "healthy"
 
 
+def test_queue_daemon_admission_renders_private_diagnostic_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue import LocalDaemonSocketClient
+
+    payload = {
+        "admission": {"admission_id": "admission"},
+        "authority": {},
+        "owners": {
+            "run_result": {
+                "availability": "unavailable",
+                "diagnostic_failure": {
+                    "schema": "loom.diagnostic.v1",
+                    "type": "builtins.RuntimeError",
+                    "message": "cannot read /private/run",
+                    "links": [
+                        {
+                            "relation": "cause",
+                            "record": {
+                                "type": "builtins.OSError",
+                                "message": "permission denied",
+                                "links": [],
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    class Result:
+        def to_dict(self) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient, "admission", lambda _self, _admission_id: Result()
+    )
+    text_stdout = io.StringIO()
+
+    assert (
+        main(
+            [
+                "queue",
+                "daemon-admission",
+                "--endpoint",
+                str(tmp_path / "daemon.sock"),
+                "admission",
+            ],
+            stdout=text_stdout,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
+    assert "run-result diagnostic failure:" in text_stdout.getvalue()
+    assert "builtins.RuntimeError: cannot read /private/run" in text_stdout.getvalue()
+    assert "cause:" in text_stdout.getvalue()
+
+    json_stdout = io.StringIO()
+    assert (
+        main(
+            [
+                "queue",
+                "daemon-admission",
+                "--endpoint",
+                str(tmp_path / "daemon.sock"),
+                "admission",
+                "--format",
+                "json",
+            ],
+            stdout=json_stdout,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
+    assert json.loads(json_stdout.getvalue())["result"] == payload
+
+
 def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

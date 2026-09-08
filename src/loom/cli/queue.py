@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 import signal
 import sys
@@ -778,7 +779,7 @@ def handle_daemon_admission(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result.to_dict())
+    return _emit_daemon_admission_payload(namespace, result.to_dict())
 
 
 def handle_daemon_agents(namespace: argparse.Namespace) -> int:
@@ -1221,6 +1222,39 @@ def _emit_daemon_payload(
         for key, value in payload.items():
             sys.stdout.write(f"  {key}: {value}\n")
     return int(ExitCode.SUCCESS)
+
+
+def _emit_daemon_admission_payload(
+    namespace: argparse.Namespace, payload: Mapping[str, PlainData]
+) -> int:
+    """Present an admission while preserving its generic JSON envelope."""
+
+    if output_format_from_namespace(namespace) is OutputFormat.JSON:
+        return _emit_daemon_payload(namespace, payload)
+    result = _emit_daemon_payload(namespace, payload)
+    diagnostic = _admission_diagnostic_failure(payload)
+    if diagnostic is not None:
+        sys.stdout.write("  run-result diagnostic failure:\n")
+        for line in diagnostic.splitlines():
+            sys.stdout.write(f"    {line}\n")
+    return result
+
+
+def _admission_diagnostic_failure(payload: Mapping[str, PlainData]) -> str | None:
+    owners = payload.get("owners")
+    if not isinstance(owners, Mapping):
+        return None
+    run_result = owners.get("run_result")
+    if not isinstance(run_result, Mapping):
+        return None
+    if run_result.get("availability") != "unavailable":
+        return None
+    detail = run_result.get("diagnostic_failure")
+    if detail is None:
+        return "diagnostic failure detail not provided"
+    from loom.diagnostics import render_diagnostic_failure
+
+    return render_diagnostic_failure(detail)
 
 
 def _enum_value(value: object) -> str:

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline import check_pipeline_stage_targets, validate_pipeline_config
+from loom.pipeline import validate_pipeline_config
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import InputBindingError
 
@@ -50,12 +50,14 @@ def _valid_config() -> dict[str, object]:
 
 
 def test_validate_pipeline_config_parses_spec_and_graph() -> None:
+    stage_events.clear()
     result = validate_pipeline_config(_valid_config())
 
     assert result.pipeline_name == "demo"
     assert result.stage_count == 1
     assert tuple(result.graph.nodes) == ("build",)
     assert result.stage_factory_target_paths == ("$.pipeline.stages[0].factory",)
+    assert stage_events == []
 
 
 def test_validate_pipeline_config_rejects_unknown_input_stage() -> None:
@@ -68,13 +70,3 @@ def test_validate_pipeline_config_rejects_unknown_input_stage() -> None:
 
     with pytest.raises(InputBindingError, match="unknown stage"):
         validate_pipeline_config(config)
-
-
-def test_check_pipeline_stage_targets_constructs_stage_factories() -> None:
-    stage_events.clear()
-    result = validate_pipeline_config(_valid_config())
-    target_result = check_pipeline_stage_targets(result.spec)
-
-    assert target_result.target_count == 1
-    assert target_result.checked_paths == ("$.pipeline.stages[0].factory",)
-    assert stage_events == [7]

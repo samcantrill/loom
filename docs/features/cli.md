@@ -837,7 +837,6 @@ Recommended:
 --overlay PATH, repeatable
 --set KEY=VALUE, repeatable
 --format text|json
---check-targets
 ```
 
 ### 11.3 Behavior
@@ -854,13 +853,10 @@ validate stage specs and DAG
 print success or errors
 ```
 
-Default validation should stay static. `--check-targets` is the explicit consent
-boundary for importing and constructing generic config `_target_` blocks outside
-`pipeline` after static validation succeeds, and for checking pipeline stage
-factories through the pipeline contract. Other pipeline values, including
-pipeline metadata, each stage's `config`, and `factory.init`, remain data for
-their pipeline or stage owner and are not independently constructed. The command
-should warn that trusted project constructors may run.
+Validation stays static: it checks Loom-owned pipeline structure and
+runtime/resource settings. Project owners perform construction and readiness
+checks for their `_target_` objects during execution. Pipeline metadata, each
+stage's `config`, and `factory.init` remain project-owned data at this boundary.
 
 Should not:
 
@@ -868,7 +864,7 @@ Should not:
 run stages
 submit jobs
 write a run directory, unless explicit validation output is requested later
-instantiate arbitrary project objects unless validation mode explicitly needs it
+instantiate arbitrary project objects
 ```
 
 ### 11.4 Output
@@ -1791,7 +1787,7 @@ For v2, test through the console entry point or `main(argv)`:
 loom validate example config
 loom plan example config
 loom run with local executor
-loom validate --check-targets warning and construction
+loom validate leaves project targets as data; loom run reports construction failures
 loom run --dry-run
 loom run --resume
 JSON output and JSON error envelopes

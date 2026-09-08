@@ -69,12 +69,7 @@ from loom.pipeline.specs import (
     OutputSpec,
     parse_pipeline_config,
 )
-from loom.pipeline.validation import (
-    PipelineTargetCheckResult,
-    PipelineValidationResult,
-    check_pipeline_stage_targets,
-    validate_pipeline_config,
-)
+from loom.pipeline.validation import PipelineValidationResult, validate_pipeline_config
 from loom.pipeline.stage import Stage
 from loom.pipeline.submitted import (
     SubmittedOperationError,
@@ -120,9 +115,7 @@ __all__ = [
     "PipelineSpec",
     "parse_pipeline_config",
     "PipelineValidationResult",
-    "PipelineTargetCheckResult",
     "validate_pipeline_config",
-    "check_pipeline_stage_targets",
     "Stage",
     "StageContext",
     "ProcessContainmentOwner",
