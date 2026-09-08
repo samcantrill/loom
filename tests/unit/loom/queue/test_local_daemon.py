@@ -2189,3 +2189,86 @@ def test_scoped_view_rejects_client_principal_for_operator_action(
             operator.status()
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("change_policy", (False, True))
+def test_gpu_monitoring_follows_execution_owners_across_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change_policy: bool
+) -> None:
+    from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
+    from loom.queue._managed_local import GpuResourceProvider
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    busy = False
+    observed_policies: list[GpuOccupancyPolicy] = []
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        observed_policies.append(observer.policy)
+        return {
+            uuid: GpuProcessObservation(
+                uuid, True, busy, "external_process_detected" if busy else "available"
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    first_policy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    config = replace(
+        _config(tmp_path),
+        agent_resource_providers=None,
+        gpu_devices=(
+            ConfiguredGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        ),
+        gpu_occupancy_policy=first_policy,
+    )
+    next_policy = GpuOccupancyPolicy(0.02, 2, 0.1) if change_policy else first_policy
+    replacement = replace(
+        config, agent_resource_providers=None, gpu_occupancy_policy=next_policy
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        original = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        original.refresh_occupancy(force=True)
+        assert daemon.status().local_resource_status[0].available
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        receipt = operator.reload_scheduling(
+            CoordinatorSchedulingReload(
+                "gpu-reload", before.scheduling_epoch, "update monitoring"
+            )
+        )
+        assert receipt["state"] == "applied"
+        installed = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        assert (installed is original) is (not change_policy)
+        busy = True
+        # The daemon cycle must refresh the same cache that owns admission.
+        status = daemon.status().local_resource_status[0]
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            daemon.reconcile_once()
+            status = daemon.status().local_resource_status[0]
+            if status.reason_code == "external_process_detected":
+                break
+            time.sleep(0.02)
+        assert status.reason_code == "external_process_detected"
+        assert not status.available
+        assert observed_policies[-1] == next_policy
+    finally:
+        daemon.stop()

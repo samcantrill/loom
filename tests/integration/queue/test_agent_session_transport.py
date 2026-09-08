@@ -5757,3 +5757,119 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
         if server is not None:
             server.stop()
         daemon.stop()
+
+
+def test_agent_policy_reload_rebuilds_the_shared_gpu_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    queried: list[GpuOccupancyPolicy] = []
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        queried.append(observer.policy)
+        return {
+            uuid: GpuProcessObservation(uuid, True, False, "available")
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident", "v1", "project", "environment", "executor"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        gpu_devices=(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        ),
+    )
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+        gpu_occupancy_policy=GpuOccupancyPolicy(),
+    )
+    changed_policy = GpuOccupancyPolicy(3, 15, 2)
+    replacement = replace(base, gpu_occupancy_policy=changed_policy)
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
+    try:
+        journal = client._require_journal()
+        registration = journal.persist_registration_intent(
+            _request(
+                {"coordinator_id": "coordinator", "coordinator_epoch": "epoch"},
+                client.agent_root_id,
+            )
+        )
+        session = AgentSession(
+            "session",
+            "coordinator",
+            "epoch",
+            "agent-a",
+            client.agent_root_id,
+            "policy-1",
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("python",),
+            ("default",),
+            AgentSessionState.ACTIVE,
+        )
+        journal.persist_session(
+            registration.idempotency_key, registration.value(), session
+        )
+        providers = client._provider_composition("agent-a", profile)
+        original = providers["gpu"]
+        assert isinstance(original, GpuResourceProvider)
+        original.refresh_occupancy(force=True)
+        assert queried[-1] == GpuOccupancyPolicy()
+        reload_control = AgentControl(
+            "gpu-policy-reload",
+            AgentControlKind.RELOAD,
+            "agent-a",
+            session.session_id,
+            session.config_revision,
+            None,
+            False,
+            "change monitoring cadence",
+        )
+        journal.prepare_control(reload_control)
+        effect = client._apply_agent_control(reload_control)
+        journal.record_control_effect(reload_control, effect)
+        assert effect.code == "applied"
+        assert journal.availability_drained()
+        active = client.active_session()
+        assert active is not None
+        resume_control = AgentControl(
+            "gpu-policy-resume",
+            AgentControlKind.RESUME,
+            "agent-a",
+            active.session_id,
+            active.config_revision,
+            None,
+            False,
+            "resume after monitoring reload",
+        )
+        journal.prepare_control(resume_control)
+        resumed = client._apply_agent_control(resume_control)
+        journal.record_control_effect(resume_control, resumed)
+        assert resumed.code == "applied"
+        installed = client._provider_composition("agent-a", profile)["gpu"]
+        assert isinstance(installed, GpuResourceProvider)
+        assert installed is not original
+        installed.refresh_occupancy(force=True)
+        assert queried[-1] == changed_policy
+        assert client._provider_composition("agent-a", profile)["gpu"] is installed
+    finally:
+        client.shutdown_clean()
+        client.close()

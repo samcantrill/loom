@@ -12,6 +12,7 @@ from ._managed_local import (
     ResourceAvailabilityStatus,
     ObserveRequest,
     GpuResourceProvider,
+    _CompositeAgentResourceProvider,
 )
 
 from collections.abc import Callable, Mapping
@@ -2002,7 +2003,7 @@ class LocalDaemon:
         parse_timestamp(as_of)
         local_status = tuple(
             status
-            for provider in self.config.agent_resource_providers or ()
+            for provider in self._local_resource_providers()
             for status in provider.observe(
                 ObserveRequest(
                     self.config.machine_id,
@@ -2292,12 +2293,26 @@ class LocalDaemon:
                 )
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
+    def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
+        """Read the installed execution owners, including owners retained by reload."""
+        execution = self._execution
+        if execution is None:
+            return tuple(self.config.agent_resource_providers or ())
+        return tuple(
+            member
+            for owner in execution.providers.values()
+            for member in (
+                owner.members
+                if isinstance(owner, _CompositeAgentResourceProvider)
+                else (owner,)
+            )
+        )
+
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
-        observed_config = self.config
-        for provider in observed_config.agent_resource_providers or ():
+        for provider in self._local_resource_providers():
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
         with self._cycle_lock:
@@ -4489,6 +4504,11 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             item.to_dict() for item in config.scheduling_components.descriptors
         ],
     }
+    if (
+        config.gpu_occupancy_policy is not None
+        and config.gpu_occupancy_policy != GpuOccupancyPolicy()
+    ):
+        payload["gpu_occupancy"] = config.gpu_occupancy_policy.to_dict()
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()

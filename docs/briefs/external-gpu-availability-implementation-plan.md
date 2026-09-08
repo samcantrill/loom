@@ -555,9 +555,9 @@ validation evidence. The residual external-start race remains explicit.
 - Workflow: one bounded executor for observation/provider work; manager owns deployment, protocol, transport, projections, composed evidence and publication.
 - Manager quality gate: scope and source owners verified; the user approved the detailed behaviour and directed implementation and publication. Private names/wiring remain discretionary.
 - Independent review: planned once after implementation because changed offers cross pending-delivery and retained-claim boundaries.
-- Corrections: 0/3; no prior implementation review/refinement passes.
-- Validation: targeted owner tests, then `make validate-pr` and `make test-summary`; pending.
-- PR/merge: pending.
+- Corrections: 1/3; manager correction preserves installed monitoring owners on embedded reload, rebuilds empty standalone provider caches on reload/resume, and withholds unsupported process output. Focused regression checks: 8 passed.
+- Validation: provider owner checks 48 passed; targeted GPU/session/deployment/transport checks 15 passed; full Pyright passed before the reload correction. Initial full gate was interrupted to apply that correction (769 passed, no test failures before interruption); this is not a passing gate receipt. Fresh `make validate-pr` and `make test-summary` are required.
+- PR/merge: [PR #283](https://github.com/samcantrill/loom/pull/283) targets `develop`; merge pending validation and review.
 
 **Executor packet: observation and resource provider**
 

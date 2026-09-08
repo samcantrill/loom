@@ -1236,8 +1236,9 @@ keys, `available`, `reason_code`, and `observed_at`. Reasons include `available`
 not a scheduling revision. Remote reports expire under the existing offer TTL;
 expired reports display unavailable/stale. Agent-level `available` still means
 an active offer exists, so it can be true when every GPU is busy. Raw process
-IDs, commands, usernames, and private UUID bindings are absent from these
-projections.
+IDs, commands, usernames, and additional private binding fields are absent from
+these projections. Status reuses the existing public inventory keys; the
+built-in NVIDIA inventory uses UUID strings as those keys.
 
 This is cooperative admission on a shared host. Another program can start after
 the final observation, and Loom cannot prevent that race. Strong exclusion

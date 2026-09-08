@@ -2950,6 +2950,8 @@ class LocalDaemonAgentHttpClient:
         )
 
     def _reset_runtime_providers(self) -> None:
+        self._configured_provider_members = None
+        self._configured_provider_agent_id = None
         self._runtime_agent_id = None
         self._runtime_provider_key = None
         self._providers = {}

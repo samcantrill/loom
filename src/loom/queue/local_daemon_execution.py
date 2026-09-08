@@ -3324,7 +3324,8 @@ class LocalDaemonExecution:
         replacement_local_capacity = replacement.agent_resource_capacity
         replacement_capacity = _coordinator_capacity(replacement)
         provider_changed = (
-            replacement_local_capacity != self.local_capacity
+            replacement.gpu_occupancy_policy != self.config.gpu_occupancy_policy
+            or replacement_local_capacity != self.local_capacity
             or replacement_capacity != self.capacity
             or _provider_composition_fingerprint(replacement_providers)
             != _provider_composition_fingerprint(self.providers)

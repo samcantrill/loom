@@ -124,7 +124,11 @@ def _default_process_runner(
     argv: Sequence[str], timeout_seconds: float
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        tuple(argv), capture_output=True, check=False, text=True, timeout=timeout_seconds
+        tuple(argv),
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=timeout_seconds,
     )
 
 
@@ -140,7 +144,9 @@ class NvidiaSmiGpuProcessObserver:
 
     def __post_init__(self) -> None:
         selected = tuple(self.selected_uuids)
-        if not selected or any(not isinstance(uuid, str) or not uuid for uuid in selected):
+        if not selected or any(
+            not isinstance(uuid, str) or not uuid for uuid in selected
+        ):
             raise ValueError("selected GPU UUIDs must be non-empty")
         if len(set(selected)) != len(selected):
             raise ValueError("selected GPU UUIDs must be unique")
@@ -180,13 +186,24 @@ class NvidiaSmiGpuProcessObserver:
             root = ElementTree.fromstring(stdout)
         except ElementTree.ParseError:
             return self._unknown("query_malformed")
+        if root.tag != "nvidia_smi_log":
+            return self._unknown("query_malformed")
         observed: dict[str, GpuProcessObservation] = {}
         for gpu in root.findall("gpu"):
             uuid = (gpu.findtext("uuid") or "").strip()
-            if uuid not in self.selected_uuids or uuid in observed:
+            if uuid not in self.selected_uuids:
+                continue
+            if uuid in observed:
+                observed[uuid] = GpuProcessObservation(
+                    uuid, False, False, "query_incomplete"
+                )
                 continue
             processes = gpu.find("processes")
-            if processes is None:
+            if (
+                processes is None
+                or (processes.text or "").strip()
+                or any(child.tag != "process_info" for child in processes)
+            ):
                 observed[uuid] = GpuProcessObservation(
                     uuid, False, False, "query_incomplete"
                 )
@@ -252,15 +269,19 @@ class GpuOccupancyMonitor:
     def refresh(self, force: bool = False) -> GpuOccupancySnapshot:
         cached = self._snapshot
         now = self._monotonic_clock()
-        if not force and cached is not None and cached.is_fresh(
-            now, self.policy.poll_interval_seconds
+        if (
+            not force
+            and cached is not None
+            and cached.is_fresh(now, self.policy.poll_interval_seconds)
         ):
             return cached
         with self._refresh_lock:
             cached = self._snapshot
             now = self._monotonic_clock()
-            if not force and cached is not None and cached.is_fresh(
-                now, self.policy.poll_interval_seconds
+            if (
+                not force
+                and cached is not None
+                and cached.is_fresh(now, self.policy.poll_interval_seconds)
             ):
                 return cached
             observations = self._observer.observe()
@@ -268,9 +289,7 @@ class GpuOccupancyMonitor:
                 tuple(
                     observations.get(
                         uuid,
-                        GpuProcessObservation(
-                            uuid, False, False, "device_missing"
-                        ),
+                        GpuProcessObservation(uuid, False, False, "device_missing"),
                     )
                     for uuid in self._selected_uuids
                 ),
