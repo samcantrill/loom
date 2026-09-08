@@ -275,6 +275,27 @@ rows, migration, mutation, cancellation, or deletion. There is no compatibility
 wrapper. Delegated whole-run Slurm remains a separate historical owner and is
 unchanged.
 
+### Managed preparation
+
+`prepare_managed_run()` is the trusted preparation boundary for callers that
+already hold a resolved coordinator-role snapshot, one composed pipeline object,
+and one explicit `ExecutionRequirement` for every stage. It persists the normal
+configuration provenance, plan, runtime metadata, exact managed runtime record,
+and embedded authority record. A pure coordinator can prepare a run with those
+requirements even when it has no local agent or installed worker environment;
+preparation does not inspect the coordinator Python or select a live remote
+offer.
+
+The supplied role snapshot and composed object are used as-is. Preparation does
+not reread their source files or compose again, so a later environment or source
+change cannot replace the checked composition. Repeating the same run identity
+with identical intent only reads and verifies the existing artifacts before
+returning its receipt. Changed requirements, composition, or partial state
+conflict and remain untouched. `prepare_managed_local_run()` remains the
+embedded-local convenience facade: it resolves its protected inputs and derives
+the local profile requirements before delegating to this owner. SLURM profiles
+and non-embedded authority families remain outside this preparation route.
+
 Daemon status keeps admission/control state separate from authority stage truth
 and service health, with owner-labelled availability and a coordinator `as_of`
 observation time. Ordinary restart preserves the stable owner and rotates the

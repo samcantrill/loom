@@ -14,10 +14,14 @@ from loom.queue import (
     ManagedLocalPreparationReceipt,
     QueueConflictError,
     QueueServiceError,
+    prepare_managed_run,
     prepare_managed_local_run,
 )
+from loom.queue.deployment import load_coordinator_service_config
+from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.pipeline.runtime import CpuResourcePlanner
+from weave import compose_config
 
 
 pytestmark = pytest.mark.unit
@@ -167,6 +171,88 @@ def test_preparation_requires_local_agent_before_run_creation(tmp_path: Path) ->
             coordinator, _pipeline_config(tmp_path), "starter-1"
         )
     assert not (tmp_path / "runs" / "starter-1").exists()
+
+
+def test_composed_preparation_uses_trusted_inputs_without_a_local_agent(
+    tmp_path: Path,
+) -> None:
+    coordinator = _coordinator_config(tmp_path)
+    payload = json.loads(coordinator.read_text(encoding="utf-8"))
+    payload["local_agent"] = None
+    coordinator.write_text(json.dumps(payload), encoding="utf-8")
+    coordinator.chmod(0o600)
+    service = load_coordinator_service_config(coordinator)
+    pipeline = _pipeline_config(tmp_path)
+    composed = compose_config(pipeline)
+    requirements = {
+        "produce": ExecutionRequirement("project-1", "environment-1", "executor-1")
+    }
+
+    _pipeline_config(tmp_path, value=43)
+    coordinator.write_text("not a deployment config", encoding="utf-8")
+    receipt = prepare_managed_run(
+        service,
+        composed,
+        "coordinator-only",
+        execution_requirements=requirements,
+    )
+
+    store = LocalRunStore(tmp_path / "runs")
+    run_dir = store.local_run_dir(receipt.run_uri)
+    before = {
+        path.relative_to(run_dir): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
+    resolved_snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
+    assert resolved_snapshot is not None
+    assert json.loads(resolved_snapshot)["pipeline"]["stages"][0]["config"]["value"] == 42
+    assert (
+        prepare_managed_run(
+            service,
+            composed,
+            "coordinator-only",
+            execution_requirements=requirements,
+        )
+        == receipt
+    )
+    after = {
+        path.relative_to(run_dir): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+    with pytest.raises(
+        QueueConflictError, match="existing partial, corrupt, or changed"
+    ):
+        prepare_managed_run(
+            service,
+            composed,
+            "coordinator-only",
+            execution_requirements={
+                "produce": ExecutionRequirement(
+                    "project-1", "environment-2", "executor-1"
+                )
+            },
+        )
+
+
+def test_composed_preparation_rejects_incomplete_requirements_before_creation(
+    tmp_path: Path,
+) -> None:
+    service = load_coordinator_service_config(_coordinator_config(tmp_path))
+    composed = compose_config(_pipeline_config(tmp_path))
+
+    with pytest.raises(QueueServiceError, match="requirements must exactly cover"):
+        prepare_managed_run(
+            service,
+            composed,
+            "missing-requirement",
+            execution_requirements={},
+        )
+
+    assert not (tmp_path / "runs" / "missing-requirement").exists()
 
 
 def test_preparation_replay_rejects_changed_scheduling_composition(
