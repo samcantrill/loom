@@ -15,7 +15,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from multiprocessing.connection import Client, Listener
+from multiprocessing import AuthenticationError
+from multiprocessing.connection import Client, Connection, Listener
 import secrets
 import sqlite3
 import subprocess
@@ -1016,9 +1017,15 @@ def _serve(root: Path) -> None:
     running = True
     try:
         while running:
-            connection = listener.accept()
             try:
-                request = connection.recv()
+                connection = listener.accept()
+            except (AuthenticationError, EOFError, ConnectionError):
+                continue
+            try:
+                try:
+                    request = connection.recv()
+                except (EOFError, OSError):
+                    continue
                 if not isinstance(request, Mapping):
                     raise AgentProcessSupervisorError(
                         "managed supervisor request is invalid"
@@ -1070,14 +1077,14 @@ def _serve(root: Path) -> None:
                     raise AgentProcessSupervisorError(
                         "managed supervisor operation is invalid"
                     )
-                connection.send({"ok": True, "value": response})
+                _send_supervisor_reply(connection, {"ok": True, "value": response})
             except (
                 AgentProcessSupervisorError,
                 KeyError,
                 TypeError,
                 ValueError,
             ) as exc:
-                connection.send({"ok": False, "error": str(exc)})
+                _send_supervisor_reply(connection, {"ok": False, "error": str(exc)})
             finally:
                 connection.close()
     finally:
@@ -1085,6 +1092,16 @@ def _serve(root: Path) -> None:
         if endpoint.exists():
             endpoint.unlink()
         lock.close()
+
+
+def _send_supervisor_reply(
+    connection: Connection, response: Mapping[str, object]
+) -> None:
+    try:
+        connection.send(response)
+    except (EOFError, OSError):
+        # A lost response preserves the committed operation and its process owner.
+        pass
 
 
 def _main() -> int:

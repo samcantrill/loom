@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -12,7 +14,6 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import TextIO, cast
 
 from loom.pipeline.stores import (
@@ -40,6 +41,11 @@ from ._repository import (
     AuthorityRepositoryError,
     AuthorityRepositoryIdentity,
     generate_service_generation,
+)
+from ._service_locks import (
+    AuthorityLifecycleLocks,
+    AuthorityServiceLockError,
+    AuthorityServiceLocks,
 )
 
 
@@ -107,6 +113,8 @@ class AuthoritySupervisorState:
     port: int
     started_at: str
     updated_at: str
+    process_start_ticks: str | None = None
+    process_boot_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pid", _positive_int(self.pid, "pid"))
@@ -123,8 +131,24 @@ class AuthoritySupervisorState:
         )
         object.__setattr__(self, "host", _non_empty(self.host, "host"))
         object.__setattr__(self, "port", _port(self.port))
-        object.__setattr__(self, "started_at", _non_empty(self.started_at, "started_at"))
-        object.__setattr__(self, "updated_at", _non_empty(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "started_at", _non_empty(self.started_at, "started_at")
+        )
+        object.__setattr__(
+            self, "updated_at", _non_empty(self.updated_at, "updated_at")
+        )
+        if self.process_start_ticks is not None:
+            object.__setattr__(
+                self,
+                "process_start_ticks",
+                _non_empty(self.process_start_ticks, "process_start_ticks"),
+            )
+        if self.process_boot_id is not None:
+            object.__setattr__(
+                self,
+                "process_boot_id",
+                _non_empty(self.process_boot_id, "process_boot_id"),
+            )
 
     def to_dict(self) -> dict[str, PlainData]:
         """Return persisted process state as plain data."""
@@ -140,6 +164,8 @@ class AuthoritySupervisorState:
             "port": self.port,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
+            "process_start_ticks": self.process_start_ticks,
+            "process_boot_id": self.process_boot_id,
         }
 
     @classmethod
@@ -160,6 +186,8 @@ class AuthoritySupervisorState:
                 "port",
                 "started_at",
                 "updated_at",
+                "process_start_ticks",
+                "process_boot_id",
             },
             "AuthoritySupervisorState",
         )
@@ -179,6 +207,8 @@ class AuthoritySupervisorState:
             port=_port(_required(mapping, "port")),
             started_at=_non_empty(_required(mapping, "started_at"), "started_at"),
             updated_at=_non_empty(_required(mapping, "updated_at"), "updated_at"),
+            process_start_ticks=_optional_non_empty(mapping, "process_start_ticks"),
+            process_boot_id=_optional_non_empty(mapping, "process_boot_id"),
         )
 
 
@@ -254,8 +284,52 @@ def start_authority_supervisor(
         command="start",
     )
     resolved_port = _port(port)
+    try:
+        with AuthorityLifecycleLocks.acquire(
+            state_dir=resolved_state_dir,
+            workspace_root=resolved_workspace_root,
+        ):
+            return _start_authority_supervisor_locked(
+                state_dir=resolved_state_dir,
+                workspace_root=resolved_workspace_root,
+                workspace_id=resolved_workspace_id,
+                host=host,
+                port=resolved_port,
+                timeout_seconds=timeout_seconds,
+                service_generation=service_generation,
+            )
+    except AuthorityServiceLockError as exc:
+        raise AuthoritySupervisorError(
+            "authority supervisor lifecycle command is already in progress",
+            code="authority_supervisor.lifecycle_locked",
+            context={
+                "state_dir": str(resolved_state_dir),
+                "workspace_root": str(resolved_workspace_root),
+            },
+        ) from exc
+
+
+def _start_authority_supervisor_locked(
+    *,
+    state_dir: Path,
+    workspace_root: Path,
+    workspace_id: str,
+    host: str,
+    port: int,
+    timeout_seconds: float,
+    service_generation: str | None,
+    rotate_generation: bool = False,
+) -> AuthoritySupervisorCommandResult:
+    """Start one service while the caller serializes its state root and workspace."""
+
+    resolved_state_dir = state_dir
+    resolved_workspace_root = workspace_root
+    resolved_workspace_id = workspace_id
+    resolved_port = port
     existing = _read_state_if_present(resolved_state_dir)
-    if existing is not None and _process_running(existing.pid):
+    if existing is not None and _state_process_state(existing) is (
+        AuthoritySupervisorProcessState.RUNNING
+    ):
         raise AuthoritySupervisorError(
             "authority supervisor is already running",
             code="authority_supervisor.already_running",
@@ -267,12 +341,32 @@ def start_authority_supervisor(
         state_dir=resolved_state_dir,
     )
 
-    repository = AuthorityRepository(resolved_state_dir)
-    identity = repository.initialize(service_generation=service_generation)
     endpoint = _endpoint(host, resolved_port)
     resolved_workspace_root.mkdir(parents=True, exist_ok=True)
-    log_handle = _open_log(resolved_state_dir)
     try:
+        service_locks = AuthorityServiceLocks.acquire(
+            state_dir=resolved_state_dir,
+            workspace_root=resolved_workspace_root,
+        )
+    except AuthorityServiceLockError as exc:
+        raise AuthoritySupervisorError(
+            "authority service root is already owned",
+            code="authority_supervisor.service_owned",
+            context={
+                "state_dir": str(resolved_state_dir),
+                "workspace_root": str(resolved_workspace_root),
+            },
+        ) from exc
+
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        repository = AuthorityRepository(resolved_state_dir)
+        identity = (
+            rotate_authority_repository_generation(resolved_state_dir)
+            if rotate_generation
+            else repository.initialize(service_generation=service_generation)
+        )
+        log_handle = _open_log(resolved_state_dir)
         try:
             process = subprocess.Popen(
                 [
@@ -281,17 +375,27 @@ def start_authority_supervisor(
                     "loom.authority._server",
                     "--state-dir",
                     str(resolved_state_dir),
+                    "--workspace-root",
+                    str(resolved_workspace_root),
                     "--workspace-id",
                     resolved_workspace_id,
                     "--host",
                     host,
                     "--port",
                     str(resolved_port),
+                    "--state-lock-fd",
+                    str(service_locks.state_lock_fd),
+                    "--workspace-lock-fd",
+                    str(service_locks.workspace_lock_fd),
                 ],
                 cwd=str(resolved_workspace_root),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                pass_fds=(
+                    service_locks.state_lock_fd,
+                    service_locks.workspace_lock_fd,
+                ),
             )
         except OSError as exc:
             raise AuthoritySupervisorError(
@@ -303,75 +407,82 @@ def start_authority_supervisor(
                     "endpoint": endpoint,
                 },
             ) from exc
-    finally:
-        log_handle.close()
+        finally:
+            log_handle.close()
 
-    try:
-        readiness = _wait_until_ready(
-            endpoint,
-            timeout_seconds=timeout_seconds,
-            process=process,
+        assert process is not None
+        try:
+            readiness = _wait_until_ready(
+                endpoint,
+                timeout_seconds=timeout_seconds,
+                process=process,
+            )
+        except Exception as exc:
+            _cleanup_started_process(process)
+            raise AuthoritySupervisorError(
+                f"authority supervisor did not become ready: {exc}",
+                code="authority_supervisor.not_ready",
+                context={"endpoint": endpoint, "state_dir": str(resolved_state_dir)},
+            ) from exc
+
+        now = utc_timestamp()
+        state = AuthoritySupervisorState(
+            pid=process.pid,
+            endpoint=endpoint,
+            state_dir=resolved_state_dir,
+            workspace_root=resolved_workspace_root,
+            workspace_id=resolved_workspace_id,
+            service_generation=identity.service_generation,
+            host=host,
+            port=resolved_port,
+            started_at=now,
+            updated_at=now,
+            process_start_ticks=_captured_process_start_ticks(process.pid),
+            process_boot_id=_process_boot_id(),
         )
-    except Exception as exc:
-        _terminate_process(process.pid, timeout_seconds=2.0)
-        raise AuthoritySupervisorError(
-            f"authority supervisor did not become ready: {exc}",
-            code="authority_supervisor.not_ready",
-            context={"endpoint": endpoint, "state_dir": str(resolved_state_dir)},
-        ) from exc
-
-    now = utc_timestamp()
-    state = AuthoritySupervisorState(
-        pid=process.pid,
-        endpoint=endpoint,
-        state_dir=resolved_state_dir,
-        workspace_root=resolved_workspace_root,
-        workspace_id=resolved_workspace_id,
-        service_generation=identity.service_generation,
-        host=host,
-        port=resolved_port,
-        started_at=now,
-        updated_at=now,
-    )
-    try:
-        _write_state(state)
-        registry_record = _registry_record_from_readiness(
+        try:
+            _write_state(state)
+            registry_record = _registry_record_from_readiness(
+                state=state,
+                identity=identity,
+                readiness=readiness,
+                health_state=AuthorityServiceHealthState.READY,
+            )
+            write_authority_registry_record(resolved_workspace_root, registry_record)
+        except Exception as exc:
+            _cleanup_started_process(process)
+            raise AuthoritySupervisorError(
+                f"failed publishing authority supervisor state: {exc}",
+                code="authority_supervisor.publish_failed",
+                context={
+                    "endpoint": endpoint,
+                    "state_dir": str(resolved_state_dir),
+                    "workspace_root": str(resolved_workspace_root),
+                },
+            ) from exc
+        return _result_from_observations(
+            command="start",
             state=state,
             identity=identity,
-            readiness=readiness,
-            health_state=AuthorityServiceHealthState.READY,
-        )
-        write_authority_registry_record(resolved_workspace_root, registry_record)
-    except Exception as exc:
-        _terminate_process(process.pid, timeout_seconds=2.0)
-        raise AuthoritySupervisorError(
-            f"failed publishing authority supervisor state: {exc}",
-            code="authority_supervisor.publish_failed",
-            context={
-                "endpoint": endpoint,
-                "state_dir": str(resolved_state_dir),
-                "workspace_root": str(resolved_workspace_root),
-            },
-        ) from exc
-    return _result_from_observations(
-        command="start",
-        state=state,
-        identity=identity,
-        registry=validate_authority_registry(
-            resolved_workspace_root,
-            expected_workspace_id=resolved_workspace_id,
-            expected_generation=identity.service_generation,
-        ),
-        readiness=AuthoritySupervisorReadiness.READY,
-        process_state=AuthoritySupervisorProcessState.RUNNING,
-        diagnostics=(
-            _diagnostic(
-                "authority_supervisor.started",
-                "authority supervisor started and registry was updated",
-                severity="info",
+            registry=validate_authority_registry(
+                resolved_workspace_root,
+                expected_workspace_id=resolved_workspace_id,
+                expected_generation=identity.service_generation,
             ),
-        ),
-    )
+            readiness=AuthoritySupervisorReadiness.READY,
+            process_state=AuthoritySupervisorProcessState.RUNNING,
+            diagnostics=(
+                _diagnostic(
+                    "authority_supervisor.started",
+                    "authority supervisor started and registry was updated",
+                    severity="info",
+                ),
+            ),
+        )
+    finally:
+        # The child inherited these open file descriptions and therefore retains
+        # ownership after this launcher returns or is itself interrupted.
+        service_locks.close()
 
 
 def inspect_authority_supervisor(
@@ -416,11 +527,7 @@ def inspect_authority_supervisor(
         )
 
     identity, repository_state, repository_diagnostics = _read_identity(state.state_dir)
-    process_state = (
-        AuthoritySupervisorProcessState.RUNNING
-        if _process_running(state.pid)
-        else AuthoritySupervisorProcessState.STALE
-    )
+    process_state = _state_process_state(state)
     readiness = _readiness_for_state(state, process_state=process_state)
     expected_generation = identity.service_generation if identity is not None else None
     registry = validate_authority_registry(
@@ -462,21 +569,80 @@ def stop_authority_supervisor(
 
     resolved_workspace_root = Path(workspace_root).resolve()
     resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
+    requested_state_dir = _optional_state_dir(
+        state_dir=state_dir,
+        workspace_root=resolved_workspace_root,
+        use_workspace_default=use_workspace_default,
+    )
+    try:
+        with AuthorityLifecycleLocks.acquire(
+            state_dir=requested_state_dir,
+            workspace_root=resolved_workspace_root,
+        ):
+            return _stop_authority_supervisor_locked(
+                state_dir=state_dir,
+                use_workspace_default=use_workspace_default,
+                workspace_root=resolved_workspace_root,
+                workspace_id=resolved_workspace_id,
+                timeout_seconds=timeout_seconds,
+            )
+    except AuthorityServiceLockError as exc:
+        raise AuthoritySupervisorError(
+            "authority supervisor lifecycle command is already in progress",
+            code="authority_supervisor.lifecycle_locked",
+            context={"workspace_root": str(resolved_workspace_root)},
+        ) from exc
+
+
+def _stop_authority_supervisor_locked(
+    *,
+    state_dir: str | Path | None,
+    use_workspace_default: bool,
+    workspace_root: Path,
+    workspace_id: str,
+    timeout_seconds: float,
+) -> AuthoritySupervisorCommandResult:
+    """Stop one service while the caller serializes its state root and workspace."""
+
     state = _resolve_state(
         state_dir=state_dir,
         use_workspace_default=use_workspace_default,
-        workspace_root=resolved_workspace_root,
+        workspace_root=workspace_root,
     )
     if state is None:
+        try:
+            AuthorityServiceLocks.ensure_unowned(
+                state_dir=_optional_state_dir(
+                    state_dir=state_dir,
+                    use_workspace_default=use_workspace_default,
+                    workspace_root=workspace_root,
+                ),
+                workspace_root=workspace_root,
+            )
+        except AuthorityServiceLockError:
+            return AuthoritySupervisorCommandResult(
+                command="stop",
+                ok=False,
+                workspace_root=workspace_root,
+                workspace_id=workspace_id,
+                process_state=AuthoritySupervisorProcessState.UNKNOWN,
+                diagnostics=(
+                    _diagnostic(
+                        "authority_supervisor.bootstrap_pending",
+                        "authority service is owned but has not published its identity",
+                        severity="warning",
+                    ),
+                ),
+            )
         return AuthoritySupervisorCommandResult(
             command="stop",
             ok=True,
-            workspace_root=resolved_workspace_root,
-            workspace_id=resolved_workspace_id,
+            workspace_root=workspace_root,
+            workspace_id=workspace_id,
             process_state=AuthoritySupervisorProcessState.STOPPED,
             readiness=AuthoritySupervisorReadiness.UNAVAILABLE,
             repository_state=AuthoritySupervisorRepositoryState.MISSING,
-            registry_status=validate_authority_registry(resolved_workspace_root).status,
+            registry_status=validate_authority_registry(workspace_root).status,
             diagnostics=(
                 _diagnostic(
                     "authority_supervisor.already_stopped",
@@ -486,7 +652,65 @@ def stop_authority_supervisor(
             ),
         )
 
-    stopped = _terminate_process(state.pid, timeout_seconds=timeout_seconds)
+    stopped = _terminate_process(state, timeout_seconds=timeout_seconds)
+    ownership_changed = False
+    service_locks: AuthorityServiceLocks | None = None
+    if stopped:
+        try:
+            service_locks = AuthorityServiceLocks.acquire(
+                state_dir=state.state_dir, workspace_root=state.workspace_root
+            )
+        except AuthorityServiceLockError:
+            # A replacement bootstrap owns these files after the recorded exit.
+            ownership_changed = True
+            stopped = False
+    if not stopped:
+        identity, repository_state, repository_diagnostics = _read_identity(
+            state.state_dir
+        )
+        registry = validate_authority_registry(
+            state.workspace_root,
+            expected_workspace_id=state.workspace_id,
+            expected_generation=identity.service_generation
+            if identity is not None
+            else None,
+        )
+        return _result_from_observations(
+            command="stop",
+            state=state,
+            identity=identity,
+            registry=registry,
+            readiness=AuthoritySupervisorReadiness.UNAVAILABLE,
+            process_state=AuthoritySupervisorProcessState.UNKNOWN,
+            repository_state=repository_state,
+            diagnostics=(
+                _diagnostic(
+                    "authority_supervisor.stop_ownership_unverified"
+                    if ownership_changed
+                    else "authority_supervisor.stop_identity_unverified",
+                    "authority service root is owned after the recorded process exited"
+                    if ownership_changed
+                    else "authority supervisor identity cannot safely authorize a signal",
+                    severity="warning",
+                ),
+                *repository_diagnostics,
+                *_registry_diagnostics(registry),
+            ),
+            ok=False,
+        )
+
+    assert service_locks is not None
+    try:
+        return _record_stopped_supervisor(state)
+    finally:
+        service_locks.close()
+
+
+def _record_stopped_supervisor(
+    state: AuthoritySupervisorState,
+) -> AuthoritySupervisorCommandResult:
+    """Publish exit while root ownership excludes a replacement bootstrap."""
+
     _mark_registry_unavailable(state)
     updated_state = AuthoritySupervisorState(
         pid=state.pid,
@@ -499,13 +723,17 @@ def stop_authority_supervisor(
         port=state.port,
         started_at=state.started_at,
         updated_at=utc_timestamp(),
+        process_start_ticks=state.process_start_ticks,
+        process_boot_id=state.process_boot_id,
     )
     _write_state(updated_state)
     identity, repository_state, repository_diagnostics = _read_identity(state.state_dir)
     registry = validate_authority_registry(
         state.workspace_root,
         expected_workspace_id=state.workspace_id,
-        expected_generation=identity.service_generation if identity is not None else None,
+        expected_generation=identity.service_generation
+        if identity is not None
+        else None,
     )
     return _result_from_observations(
         command="stop",
@@ -513,17 +741,13 @@ def stop_authority_supervisor(
         identity=identity,
         registry=registry,
         readiness=AuthoritySupervisorReadiness.UNAVAILABLE,
-        process_state=AuthoritySupervisorProcessState.STOPPED
-        if stopped
-        else AuthoritySupervisorProcessState.STALE,
+        process_state=AuthoritySupervisorProcessState.STOPPED,
         repository_state=repository_state,
         diagnostics=(
             _diagnostic(
                 "authority_supervisor.stopped",
-                "authority supervisor stopped"
-                if stopped
-                else "authority supervisor process was not running",
-                severity="info" if stopped else "warning",
+                "authority supervisor stopped",
+                severity="info",
             ),
             *repository_diagnostics,
             *_registry_diagnostics(registry),
@@ -551,22 +775,45 @@ def restart_authority_supervisor(
         use_workspace_default=use_workspace_default,
         command="restart",
     )
-    stop_authority_supervisor(
-        state_dir=resolved_state_dir,
-        workspace_root=resolved_workspace_root,
-        workspace_id=workspace_id,
-        timeout_seconds=5.0,
-    )
-    generation = rotate_authority_repository_generation(resolved_state_dir).service_generation
-    result = start_authority_supervisor(
-        state_dir=resolved_state_dir,
-        workspace_root=resolved_workspace_root,
-        workspace_id=workspace_id,
-        host=host,
-        port=port,
-        timeout_seconds=timeout_seconds,
-        service_generation=generation,
-    )
+    resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
+    resolved_port = _port(port)
+    try:
+        with AuthorityLifecycleLocks.acquire(
+            state_dir=resolved_state_dir,
+            workspace_root=resolved_workspace_root,
+        ):
+            stopped = _stop_authority_supervisor_locked(
+                state_dir=resolved_state_dir,
+                use_workspace_default=False,
+                workspace_root=resolved_workspace_root,
+                workspace_id=resolved_workspace_id,
+                timeout_seconds=5.0,
+            )
+            if not stopped.ok:
+                raise AuthoritySupervisorError(
+                    "authority supervisor could not be stopped safely for restart",
+                    code="authority_supervisor.restart_stop_unverified",
+                    context=stopped.to_dict(),
+                )
+            result = _start_authority_supervisor_locked(
+                state_dir=resolved_state_dir,
+                workspace_root=resolved_workspace_root,
+                workspace_id=resolved_workspace_id,
+                host=host,
+                port=resolved_port,
+                timeout_seconds=timeout_seconds,
+                service_generation=None,
+                rotate_generation=True,
+            )
+    except AuthorityServiceLockError as exc:
+        raise AuthoritySupervisorError(
+            "authority supervisor lifecycle command is already in progress",
+            code="authority_supervisor.lifecycle_locked",
+            context={
+                "state_dir": str(resolved_state_dir),
+                "workspace_root": str(resolved_workspace_root),
+            },
+        ) from exc
     return AuthoritySupervisorCommandResult(
         command="restart",
         ok=result.ok,
@@ -649,7 +896,9 @@ def _result_from_observations(
     diagnostics: Sequence[Mapping[str, PlainData]] = (),
     ok: bool = True,
 ) -> AuthoritySupervisorCommandResult:
-    registry_generation = None if registry.record is None else registry.record.service_generation
+    registry_generation = (
+        None if registry.record is None else registry.record.service_generation
+    )
     service_generation = None if identity is None else identity.service_generation
     generation_matches = (
         None
@@ -705,6 +954,49 @@ def _registry_record_from_readiness(
             "repository_schema_version": identity.schema_version,
         },
     )
+
+
+def _publish_supervisor_bootstrap(
+    *,
+    state_dir: Path,
+    workspace_root: Path,
+    workspace_id: str,
+    host: str,
+    port: int,
+    identity: AuthorityRepositoryIdentity,
+    readiness: AuthorityProtocolReadiness,
+    tls: bool = False,
+) -> AuthoritySupervisorState:
+    """Publish a child-owned service identity before it begins accepting requests."""
+
+    now = utc_timestamp()
+    state = AuthoritySupervisorState(
+        pid=os.getpid(),
+        endpoint=_endpoint(host, port).replace("http://", "https://", 1)
+        if tls
+        else _endpoint(host, port),
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        workspace_id=workspace_id,
+        service_generation=identity.service_generation,
+        host=host,
+        port=port,
+        started_at=now,
+        updated_at=now,
+        process_start_ticks=_captured_process_start_ticks(os.getpid()),
+        process_boot_id=_process_boot_id(),
+    )
+    _write_state(state)
+    write_authority_registry_record(
+        workspace_root,
+        _registry_record_from_readiness(
+            state=state,
+            identity=identity,
+            readiness=readiness,
+            health_state=AuthorityServiceHealthState.UNKNOWN,
+        ),
+    )
+    return state
 
 
 def _wait_until_ready(
@@ -873,23 +1165,155 @@ def _mark_registry_unavailable(state: AuthoritySupervisorState) -> None:
     write_authority_registry_record(state.workspace_root, updated)
 
 
-def _terminate_process(pid: int, *, timeout_seconds: float) -> bool:
-    if not _process_running(pid):
+def _terminate_process(
+    state: AuthoritySupervisorState,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    """Terminate only the exact persisted process and confirm its exit."""
+
+    matching = _matching_process_is_live(state)
+    if matching is False:
+        # A missing PID or changed start identity proves this service has ended.
+        return True
+    if matching is None:
+        # Legacy records have only a numeric PID. Never turn that into signal
+        # authority; the PID may now belong to another process.
+        return False
+    pidfd = _open_verified_pidfd(state)
+    if pidfd is None:
         return False
     try:
-        os.kill(pid, signal.SIGTERM)
+        if _pidfd_exited(pidfd):
+            _reap_exited_child(state.pid)
+            return True
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        except ProcessLookupError:
+            _reap_exited_child(state.pid)
+            return True
+        if _wait_for_pidfd_exit(pidfd, time.monotonic() + timeout_seconds):
+            _reap_exited_child(state.pid)
+            return True
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        except ProcessLookupError:
+            _reap_exited_child(state.pid)
+            return True
+        stopped = _wait_for_pidfd_exit(pidfd, time.monotonic() + 2.0)
+        if stopped:
+            _reap_exited_child(state.pid)
+        return stopped
+    finally:
+        os.close(pidfd)
+
+
+def _state_process_state(
+    state: AuthoritySupervisorState,
+) -> AuthoritySupervisorProcessState:
+    matching = _matching_process_is_live(state)
+    if matching is True:
+        return AuthoritySupervisorProcessState.RUNNING
+    if matching is False:
+        return AuthoritySupervisorProcessState.STALE
+    return AuthoritySupervisorProcessState.UNKNOWN
+
+
+def _matching_process_is_live(state: AuthoritySupervisorState) -> bool | None:
+    if state.process_start_ticks is None or state.process_boot_id is None:
+        return False if not _process_running(state.pid) else None
+    try:
+        start_ticks = _process_start_ticks(state.pid)
     except ProcessLookupError:
         return False
-    deadline = time.monotonic() + timeout_seconds
+    boot_id = _process_boot_id()
+    if start_ticks is None or boot_id is None:
+        return None
+    return start_ticks == state.process_start_ticks and boot_id == state.process_boot_id
+
+
+def _open_verified_pidfd(state: AuthoritySupervisorState) -> int | None:
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return None
+    try:
+        pidfd = os.pidfd_open(state.pid)
+    except (OSError, ProcessLookupError):
+        return None
+    try:
+        if _matching_process_is_live(state) is not True:
+            os.close(pidfd)
+            return None
+    except BaseException:
+        os.close(pidfd)
+        raise
+    return pidfd
+
+
+def _pidfd_exited(pidfd: int) -> bool:
+    return bool(select.select([pidfd], [], [], 0)[0])
+
+
+def _wait_for_pidfd_exit(pidfd: int, deadline: float) -> bool:
     while time.monotonic() < deadline:
-        if not _process_running(pid):
+        if _pidfd_exited(pidfd):
             return True
         time.sleep(0.05)
+    return _pidfd_exited(pidfd)
+
+
+def _reap_exited_child(pid: int) -> None:
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
+def _process_start_ticks(pid: int) -> str | None:
+    """Read Linux's immutable process start identity when the host exposes it."""
+
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        value = stat_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        if _process_running(pid):
+            return None
+        raise ProcessLookupError(pid) from exc
+    except OSError:
+        return None
+    closing_parenthesis = value.rfind(")")
+    fields = value[closing_parenthesis + 2 :].split()
+    if closing_parenthesis < 0 or len(fields) <= 19:
+        return None
+    return fields[19]
+
+
+def _captured_process_start_ticks(pid: int) -> str | None:
+    try:
+        return _process_start_ticks(pid)
     except ProcessLookupError:
-        return True
-    return not _process_running(pid)
+        return None
+
+
+def _process_boot_id() -> str | None:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _cleanup_started_process(process: subprocess.Popen[bytes]) -> None:
+    """Use the launcher's unreaped child ownership to clean a failed startup."""
+
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2.0)
 
 
 def _process_running(pid: int) -> bool:
@@ -991,7 +1415,10 @@ def _reject_second_workspace_authority(
     existing_state = _read_state_if_present(Path(registry.record.state_dir).resolve())
     if existing_state is None:
         return
-    if not _process_running(existing_state.pid):
+    if (
+        _state_process_state(existing_state)
+        is not AuthoritySupervisorProcessState.RUNNING
+    ):
         return
     if (
         _readiness_for_state(
@@ -1048,6 +1475,13 @@ def _required(mapping: Mapping[str, object], field: str) -> object:
     return mapping[field]
 
 
+def _optional_non_empty(mapping: Mapping[str, object], field: str) -> str | None:
+    value = mapping.get(field)
+    if value is None:
+        return None
+    return _non_empty(value, field)
+
+
 def _reject_unknown(
     mapping: Mapping[str, object], allowed: set[str], field: str
 ) -> None:
@@ -1071,7 +1505,12 @@ def _positive_int(value: object, field: str) -> int:
 
 
 def _port(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > 65535:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value > 65535
+    ):
         raise AuthoritySupervisorError("port must be an integer from 1 to 65535")
     return value
 

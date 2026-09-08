@@ -37,6 +37,7 @@ from ._agent_process_supervisor import (
     AgentProcessSupervisorService,
     SupervisorLaunchConfiguration,
 )
+from ._managed_local import _ManagedApplicationSuspended
 from .agent_sessions import (
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -388,7 +389,12 @@ def run_outbound_agent_service(
     stop: Event,
     trusted_config_loader: Callable[[], OutboundAgentServiceConfig] | None = None,
 ) -> None:
-    """Run one foreground agent role with bounded reconnect and poll loops."""
+    """Run a foreground agent, preserving supervised work on service stop.
+
+    Stop interrupts active and retained-worker observation at durable replay
+    boundaries. It does not cancel jobs or release their claims. In-flight
+    transport operations retain their configured timeouts before suspension.
+    """
 
     active = config
     pending: OutboundAgentServiceConfig | None = None
@@ -432,7 +438,7 @@ def run_outbound_agent_service(
                     ),
                     prepare_role_reload=prepare_install,
                 )
-            client.resume_retained_work()
+            client.resume_retained_work(suspend_requested=stop.is_set)
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
@@ -480,10 +486,13 @@ def run_outbound_agent_service(
                     session.availability_revision,
                     sequence=sequence,
                     wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+                    suspend_requested=stop.is_set,
                 )
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
+        except _ManagedApplicationSuspended:
+            return
         except QueueError:
             if stop.is_set():
                 return

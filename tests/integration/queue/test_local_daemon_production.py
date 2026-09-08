@@ -119,19 +119,19 @@ def _shutdown_test_supervisors(
     """Stop the independent supervisor processes created by each test."""
 
     clients: list[AgentProcessSupervisorClient] = []
-    initialize = AgentProcessSupervisorService.initialize
+    start = AgentProcessSupervisorService._start
 
-    def tracked_initialize(
-        agent_root: Path, *, configuration: SupervisorLaunchConfiguration
+    def tracked_start(
+        root: Path, configuration: SupervisorLaunchConfiguration
     ) -> AgentProcessSupervisorClient:
-        client = initialize(agent_root, configuration=configuration)
+        client = start(root, configuration)
         clients.append(client)
         return client
 
     monkeypatch.setattr(
         AgentProcessSupervisorService,
-        "initialize",
-        staticmethod(tracked_initialize),
+        "_start",
+        staticmethod(tracked_start),
     )
     yield
     for client in reversed(clients):
@@ -1894,6 +1894,15 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             )
         else:
             assert closed_stage.status is expected_status
+            if requested_outcome == "cancelled":
+                assert (
+                    client.wait("recovery-item", timeout_seconds=10).state
+                    is LocalDaemonAdmissionState.CANCELLED
+                )
+                assert (
+                    SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).status
+                    is RunStatus.CANCELLED
+                )
         assert len(closed_stage.retry_decisions) == 1
         detail = client.admission_for_queue_item("recovery-item")
         assert detail.run_uri == assignment.run_uri
@@ -1919,6 +1928,11 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             ObserveRequest(config.machine_id, "post-recovery", "retained")
         )
         assert observed.live_claim_ids == (assignment.claim_id,)
+        if requested_outcome == "cancelled":
+            assert (
+                SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).status
+                is RunStatus.CANCELLED
+            )
     finally:
         replacement.stop()
 
@@ -2505,6 +2519,227 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> 
 
     assert str(raised.value) == "local_daemon_internal_error"
     assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize("legacy_projection", [False, True])
+def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_projection: bool
+) -> None:
+    _, run_uri, _ = _persist_single_stage_run(
+        tmp_path / "runs",
+        factory_target="tests.support.pipeline_execution_stages.EarlyStopStage",
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+    original_projection = LocalDaemonExecution._terminal_outcome
+
+    def project_like_previous_version(self, admission, plan, snapshot, scoped):
+        if any(stage.status is StageStatus.CANCELLED for stage in snapshot.stages):
+            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
+        return original_projection(self, admission, plan, snapshot, scoped)
+
+    with monkeypatch.context() as legacy:
+        if legacy_projection:
+            legacy.setattr(
+                LocalDaemonExecution, "_terminal_outcome", project_like_previous_version
+            )
+        daemon = LocalDaemon(config)
+        daemon.start()
+        try:
+            client = daemon.client_view(
+                LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+            )
+            client.submit(LocalDaemonAdmissionRequest("stop-early", run_uri))
+            assert (
+                client.wait("stop-early", timeout_seconds=10).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            assert authority.open_run(run_uri).status is (
+                RunStatus.RUNNING if legacy_projection else RunStatus.CANCELLED
+            )
+        finally:
+            daemon.stop()
+
+    replacement = LocalDaemon(config)
+    replacement.start()
+    try:
+        deadline = time.monotonic() + 10
+        while authority.open_run(run_uri).status is not RunStatus.CANCELLED:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        client = replacement.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        completed = client.wait("stop-early", timeout_seconds=10)
+        assert completed.state is LocalDaemonAdmissionState.CANCELLED
+        assert completed.cancellation_operation_id is not None
+        assert (
+            completed.cancellation_principal_id
+            == f"coordinator:{completed.coordinator_id}"
+        )
+        assert authority.open_run(run_uri).stages[0].status is StageStatus.CANCELLED
+        assert replacement._execution is not None
+        assert (
+            replacement._execution.coordinator.retained_assignments(
+                agent_id=config.machine_id
+            )
+            == ()
+        )
+    finally:
+        replacement.stop()
+
+
+def test_stage_cancellation_contains_running_sibling_and_closes_downstream(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = path_to_run_uri(store.root / "cancel-siblings")
+    store.create_run(run_uri)
+    started = tmp_path / "sibling-started"
+    pipeline_config = {
+        "name": "cancel-siblings",
+        "stages": [
+            {
+                "name": name,
+                "factory": {
+                    "_target_": f"tests.support.pipeline_execution_stages.{factory}"
+                },
+                "config": config,
+                "depends_on": dependencies,
+                "resources": {
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                },
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+            }
+            for name, factory, config, dependencies in (
+                (
+                    "sibling",
+                    "SleepStage",
+                    {"seconds": 30, "started_marker": str(started)},
+                    [],
+                ),
+                ("stop", "EarlyStopStage", {"wait_for_marker": str(started)}, []),
+                ("downstream", "JsonProducerStage", {}, ["stop"]),
+            )
+        ],
+    }
+    pipeline = PipelineSpec.from_config(pipeline_config)
+    plan = plan_pipeline(
+        pipeline,
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    store.write_runtime_metadata(
+        run_uri,
+        {
+            "executor": "local",
+            "stages": {name: {"executor": "local"} for name in pipeline.stage_names},
+        },
+    )
+    store.write_config_snapshot(
+        run_uri, "resolved", json_dumps_pretty({"pipeline": pipeline_config})
+    )
+    prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=_execution_requirements(pipeline),
+        options={
+            "run_uri": run_uri,
+            "executor": "local",
+            "execution": {"settings": {"max_parallel_stages": 2}},
+        },
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    config = _daemon_config(tmp_path, cpu_capacity=2)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("cancel-siblings", run_uri))
+        assert (
+            client.wait("cancel-siblings", timeout_seconds=15).state
+            is LocalDaemonAdmissionState.CANCELLED
+        )
+        snapshot = authority.open_run(run_uri)
+        assert started.exists()
+        assert snapshot.status is RunStatus.CANCELLED
+        assert {stage.stage_name: stage.status for stage in snapshot.stages} == {
+            name: StageStatus.CANCELLED for name in pipeline.stage_names
+        }
+        assert all(stage.latest_commit is None for stage in snapshot.stages)
+        assert daemon._execution is not None
+        assert (
+            daemon._execution.coordinator.retained_assignments(
+                agent_id=config.machine_id
+            )
+            == ()
+        )
+    finally:
+        daemon.stop()
+
+
+def test_late_cancellation_waits_for_local_provider_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, run_uri, _ = _persist_single_stage_run(tmp_path / "runs")
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    release_entered, allow_release = Event(), Event()
+    original_release = AtomResourceProvider.release
+
+    def delayed_release(provider, command):
+        release_entered.set()
+        assert allow_release.wait(15)
+        return original_release(provider, command)
+
+    monkeypatch.setattr(AtomResourceProvider, "release", delayed_release)
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("late-cancel", run_uri))
+        assert release_entered.wait(10)
+        deadline = time.monotonic() + 10
+        while authority.open_run(run_uri).status is not RunStatus.SUCCEEDED:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert (
+            client.admission_for_queue_item("late-cancel").state
+            is LocalDaemonAdmissionState.ACTIVE
+        )
+        client.cancel("late-cancel")
+        with pytest.raises(TimeoutError):
+            client.wait("late-cancel", timeout_seconds=0.2)
+        assert not allow_release.is_set()
+        allow_release.set()
+        assert (
+            client.wait("late-cancel", timeout_seconds=10).state
+            is LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert daemon._execution is not None
+        assert (
+            daemon._execution.coordinator.retained_assignments(
+                agent_id=config.machine_id
+            )
+            == ()
+        )
+    finally:
+        allow_release.set()
+        daemon.stop()
 
 
 def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfig:
