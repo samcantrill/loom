@@ -177,9 +177,74 @@ CPU/RAM claims stay absent for GPU-only accounting. Existing timeout tests own
 duration validity; resource tests need only prove the selected timeout reaches
 that owner without disturbing cancellation and cleanup.
 
-Remaining design work is exact new-policy defaults and public vocabulary,
-the narrow old-runtime/placement admission rule, and complete executor/control
-receipt propagation. No phase cards or runtime changes are admitted yet.
+The proposed public vocabulary below resolves the invocation shape for design
+review. New-job defaults, the narrow old-runtime/placement admission rule, raw
+whole-run local queue disposition and complete executor/control receipts remain
+unfinished. No phase cards or runtime changes are admitted yet.
+
+### Proposed Configurable Policy Shape
+
+Add one import-light `ResourcePolicy` value at the existing runtime-options owner,
+exposed through `RunOptions.resource_policy` and
+`StageRuntimeOptions.resource_policy`. It selects resource kinds, not amounts or
+backend commands. Proposed authored form:
+
+```yaml
+runtime:
+  resource_policy:
+    account_for: [gpu]
+    enforce: []
+  reliability:
+    timeout:
+      enabled: false
+  stage_options:
+    fit:
+      resource_policy:
+        enforce: [gpu]
+      reliability:
+        timeout:
+          enabled: true
+          duration_seconds: 600
+```
+
+Stage resource declarations and their runtime refinements continue to use the
+existing `ResourceRequest` entries. In this example, all stages account only
+for their effective GPU demand; only `fit` requests extra GPU binding and a
+ten-minute job timeout. No amount is repeated in `resource_policy`. The spelling
+is a design proposal, not a currently accepted executable Loom configuration.
+
+Each selection accepts `all` or an explicit list of resource-kind identifiers.
+An empty list selects none. An omitted axis inherits the earlier profile/run
+choice independently; a supplied axis replaces that axis without list union.
+An empty policy mapping changes neither axis. Authored `null` is not a second
+spelling for explicit none. The immutable Python representation preserves missing
+axes until composition finishes; its exact private representation is discretionary.
+Resolve the approved new-job defaults only after composition, then record concrete
+effective choices before admission. The pending default decision below still
+applies; this proposal does not silently decide it.
+
+Resolve selections against the full normalized demand after existing semantic
+refinement. `all` means all effective demand kinds for that stage, not a fabricated
+host capacity. A selected kind with no effective demand produces no claim, limit
+or visibility mask and is reported as not applicable. An explicitly requested
+control for a present demand must be supported and actually applicable at its
+backend, or fail with the requested kind, relevant mechanism/prerequisite and
+correction guidance. No additional mechanism registry is proposed: use the
+existing capability descriptors and concrete backend mapping owners.
+
+`enforce: []` disables additional resource controls only; timeout remains its
+existing reliability option. To disable every job limit, set both `enforce: []`
+and `reliability.timeout.enabled: false`. Cancellation, leases, supervision and
+cleanup timeouts remain active. SLURM allocation directives continue to derive
+from full effective allocation demand, independent of which kinds Loom itself
+accounts for; no extra inner controls does not remove scheduler constraints.
+
+The default policy can therefore express GPU-only accounting with GPU binding,
+CPU/RAM controls, timeout, combinations of those, or none, without backend-specific
+mode names or duplicated amounts. Existing codec/profile and command-boundary
+tests own selection shape, independent inheritance/clearing, absent-demand
+behavior and correct controls. Add no selector grammar, priorities, policy
+plugins or per-control amounts for hypothetical future consumers.
 
 ### Default Decision And Backend Boundary Evidence
 
