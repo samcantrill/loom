@@ -60,7 +60,6 @@ from loom.pipeline.execution.models import (
     StageWorkerRequest,
     StageWorkerResult,
 )
-from loom.pipeline.execution.lifecycle import write_stage_failed
 from loom.pipeline.stores.atomic import atomic_write_bytes
 
 from ._agent_process_supervisor import (
@@ -3497,16 +3496,6 @@ def run_managed_local_assignment(
                     assignment.stage_name,
                     failure.to_dict(),
                     attempt=assignment.attempt,
-                )
-                write_stage_failed(
-                    run_store,
-                    run_uri=assignment.run_uri,
-                    stage_name=assignment.stage_name,
-                    attempt=assignment.attempt,
-                    started_at=worker_result.started_at,
-                    finished_at=worker_result.finished_at,
-                    message=failure.message,
-                    owner={"component": "managed-assignment"},
                 )
         coordinator.advance(
             assignment.assignment_id,

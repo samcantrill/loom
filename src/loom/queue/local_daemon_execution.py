@@ -5461,6 +5461,7 @@ def _run_result_owner_view(
     config: LocalDaemonConfig,
     admission: LocalDaemonAdmission,
     *,
+    snapshot: AuthoritativeRunSnapshot | None,
     clock: Callable[[], str],
 ) -> Mapping[str, PlainData]:
     """Project complete persisted stage failures as one fail-closed owner view."""
@@ -5476,6 +5477,8 @@ def _run_result_owner_view(
         "failures": [],
     }
     try:
+        if snapshot is None:
+            raise QueueServiceError("failed-stage authority is unavailable")
         store = LocalRunStore(config.run_store_root)
         store.open_run(admission.run_uri)
         raw_plan = store.read_plan(admission.run_uri)
@@ -5496,11 +5499,14 @@ def _run_result_owner_view(
 
         failures: list[PlainData] = []
         failed_stage_count = 0
+        stages = {stage.stage_name: stage for stage in snapshot.stages}
         for stage_name in plan.stage_order:
-            status = store.read_stage_status(admission.run_uri, stage_name)
-            if status is None or status.status is not StageStatus.FAILED:
+            stage = stages.get(stage_name)
+            if stage is None or stage.status is not StageStatus.FAILED:
                 continue
             failed_stage_count += 1
+            if not stage.attempts:
+                raise QueueServiceError("failed stage has no authoritative attempt")
             persisted = store.read_stage_failure(admission.run_uri, stage_name)
             if persisted is None:
                 raise QueueServiceError("failed stage has no persisted failure")
@@ -5508,7 +5514,7 @@ def _run_result_owner_view(
             if (
                 failure.run_uri != admission.run_uri
                 or failure.stage_name != stage_name
-                or failure.attempt != status.attempt
+                or failure.attempt != stage.attempts[-1].attempt
             ):
                 raise QueueServiceError("persisted stage failure conflicts with status")
             failures.append(failure.to_dict())
@@ -5767,7 +5773,7 @@ def build_local_daemon_owner_views(
     for admission in admissions:
         authority_view: dict[str, PlainData]
         authority_observed_at = clock()
-        run_result_view = _run_result_owner_view(config, admission, clock=clock)
+        snapshot: AuthoritativeRunSnapshot | None = None
         cancellation_receipt: dict[str, PlainData] | None = None
         try:
             factory = config.coordinator_authority_factory
@@ -5812,6 +5818,9 @@ def build_local_daemon_owner_views(
                 ],
                 "freshness": "current",
             }
+        run_result_view = _run_result_owner_view(
+            config, admission, snapshot=snapshot, clock=clock
+        )
         view = ensure_plain_data(
             {
                 "queue_item_id": admission.queue_item_id,

@@ -2224,7 +2224,16 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         daemon.stop()
 
 
-@pytest.mark.parametrize("damage", ["missing", "corrupt", "read_error"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "corrupt",
+        "read_error",
+        "missing_status_and_failure",
+        "authority_unavailable",
+    ],
+)
 def test_run_result_owner_projects_complete_failures_or_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2258,6 +2267,8 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         run_uri, "resolved", json_dumps_pretty({"pipeline": pipeline})
     )
     config = _daemon_config(tmp_path)
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
     admission = LocalDaemonAdmission(
         admission_id="admission",
         queue_item_id="item",
@@ -2271,6 +2282,21 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
     )
     failures = []
     for stage_name in plan.stage_order:
+        allocation = authority.allocate_stage_attempt(
+            run_uri, stage_name, owner_id="fixture", lease_ttl_seconds=30
+        )
+        authority.transition_stage(
+            run_uri,
+            stage_name,
+            from_status=StageStatus.RUNNING,
+            to_status=StageStatus.FAILED,
+        )
+        assert allocation.lease is not None
+        authority.release_lease(
+            allocation.lease.lease_id,
+            owner_id="fixture",
+            fencing_token=allocation.lease.fencing_token,
+        )
         store.write_stage_status(
             run_uri=run_uri,
             stage_name=stage_name,
@@ -2311,12 +2337,20 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
         "failures": failures,
     }
 
-    if damage == "missing":
+    if damage in {"missing", "missing_status_and_failure"}:
         store.local_stage_dir(run_uri, "alpha").joinpath("failure.json").unlink()
+        if damage == "missing_status_and_failure":
+            store.local_stage_dir(run_uri, "alpha").joinpath("status.json").unlink()
     elif damage == "corrupt":
         store.write_stage_failure(
             run_uri, "alpha", {**failures[-1], "unknown": True}, attempt=1
         )
+    elif damage == "authority_unavailable":
+
+        def unavailable_authority(run_uri: str) -> Never:
+            raise OSError("injected authority read failure")
+
+        config = replace(config, coordinator_authority_factory=unavailable_authority)
     else:
         read_failure = LocalRunStore.read_stage_failure
 
