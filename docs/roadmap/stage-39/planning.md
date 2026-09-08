@@ -336,6 +336,48 @@ silently. Current supported demand normalization remains owned by resource
 validators/planners; control capability is checked separately. Keep GPU-only
 accounting, GPU binding and driver passthrough distinct in examples and tests.
 
+### Control Evidence At Its Actual Owner
+
+`runtime/capabilities.py::_resource_capability_diagnostics` currently derives
+diagnostics from all declared stage demands and special-cases the Apptainer
+CPU/RAM switch. Merely filtering container argv is insufficient: this earlier
+boundary could still reject an unselected Docker GPU control, or claim that
+declared resources are enforced when no control was requested. Replace the
+special case with the same resolved selection used at launch. Keep resource
+semantic validity separate from enforcement availability, including custom
+registered resource kinds whose control is not selected.
+
+Use existing capability diagnostics for preflight and existing executor/attempt
+metadata for execution facts, rather than adding a resource-control state store.
+The design must distinguish these meanings at the current consumers:
+
+| Evidence | Authoritative point | Meaning and limit |
+| --- | --- | --- |
+| Demand and accounting selection | Resolved runtime/placement | Requested amount remains at its existing owner; selecting accounting alone proves neither admission nor isolation |
+| Reservation | Existing admitted claim/lease | The selected capacity is reserved; no environment binding or measured GPU isolation follows from this fact |
+| Requested control | Capability/preflight and prepared command | The selected mechanism can be attempted; constructing argv is not execution evidence |
+| Applied launch configuration | Actual local/remote/container launch owner | The selected argument or binding was supplied for the launched process; this does not establish measured kernel enforcement |
+| Delegated control | SLURM mapping and existing submission receipt | Directives request constraints from SLURM; successful submission is not proof of site enforcement |
+| Not requested / not applicable | Resolved policy and full effective demand | An excluded control adds nothing; a selected kind without demand invents no amount, mask or limit |
+| Unavailable / failed application | Existing preflight or executor failure | Explain the requested kind, mechanism and prerequisite; preserve the underlying failure and do not continue as if enforcement succeeded |
+
+The existing Apptainer and Docker `_setup_metadata`/`_process_metadata` owners
+already distinguish setup failure, command construction and process outcome.
+Extend their metadata at those boundaries; do not mark a failed container setup
+as applied simply because its command contained resource flags. Existing timeout
+metadata remains authoritative for deadlines. Keep current redaction of raw GPU
+allocation tokens; diagnostic message approval is not permission to copy tokens,
+credentials or complete environments into resource receipts.
+
+Required comparisons use the existing capability contract/integration tests and
+container executor tests: an unselected unsupported control is not an error;
+selecting it produces an actionable failure; a preflight or failed launch does
+not claim applied enforcement; a successful fake launcher proves supplied argv
+and environment only. Actual host-limit guarantees require separate physical
+evidence and are not a condition for the managed CPU diagnostic proof. Exact
+metadata keys and any necessary existing-owner codec changes remain part of the
+expanded design review, not an additional policy or lifecycle API.
+
 ### Admission And Managed Binding Coverage
 
 The serial pipeline runner has its own authority-lease admission in addition to
@@ -377,6 +419,27 @@ specifications explicitly distinguish this whole-run API from the dependency-rea
 managed-stage route. Finish the raw local launch-contract disposition without
 claiming that a RunOptions field reaches arbitrary opaque commands, silently
 rewriting saved queue items, or introducing a second demand schema.
+
+There is a concrete attribution gap, not just a missing runtime argument:
+`LaunchContract.resources` and `ResourceAssignmentRequest.resources` use arbitrary
+logical pool keys, whereas the proposed runtime selection names semantic resource
+kinds. `StaticSlotAssignmentProvider.acquire` knows each slot's resource name,
+but flattens selected bindings into `LaunchEnvironmentBindings.environment` before
+returning them. The local adapter therefore cannot safely infer which resource
+produced a variable. Neither parsing names such as `CUDA_VISIBLE_DEVICES` nor
+reading the provider's display-only `safe_evidence` is an authoritative mapping.
+
+The raw-queue disposition must explicitly choose its supported policy boundary
+before implementation: either a reviewed typed attribution/selection extension
+at those existing owners, or an explicitly documented legacy boundary with a
+clear policy-aware replacement route. Do not silently claim coverage or silently
+drop this route from the accepted work. Any proposed extension must preserve
+arbitrary logical resources, assignment leases/renewal/release and enqueue replay;
+it must not reinterpret immutable opaque argv. The existing assignment and local
+adapter tests must distinguish retaining a reservation from adding its binding.
+This unresolved scope/compatibility disposition remains visible for design
+agreement; no queue-format cut is authorized merely by the pipeline hard-cut
+proposal above.
 
 Resource-provider GPU/readiness probes also call the environment helpers, but
 are explicit probe operations rather than configured experiment jobs. Keep their
