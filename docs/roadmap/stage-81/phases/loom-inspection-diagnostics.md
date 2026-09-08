@@ -144,7 +144,48 @@ Manager owns independent actual-PR review, publication, merge and cleanup.
 ## Workflow State And Completion
 
 - Manager setup: complete on clean published base; canonical readiness reused.
-- Implementation: pending executor.
+- Implementation: complete at `bc270a4362271796d592d1f93f68d870af1657cf`.
 - Optional planner/refiner: unused; corrections 0/3.
 - Independent review: required after implementation and both local gates.
 - PR, merge and cleanup: pending; no runtime validation claimed.
+
+## Completion Record
+
+- Implementation and changed paths: added the detached `loom.diagnostic.v1`
+  projector/strict renderer under `src/loom/diagnostics`, added the eighth
+  `run_result.diagnostic_failure` member and authority-cause handoff in local
+  daemon owner assembly, rendered it only for admission text output while
+  retaining the generic JSON envelope, and documented the existing authorized
+  disclosure boundary in `docs/features/queue.md`.
+- Commits: `bc270a4362271796d592d1f93f68d870af1657cf` (`Add Loom inspection
+  failure diagnostics`).
+- Tests added or updated by suite: diagnostics projection/strict-renderer unit
+  coverage; queue CLI text/JSON presentation unit coverage; local-daemon
+  owner-view, authority-cause, actual socket, and eight-owner-key integration
+  coverage; diagnostics public-import coverage.
+- Targeted validation: `uv run pytest`
+  `tests/unit/loom/diagnostics/test_diagnostic_failure.py`
+  `tests/package/test_import.py::test_import_loom_diagnostics_public_api`
+  `tests/unit/loom/cli/test_queue.py::test_queue_daemon_admission_renders_private_diagnostic_failure`
+  `tests/integration/queue/test_local_daemon_production.py::test_run_result_owner_projects_complete_failures_or_fails_closed`
+  `tests/integration/queue/test_local_daemon_production.py::test_daemon_projects_stage_failure_to_authority_run_and_admission`
+  passed 15 tests. Changed-path Ruff and Pyright both passed.
+- Final `make validate-pr` result: passed at the validated revision. Default
+  lane: 3,018 passed, 155 opt-in deselections; config-extra: 161 passed, 18
+  expected opt-in skips; package build passed. Raw receipt retained at
+  `build/phase-12-validation/validate-pr.log`.
+- Final `make test-summary` and `build/test-summary.md`: passed at the
+  validated revision. Package 122, unit 2,149, contract 300, integration 379,
+  e2e 68, and config-extra 161 passed; config-extra retained 18 expected
+  opt-in skips. Summary: `build/test-summary.md`; raw JUnit/coverage receipts:
+  `build/test-summary/{package,unit,contract,integration,e2e,config-extra}/`;
+  raw gate log: `build/phase-12-validation/test-summary.log`.
+- Validated revision or tree state: clean source/test/configuration tree at
+  `bc270a4362271796d592d1f93f68d870af1657cf` before this completion-record-only
+  edit.
+- Later validation-relevant changes: none; the pending completion-record edit
+  changes no source, tests, dependencies, build, or validation configuration.
+- Scope or fixed-contract variance: none.
+- Residual blocker or risk: no blocker. Physical/container acceptance remains
+  opt-in and outside P12; its 18 config-extra skips are explicitly reported
+  above.
