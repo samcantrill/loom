@@ -1998,6 +1998,10 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         assert control[0] == "contained"
         assert control[1] is not None
         assert authority.open_run(run_uri).stages[0].status is StageStatus.CANCELLED
+        assert coordinator.wait("recovery-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.CANCELLED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.CANCELLED
         release_agent.set()
         with pytest.raises(QueueConflictError):
             worker.result(timeout=10)

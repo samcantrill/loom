@@ -43,12 +43,15 @@ from loom.queue._managed_local import (
     ProviderReleaseEvidence,
     SQLiteAgentJournal,
     GpuResourceProvider,
+    _ManagedApplicationSuspended,
     _cancelled_worker_result,
     _compose_agent_resource_providers,
     _configured_provider_descriptor,
+    _managed_root_failed_worker_result,
     _worker_environment,
 )
 from loom.pipeline.execution.models import StageWorkerResult
+from loom.pipeline.status import StageStatus
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
@@ -151,6 +154,15 @@ def _supervisor_containment_evidence(
             "worker_result_digest": receipt.worker_result_digest,
         }
     )
+
+
+def _raise_if_application_suspended(
+    suspend_requested: Callable[[], bool] | None,
+) -> None:
+    if suspend_requested is not None and suspend_requested():
+        raise _ManagedApplicationSuspended(
+            "remote application stopped with supervised work retained"
+        )
 
 
 class _IndeterminateAgentProtocolError(QueueServiceError):
@@ -3495,9 +3507,17 @@ class LocalDaemonAgentHttpClient:
         *,
         sequence: int,
         wait_timeout_ms: int,
+        suspend_requested: Callable[[], bool] | None = None,
     ) -> Mapping[str, PlainData]:
-        """Poll and drive at most one resident assignment to ordered release."""
+        """Poll and drive one resident assignment to ordered release.
 
+        A suspension callback stops application observation at a durable replay
+        boundary. It preserves the supervised worker, fence, and provider claims;
+        an assignment already delivered is journalled and handed to its process
+        owner before suspension. Poll/network calls retain their bounded waits.
+        """
+
+        _raise_if_application_suspended(suspend_requested)
         delivery = self.wait_for_work(
             session_id,
             availability_revision,
@@ -3602,7 +3622,9 @@ class LocalDaemonAgentHttpClient:
         workspace.accept()
         prepared = execution_journal.prepare_composite(assignment, commands, providers)
         if prepared is AssignmentState.DECLINED:
-            reason_code = execution_journal.read_decline_reason(assignment.assignment_id)
+            reason_code = execution_journal.read_decline_reason(
+                assignment.assignment_id
+            )
             next_revision = self._availability_revision(
                 session, request.assignment_id, providers
             )
@@ -3797,13 +3819,15 @@ class LocalDaemonAgentHttpClient:
                             process_execution_id=execution_id,
                         ),
                     )
-        self._flush_workspace_events(session_id, workspace)
+        if not cancelled_before_start:
+            self._flush_workspace_events(session_id, workspace)
         if launch is None:
             retained_launch = workspace.supervisor_launch_json()
             if retained_launch is not None:
                 launch = _launch_from_value(json.loads(retained_launch))
         if launch is not None:
             while True:
+                _raise_if_application_suspended(suspend_requested)
                 receipt = supervisor.query(launch)
                 if receipt.state in {
                     SupervisorLaunchState.EXITED,
@@ -3815,39 +3839,12 @@ class LocalDaemonAgentHttpClient:
                 self.poll_assignment_control(session_id)
                 self._maintain_resource_offer()
                 sleep(0.05)
+            if not self._settle_supervised_worker_result(workspace, launch, receipt):
+                raise QueueConflictError("remote process group containment is unknown")
         elif not result_path.is_file():
             raise QueueConflictError(
                 "remote process outcome is unknown and cannot be relaunched"
             )
-        if (
-            not result_path.is_file()
-            and request.assignment_id in self._cancelled_assignments
-        ):
-            cancelled = _cancelled_worker_result(workspace.worker_request())
-            atomic_write_bytes(
-                result_path,
-                json.dumps(
-                    cancelled.to_dict(),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                ).encode(),
-            )
-        if not result_path.is_file():
-            raise QueueConflictError(
-                "remote process exited without a durable worker result"
-            )
-        if launch is not None:
-            contained = supervisor.contain(launch)
-            if contained.state is not SupervisorLaunchState.CONTAINED:
-                raise QueueConflictError("remote process group containment is unknown")
-            if (
-                contained.worker_result_digest
-                != hashlib.sha256(result_path.read_bytes()).hexdigest()
-            ):
-                raise QueueConflictError(
-                    "remote supervisor result evidence does not match the workspace"
-                )
         return self._complete_remote_result_and_release(
             session,
             request,
@@ -3860,16 +3857,24 @@ class LocalDaemonAgentHttpClient:
             authorization_revision=authorization_revision,
             persist_result=not cancelled_before_start,
             result_path_label="remote execution completion",
+            # Pre-start cancellation has no supervised launch for restart replay.
+            suspend_requested=suspend_requested if launch is not None else None,
         )
 
-    def resume_retained_work(self) -> tuple[Mapping[str, PlainData], ...]:
+    def resume_retained_work(
+        self, *, suspend_requested: Callable[[], bool] | None = None
+    ) -> tuple[Mapping[str, PlainData], ...]:
         """Join continuous supervisor receipts before releasing startup capacity.
 
         This is deliberately an explicit application-start step: no offer or
         poll can bypass it, and an unknown receipt leaves its reference and
         provider claim unavailable.
+
+        Suspension preserves the same retained references for the next service
+        incarnation and never releases capacity or cancels its supervised work.
         """
 
+        _raise_if_application_suspended(suspend_requested)
         journal = self._require_journal()
         execution_journal = self._execution_journal
         supervisor = self._supervisor
@@ -3877,6 +3882,7 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote restart has no supervisor journal")
         completed: list[Mapping[str, PlainData]] = []
         for session_id, assignment_id in journal.unresolved_assignment_references():
+            _raise_if_application_suspended(suspend_requested)
             session = journal.session(session_id)
             workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), assignment_id
@@ -3932,6 +3938,7 @@ class LocalDaemonAgentHttpClient:
                 SupervisorLaunchState.STARTING,
                 SupervisorLaunchState.RUNNING,
             }:
+                _raise_if_application_suspended(suspend_requested)
                 self.poll_assignment_control(session_id)
                 sleep(0.05)
                 receipt = supervisor.query(launch)
@@ -3949,19 +3956,7 @@ class LocalDaemonAgentHttpClient:
                     break
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
-            result_path = workspace.root / "worker-result.json"
-            if (
-                not result_path.is_file()
-                and assignment_id in self._cancelled_assignments
-            ):
-                self._record_contained_cancellation(workspace)
-            contained = supervisor.contain(launch)
-            if contained.state is not SupervisorLaunchState.CONTAINED:
-                continue
-            if not result_path.is_file():
-                continue
-            digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
-            if contained.worker_result_digest != digest:
+            if not self._settle_supervised_worker_result(workspace, launch, receipt):
                 continue
             completed.append(
                 self._complete_remote_result_and_release(
@@ -3976,10 +3971,60 @@ class LocalDaemonAgentHttpClient:
                     authorization_revision=0,
                     persist_result=True,
                     result_path_label="remote restart completion",
+                    suspend_requested=suspend_requested,
                 )
             )
         self._restart_with_retained_work = self._has_retained_agent_work()
         return tuple(completed)
+
+    def _settle_supervised_worker_result(
+        self,
+        workspace: _ResidentAssignmentWorkspace,
+        launch: ResidentWorkerLaunch,
+        receipt: SupervisorReceipt,
+    ) -> bool:
+        """Close a known root exit only with continuous group/result evidence."""
+
+        if receipt.state not in {
+            SupervisorLaunchState.EXITED,
+            SupervisorLaunchState.CONTAINED,
+        }:
+            return False
+        supervisor = self._supervisor
+        if supervisor is None:
+            raise QueueConflictError("remote completion has no process owner")
+        result_path = workspace.root / "worker-result.json"
+        if not result_path.is_file():
+            if workspace.assignment_id in self._cancelled_assignments:
+                self._record_contained_cancellation(workspace)
+            else:
+                result = _managed_root_failed_worker_result(
+                    workspace.worker_request(),
+                    ManagedLocalError(
+                        "resident worker exited without a durable worker result"
+                    ),
+                    process_exit_code=receipt.exit_code,
+                )
+                atomic_write_bytes(
+                    result_path,
+                    json.dumps(
+                        result.to_dict(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode(),
+                )
+        contained = supervisor.contain(launch)
+        if contained.state is not SupervisorLaunchState.CONTAINED:
+            return False
+        if (
+            contained.worker_result_digest
+            != hashlib.sha256(result_path.read_bytes()).hexdigest()
+        ):
+            raise QueueConflictError(
+                "remote supervisor result evidence does not match the workspace"
+            )
+        return True
 
     def _join_retained_supervised_start(
         self,
@@ -4026,11 +4071,16 @@ class LocalDaemonAgentHttpClient:
         authorization_revision: int,
         persist_result: bool,
         result_path_label: str,
+        suspend_requested: Callable[[], bool] | None = None,
     ) -> Mapping[str, PlainData]:
         """Own normal and restart result/output/outbox completion ordering."""
 
         result_path = workspace.root / "worker-result.json"
         result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
+        cancelled_before_start = (
+            result.status is StageStatus.CANCELLED
+            and workspace.supervisor_launch_json() is None
+        )
         if persist_result:
             workspace.persist_worker_result(result)
             execution_journal.record_result(assignment.assignment_id, result.to_dict())
@@ -4039,7 +4089,8 @@ class LocalDaemonAgentHttpClient:
             f"{request.assignment_id}:result-output-durable",
             {"kind": "result_and_output_durable", "status": report.status.value},
         )
-        self._flush_workspace_events(session.session_id, workspace)
+        if not cancelled_before_start:
+            self._flush_workspace_events(session.session_id, workspace)
         authorization = self._fresh_transfer_authorization(
             session_id=session.session_id,
             assignment_id=request.assignment_id,
@@ -4064,6 +4115,7 @@ class LocalDaemonAgentHttpClient:
         for item in report.outputs:
             offset = 0
             while True:
+                _raise_if_application_suspended(suspend_requested)
                 data, final = workspace.output_chunk(item.transfer_id, offset)
                 response, authorization_id, authorization_revision = (
                     self._authorized_transfer_call(
@@ -4091,6 +4143,7 @@ class LocalDaemonAgentHttpClient:
                 self._maintain_resource_offer()
                 if final:
                     break
+        _raise_if_application_suspended(suspend_requested)
         self._assignment_call(
             session.session_id,
             request.assignment_id,
@@ -4098,6 +4151,8 @@ class LocalDaemonAgentHttpClient:
                 session.session_id, request.assignment_id, fence=fence
             ),
         )
+        if cancelled_before_start:
+            self._flush_workspace_events(session.session_id, workspace)
         next_revision = self._release_provider_claims(
             session,
             assignment,

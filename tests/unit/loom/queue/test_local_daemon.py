@@ -2025,6 +2025,7 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     known = SimpleNamespace(
         state="accepted",
         assignment=SimpleNamespace(
+            assignment_id="known-assignment",
             operation_id="known",
             profile_id="profile-a",
             profile_configuration_fingerprint="config-a",
@@ -2033,6 +2034,7 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     unknown = SimpleNamespace(
         state="submitting",
         assignment=SimpleNamespace(
+            assignment_id="unknown-assignment",
             operation_id="unknown",
             profile_id="profile-a",
             profile_configuration_fingerprint="config-a",
@@ -2062,6 +2064,7 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     subject = cast(Any, execution)
     subject.slurm_assignments = _Assignments()
     subject.slurm_submissions = _Submissions()
+    subject.daemon = None
     subject._slurm_profile = lambda profile_id, fingerprint: (
         f"resolved:{profile_id}:{fingerprint}"
     )
@@ -2087,6 +2090,7 @@ def test_slurm_cancellation_waits_for_exact_provider_release() -> None:
     subject.slurm_submissions = SimpleNamespace(
         find=lambda _operation_id: SimpleNamespace()
     )
+    subject.daemon = None
 
     def unavailable(_assignment_id: str) -> None:
         raise QueueConflictError("provider release is unavailable")

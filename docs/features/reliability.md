@@ -88,9 +88,28 @@ the supported behavior; the authoritative contracts and phase ownership remain i
   coordinator capacity. The internal `logical_released` state is still
   settling, while an assignment explicitly retained by guarded recovery
   remains the documented exception.
+- Stage-originated cancellation, including `context.stop_early()` and guarded
+  cancellation recovery, installs the same durable run-cancellation operation as
+  client cancellation. It closes remaining work before finalizing the authority
+  run. A late cancellation preserves an already terminal authority outcome and
+  still waits for ordinary local, remote, and SLURM provider settlement before
+  completing admission.
+- Remote cancellation before launch records `cancelled_before_start` in the
+  coordinator's event stream. The terminal result opens the remaining event
+  stream, which is acknowledged before provider release and application stop.
+- On coordinator restart, cancelled admissions from older versions without a
+  cancellation operation are checked against authority in bounded reconciliation
+  batches. Only a cancelled stage in a nonterminal run reopens cancellation
+  processing; terminal authority outcomes remain unchanged. Unavailable evidence
+  keeps the repair queued; its failure does not abort reconciliation of other
+  admissions.
 - Disconnect, timeout, missing PID, expired offer, or credential change does not
   prove failure or containment. Accepted unknown work is not automatically
   reassigned and does not consume retry budget.
+- Resident remote agents apply the same missing-result infrastructure-failure
+  rule during normal completion and restart replay. The result is made durable,
+  matched to a positive continuous-supervisor containment receipt, committed
+  through the current execution fence, and acknowledged before provider release.
 - A SLURM submission operation commits `SUBMITTING` before one automatic
   `sbatch` invocation. Accepted returns an exact job handle; positive non-
   acceptance may be definitely rejected; every timeout, crash, interruption,

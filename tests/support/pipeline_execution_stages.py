@@ -201,6 +201,13 @@ class EarlyStopStage:
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
         _ = inputs
+        marker = context.stage_config.get("wait_for_marker")
+        if isinstance(marker, str):
+            deadline = time.monotonic() + 10
+            while not Path(marker).exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("early-stop stage timed out waiting for sibling")
+                time.sleep(0.01)
         context.stop_early(
             str(context.stage_config.get("message", "stopped early")),
             detail={"stage": context.stage_name, "configured": True},

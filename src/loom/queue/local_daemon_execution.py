@@ -1729,6 +1729,29 @@ class LocalDaemonExecution:
 
         intent, scoped_authority = self._admission_context(admission)
         self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
+        outcome = self._reconcile_admission(admission, intent, scoped_authority)
+        if outcome.state not in {
+            LocalDaemonAdmissionState.SUCCEEDED,
+            LocalDaemonAdmissionState.FAILED,
+            LocalDaemonAdmissionState.CANCELLED,
+        }:
+            return outcome
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
+        return self._settled_terminal_outcome(
+            admission.run_uri,
+            outcome,
+            slurm_in_flight=slurm_in_flight,
+            slurm_diagnostic=slurm_diagnostic,
+        )
+
+    def _reconcile_admission(
+        self,
+        admission: LocalDaemonAdmission,
+        intent: ManagedLocalIntent,
+        scoped_authority: _ScopedCoordinatorAuthority,
+    ) -> LocalDaemonExecutionOutcome:
         if (
             admission.cancellation_operation_id is not None
             or self.cancellation_operation(admission.admission_id) is not None
@@ -1750,14 +1773,11 @@ class LocalDaemonExecution:
             admission.run_uri, scoped_authority
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
-        terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
+        terminal = self._terminal_outcome(
+            admission, intent.plan, snapshot, scoped_authority
+        )
         if terminal is not None:
-            return self._settled_terminal_outcome(
-                admission.run_uri,
-                terminal,
-                slurm_in_flight=slurm_in_flight,
-                slurm_diagnostic=slurm_diagnostic,
-            )
+            return terminal
         orchestrator.reconcile(
             admission_id=admission.admission_id,
             plan=intent.plan,
@@ -1781,14 +1801,11 @@ class LocalDaemonExecution:
             admission.run_uri, scoped_authority
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
-        terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
+        terminal = self._terminal_outcome(
+            admission, intent.plan, snapshot, scoped_authority
+        )
         if terminal is not None:
-            return self._settled_terminal_outcome(
-                admission.run_uri,
-                terminal,
-                slurm_in_flight=slurm_in_flight,
-                slurm_diagnostic=slurm_diagnostic,
-            )
+            return terminal
         if slurm_in_flight or any(
             stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
             for stage in snapshot.stages
@@ -1818,17 +1835,13 @@ class LocalDaemonExecution:
                 LocalDaemonAdmissionState.ACTIVE,
                 slurm_diagnostic or "SLURM release remains durably in flight",
             )
-        retained = self.coordinator.retained_assignments(
-            agent_id=self.config.machine_id
-        )
         if any(
-            assignment.run_uri == run_uri
-            and not self._recovery_retains_assignment(assignment.assignment_id)
-            for assignment, _receipt in retained
+            not self._recovery_retains_assignment(assignment_id)
+            for assignment_id, _state in self.coordinator.list_run_live_states(run_uri)
         ):
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.ACTIVE,
-                "local assignment release remains durably in flight",
+                "managed assignment release remains durably in flight",
             )
         return terminal
 
@@ -2166,6 +2179,8 @@ class LocalDaemonExecution:
         for retained in records:
             record = retained
             assignment_id = record.assignment.assignment_id
+            if self._recovery_retains_assignment(assignment_id):
+                continue
             if self._reconcile_slurm_terminal_assignment(record, authority):
                 record = self.slurm_assignments.read(assignment_id)
             if record.state in {"logical_released", "terminal", "rejected"}:
@@ -3640,6 +3655,7 @@ class LocalDaemonExecution:
 
     def _terminal_outcome(
         self,
+        admission: LocalDaemonAdmission,
         plan: ExecutionPlan,
         snapshot: AuthoritativeRunSnapshot,
         authority: _ScopedCoordinatorAuthority,
@@ -3680,7 +3696,11 @@ class LocalDaemonExecution:
                 "authority reports a failed stage",
             )
         if any(facts.get(name) is StageStatus.CANCELLED for name in run_stages):
-            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
+            requested = self._daemon_owner()._cancel(
+                admission.queue_item_id,
+                principal_id=f"coordinator:{self.coordinator_id}",
+            )
+            return self._cancel(requested, authority, plan.stage_order)
         expected = {
             stage.stage_name: (
                 {StageStatus.SKIPPED}
@@ -3702,6 +3722,38 @@ class LocalDaemonExecution:
             )
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
         return None
+
+    def repair_cancelled_admission(self, admission: LocalDaemonAdmission) -> None:
+        """Reconcile legacy stage cancellation that never finalized its run."""
+
+        if (
+            admission.state is not LocalDaemonAdmissionState.CANCELLED
+            or admission.cancellation_operation_id is not None
+        ):
+            return
+        intent, authority = self._admission_context(admission)
+        snapshot = authority.open_run(admission.run_uri)
+        if snapshot.status in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.INTERRUPTED,
+            RunStatus.CANCELLED,
+        }:
+            return
+        run_stages = {
+            stage.stage_name
+            for stage in intent.plan.stage_plans
+            if stage.action is PlanAction.RUN
+        }
+        if any(
+            stage.stage_name in run_stages and stage.status is StageStatus.CANCELLED
+            for stage in snapshot.stages
+        ):
+            self._daemon_owner()._cancel(
+                admission.queue_item_id,
+                principal_id=f"coordinator:{self.coordinator_id}",
+                repair_revision=admission.revision,
+            )
 
     def _recovery_failure_is_settling(self, stage: object) -> bool:
         reason = getattr(stage, "reason", None)
@@ -3823,6 +3875,12 @@ class LocalDaemonExecution:
         for assignment_id, coordinator_state in self.coordinator.list_run_live_states(
             run_uri
         ):
+            if self._recovery_retains_assignment(assignment_id):
+                settling = (
+                    self._daemon_owner()._recovery_is_settling(assignment_id)
+                    or settling
+                )
+                continue
             journal_state = self.journal.find_state(assignment_id)
             if coordinator_state == "reserved" and journal_state is None:
                 self.coordinator.cancellation_release_unstarted(assignment_id)
@@ -3885,6 +3943,14 @@ class LocalDaemonExecution:
 
         settling = False
         for record in self.slurm_assignments.list_run_unreleased(run_uri):
+            if self._recovery_retains_assignment(record.assignment.assignment_id):
+                settling = (
+                    self._daemon_owner()._recovery_is_settling(
+                        record.assignment.assignment_id
+                    )
+                    or settling
+                )
+                continue
             if record.state == "released":
                 continue
             submission = self.slurm_submissions.find(record.assignment.operation_id)
@@ -3992,8 +4058,14 @@ class LocalDaemonExecution:
                 )
             )
             for row in rows:
-                settling = True
                 assignment_id = str(row["assignment_id"])
+                if self._recovery_retains_assignment(assignment_id):
+                    settling = (
+                        self._daemon_owner()._recovery_is_settling(assignment_id)
+                        or settling
+                    )
+                    continue
+                settling = True
                 operation_id = (
                     "cancel-remote-"
                     + hashlib.sha256(
@@ -4814,7 +4886,9 @@ class LocalDaemonExecution:
             raise QueueConflictError("remote start permit fence conflicts")
         return True
 
-    def remote_decline(self, assignment_id: str, *, reason_code: str | None = None) -> None:
+    def remote_decline(
+        self, assignment_id: str, *, reason_code: str | None = None
+    ) -> None:
         """Release a pre-grant assignment after definitive physical decline."""
 
         record = self._remote_assignment_record(assignment_id)
@@ -4831,7 +4905,9 @@ class LocalDaemonExecution:
             raise QueueConflictError("remote decline reason replay conflicts")
         if reason_code is not None:
             self.coordinator.record_event(
-                assignment_id, 1, f"{assignment_id}:definitive_decline",
+                assignment_id,
+                1,
+                f"{assignment_id}:definitive_decline",
                 {"kind": "definitive_decline", "reason_code": reason_code},
             )
         authority.unbind_prepared_attempt(
@@ -4874,7 +4950,7 @@ class LocalDaemonExecution:
         event_id: str,
         payload: Mapping[str, PlainData],
     ) -> int:
-        # Sequence 1 is reserved for the coordinator-confirmed start fact.
+        # Sequence 1 records a confirmed start or cancellation before start.
         return (
             self.coordinator.record_event(
                 assignment_id, sequence + 1, event_id, payload
@@ -4925,6 +5001,13 @@ class LocalDaemonExecution:
                     },
                 ),
             )
+            if report.status is StageStatus.CANCELLED and not record["start_permitted"]:
+                self.coordinator.record_event(
+                    assignment_id,
+                    1,
+                    f"{assignment_id}:start-prevented",
+                    {"kind": "cancelled_before_start"},
+                )
         state = self.coordinator.state(assignment_id)
         if state == "running":
             self.coordinator.advance(

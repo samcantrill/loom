@@ -15,6 +15,7 @@ from ._managed_local import (
     _CompositeAgentResourceProvider,
 )
 
+from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -1501,6 +1502,7 @@ class LocalDaemon:
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
         self._service_error: str | None = None
+        self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
 
@@ -1817,6 +1819,7 @@ class LocalDaemon:
         self._epoch = epoch
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
+        self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
         self._wake.set()
@@ -2335,6 +2338,7 @@ class LocalDaemon:
             execution.open_owner_stores()
             self._resume_pending_recoveries(execution)
             execution.begin_cycle()
+            self._repair_cancelled_admissions(execution)
             with self._connection() as conn:
                 admissions = tuple(
                     _admission_from_row(row)
@@ -2509,7 +2513,36 @@ class LocalDaemon:
         self._wake.set()
         return self._admission(admission_id)
 
-    def _cancel(self, queue_item_id: str, *, principal_id: str) -> LocalDaemonAdmission:
+    def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
+        if self._cancelled_admission_repairs is None:
+            with self._connection() as conn:
+                self._cancelled_admission_repairs = deque(
+                    str(row["admission_id"])
+                    for row in conn.execute(
+                        "SELECT admission_id FROM managed_admissions "
+                        "WHERE state = ? AND cancellation_operation_id IS NULL "
+                        "ORDER BY enqueue_sequence, admission_id",
+                        (LocalDaemonAdmissionState.CANCELLED.value,),
+                    )
+                )
+        pending = self._cancelled_admission_repairs
+        for _ in range(min(16, len(pending))):
+            admission_id = pending.popleft()
+            try:
+                execution.repair_cancelled_admission(self._admission(admission_id))
+            except Exception:
+                self._record_admission_health(admission_id, "unavailable")
+                pending.append(admission_id)
+            else:
+                self._record_admission_health(admission_id, "healthy")
+
+    def _cancel(
+        self,
+        queue_item_id: str,
+        *,
+        principal_id: str,
+        repair_revision: int | None = None,
+    ) -> LocalDaemonAdmission:
         self._require_started()
         if not isinstance(principal_id, str) or not principal_id:
             raise QueueServiceError("cancellation principal is required")
@@ -2522,7 +2555,12 @@ class LocalDaemon:
             if row is None:
                 raise AdmissionNotFoundError("managed admission was not found")
             admission = _admission_from_row(row)
-            if admission.state in {
+            repairing_cancelled = (
+                admission.state is LocalDaemonAdmissionState.CANCELLED
+                and repair_revision == admission.revision
+                and admission.cancellation_operation_id is None
+            )
+            if not repairing_cancelled and admission.state in {
                 LocalDaemonAdmissionState.SUCCEEDED,
                 LocalDaemonAdmissionState.FAILED,
                 LocalDaemonAdmissionState.CANCELLED,

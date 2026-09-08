@@ -1322,6 +1322,20 @@ continuous supervisor's exact receipts; it never starts a replacement root.
 Any receipt whose continuity is `UNKNOWN` keeps its claim unavailable and
 requires operator recovery rather than relaunch.
 
+Stopping the foreground agent application (`SIGINT`, `SIGTERM`, or the service
+stop event) suspends observation at a durable replay boundary. Active workers
+remain owned by the detached supervisor; their fences, journals, and provider
+claims survive for the next application incarnation. The same stop behaviour
+applies while startup joins retained work and while replayable output chunks are
+transferred. Before suspending, an already delivered assignment either reaches
+a durable supervisor handoff or finishes its cancellation without launching a
+worker. In-flight network calls retain their bounded timeouts.
+Stopping the application does not cancel its jobs or retire its session.
+
+A client abandoning a supervisor request or reply does not stop that supervisor.
+Committed operations remain replayable under the same launch identity and
+continuity epoch after the application reconnects.
+
 Reloading a resident remote agent cannot change its executable profile set. To
 add, remove, or alter a resident executable binding, drain the old root and
 initialize a fresh one; a trusted reload that differs only in profile ordering

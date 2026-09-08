@@ -734,6 +734,10 @@ def _exercise_mixed_route_run(
             )
             assert Path(profile.job_private_file_provider.fixed_path).exists()
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            assert client.wait("mixed-route", timeout_seconds=10).state is (
+                LocalDaemonAdmissionState.CANCELLED
+            )
+            assert authority.open_run(run_uri).status is RunStatus.CANCELLED
             return
         if terminal_boundary is None:
             view.commit_result(assignment_id, incarnation, fence)

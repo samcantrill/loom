@@ -2966,7 +2966,30 @@ Each should have a design document or design section before implementation.
 
 ---
 
-## 25. Summary
+## 25. Local Authority Supervisor Lifecycle
+
+`loom authority start`, `stop`, and `restart` serialize their short state and
+workspace mutations. The running authority service then retains exclusive
+filesystem ownership of both roots for its whole lifetime, including after the
+launcher exits. The private server entrypoint takes the same ownership when it
+is launched directly, so it cannot bypass the lifecycle command's exclusion;
+direct callers should provide `--workspace-root` when its workspace differs
+from the authority state root.
+
+The child publishes its process identity and bootstrap registry before serving
+requests, so a launcher failure leaves a discoverable service. While ownership
+is held but publication is incomplete, stop reports an unresolved startup;
+restart cannot rotate that owner's generation or launch a second service.
+
+Supervisor state records the Linux boot ID and process start identity alongside
+the PID. `stop` opens a matching process through a pidfd and signals that descriptor,
+then reports success only after exit is observed. Older state records without
+that identity remain readable for inspection, but a live numeric PID in such a
+record is never signalled. A repeated stop is successful once the recorded
+service has already exited; a live unverified record remains an explicit
+unsuccessful observation rather than a claimed stop.
+
+## 26. Summary
 
 `loom.pipeline.execution` should be a small, explicit coordinator around a
 planned pipeline.
