@@ -36,6 +36,7 @@ experiment can depend on it only through an explicit published prerequisite.
 | `queue/local_daemon_runtime.py::_stage_placement_policy` | Current default resource demand includes one CPU | Explicit empty/GPU-only accounting must not accidentally reintroduce CPU claims through this default |
 | `pipeline/runtime/placement.py::ResolvedStagePlacement` | Immutable schema-2 placement and fingerprint feed admission, recovery and SLURM mapping | Policy must survive this boundary and replay comparison; command generation cannot reconstruct a different selection |
 | `pipeline/runtime/placement.py::resolve_stage_placement` and `ResolvedStagePlacement.from_dict` | Planners own authored/default/runtime demand resolution; decoding currently reconstructs scheduling requests for every resource entry | Apply accounting selection after semantic demand resolution; persist the selection so decoding cannot recreate excluded claims |
+| `pipeline/execution/runner.py::_acquire_stage_resource_admission`, `resource_admission.py::resource_requests_from_runtime` | The serial runner separately turns all runtime entries into integer authority leases | Apply the same resolved accounting selection here; managed-daemon placement is not the only admission owner |
 | `queue/local_daemon_runtime.py` schema-2 prepared payload | Exact runtime/placement payload participates in replay comparison | A policy change needs an explicit retained-payload version/read/upgrade rule, not only new Python defaults |
 | `pipeline/runtime/capabilities.py::ResourceCapability`, `ResourceEnforcementExpectation` | Metadata already distinguishes enforced, best-effort, not-enforced and not-applicable | Extend truthful reporting at its current owner; static capability is not measured host enforcement |
 | `pipeline/executors/apptainer/commands.py::_append_resource_limits` | `cpu_memory_enforcement=runtime/scheduling_only` selects CPU/RAM flags from mapped container resource intent | Replace the adapter-specific switch after generic policy and consumers exist |
@@ -43,6 +44,7 @@ experiment can depend on it only through an explicit published prerequisite.
 | `pipeline/executors/slurm/resources.py::map_slurm_resources` | Maps request entries into SBATCH directives | Scheduler request and inner process enforcement are different owners |
 | `pipeline/executors/slurm/ready_stage.py::map_ready_stage` | Maps the persisted placement request and rejects unmappable hard requirements | Preserve hard semantics, profile identity and request digest on delegated execution |
 | `pipeline/executors/slurm/planning.py` | Whole-run/stage job planning also maps resource directives | Do not update only ready-stage delegation while silently changing other supported routes |
+| `queue/_managed_local.py::_worker_environment`, local resident launch and `agent_session_transport.py` remote launch | Active claim providers always contribute launch environment; the GPU provider contributes `CUDA_VISIBLE_DEVICES` | Select additional job binding independently of claim activation and pass the admitted policy to both local and remote launch owners |
 
 Current consumers are native managed agents, direct container executors,
 protected SLURM ready-stage and existing SLURM planning, their dry-run/preflight
@@ -209,6 +211,48 @@ share/VRAM semantics. A generic resource label must not widen that implementatio
 silently. Current supported demand normalization remains owned by resource
 validators/planners; control capability is checked separately. Keep GPU-only
 accounting, GPU binding and driver passthrough distinct in examples and tests.
+
+### Admission And Managed Binding Coverage
+
+The serial pipeline runner has its own authority-lease admission in addition to
+managed placement. It consumes `ResolvedStageRuntimeOptions`, already available
+to each `StageExecutionRequest`. Derive its requests from the selected accounting
+subset before applying that admission owner's integer-lease constraint; excluded
+demands retain their semantic validation and provenance but must not create
+leases or fail an irrelevant lease-amount check. Do not reinterpret lack of a
+configured coordination store as verified capacity accounting.
+
+Managed local and remote execution currently activate all admitted claims, then
+build the worker environment by calling each provider's `worker_environment`.
+The GPU provider derives visibility from the active claim. Preserve claim
+activation, renewal, fencing and release even when binding is not selected.
+Filter only the additional launch controls; do not remove claims or deactivate
+their lifecycle to suppress `CUDA_VISIBLE_DEVICES`. The admitted choice must
+reach both launch paths and their retained launch comparison so reconnect does
+not reconstruct different controls. Deployment-owned base environment and
+inherited scheduler constraints remain their existing owners' responsibility.
+
+The older whole-run queue is a separate boundary requiring a final disposition:
+`QueueItem.launch_contract` supplies opaque command/environment snapshots and
+integer resource demands; `queue/local.py::_merge_assignment_environment`
+merges assignment bindings without reading pipeline runtime policy. Do not claim
+that adding a RunOptions field changes this route. Trace maintained producers
+before deciding whether a narrow adapter can convey the policy or this separate
+public launch contract must retain its explicit existing behavior. Do not silently
+rewrite saved queue items or add an unneeded second policy schema.
+
+Resource-provider GPU/readiness probes also call the environment helpers, but
+are explicit probe operations rather than configured experiment jobs. Keep their
+current binding evidence and Stage 85 readiness ownership; an experiment's
+no-enforcement choice must not weaken the probe's existing contract.
+
+Coverage must distinguish actual serial lease selection, local managed launch
+environment, remote-agent launch environment and retained-launch reconstruction.
+Use existing resource-admission, managed-resources, local-daemon-production and
+agent-session-transport tests. Assert that a no-binding job still owns and
+releases its GPU reservation, and that a selected binding uses authoritative
+tokens without inventing devices. These are distinct supported routes, not a
+backend-by-policy Cartesian matrix.
 
 ## Complexity Delta
 
