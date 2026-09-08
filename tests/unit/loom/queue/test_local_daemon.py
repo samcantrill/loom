@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import os
+import json
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
@@ -472,9 +473,25 @@ def test_management_agent_and_operation_reads_are_current_and_typed(
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
             )
+            expired_offer = AgentOffer(
+                session_id="session-current",
+                coordinator_epoch=daemon._epoch or "",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                cpu=1,
+                memory_bytes=0,
+                ttl_seconds=1,
+                provider_composition=(
+                    AgentProviderDescriptor(
+                        CpuResourcePlanner.descriptor,
+                        CpuResourcePlanner.claim_contracts,
+                    ),
+                ),
+            )
             conn.execute(
-                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', '{}', '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
-                (daemon._epoch,),
+                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', ?, '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
+                (daemon._epoch, json.dumps(expired_offer.value())),
             )
             conn.commit()
 
