@@ -1014,6 +1014,12 @@ pipeline-ordered list of schema-v1 `ExecutionFailure` mappings and `empty`
 otherwise. Every mapping retains its persisted attempt identity. The timestamp
 is the observation time, not a cross-owner snapshot or failure time.
 
+The native local managed route publishes the complete worker failure into the
+existing run-store failure/status files after fenced authority acceptance and
+before releasing the terminal assignment. These files are diagnostic
+projections; the authority remains the lifecycle owner. No historical
+backfill is performed.
+
 Loom fails that entire view closed on a run-store read, corruption, or required
 failed-stage evidence error: it reports `unavailable`,
 `run_store_unavailable`, and an empty failures list rather than returning a

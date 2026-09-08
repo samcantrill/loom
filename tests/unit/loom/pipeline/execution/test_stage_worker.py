@@ -14,6 +14,7 @@ from loom.pipeline.execution import (
     StageExecutionRequest,
     StageExecutionResult,
     ExecutionFailure,
+    StageReportedFailure,
     StageWorkerRunRequest,
     StageWorkerStateError,
     create_authority_backed_serial_run_store,
@@ -431,3 +432,34 @@ def test_run_stage_worker_records_target_construction_failure(tmp_path: Path) ->
     assert (
         store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
     )
+
+
+def test_worker_executor_fallback_preserves_reported_failure_without_native_text(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_run(tmp_path)
+
+    class ReportingExecutor(FakeExecutor):
+        def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+            del request
+            raise StageReportedFailure({"record": {"items": ["safe"]}}) from ValueError(
+                "private-fallback-cause-sentinel"
+            )
+
+    result = run_stage_worker(
+        run_store=store,
+        request=StageWorkerRunRequest(run_uri=run_uri, stage_name="build"),
+        executor=ReportingExecutor(),
+    )
+
+    assert result.status is StageStatus.FAILED
+    assert result.traceback_path is None
+    assert result.failure is not None
+    assert result.failure.to_dict()["details"] == {
+        "domain_failure": {"record": {"items": ["safe"]}}
+    }
+    assert (
+        store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    )
+    assert "private-fallback-cause-sentinel" not in json_dumps_pretty(result.to_dict())
+    assert not list(store.local_stage_dir(run_uri, "build").rglob("traceback.txt"))
