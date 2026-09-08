@@ -22,7 +22,7 @@ experiment can depend on it only through an explicit published prerequisite.
 | Gate | Locked result | Remaining work |
 | --- | --- | --- |
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Resolve concrete current runtime/placement/adapter propagation |
-| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners resolved below | Confirm the new-job default, finalize public shape and retained-run migration |
+| Minimum design | Reuse existing demand, claims, capabilities, timeout and backend mappers; composition/timeout owners and retained-work boundaries traced below | Confirm the new-job default and finalize the proposed hard cut, raw-queue disposition and control receipts |
 | Validation / phase shaping | Distinguish selections through real admission/command boundaries | Complete finite supported matrix and independently reviewable phase cards |
 | Quality / implementation | Not ready; no runtime edits | Expanded design/plan review, then normal Loom phase workflow |
 
@@ -245,6 +245,65 @@ mode names or duplicated amounts. Existing codec/profile and command-boundary
 tests own selection shape, independent inheritance/clearing, absent-demand
 behavior and correct controls. Add no selector grammar, priorities, policy
 plugins or per-control amounts for hypothetical future consumers.
+
+### Retained Work Boundary — Proposed Hard Cut
+
+Current executable readers already reject unsupported versions instead of
+migrating retained work. `RunOptions.from_dict` accepts only its current explicit
+schema (an omitted version means fresh authored input); `ResolvedStagePlacement`
+checks its current version and content fingerprint. The exact managed runtime
+reader requires its closed field set, version, digest and plan identity.
+`managed_local_preparation._replay_receipt` preserves a failed replay's cause and
+does not rewrite an existing run to make it executable. The queue feature spec
+also documents hard cuts for its existing persisted formats. Reuse this design,
+not a new compatibility engine.
+
+Recommended version boundary, still subject to the expanded design review:
+
+| Existing executable owner | Proposed change | Old-data behavior |
+| --- | --- | --- |
+| `RunOptions` schema 1 | Schema 2 includes independently composed resource policy | Explicit version 1 is rejected with migration guidance; no silent change to serialized invocation meaning |
+| `ResolvedStagePlacement` schema 2 | Schema 3 retains full semantic demand and explicitly selected accounting kinds in its fingerprint | Reject schema 2; do not rebuild all claims from the full demand |
+| Exact managed runtime record schema 2 | Schema 3 embeds the new invocation and placements with concrete effective selections | Reject schema 2 before admission; never rewrite the saved record during replay |
+| `StageWorkerRequest` schema 1 | Schema 2 requires the resolved policy in its existing `resolved_runtime` mapping | Reject old prepared requests before launch instead of substituting new defaults |
+| Resident assignment bundle schema 3 | Schema 4 carries and validates that same resolved runtime | Reject old retained bundles; local/remote launch cannot reinterpret omitted policy |
+
+The worker and resident boundaries are material, not additional copies of the
+policy. Current `StageWorkerRequest.__post_init__` only checks the nested runtime's
+stage identity and executor, while the resident bundle checks stage identity and
+plain data. Both can currently retain policy-free mappings. Updating only the
+top-level managed record would therefore leave direct prepared-worker and remote
+replay paths without the same executable-version decision. Use one runtime-owned
+policy decoder at these actual process/serialization boundaries; do not add a
+parallel remote policy envelope or infer choices from claim-provider data.
+
+New, unversioned authored configurations continue to compose under the new-job
+default once the maintainer chooses it. They are new invocations, not retained
+execution records. Migration documentation must show explicit selections for
+users who want to preserve an earlier backend's controls; maintained examples
+must declare their intended choice. Existing explicit adapter-specific controls
+cannot be silently ignored or translated by guessing: their removal ships with
+the accepted replacement and current consumer migration.
+
+The operational guidance for incompatible prepared work is to preserve its
+artifacts, use the compatible pinned Loom environment to finish or explicitly
+cancel live work, and prepare a new run identity with the new policy. Do not
+instruct users to delete a record, edit its version, or reprepare over a live run.
+This is not live upgrade or cross-version adoption. Ordinary result inspection
+and scientific artifact schemas are not cut merely because execution policy
+changes; existing lifecycle ownership must remain intact when a new reader
+refuses an old executable record.
+
+Required oracles: serialize/decode selected policy without reintroducing CPU
+claims; exact replay preserves bytes and file timestamps; a changed selection
+conflicts; previous supported writer versions fail before claim/launch effects
+and preserve saved state. Extend the existing runtime-options, placement,
+`test_managed_local_preparation`, local-daemon-production and resident transport
+owners. Keep the preserved cause plus actionable next step at the reader error
+boundary. Version constants above are based on the recorded source revision;
+reconcile then-current owners before implementation, without rewriting unrelated
+formats. This proposed boundary does not settle the pending new-job default or
+the separate legacy opaque `LaunchContract` disposition.
 
 ### Default Decision And Backend Boundary Evidence
 
