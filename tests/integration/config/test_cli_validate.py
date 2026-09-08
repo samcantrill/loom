@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -69,6 +70,45 @@ def test_validate_static_does_not_construct_project_targets(tmp_path: Path) -> N
     }
     assert stderr.getvalue() == ""
     assert construction_event_log == []
+
+
+def test_validate_static_does_not_import_a_fresh_project_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module_name = "fresh_static_project_target"
+    marker_path = tmp_path / "target-events.txt"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker_path)!r}).write_text('imported\\n', encoding='utf-8')\n"
+        "class FailingProjectStage:\n"
+        "    def __init__(self) -> None:\n"
+        f"        Path({str(marker_path)!r}).write_text('constructed\\n', encoding='utf-8')\n"
+        "        raise RuntimeError('fresh constructor sentinel')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        "pipeline:\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        f"        _target_: {module_name}:FailingProjectStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n",
+        encoding="utf-8",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert module_name not in sys.modules
+    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
+
+    assert stdout.getvalue() == f"OK validate {config_path}: 1 stage\n"
+    assert stderr.getvalue() == ""
+    assert module_name not in sys.modules
+    assert not marker_path.exists()
 
 
 def test_validate_invalid_pipeline_returns_pipeline_error(tmp_path: Path) -> None:
