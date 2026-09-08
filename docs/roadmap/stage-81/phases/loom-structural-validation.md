@@ -14,7 +14,8 @@
   rphys P13. No semantic dependency on Stage 85 deployment adoption.
 - Workflow path: ordinary implementation; independent review explicitly required
   by the approved public-removal contract. No further startup planning pass.
-- Blockers: none
+- Blockers: none; bounded fresh-import and constructor-cause test correction
+  completed at `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`
 
 ## Objective And Context
 
@@ -150,18 +151,47 @@ revision-bound validation evidence. Manager owns PR/review/delivery and metadata
 
 - Manager preparation: complete at published base; canonical readiness reused.
 - Expanded planning: not needed; no affected contract drift.
-- Implementation: complete at `badf364a02f2d2cdaf2f8d657763708ad44ebe18`.
-- Refiner: unused; blocker corrections 0/3.
+- Implementation: complete at `badf364a02f2d2cdaf2f8d657763708ad44ebe18`,
+  with the required boundary-test correction at
+  `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`.
+- Refiner: unused; blocker correction 1/3 completed by the executor's one
+  directly related repair.
 - Independent review: required after implementation and local gates.
-- PR, merge and cleanup: pending; no runtime validation claimed yet.
+- PR, merge and cleanup: pending; corrected-tree local validation is recorded
+  below.
+
+### Manager Pre-submit Correction
+
+The initial static tests observe constructors in modules already imported by the
+test process. The actual-run regression uses `NotAStage` and checks its interface
+error; existing `test_stage_factory.py` does not assert an import side effect or
+an original constructor cause. This leaves the approved static-versus-execution
+oracle incomplete: eager import could execute project initialization undetected,
+and loss of a constructor's cause would not fail these tests.
+
+Smallest correction: add a fresh project-target regression through real CLI
+composition/static validation and the actual construction owner. Prove static
+validation does not import or construct it, execution does, and the original
+constructor cause survives. Keep existing interface and nested-data tests.
+Own only the required test fixture/assertions and this completion record; no
+runtime change or broader validation API is needed unless the regression fails.
+Run the focused config/constructor selection, then refresh both required Loom
+gates on the stable corrected test tree. Preserve prior evidence as historical.
+
+Manager inspected all initial JUnit skips: 13 opt-in Apptainer namespace timeout
+cases and five opt-in Docker/Apptainer smoke/build/resource cases. They are not
+P11 requirements. Required config-backed validation and the actual-run interface
+test executed and passed. No physical acceptance is inferred from these results.
+The correction completed without a runtime change; its fresh focused and final
+gate evidence follows.
 
 ## Executor Completion Record
 
 | Item | Evidence |
 | --- | --- |
-| Implementation and changed paths | `badf364a02f2d2cdaf2f8d657763708ad44ebe18` removes `--check-targets`, the eager pipeline checker and exports, its exclusive CLI option/warning/helpers, and removed validation-result fields. `loom validate` now emits `loom.cli.validate.v3`, preserves composition, graph and resource/runtime validation, and directs construction/readiness to project execution. Updated paths are `src/loom/{cli/{options.py,results.py,validate.py},pipeline/{__init__.py,validation.py}}`, their affected unit/package/integration/e2e tests, `README.md`, and `docs/features/cli.md`. |
-| Boundary coverage | Focused default selection passed: `65 passed` across validate/options/pipeline API and execution construction owners. Focused config-extra selection passed: `19 passed` across config-backed validate and CLI e2e owners. The added boundary cases prove static validation leaves generic and nested target-shaped values untouched, an invalid project target remains statically valid, and real execution retains the informative stage-interface failure. |
-| Final gates and validated tree | On clean implementation revision `badf364a02f2d2cdaf2f8d657763708ad44ebe18`, `make validate-pr` passed Ruff, Pyright, default/config-extra harnesses, and `uv build`; it produced `dist/loom-0.1.0.tar.gz` and `dist/loom-0.1.0-py3-none-any.whl`. `make test-summary` passed: 3,170 passed, 0 failed, 0 errors, 18 skipped, and 3,147 deselected (3,188 total). No physical, container, GPU, or SLURM acceptance gate was run or required. |
+| Implementation and changed paths | `badf364a02f2d2cdaf2f8d657763708ad44ebe18` removes `--check-targets`, the eager pipeline checker and exports, its exclusive CLI option/warning/helpers, and removed validation-result fields. `loom validate` now emits `loom.cli.validate.v3`, preserves composition, graph and resource/runtime validation, and directs construction/readiness to project execution. `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1` adds the admitted test-only repair in `tests/integration/config/test_cli_validate.py` and `tests/unit/loom/pipeline/test_stage_factory.py`; no runtime source changed. |
+| Boundary coverage | Historical focused selections passed: `65 passed` for validate/options/pipeline API and execution owners, and `19 passed` for config-backed validate/CLI e2e. The correction-focused selection passed: `8 passed` for the stage factory owner and `3 passed` for real config-backed CLI validation. The fresh static target remains absent from `sys.modules` and produces no import/constructor marker; the fresh construction target records import plus construction and preserves its original `ProjectConstructorError` cause. Existing nested-data and interface cases remain in place. |
+| Final gates and validated tree | Historical `badf364a02f2d2cdaf2f8d657763708ad44ebe18` receipt is superseded for validation by clean corrected revision `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1`. On that revision, `make validate-pr` passed Ruff, Pyright (0 errors), default harness (`3,011 passed`, `155 deselected`), config-extra harness (`161 passed`, `18 skipped`, `3,014 deselected`), and `uv build`, producing `dist/loom-0.1.0.tar.gz` and `dist/loom-0.1.0-py3-none-any.whl`. `make test-summary` passed: 3,172 passed, 0 failed, 0 errors, 18 skipped, and 3,148 deselected (3,190 total). No physical, container, GPU, or SLURM acceptance gate was run or required. |
 | Raw reports and logs | Summary: `build/test-summary.md`. JUnit: `build/test-summary/package/junit.xml`, `build/test-summary/unit/junit.xml`, `build/test-summary/contract/junit.xml`, `build/test-summary/integration/junit.xml`, `build/test-summary/e2e/junit.xml`, and `build/test-summary/config-extra/junit.xml`. Coverage JSON: `build/test-summary/package/coverage.json`, `build/test-summary/unit/coverage.json`, `build/test-summary/contract/coverage.json`, `build/test-summary/integration/coverage.json`, `build/test-summary/e2e/coverage.json`, and `build/test-summary/config-extra/coverage.json`; raw coverage data is in the matching six `.coverage` paths. `make validate-pr` has no persistent raw-log artifact; its build outputs above are retained as ignored local evidence. |
-| Validation-relevant changes after evidence | None. This completion-record update is documentation-only and does not alter the validated source/test/dependency/build configuration tree. |
+| Validation-relevant changes after evidence | `e4150d13e65ef8e4ed38b5a9d38fac9c0f459ab1` adds only the approved fresh-target test oracle. All final evidence above was refreshed after that change; this completion-record update is documentation-only. |
 | Residual risk and blocker | No implementation blocker. The deliberate incompatible CLI/API removal requires separate downstream adoption; independent review remains required before manager PR delivery. |
