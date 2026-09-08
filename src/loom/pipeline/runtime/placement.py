@@ -150,6 +150,7 @@ class StagePlacementPolicy:
 @dataclass(frozen=True, slots=True)
 class ResolvedStagePlacement:
     resource_request: ResourceRequest
+    resource_policy: ResourcePolicy
     resource_selection: Mapping[str, tuple[str, ...]]
     scheduling_requests: Mapping[str, ResolvedResourceRequest]
     validator_ids: Mapping[str, str]
@@ -168,6 +169,8 @@ class ResolvedStagePlacement:
             raise RuntimeResourceError("unsupported resolved placement schema version")
         if not isinstance(self.resource_request, ResourceRequest):
             raise RuntimeResourceError("resolved placement resource request is invalid")
+        if not isinstance(self.resource_policy, ResourcePolicy):
+            raise RuntimeResourceError("resolved placement resource policy is invalid")
         selection = dict(self.resource_selection)
         if set(selection) != {"account_for", "enforce"}:
             raise RuntimeResourceError(
@@ -182,6 +185,10 @@ class ResolvedStagePlacement:
         ):
             raise RuntimeResourceError(
                 "resolved placement resource selection is invalid"
+            )
+        if selection != self.resource_policy.select(self.resource_request.entries):
+            raise RuntimeResourceError(
+                "resolved placement resource selection conflicts with policy"
             )
         requests = dict(self.scheduling_requests)
         descriptors = dict(self.planner_descriptors)
@@ -219,6 +226,7 @@ class ResolvedStagePlacement:
         data: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "resource_request": self.resource_request.to_dict(),
+            "resource_policy": self.resource_policy.to_dict(),
             "resource_selection": {
                 key: list(value)
                 for key, value in sorted(self.resource_selection.items())
@@ -257,6 +265,7 @@ class ResolvedStagePlacement:
         allowed = {
             "schema_version",
             "resource_request",
+            "resource_policy",
             "resource_selection",
             "validator_ids",
             "planner_descriptors",
@@ -284,6 +293,10 @@ class ResolvedStagePlacement:
         resource_request = ResourceRequest.from_dict(
             _required(mapping, "resource_request", "ResolvedStagePlacement"),
             registry=registry,
+        )
+        resource_policy = coerce_resource_policy(
+            _required(mapping, "resource_policy", "ResolvedStagePlacement"),
+            path="ResolvedStagePlacement.resource_policy",
         )
         validator_ids = _string_mapping(
             _required(mapping, "validator_ids", "ResolvedStagePlacement"),
@@ -334,6 +347,7 @@ class ResolvedStagePlacement:
         return cls(
             schema_version=cast(int, schema_version),
             resource_request=resource_request,
+            resource_policy=resource_policy,
             resource_selection={
                 key: tuple(
                     cast(str, item)
@@ -521,6 +535,7 @@ def resolve_stage_placement(
     payload: dict[str, PlainData] = {
         "schema_version": RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION,
         "resource_request": canonical.to_dict(),
+        "resource_policy": policy_value.to_dict(),
         "resource_selection": {key: list(value) for key, value in selection.items()},
         "validator_ids": dict(sorted(validator_ids.items())),
         "planner_descriptors": {
@@ -541,6 +556,7 @@ def resolve_stage_placement(
     }
     return ResolvedStagePlacement(
         resource_request=canonical,
+        resource_policy=policy_value,
         resource_selection=selection,
         scheduling_requests=requests,
         validator_ids=validator_ids,
