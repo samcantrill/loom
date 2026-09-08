@@ -454,7 +454,7 @@ def test_worker_executor_fallback_preserves_reported_failure_without_native_text
 
     assert result.status is StageStatus.FAILED
     assert result.traceback_path is None
-    assert result.failure is not None
+    assert isinstance(result.failure, ExecutionFailure)
     assert result.failure.to_dict()["details"] == {
         "domain_failure": {"record": {"items": ["safe"]}}
     }
