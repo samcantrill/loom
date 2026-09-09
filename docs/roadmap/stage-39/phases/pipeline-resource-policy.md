@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; full validation passed, PR and independent review pending
+- Status: pr_open; full validation passed, independent review pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -10,11 +10,12 @@
 - Base revision: published develop `998b07c`, merged without conflicts in
   `2e4d0c9`; original approved planning packet imported from `6c1a0edc`
 - PR target: develop
+- PR: [#292](https://github.com/samcantrill/loom/pull/292)
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: none known. Full validation passed at `49799dc`; PR submission and
-  required independent full-diff review remain outstanding.
+- Blockers: none known. Full validation passed at `49799dc`; required independent
+  full-diff review remains outstanding before PR #292 can merge.
 
 ## Objective And Context
 
@@ -248,7 +249,8 @@ gate/review/merge ownership follows the canonical phase workflow.
   its separately returned repair, and manager correction `6474206`. Do not reset
   the budget by relabelling further work. Resume through a reviewed targeted
   amendment with explicit recovery scope, not another unbounded correction.
-- PR and merge: pending
+- PR and merge: #292 open, non-draft and mergeable; base develop and title verified;
+  merge waits for the required independent review
 
 ## Completion Record
 
@@ -260,7 +262,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,096 passed / 2 skipped / 156 deselected (1,004.93s), config-extra 162 passed / 18 skipped / 3,101 deselected (155.99s), sdist and wheel builds |
 | Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 424, e2e 70, config-extra 162; total 3,260 passed, no failures/errors, 18 opt-in skips (1,464.45s). Generated 2026-09-09T13:08:09Z |
 | Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-complete.log,test-summary-complete.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
-| PR, review, merge | Manager pre-submit passed; PR and required independent entire-diff review pending. No remote merge claimed |
+| PR, review, merge | Manager pre-submit passed; PR #292 open to develop with approved title. Required independent entire-diff review pending. No remote merge claimed |
 | Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Preserve worktree and evidence until merge; Phase 2 and Stage 81 physical continuation excluded |
 
 ## Approved Recovery Amendment

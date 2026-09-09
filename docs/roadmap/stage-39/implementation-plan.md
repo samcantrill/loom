@@ -1,6 +1,6 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; Phase 1 full validation passed, PR and independent review pending
+Status: pr_open; Phase 1 full validation passed, independent review pending
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -10,8 +10,9 @@ Blockers: none known. Source `49799dc` passes both required full gates against
 unchanged published develop `998b07c`: default 3,096 passed, config-extra 162 passed,
 repository Ruff/Pyright and builds; separate suite summary 3,260 passed, zero
 failures/errors, 18 opt-in skips. The phase Completion Record owns detailed evidence.
-Manager pre-submit passed. PR submission and independent entire-diff review remain
-required before merge; previous failed/interrupted receipts are superseded.
+Manager pre-submit passed. PR #292 targets develop with the approved title;
+independent entire-diff review remains required before merge. Previous
+failed/interrupted receipts are superseded.
 
 ## Summary
 
@@ -85,7 +86,7 @@ required before merge; previous failed/interrupted receipts are superseded.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | pr_open | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -141,5 +142,5 @@ required before merge; previous failed/interrupted receipts are superseded.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; full-diff independent review and PR pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | [#292](https://github.com/samcantrill/loom/pull/292), merge pending | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; full-diff independent review pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
