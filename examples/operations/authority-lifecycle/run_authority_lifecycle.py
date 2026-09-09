@@ -16,7 +16,7 @@ REPO_ROOT = next(
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from examples.support import start_authority_session
+from examples.support import run_cli_json, start_authority_session
 
 
 HERE = Path(__file__).resolve().parent
@@ -32,6 +32,26 @@ def main() -> None:
         initial_generation = authority.generation
         restarted = authority.restart()
         stop = authority.stop()
+        # The session helper skips repeat calls, so exercise the CLI itself.
+        repeated_stop = run_cli_json(
+            [
+                "authority",
+                "stop",
+                "--state-dir",
+                str(authority.state_dir),
+                "--workspace-root",
+                str(authority.workspace_root),
+                "--format",
+                "json",
+            ]
+        )["result"]
+        if (
+            stop["process_state"] != "stopped"
+            or repeated_stop["process_state"] != "stopped"
+        ):
+            raise RuntimeError(
+                "authority stop did not confirm a completed, repeatable stop"
+            )
     finally:
         if not authority.stopped:
             authority.stop()
@@ -47,6 +67,7 @@ def main() -> None:
         f"{initial_generation != restarted['service_generation']}"
     )
     print(f"  stop_state: {stop['process_state']}")
+    print(f"  repeated_stop_state: {repeated_stop['process_state']}")
 
 
 if __name__ == "__main__":

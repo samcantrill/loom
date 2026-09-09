@@ -1,4 +1,4 @@
-"""Run authenticated remote discovery and guarded controls through the CLI."""
+"""Run guarded remote controls and restart the agent during supervised work."""
 
 from __future__ import annotations
 
@@ -8,7 +8,14 @@ import subprocess
 import sys
 from typing import Any, cast
 
+from weave import compose_config
 
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.queue import ExecutionRequirement, prepare_managed_run
+from loom.queue.deployment import load_coordinator_service_config
+
+
+HERE = Path(__file__).resolve().parent
 OPERATIONS_ROOT = Path(__file__).resolve().parents[1]
 if str(OPERATIONS_ROOT) not in sys.path:
     sys.path.insert(0, str(OPERATIONS_ROOT))
@@ -33,8 +40,7 @@ def main() -> None:
     port = available_port()
     coordinator_config = root / "coordinator.yaml"
     agent_config = root / "agent.yaml"
-    checkout = Path(__file__).resolve().parents[3]
-    write_protected(agent_config, _agent_yaml(root, checkout, port))
+    write_protected(agent_config, _agent_yaml(root, HERE, port))
     readiness = recorder.cli("queue", "agent-check", str(agent_config))
     descriptor = next(
         check["details"]["evidence"]["descriptor"]
@@ -52,10 +58,27 @@ def main() -> None:
     )
     recorder.cli("queue", "daemon-init", str(coordinator_config))
     recorder.cli("queue", "agent-init", str(agent_config))
+    requirement = ExecutionRequirement(
+        descriptor["project_fingerprint"],
+        descriptor["environment_fingerprint"],
+        descriptor["executor_fingerprint"],
+    )
+    service = load_coordinator_service_config(coordinator_config)
+    receipt = recorder.python(
+        "prepare_managed_run",
+        lambda: prepare_managed_run(
+            service,
+            compose_config(HERE / "pipeline.yaml"),
+            "remote-lifecycle",
+            execution_requirements={"work": requirement},
+        ),
+    )
 
     endpoint = root / "deployment" / "coordinator" / "daemon.sock"
     daemon = recorder.start_cli("queue", "daemon-serve", str(coordinator_config))
     agent = None
+    run_submitted = False
+    completed = None
     try:
         status = wait_until(
             lambda: _running_daemon_status(recorder, daemon, endpoint), timeout=15
@@ -144,11 +167,103 @@ def main() -> None:
             or resumed["kind"] != "TERMINAL"
         ):
             raise RuntimeError("remote agent did not apply the guarded resume")
+
+        submitted = recorder.cli(
+            "queue",
+            "daemon-submit",
+            "--endpoint",
+            str(endpoint),
+            "remote-lifecycle",
+            receipt.run_uri,
+        )
+        run_submitted = True
+        wait_until(
+            lambda: _running_work(recorder, endpoint, receipt.run_uri), timeout=15
+        )
+        original_assignment = _assignment(
+            recorder, endpoint, str(submitted["admission_id"])
+        )
+        recorder.observe_process_tree(daemon.pid, agent.pid)
+        stop_cli_service(agent)
+        stopped_returncode = agent.returncode
+        try:
+            retained = _running_work(recorder, endpoint, receipt.run_uri)
+            retained_assignment = _assignment(
+                recorder, endpoint, str(submitted["admission_id"])
+            )
+            if (
+                retained is None
+                or retained_assignment["attempt"] != original_assignment["attempt"]
+                or retained_assignment["assignment_id"]
+                != original_assignment["assignment_id"]
+                or retained_assignment["claim_id"] != original_assignment["claim_id"]
+                or retained_assignment["state"] == "released"
+            ):
+                raise RuntimeError(
+                    "agent stop did not retain the active attempt and claim"
+                )
+        finally:
+            agent = recorder.start_cli("queue", "agent-serve", str(agent_config))
+
+        # Startup may join retained work before advertising normal availability.
+        completed = _wait_for_run(recorder, endpoint)
+        inspected = recorder.cli(
+            "inspect-run", receipt.run_uri, "--endpoint", str(endpoint)
+        )
+        (finished,) = inspected["stages"]
+        released = _assignment(recorder, endpoint, str(submitted["admission_id"]))
+        if (
+            completed["state"] != "SUCCEEDED"
+            or finished["state"] != "SUCCEEDED"
+            or released["attempt"] != original_assignment["attempt"]
+            or released["assignment_id"] != original_assignment["assignment_id"]
+            or released["claim_id"] != original_assignment["claim_id"]
+            or released["state"] != "released"
+        ):
+            raise RuntimeError(
+                "restarted agent did not complete and release the original assignment"
+            )
+        factory = service.daemon.coordinator_authority_factory
+        if factory is None:
+            raise RuntimeError(
+                "the example requires its configured coordinator authority"
+            )
+        authority = factory(receipt.run_uri)
+        snapshot = recorder.python(
+            "CoordinatorAuthorityStore.open_run",
+            lambda: authority.open_run(receipt.run_uri),
+        )
+        (stage,) = snapshot.stages
+        (attempt,) = stage.attempts
+        (fact,) = stage.artifact_facts
+        if attempt.attempt != original_assignment["attempt"]:
+            raise RuntimeError("the authority result belongs to a different attempt")
+        artifacts = LocalArtifactStore(
+            LocalRunStore(root / "runs").local_artifact_root(receipt.run_uri)
+        )
+        report = recorder.python(
+            "LocalArtifactStore.load",
+            lambda: artifacts.load(fact.artifact, expected_type="json"),
+        )
+        if report["value"] != 42:
+            raise RuntimeError(
+                "remote result relay returned unexpected artifact contents"
+            )
+        recorder.started_pids.add(report["worker_pid"])
     finally:
         try:
-            if agent is not None:
-                recorder.observe_process_tree(agent.pid)
-                stop_cli_service(agent)
+            try:
+                # Even a failed continuity assertion must let bounded work settle.
+                if run_submitted and completed is None:
+                    if agent is None or agent.poll() is not None:
+                        agent = recorder.start_cli(
+                            "queue", "agent-serve", str(agent_config)
+                        )
+                    _wait_for_run(recorder, endpoint)
+            finally:
+                if agent is not None:
+                    recorder.observe_process_tree(agent.pid)
+                    stop_cli_service(agent)
         finally:
             recorder.observe_process_tree(daemon.pid)
             stop_cli_service(daemon)
@@ -158,7 +273,49 @@ def main() -> None:
         coordinator_id=status["coordinator_id"],
         agent_id="machine-B",
         final_operation="example-remote-resume",
+        run_uri=receipt.run_uri,
+        result=completed["state"],
+        foreground_stop_returncode=stopped_returncode,
+        retained_while_stopped=True,
+        initial_attempt=original_assignment["attempt"],
+        completed_attempt=attempt.attempt,
+        assignment_id=released["assignment_id"],
+        assignment_released=released["state"] == "released",
+        report_value=report["value"],
         root=str(root),
+    )
+
+
+def _running_work(
+    recorder: JourneyRecorder, endpoint: Path, run_uri: str
+) -> dict[str, Any] | None:
+    inspected = recorder.cli("inspect-run", run_uri, "--endpoint", str(endpoint))
+    (stage,) = cast(list[dict[str, Any]], inspected["stages"])
+    lifecycle = next(axis for axis in inspected["axes"] if axis["name"] == "lifecycle")
+    if stage["state"] == "RUNNING" and lifecycle["state"] == "RUNNING":
+        return stage
+    return None
+
+
+def _assignment(
+    recorder: JourneyRecorder, endpoint: Path, admission_id: str
+) -> dict[str, Any]:
+    detail = recorder.cli(
+        "queue", "daemon-admission", "--endpoint", str(endpoint), admission_id
+    )
+    (assignment,) = detail["owners"]["assignment"]["assignments"]
+    return assignment
+
+
+def _wait_for_run(recorder: JourneyRecorder, endpoint: Path) -> dict[str, object]:
+    return recorder.cli(
+        "queue",
+        "daemon-wait",
+        "--endpoint",
+        str(endpoint),
+        "remote-lifecycle",
+        "--timeout",
+        "25",
     )
 
 
@@ -231,7 +388,7 @@ agent_server:
 """
 
 
-def _agent_yaml(root: Path, checkout: Path, port: int) -> str:
+def _agent_yaml(root: Path, project: Path, port: int) -> str:
     return f"""
 schema_version: 3
 kind: loom.outbound-agent-service
@@ -245,14 +402,16 @@ resident_profiles:
   - descriptor:
       profile_id: remote-default
       revision: v1
-    project_root: {_quoted(checkout)}
+    project_root: {_quoted(project)}
     python_executable: {json.dumps(str(Path(sys.executable).absolute()))}
     cpu_capacity: 1
     memory_capacity_bytes: 0
     gpu_devices: []
     environment: {{}}
     readiness:
-      source_roots: [src/loom]
+      imports: [loom, stages]
+      import_roots: {{stages: .}}
+      source_roots: [stages.py]
 registration:
   config_revision: remote-config-v1
   inventory_revision: remote-inventory-v1

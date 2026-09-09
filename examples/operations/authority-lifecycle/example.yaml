@@ -1,6 +1,6 @@
 id: operations.authority-lifecycle
 title: Authority Lifecycle
-summary: Start, inspect, restart, and stop a local authority supervisor through the public CLI.
+summary: Start, inspect, restart, and confirm repeatable stop of a local authority supervisor through the public CLI.
 capability: operations
 level: introductory
 introduced_in: v10
@@ -19,7 +19,7 @@ validation_command: uv run pytest tests/integration/docs/test_v0_python_examples
 entrypoints:
   - path: run_authority_lifecycle.py
     kind: python
-    description: Start an authority supervisor, inspect status/doctor, restart it, and stop it.
+    description: Start an authority supervisor, inspect status/doctor, restart it, and confirm two completed CLI stops.
 tags:
   - authority
   - lifecycle

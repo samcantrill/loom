@@ -27,7 +27,7 @@ workflows.
 | `operations.cleanup-and-gc` | Preview and explicitly delete registered temporary candidates while preserving runs and committed outputs. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
 | `operations.service-less-slurm-driving` | Bounded foreground submission of prepared whole runs on a shared SLURM filesystem. |
-| `operations.managed-remote-operations` | Authenticated remote discovery and exact guarded control fences. |
+| `operations.managed-remote-operations` | Authenticated controls, composed preparation, and foreground restart during active work. |
 | `operations.managed-ready-stage-slurm` | Explicit ready-stage SLURM operation lifecycle using the deterministic fake gateway. |
 
 ## Public Python API Workflows
@@ -36,7 +36,7 @@ workflows.
 | --- | --- |
 | `operations.captured-logs` | Captured local stdout/stderr, explicit file-backed output registration, and a separate workspace file. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
-| `operations.managed-local-basic` | Copyable embedded managed-local preparation, service lifecycle, inspection, and restart. |
+| `operations.managed-local-basic` | Copyable preparation, controlled cancellation, CPU capacity reuse, inspection, and restart. |
 
 ## Representative End-to-End Evidence
 
