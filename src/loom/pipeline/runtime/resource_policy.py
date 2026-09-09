@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import cast
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.serialization import PlainData
@@ -64,8 +65,10 @@ class ResourcePolicy:
     def from_dict(cls, value: object) -> "ResourcePolicy":
         mapping = sparse_resource_policy(value, path="ResourcePolicy")
         return cls(
-            account_for=mapping.get("account_for", ALL_RESOURCES),
-            enforce=mapping.get("enforce", ()),
+            account_for=cast(
+                str | Iterable[str], mapping.get("account_for", ALL_RESOURCES)
+            ),
+            enforce=cast(str | Iterable[str], mapping.get("enforce", ())),
         )
 
     def select(

@@ -590,10 +590,17 @@ def _validate_worker_resource_selection(
     from loom.pipeline.runtime.resource_policy import ResourcePolicy
 
     expected = ResourcePolicy.from_dict(policy).select(entries)
+    if (
+        set(selection) != {"account_for", "enforce"}
+        or any(
+            isinstance(value, str) or not isinstance(value, Sequence)
+            for value in selection.values()
+        )
+    ):
+        raise RunRequestError("StageWorkerRequest.metadata.resource_selection is invalid")
     actual = {
-        key: tuple(value)
+        key: tuple(cast(str, item) for item in cast(Sequence[object], value))
         for key, value in selection.items()
-        if isinstance(key, str) and not isinstance(value, str)
     }
     if actual != expected:
         raise RunRequestError(

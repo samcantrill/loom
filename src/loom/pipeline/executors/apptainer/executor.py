@@ -43,6 +43,7 @@ from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
     AuthorityConfig,
@@ -494,7 +495,9 @@ def _prepare_apptainer_attempt(
         executor_name=executor_name,
     )
     full_resources = cast(ResourceRequest, runtime.resources)
-    selected = runtime.resource_policy.select(full_resources.entries)["enforce"]
+    selected = cast(ResourcePolicy, runtime.resource_policy).select(
+        full_resources.entries
+    )["enforce"]
     resources = ResourceRequest(
         entries={key: full_resources.entries[key] for key in selected}
     )

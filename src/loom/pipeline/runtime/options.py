@@ -334,7 +334,7 @@ class StageRuntimeOptions:
                 path="StageRuntimeOptions.reliability",
             ),
             resource_policy=(
-                mapping["resource_policy"]
+                cast(ResourcePolicy | Mapping[str, object], mapping["resource_policy"])
                 if "resource_policy" in mapping
                 else None
             ),
