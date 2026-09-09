@@ -1334,6 +1334,93 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         daemon.stop()
 
 
+@pytest.mark.parametrize("account_for", ["all", []])
+def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    account_for: str | list[PlainData],
+) -> None:
+    import loom.queue.local_daemon_execution as execution_owner
+
+    run_root = tmp_path / "runs"
+    store, run_uri, _pipeline = _persist_single_stage_run(
+        run_root,
+        resource_policy={"account_for": account_for, "enforce": ["cpu"]},
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    stalled = Event()
+
+    class ObservedStartNotification(Event):
+        """Bound the regression without fabricating a process-start event."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.completed_waits = 0
+
+        def wait(self, timeout: float | None = None) -> bool:
+            signalled = super().wait(timeout)
+            if not signalled and any(
+                future.done() and future.exception() is None
+                for future in tuple(execution._local_assignment_futures.values())
+            ):
+                self.completed_waits += 1
+                if self.completed_waits == 2:
+                    stalled.set()
+                    raise AssertionError(
+                        "daemon kept waiting after its no-start task completed"
+                    )
+            return signalled
+
+    monkeypatch.setattr(execution_owner, "Event", ObservedStartNotification)
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        submitted = client.submit(LocalDaemonAdmissionRequest("no-start", run_uri))
+        completed = client.wait("no-start", timeout_seconds=10)
+
+        assert not stalled.is_set()
+        assert completed.state is LocalDaemonAdmissionState.FAILED
+        assert authority.open_run(run_uri).status is RunStatus.FAILED
+        assert _supervisor_launch_count(config) == 0
+        assert execution.coordinator.list_run_live_states(run_uri) == ()
+        assert execution.journal is not None
+        assert execution.journal.retained_claim_commands() == ()
+        detail = client.admission(submitted.admission_id)
+        result = store.read_stage_worker_result(run_uri, "build", attempt=1)
+        assert result is not None
+        failure = cast(Mapping[str, PlainData], result["failure"])
+        assert "cpu" in cast(str, failure["message"])
+        assert "enforce: []" in cast(str, failure["message"])
+        metadata = cast(Mapping[str, PlainData], result["executor_metadata"])
+        assert metadata["process_created"] is False
+        assert metadata["resource_controls"] == [
+            {
+                "resource": "cpu",
+                "owner": "managed_provider",
+                "mechanism": None,
+                "disposition": "unavailable",
+            }
+        ]
+        run_result = cast(Mapping[str, object], detail.owners["run_result"])
+        assert run_result["availability"] == "available"
+        assert run_result["failures"]
+    finally:
+        daemon.stop()
+
+
 def test_completed_background_failure_replays_the_same_local_assignment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2144,8 +2231,18 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         assert worker_result.status is StageStatus.FAILED
         assert worker_result.exit_code is None
         assert worker_result.signal == signal.SIGKILL
-        assert worker_result.executor_metadata == {
+        assert thaw_plain_data(
+            worker_result.executor_metadata, path="lost worker executor metadata"
+        ) == {
             "process_created": True,
+            "resource_controls": [
+                {
+                    "resource": "cpu",
+                    "owner": "managed_provider",
+                    "mechanism": None,
+                    "disposition": "not_requested",
+                }
+            ],
             "worker_result": "missing",
         }
         run_store = LocalRunStore(run_root)
@@ -3114,6 +3211,7 @@ def _persist_single_stage_run(
     *,
     skip: bool = False,
     factory_target: str = ("tests.support.pipeline_execution_stages.JsonProducerStage"),
+    resource_policy: Mapping[str, PlainData] | None = None,
 ) -> tuple[LocalRunStore, str, dict[str, object]]:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / "run-1")
@@ -3158,6 +3256,11 @@ def _persist_single_stage_run(
         plan=plan,
         pipeline=spec,
         execution_requirements=_execution_requirements(spec),
+        options=(
+            None
+            if resource_policy is None
+            else {"resource_policy": dict(resource_policy)}
+        ),
     )
     return run_store, run_uri, pipeline_config
 

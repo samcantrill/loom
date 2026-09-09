@@ -7,8 +7,10 @@ Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
 Blockers: Phase 1's Transport Boundary Finding requires a targeted amendment to
-reconcile portable failure data with the generic HTTP JSON limits. Full gates,
-independent implementation review and PR submission remain incomplete.
+reconcile portable failure data with the generic HTTP JSON limits. The latest
+full gate failed/interrupted; focused integration corrections pass, while the
+guarded-recovery stall remains under investigation. Full gates, independent
+implementation review and PR submission remain incomplete.
 
 ## Summary
 
@@ -127,5 +129,5 @@ independent implementation review and PR submission remain incomplete.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Local checkpoint `6474206`; targeted 214 unit/contract and 15 fake-SLURM integration tests pass; managed comparisons 5 pass/1 fails; Ruff/Pyright pass; full gates and review pending | No-claim sequential pipeline and remote replay/failure/control boundaries remain incomplete; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`, test typing checkpoint `cfca015`; R1–R4 focused receipts and current integration corrections are recorded in the phase card. Latest full gate failed/interrupted; full gates and independent review remain pending | Portable failure HTTP limits need approval; wider-run guarded-recovery stall remains unresolved; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |

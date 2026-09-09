@@ -103,6 +103,7 @@ def test_fake_descriptor_contract_does_not_change_resource_schema_validation() -
     result = validate_executor_capabilities(
         RunOptions(
             executor="batch",
+            resource_policy={"enforce": ["contract.scratch"]},
             stage_options={
                 "train": StageRuntimeOptions(resources=request),
             },

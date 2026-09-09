@@ -257,7 +257,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Implementation and changed paths | Checkpoint `6474206` adds full-intent container validation, saved-selection-aware builders, selection-aware capability/preflight, truthful direct-container launch receipts, native unsupported-control rejection, and direct handoff finalization after container/runtime precedence. Refiner commits preserve sparse axes and worker policy/selection, gate provider bindings, and begin empty-claim lifecycle support. Recovery delivery `b8e33bb` canonically reuses unchanged unconsumed offers for no-claim work, makes later assignments use that canonical ID, compares retained runtime demand/policy/selection at local restart, ready-stage SLURM and dispatch, carries full schema-2 remote failures/start proof, and records definitive selected-control no-start results through local and remote terminal paths. This is not a complete Phase 1 implementation. |
 | Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
 | Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
-| Full gates | Initial full receipts at `fce8016` are stale after implementation changes. Neither `make validate-pr` nor `make test-summary` is claimed for `6474206`; both must run on the final corrected stable tree. |
+| Full gates | The latest `make validate-pr` passed repository-wide lint and Pyright, then failed/interrupted in default tests: 681 passed, 8 failed, 2 skipped, 156 deselected. Current capability/default-expectation corrections pass 21 targeted tests; SLURM continuation corrections pass 5. The recovery stall remains under investigation. Earlier full receipts and `build/test-summary.md` are stale; both final gates must run on the corrected stable tree. |
 | PR, review, and merge | Blocked before submission. Required independent implementation review has not run. No PR, push or merge occurred. |
 | Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
@@ -450,9 +450,54 @@ This needs approval of the changed transport constraint; no runtime change for
 this finding or new review/refiner pass has been made. The manager's one recovery
 correction remains open, not reset.
 
-Current full-gate attempt: repository-wide lint and Pyright pass after test-only
-type narrowing; default tests are running. These pending results cannot resolve
-the transport finding. Independent review, PR and merge remain unstarted.
+Current full-gate evidence: repository-wide lint and Pyright passed after test-only
+type narrowing, but default tests failed/interrupted with 681 passed, 8 failed,
+2 skipped and 156 deselected. The runner stalled at guarded recovery's cycle-lock
+acquisition and was interrupted after its worker had finished. The isolated
+cancellation variant passed (1 passed, 2 deselected); that does not establish the
+cause or resolve the wider-run stall. Logs are retained in
+`build/resource-policy-checkpoint/validate-pr-current.log` and
+`recovery-lock-diagnostic.log`. The local-daemon production file completed with
+62 passed and one stale lost-worker metadata assertion; all three guarded-recovery
+cases passed. That assertion now checks the complete new control record, retaining
+the containment/no-output/no-retry checks. The isolated no-extra environment then
+reproduced the cancelled-recovery stall and exited 139 during its native thread
+dump. Its partial evidence is in `local-daemon-isolated.log`; the orphaned test
+supervisor was stopped through its authenticated shutdown operation, preserving
+files. A bounded Python-level thread diagnostic is in progress. The native dump
+crash and earlier stall are not claimed resolved.
+
+The same open manager correction addresses two existing Phase 1 integration
+owners found by that gate. Capability checking now resolves all configured stages
+together, avoiding false unknown-stage errors; selected-control/default metadata
+expectations match the accepted empty-enforcement behavior. The affected contract,
+capability, fake-Apptainer and CLI selection passed 21 tests. Delayed SLURM afterok
+worker preparation now records the selection from retained full demand and explicit
+resolved policy before first worker creation. Saved worker replay is unchanged;
+missing legacy policy fails with pinned-runtime/fresh-identity guidance, without
+rewriting saved runtime. The complete afterok integration file passed 5 tests
+(`continuation-correction.xml`), including default, selected and legacy cases.
+The adjacent prepared/stage-job unit, integration and CLI consumers passed 18
+tests (`continuation-consumers.xml`). These checks cover multi-stage composition,
+truthful default diagnostics and the real delayed worker-request writer; a failing
+adjacent producer or lifecycle test expands the selection. They are not a fresh
+full gate and cannot resolve the transport finding. Independent review, PR and
+merge remain unstarted.
+
+An actual-daemon R4 check established an additional wrapper gap: after the real
+assignment task persisted/released a no-start failure, `_execute` kept waiting for
+an impossible process-start notification while holding the scheduling cycle.
+The lower-level saga tests did not cover this waiter. Two new daemon cases (CPU
+accounting and no accounting) fail before the correction and pass after it; the
+observer bounds repeated waiting on an already completed real future without
+inventing a start event. `_execute` now propagates a completed future's exception
+or returns without a start, allowing the next cycle to project terminal truth.
+No lifecycle state, claim-release rule or process-start proof changes. Both cases,
+the lost-worker containment case and background-observer replay passed (4;
+`no-start-daemon-after.xml`), with the red receipt retained in
+`no-start-daemon-before.xml`. This is an R4 completion-path correction, not evidence
+that it caused or resolved the separate guarded-recovery stall. Changed-file Ruff,
+Pyright and diff checks pass for these corrections; full validation is outstanding.
 
 ### R1 — Canonical Offer Reuse
 

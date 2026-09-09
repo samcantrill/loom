@@ -4886,9 +4886,11 @@ class LocalDaemonExecution:
             self._local_assignment_futures[assignment.assignment_id] = prior
         while not accepted.wait(timeout=0.01):
             if prior.done():
-                # Preserve the existing saga failure semantics; an unaccepted
-                # launch is never reported as a background start.
+                # A completed no-start failure or terminal replay has no new
+                # start notification. Propagate errors, then let the next
+                # cycle project terminal truth without inventing a start.
                 prior.result()
+                return False
         return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:

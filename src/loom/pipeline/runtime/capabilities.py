@@ -1017,18 +1017,14 @@ def _resource_capability_diagnostics(
     scheduler_owned = descriptor.name.startswith("slurm")
     if direct_container and not stage_options_by_id:
         stage_options_by_id[None] = StageRuntimeOptions()
+    resolved = resolve_run_runtime(options, stage_ids=options.stage_options)
     for stage_id, stage_options in stage_options_by_id.items():
         resources = cast(ResourceRequest, stage_options.resources)
         entries: Mapping[str, object] = resources.entries
         policy = (
             cast(ResourcePolicy, options.resource_policy).resolved()
             if stage_id is None
-            else cast(
-                ResourcePolicy,
-                resolve_run_runtime(options, stage_ids=[stage_id])[
-                    stage_id
-                ].resource_policy,
-            )
+            else cast(ResourcePolicy, resolved[stage_id].resource_policy)
         )
         stage_path = f"RunOptions.stage_options[{stage_id!r}]"
         resource_path = f"{stage_path}.resources"

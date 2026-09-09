@@ -292,7 +292,7 @@ def test_cli_preflight_strict_resource_warning_exits_pipeline_failure(
     assert payload["ok"] is False
     assert payload["result"]["status"] == "WARN"
     assert payload["result"]["checks"][0]["details"]["diagnostics"][0]["code"] == (
-        "resource.ignored"
+        "resource.not_requested"
     )
     assert stderr.getvalue() == ""
 

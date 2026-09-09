@@ -338,13 +338,13 @@ def test_scheduling_only_retains_effective_resources_without_direct_flags(
         {
             "resource": "cpu",
             "owner": "apptainer",
-            "mechanism": "--cpus",
+            "mechanism": None,
             "disposition": "not_requested",
         },
         {
             "resource": "memory",
             "owner": "apptainer",
-            "mechanism": "--memory",
+            "mechanism": None,
             "disposition": "not_requested",
         },
     ]

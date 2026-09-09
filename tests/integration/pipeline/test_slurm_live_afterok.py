@@ -7,7 +7,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from loom.pipeline.execution import StageJobRunRequest, run_stage_job
+from loom.pipeline.execution.continuation import ContinuationStateError
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
     SlurmCommandResult,
@@ -16,7 +19,11 @@ from loom.pipeline.executors.slurm import (
     read_slurm_live_manifest,
     submit_afterok_slurm,
 )
-from loom.pipeline.runtime import RunOptions, build_runtime_metadata
+from loom.pipeline.runtime import (
+    RunOptions,
+    StageRuntimeOptions,
+    build_runtime_metadata,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationState
 from loom.serialization import json_dumps_pretty
@@ -145,8 +152,10 @@ def test_live_afterok_partial_failure_persists_accepted_and_failed_facts(
     assert store.read_stage_status(run_uri, "report") is None
 
 
+@pytest.mark.parametrize("resource_case", ["default", "selected", "legacy"])
 def test_live_afterok_submitted_stage_job_materializes_worker_request_at_start(
     tmp_path: Path,
+    resource_case: str,
 ) -> None:
     store, run_uri = _prepared_store(
         tmp_path,
@@ -157,13 +166,40 @@ def test_live_afterok_submitted_stage_job_materializes_worker_request_at_start(
     serialized = json_dumps_pretty(config)
     store.write_config_snapshot(run_uri, "resolved", serialized)
     store.write_config_snapshot(run_uri, "resolved_redacted", serialized)
-    store.write_runtime_metadata(
-        run_uri,
-        build_runtime_metadata(
-            RunOptions(run_uri=run_uri, executor="slurm-afterok"),
-            stage_ids=("extract",),
-        ).to_dict(),
-    )
+    runtime = build_runtime_metadata(
+        RunOptions(
+            run_uri=run_uri,
+            executor="slurm-afterok",
+            stage_options=(
+                {
+                    "extract": StageRuntimeOptions(
+                        resources={
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 128,
+                                    "unit": "MiB",
+                                },
+                            }
+                        },
+                        resource_policy={"account_for": ["cpu"], "enforce": []},
+                    )
+                }
+                if resource_case == "selected"
+                else {}
+            ),
+        ),
+        stage_ids=("extract",),
+    ).to_dict()
+    if resource_case == "legacy":
+        runtime.pop("resource_policy")
+        stages = runtime["stages"]
+        assert isinstance(stages, dict)
+        stage_runtime = stages["extract"]
+        assert isinstance(stage_runtime, dict)
+        stage_runtime.pop("resource_policy")
+    store.write_runtime_metadata(run_uri, runtime)
     planning = plan_afterok_slurm_dry_run(
         run_store=store,
         run_uri=run_uri,
@@ -180,6 +216,19 @@ def test_live_afterok_submitted_stage_job_materializes_worker_request_at_start(
 
     assert store.read_stage_worker_request(run_uri, "extract", attempt=1) is None
 
+    if resource_case == "legacy":
+        with pytest.raises(ContinuationStateError, match="pinned original runtime"):
+            run_stage_job(
+                run_store=store,
+                request=StageJobRunRequest(
+                    run_uri=run_uri, stage_name="extract", executor="local"
+                ),
+            )
+        assert store.read_stage_worker_request(run_uri, "extract", attempt=1) is None
+        assert store.read_stage_worker_result(run_uri, "extract", attempt=1) is None
+        assert store.read_runtime_metadata(run_uri) == runtime
+        return
+
     result = run_stage_job(
         run_store=store,
         request=StageJobRunRequest(
@@ -192,6 +241,18 @@ def test_live_afterok_submitted_stage_job_materializes_worker_request_at_start(
     worker_request = store.read_stage_worker_request(run_uri, "extract", attempt=1)
     assert result.status is StageStatus.SUCCEEDED
     assert worker_request is not None
+    saved_runtime = cast(Mapping[str, object], worker_request["resolved_runtime"])
+    assert saved_runtime["resource_selection"] == {
+        "account_for": ["cpu"] if resource_case == "selected" else [],
+        "enforce": [],
+    }
+    assert store.read_runtime_metadata(run_uri) == runtime
+    if resource_case == "selected":
+        saved_resources = cast(Mapping[str, object], saved_runtime["resources"])
+        assert set(cast(Mapping[str, object], saved_resources["entries"])) == {
+            "cpu",
+            "memory",
+        }
     metadata = cast(Mapping[str, object], worker_request["metadata"])
     submitted = cast(Mapping[str, object], metadata["submitted_operation"])
     assert submitted["backend"] == "slurm"

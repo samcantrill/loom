@@ -17,7 +17,8 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
 )
 from loom.pipeline.specs import parse_pipeline_config
-from loom.pipeline.resources import ResourceValidatorRegistry
+from loom.pipeline.resources import ResourceRequest, ResourceValidatorRegistry
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.submitted import (
     SUBMITTED_OPERATION_METADATA_KEY,
     SubmittedOperationRecord,
@@ -747,6 +748,7 @@ def _materialize_submitted_worker_request_if_needed(
             runtime=runtime,
             stage_name=stage_name,
             continuation_executor=continuation_executor,
+            resource_validator_registry=resource_validator_registry,
         ),
         executor_metadata={"worker_command": "loom stage-job run"},
         metadata={
@@ -852,6 +854,7 @@ def _stage_runtime_metadata(
     runtime: Mapping[str, PlainData],
     stage_name: str,
     continuation_executor: str,
+    resource_validator_registry: ResourceValidatorRegistry | None,
 ) -> Mapping[str, PlainData]:
     stages = runtime.get("stages")
     stage_runtime = (
@@ -859,11 +862,36 @@ def _stage_runtime_metadata(
         if isinstance(stages, Mapping) and isinstance(stages.get(stage_name), Mapping)
         else {}
     )
-    return {
+    result = {
         **dict(cast(Mapping[str, PlainData], stage_runtime)),
         "stage_id": stage_name,
         "executor": continuation_executor,
     }
+    if "resource_selection" not in result:
+        policy_value = result.get("resource_policy")
+        resources_value = result.get("resources")
+        if (
+            not isinstance(policy_value, Mapping)
+            or set(policy_value) != {"account_for", "enforce"}
+            or not isinstance(resources_value, Mapping)
+        ):
+            raise ContinuationStateError(
+                "submitted stage runtime lacks its resolved resource policy; "
+                "finish with the pinned original runtime or prepare a fresh execution identity",
+                code="execution.stage_job.missing_resource_policy",
+                context={"stage": stage_name},
+            )
+        # This is first worker preparation, not replay of a saved worker. Select
+        # only from the already retained demand and concrete policy, never from
+        # today's invocation defaults or the outer scheduler's allocation size.
+        resources = ResourceRequest.from_dict(
+            resources_value, registry=resource_validator_registry
+        )
+        policy = ResourcePolicy.from_dict(policy_value)
+        result["resource_selection"] = {
+            key: list(value) for key, value in policy.select(resources.entries).items()
+        }
+    return result
 
 
 def validate_prepared_run_plugin_activations(

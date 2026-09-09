@@ -64,10 +64,10 @@ def test_merged_runtime_options_validate_against_default_local_descriptor() -> N
                 "train": {
                     "resources": {
                         "entries": {
-                                "gpu": {
-                                    "kind": "gpu",
-                                    "amount": 1,
-                                }
+                            "gpu": {
+                                "kind": "gpu",
+                                "amount": 1,
+                            }
                         }
                     }
                 }
@@ -81,10 +81,12 @@ def test_merged_runtime_options_validate_against_default_local_descriptor() -> N
 
     assert result.ok
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["stage_id"], item["resource_kind"], item["code"]) for item in diagnostics] == [
-        ("extract", "cpu", "resource.ignored"),
-        ("train", "gpu", "resource.ignored"),
-        ("train", "memory", "resource.ignored"),
+    assert [
+        (item["stage_id"], item["resource_kind"], item["code"]) for item in diagnostics
+    ] == [
+        ("extract", "cpu", "resource.not_requested"),
+        ("train", "gpu", "resource.not_requested"),
+        ("train", "memory", "resource.not_requested"),
     ]
 
 
@@ -94,9 +96,9 @@ def test_unknown_selected_executor_fails_capability_validation() -> None:
     result = validate_executor_capabilities(options)
 
     assert not result.ok
-    assert cast(list[dict[str, object]], result.to_dict()["diagnostics"])[0]["code"] == (
-        "executor.unknown"
-    )
+    assert cast(list[dict[str, object]], result.to_dict()["diagnostics"])[0][
+        "code"
+    ] == ("executor.unknown")
 
 
 def test_custom_descriptor_and_resource_registry_validate_registered_kinds() -> None:
@@ -105,7 +107,9 @@ def test_custom_descriptor_and_resource_registry_validate_registered_kinds() -> 
             raise AssertionError(f"{path}.amount should be positive")
 
     resource_registry = DEFAULT_RESOURCE_VALIDATOR_REGISTRY.compose(
-        ResourceValidatorRegistry().with_validator("integration.scratch", _validate_scratch)
+        ResourceValidatorRegistry().with_validator(
+            "integration.scratch", _validate_scratch
+        )
     )
     descriptor_registry = ExecutorDescriptorRegistry(
         {
@@ -144,8 +148,11 @@ def test_custom_descriptor_and_resource_registry_validate_registered_kinds() -> 
 
     assert result.ok
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["code"], item["resource_kind"], item["adapter_namespace"]) for item in diagnostics] == [
+    assert [
+        (item["code"], item["resource_kind"], item["adapter_namespace"])
+        for item in diagnostics
+    ] == [
         ("adapter_namespace.unclaimed", None, "slurm"),
-        ("resource.supported", "cpu", None),
-        ("resource.advisory", "integration.scratch", None),
+        ("resource.not_requested", "cpu", None),
+        ("resource.not_requested", "integration.scratch", None),
     ]
