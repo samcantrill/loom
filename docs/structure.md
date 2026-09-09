@@ -1025,6 +1025,12 @@ executors, project stage modules, or command registration. Check implementations
 that need heavier public APIs should import them inside runner code rather than
 through the package root.
 
+Native exception-to-plain-data capture is shared lower-layer serialization code
+in private `loom.serialization._diagnostic_capture`. Execution owners use it
+without importing diagnostics. The existing diagnostic projection import and
+renderer facade retain `loom.diagnostic.v1` and its public error behavior; this
+does not introduce another failure format or a new exception base class.
+
 `loom.testing` is a separate opt-in downstream test-support package. It may
 depend on public runtime contracts to execute caller-supplied conformance cases,
 but `loom`, runtime modules, package roots, plugin discovery, and CLI modules

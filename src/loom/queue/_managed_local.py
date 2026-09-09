@@ -27,7 +27,7 @@ from time import sleep
 from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
-from loom.diagnostics.diagnostic_failure import _capture_exception_details
+from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.io.uris import uri_to_path
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
 from loom.pipeline.planning import StageFingerprintRecord

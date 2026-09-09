@@ -12,6 +12,10 @@ lossy display summaries. Its approved startup review passed at `c5b23a7`; target
 afterok/continuation and CLI preparation checks pass. Fresh full validation,
 independent full-diff review and PR submission remain incomplete. Earlier failed
 full-gate receipts remain historical evidence, not passing merge evidence.
+The capture projector now has a private serialization owner, preserving the
+diagnostic API/format while keeping execution imports below diagnostics. The
+combined capture/handoff/CLI/continuation selection passes 115 checks. Interrupted
+gates at `ecfeb46` are superseded only by fresh full gates after that correction.
 
 ## Summary
 

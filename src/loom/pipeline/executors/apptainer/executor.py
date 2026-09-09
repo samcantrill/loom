@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from loom.diagnostics.diagnostic_failure import _capture_exception_details
+from loom.serialization._diagnostic_capture import _capture_exception_details
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace

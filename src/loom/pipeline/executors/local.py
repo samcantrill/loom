@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
-from loom.diagnostics.diagnostic_failure import _capture_exception_details
+from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.pipeline.early_stopping import (
     EarlyStopSignal,
     lifecycle_reason_from_early_stop,

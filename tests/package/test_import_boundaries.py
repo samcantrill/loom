@@ -37,6 +37,25 @@ def test_import_does_not_import_deferred_modules() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_execution_failure_capture_does_not_import_diagnostics() -> None:
+    script = dedent(
+        """
+        import sys
+        import loom.pipeline.executors.local
+        import loom.pipeline.executors.subprocess
+        import loom.pipeline.executors.apptainer.executor
+        import loom.pipeline.executors.docker.executor
+        import loom.pipeline.execution.stage_worker
+        assert not any(name == "loom.diagnostics" or name.startswith("loom.diagnostics.")
+                       for name in sys.modules), "execution imported higher-level diagnostics"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_import_serialization_does_not_import_io() -> None:
     script = dedent(
         """

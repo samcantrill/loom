@@ -242,7 +242,8 @@ gate/review/merge ownership follows the canonical phase workflow.
   unmet fixed contracts below, so completion is not accepted
 - Refiner: correction `1198c1a` and related repair `68a37ad` returned;
   manager verified the changes and added discriminating integration coverage
-- Pre-submit: blocked by the delayed-SLURM durable handoff finding; no PR opened or pushed
+- Pre-submit: targeted delayed-handoff and capture-boundary checks pass; fresh full
+  gates and independent full-diff review outstanding; no PR opened or pushed
 - Independent implementation review: not started
 - Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
   its separately returned repair, and manager correction `6474206`. Do not reset
@@ -766,6 +767,20 @@ provenance, not a dependency for another machine to inspect the cause. Cover com
 local/subprocess/container worker capture/wrapping and managed no-start producers;
 carry existing structured failures intact rather than recapturing their summaries.
 Do not introduce a repository-wide exception base-class migration.
+
+Manager pre-submit correction: the first capture implementation imported the
+higher-level diagnostics package from five execution owners, contrary to
+`docs/structure.md`. The new package-boundary check reproduces that violation
+(`capture-boundary-before.xml`). Move the existing projector/capture functions
+without algorithm changes into private `serialization._diagnostic_capture`;
+keep the diagnostic facade, renderer, public error identity and v1 bytes intact.
+This resolves implementation layering within R3, not a new format/behavior choice
+or exception hierarchy. Both running full gates at `ecfeb46` were stopped before
+source edits and their exact process groups exited; their interrupted receipts
+are not validation passes. Fresh capture/renderer, executor, both bounded TLS
+report operations, delayed afterok, CLI and adjacent continuation selection passes
+all 115 tests (`capture-and-handoff-after.xml`, 18.33s), including the new import
+boundary. Changed-file Ruff and diff checks pass. Fresh full gates remain required.
 
 `_RemoteExecutionReport` schema 2 retains existing identity/status/output and scalar
 summary fields and adds the following closed fields:
