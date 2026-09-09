@@ -2,7 +2,8 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: implemented; final local validation complete, with manager pre-submit
+  and independent review pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -233,7 +234,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 - Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
   passed after the bounded `SlurmStageDelivery` replay correction; final plan approved
 - Additional phase planning: not needed; current contracts and upstream join are explicit
-- Implementation: executor handoff prepared
+- Implementation: complete at `fce80162e49d60ae6f4f6cb093260f3d300d19df`
 - Refiner / pre-submit / independent implementation review: not started
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -242,9 +243,9 @@ gate/review/merge ownership follows the canonical phase workflow.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | not started |
-| Tests added or updated | not started |
-| Validated revision/tree state and evidence | no runtime evidence |
-| Validation-relevant changes after evidence | not applicable |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | physical proof deferred; phase worktree active |
+| Implementation and changed paths | Added the public, sparse two-axis `ResourcePolicy`; composed it independently through runtime profiles; and stored post-demand selections with full placement demand. Admission, local/remote/SLURM worker handoffs and retained codecs now consume or validate that exact selection. Docker and Apptainer use selected controls without restoring filtered authored intent; SLURM retains full allocation demand while avoiding duplicate inner CPU/RAM limits. Capability/preflight diagnostics, executable metadata, removed-switch guidance, public exports, and resource/container documentation now describe the same policy. |
+| Tests added or updated | Extended runtime option/profile, placement/admission, worker codec/replay, direct Docker/Apptainer command and executor, queue handoff, capability/preflight, package-import, and opt-in container-acceptance coverage. The discriminating cases cover sparse inherit/clear, zero-demand omission, retained-selection conflicts, empty enforcement retaining intent but emitting no controls, and removed `cpu_memory_enforcement` guidance. |
+| Validated revision/tree state and evidence | Source/test tree `fce80162e49d60ae6f4f6cb093260f3d300d19df` passed the targeted policy, admission/handoff, container-command, capability, and preflight slices during implementation. Fresh `make validate-pr` passed Ruff, Pyright (0 errors), default (3,023 passed; 155 deselected), config-extra (161 passed; 18 expected skips; 3,026 deselected), and source/wheel builds. Fresh `make test-summary` passed package 123, unit 2,153, contract 300, integration 379, E2E 68, and config-extra 161 tests, with zero failures/errors and the same 18 expected skips. |
+| Validation-relevant changes after evidence | None. This completion record is documentation-only evidence metadata. |
+| PR, review, and merge | Pending manager pre-submit checks and required independent implementation review; no PR was prepared or pushed by the executor. |
+| Residual risk and cleanup | The seven `LOOM_RUN_*` physical container/GPU/SIF/live-SLURM acceptance switches were unset, so no physical execution was authorized; the 18 config-extra physical acceptance skips are expected. Fake-command coverage proves selection and evidence plumbing, not host isolation or a live scheduler. Phase 2 whole-run policy/provider work remains unchanged; phase worktree remains active. |
