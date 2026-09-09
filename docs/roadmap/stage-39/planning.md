@@ -1,14 +1,14 @@
 # Roadmap Stage 39 Planning: Independent Resource Accounting And Enforcement
 
-Status: original plan approved; recovery amendment approved, startup review pending
+Status: recovery amendment approved and independently reviewed; implementation active
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
 at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: independent startup review of the Phase 1 recovery amendment
-Blockers: four implementation findings; concrete recovery contracts at their Phase 1 owner
+Current gate: bounded Phase 1 recovery execution after passing startup review
+Blockers: no unresolved startup decision; implementation obligations at the Phase 1 owner
 
 ## Current State
 
@@ -25,7 +25,7 @@ an explicit published prerequisite; that proof grants no physical authority.
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Approved; no unanswered default |
 | Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Approved |
 | Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards; plan review passed after bounded SLURM delivery correction | Approved |
-| Quality / implementation | Original design/plan approved; maintainer approved targeted recovery on 2026-09-09 | Independent startup review of Phase 1 R1–R4, then bounded execution and full gates; current state in manifest |
+| Quality / implementation | Original design/plan approved; recovery requested 2026-09-09 and independently confirmed after one restart-path correction | Bounded execution and full gates; startup receipt and current state in manifest |
 
 ## Evidence And Scope
 
@@ -881,6 +881,6 @@ oracles. Manager verification confirms the source path and corrected card.
 That original approval remains the behavior baseline. Subsequent implementation
 evidence exposed the four boundaries now specified by Phase 1's Approved Recovery
 Amendment; the maintainer requested their implementation on 2026-09-09. Independent
-startup review must pass before its bounded execution. The manifest owns current
+startup review passed after the single local restart-path correction. The manifest owns current
 validation and progress; a partial checkpoint is not completion. This recovery
 does not authorize physical/GPU runs, host changes or Phase 2 execution.

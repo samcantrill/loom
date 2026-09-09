@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked; recovery approved, independent startup review pending
+- Status: in_progress; recovery startup review passed, bounded execution admitted
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -13,8 +13,8 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: no-claim offer freshness, authoritative retained-worker comparison,
-  and managed control/failure transport and known-no-start completion (see below)
+- Blockers: no unresolved startup decision; R1–R4 implementation obligations remain
+  open and must pass before PR submission
 
 ## Objective And Context
 
@@ -360,6 +360,13 @@ consumed, not reset. Recovery permits one scoped executor delivery and at most
 one qualified correction. Stop with a concrete blocker if that allowance is
 spent. No recovery implementation starts before a passing independent startup
 receipt is recorded. Private helpers and slice order remain executor discretion.
+
+Independent startup receipt: PASS at clean `5bb294908b23ce88782be0632935a38fce66aeaf`.
+The single finding at `a07e290a` was the omitted local restart comparison; the
+bounded correction and targeted independent confirmation resolve it through R2's
+shared owner and actual restart mismatch/exact-replay oracle. No runtime validation
+was claimed by this review. Recovery executor delivery is now admitted; its one
+qualified implementation-correction allowance is unspent.
 
 Evidence: clean tree `b94b89d` joins checkpoint `6474206` to develop `000f34f`
 (PR #290). That upstream delta adds managed-lifecycle examples/tests but changes

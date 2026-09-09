@@ -1,13 +1,13 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: blocked; Phase 1 recovery approved, independent startup review pending
+Status: in_progress; Phase 1 recovery startup review passed, execution admitted
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: independent startup review of the approved Phase 1 recovery amendment;
-the four implementation findings remain open until executable evidence passes
+Blockers: no unresolved startup decision; R1–R4 implementation and validation
+remain required before PR submission
 
 ## Summary
 
@@ -81,7 +81,7 @@ the four implementation findings remain open until executable evidence passes
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -104,13 +104,14 @@ the four implementation findings remain open until executable evidence passes
   R1–R4 contract is in Phase 1's Approved Recovery Amendment. Independent startup
   review at `a07e290a` found one omitted local restart comparison route; the bounded
   correction adds `_reconcile_retained_local_assignment` and an actual restart
-  mismatch/exact-replay oracle to R2. Targeted confirmation is pending.
+  mismatch/exact-replay oracle to R2. Targeted independent confirmation PASS at
+  clean `5bb294908b23ce88782be0632935a38fce66aeaf`; bounded execution is admitted.
   Existing three corrections remain consumed; the approved
   recovery has one executor delivery and at most one qualified correction, not
   a reset of the original budget. No PR opens with known blockers.
 - Current source: checkpoint `6474206` reconciled to published develop `000f34f`
   through merge `b94b89d`; preserve PR #290's new managed-lifecycle journeys.
-  Startup review then bounded implementation, fresh full gates, independent full
+  Bounded implementation, fresh full gates, independent full
   Phase 1 implementation review and verified merge/cleanup are required. This
   recovery request excludes Phase 2 execution and physical Stage 81 continuation.
 - Accepted risks: no additional enforcement can expose more host resources than
