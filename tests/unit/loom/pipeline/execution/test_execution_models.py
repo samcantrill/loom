@@ -21,13 +21,14 @@ from loom.pipeline.execution import (
     StageWorkerResult,
     redact_executor_metadata,
 )
+from loom.pipeline.execution.models import STAGE_WORKER_REQUEST_SCHEMA_VERSION
 from loom.pipeline.planning import (
     FingerprintContext,
     PlanSelectors,
     ResumeOptions,
     build_stage_fingerprint,
 )
-from loom.pipeline.runtime import RunOptions
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions, RunOptions
 from loom.pipeline.status import StageStatus
 from loom.serialization import PlainData
 from loom.artifacts import ArtifactRef
@@ -61,7 +62,7 @@ def _artifact_ref() -> ArtifactRef:
 def _worker_request() -> StageWorkerRequest:
     stage = _minimal_pipeline_spec().get_stage("build")
     return StageWorkerRequest(
-        schema_version=1,
+        schema_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         run_uri="file:///tmp/run",
         stage_name="build",
         attempt=1,
@@ -77,7 +78,9 @@ def _worker_request() -> StageWorkerRequest:
         stderr_path="/tmp/run/stages/build/logs/stderr.log",
         traceback_path="/tmp/run/stages/build/logs/traceback.txt",
         result_path="/tmp/run/stages/build/worker_result.json",
-        resolved_runtime={"stage_id": "build", "executor": "local"},
+        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="build")
+        .for_execution()
+        ._to_worker_metadata(),
         executor_metadata={"command": ["python", "-m", "loom"]},
     )
 

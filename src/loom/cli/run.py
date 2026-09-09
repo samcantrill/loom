@@ -780,6 +780,7 @@ def build_slurm_dry_run_result(
         )
     else:
         from loom.pipeline.executors.slurm import plan_afterok_slurm_dry_run
+        from loom.pipeline.runtime import resolve_run_runtime
 
         result = plan_afterok_slurm_dry_run(
             run_store=store,
@@ -790,6 +791,11 @@ def build_slurm_dry_run_result(
                 fallback=slurm_options,
             ),
             stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+            stage_runtime=resolve_run_runtime(
+                runtime_options,
+                stage_ids=pipeline_result.spec.stage_names,
+                registry=validator_registry,
+            ),
             container_options=_slurm_container_options_from_runtime(runtime_options),
             stage_container_options=_stage_slurm_container_options(runtime_options),
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
@@ -2007,6 +2013,8 @@ def build_slurm_live_submission_result(
         )
         submit = submit_single_job_slurm
     else:
+        from loom.pipeline.runtime import resolve_run_runtime
+
         planning_result = plan_afterok_slurm_dry_run(
             run_store=store,
             run_uri=run_uri,
@@ -2016,6 +2024,11 @@ def build_slurm_live_submission_result(
                 fallback=slurm_options,
             ),
             stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+            stage_runtime=resolve_run_runtime(
+                runtime_options,
+                stage_ids=pipeline_result.spec.stage_names,
+                registry=validator_registry,
+            ),
             container_options=_slurm_container_options_from_runtime(runtime_options),
             stage_container_options=_stage_slurm_container_options(runtime_options),
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),

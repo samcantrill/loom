@@ -46,7 +46,7 @@ from .local_daemon import (
 )
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _RECORD_NAME = "managed_local_runtime.json"
 
 
@@ -189,6 +189,7 @@ def _runtime_payload(
                 preference_scorers=preference_scorers,
             ),
             planners=planners,
+            resource_policy=exact.resource_policy,
         ).to_dict()
     return {
         "schema_version": _SCHEMA_VERSION,
@@ -455,7 +456,10 @@ def load_managed_local_runtime_record(
         not isinstance(payload, dict)
         or payload.get("schema_version") != _SCHEMA_VERSION
     ):
-        raise QueueServiceError("managed-local runtime record schema is unsupported")
+        raise QueueServiceError(
+            "managed-local runtime record schema is unsupported; finish or cancel "
+            "the saved work in its pinned environment and prepare a fresh identity"
+        )
     if payload.get("run_uri") != run_uri:
         raise QueueServiceError("managed-local runtime record belongs to another run")
     digest = payload.pop("digest", None)

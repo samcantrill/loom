@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import sqlite3
 import sys
 import subprocess
@@ -21,6 +23,7 @@ from loom.queue._agent_process_supervisor import (
     ResidentWorkerLaunchProfile,
     SupervisorLaunchState,
     SupervisorLaunchConfiguration,
+    _launch_from_value,
     _launch_value,
 )
 
@@ -50,6 +53,71 @@ def _launch(
         profile=_profile(),
         environment={},
     )
+
+
+def test_legacy_launch_writer_shape_and_digest_are_preserved(tmp_path: Path) -> None:
+    profile = _profile()
+    legacy_profile = {
+        "project_root": str(profile.project_root),
+        "python_executable": str(profile.python_executable),
+        "descriptor": dict(profile.descriptor),
+        "environment": {},
+        "readiness_identity": None,
+    }
+    legacy = {
+        "supervisor_id": "supervisor-A",
+        "continuity_epoch": "epoch-A",
+        "agent_id": "agent-A",
+        "session_id": "session-A",
+        "assignment_id": "assignment-A",
+        "process_execution_id": "process-A",
+        "execution_fence": "fence-A",
+        "launch_operation_id": "launch-A",
+        "bundle_digest": "a" * 64,
+        "workspace_root": str(tmp_path.resolve()),
+        "profile": legacy_profile,
+        "environment": {"LANG": "C.UTF-8"},
+    }
+    old_digest_input = {
+        **legacy,
+        "profile_id": profile.profile_id,
+        "profile_fingerprint": profile.fingerprint,
+    }
+    old_digest = hashlib.sha256(
+        json.dumps(
+            old_digest_input, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
+
+    decoded = _launch_from_value(json.loads(json.dumps(legacy)))
+    assert decoded.schema_version is None
+    assert decoded.resource_controls is None
+    assert _launch_value(decoded) == legacy
+    assert decoded.spec_digest == old_digest
+
+    controls = (
+        {
+            "resource": "gpu",
+            "owner": "managed_provider",
+            "mechanism": "provider_environment_binding",
+            "disposition": "requested",
+        },
+    )
+    current = replace(decoded, schema_version=2, resource_controls=controls)
+    current_value = _launch_value(current)
+    assert current_value["schema_version"] == 2
+    assert _launch_from_value(current_value).spec_digest == current.spec_digest
+    assert current.spec_digest != old_digest
+    assert replace(current, resource_controls=()).spec_digest != current.spec_digest
+    with pytest.raises(AgentProcessSupervisorError, match="legacy"):
+        replace(decoded, resource_controls=controls)
+    with pytest.raises(AgentProcessSupervisorError, match="invalid fields"):
+        _launch_from_value(
+            {
+                **current_value,
+                "resource_controls": [{**controls[0], "binding": "private-gpu"}],
+            }
+        )
 
 
 def test_launch_exact_replay_has_one_root_and_conflicting_identity_rejects(

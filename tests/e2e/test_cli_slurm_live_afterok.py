@@ -11,14 +11,95 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
 from loom.pipeline.stores.service_authority import LocalAuthorityService
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_store
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 pytestmark = pytest.mark.e2e
+
+
+def test_cli_live_afterok_prepares_exact_runtime_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.cli.run as run_command
+
+    store, _ = _prepared_store(tmp_path, {"extract": ()}, authority_backed=True)
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+        authority_config=store.authority_config(),
+    )
+    monkeypatch.setattr(
+        run_command, "_create_default_run_store", lambda **_kwargs: store
+    )
+    # The in-process authority fixture is not a multi-host authority service.
+    # Bypass admission/readiness only; exercise real CLI composition, preparation,
+    # planning, and fake submission without claiming physical cluster acceptance.
+    monkeypatch.setattr(
+        run_command, "_require_slurm_live_authority", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        run_command, "_run_preflight_for_slurm_live_submission", lambda **_kwargs: None
+    )
+    runner = FakeSlurmCommandRunner()
+    monkeypatch.setattr(run_command, "_build_slurm_command_runner", lambda: runner)
+    config_path = tmp_path / "pipeline.yaml"
+    _write_afterok_config(config_path)
+    run_uri = path_to_run_uri(tmp_path / "runs" / "private-handoff")
+    stdout, stderr = io.StringIO(), io.StringIO()
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--executor",
+                "slurm-afterok",
+                "--run-uri",
+                run_uri,
+                "--set",
+                "+runtime="
+                + json.dumps(
+                    {
+                        "stage_options": {
+                            "extract": {
+                                "resources": {
+                                    "entries": {"cpu": {"kind": "cpu", "amount": 2}}
+                                }
+                            }
+                        },
+                        "resource_policy": {"account_for": "all", "enforce": []},
+                    }
+                ),
+                "--set",
+                "runtime.stage_options.extract.resources.entries.cpu.amount=3",
+                "--set",
+                "runtime.resource_policy.account_for=[]",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    ), stdout.getvalue()
+    payload = json.loads(stdout.getvalue())
+    private = json.loads(
+        Path(payload["result"]["manifest_path"])
+        .with_name("execution-resources.json")
+        .read_text()
+    )
+    saved = private["stages"]["extract"]
+    assert saved["resources"]["entries"]["cpu"]["amount"] == 3
+    assert saved["resource_policy"] == {"account_for": [], "enforce": []}
+    assert saved["resource_selection"] == {"account_for": [], "enforce": []}
+    assert len(runner.calls) == 3
 
 
 def test_cli_slurm_live_afterok_rejects_default_authority_before_sbatch(

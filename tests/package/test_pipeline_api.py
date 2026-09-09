@@ -38,6 +38,7 @@ def test_pipeline_public_exports() -> None:
         "is_active_submitted_operation",
         "is_terminal_submitted_operation",
         "ResourceEntry",
+        "ResourcePolicy",
         "ResourceRequest",
         "parse_resource_request",
         "CONTINUE_INDEPENDENT_FAILURE_POLICY",

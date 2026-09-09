@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import os
 import re
@@ -21,8 +21,11 @@ from loom.pipeline.executors.containers import (
     ContainerResourceIntent,
     parse_container_options,
 )
-from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.executors._container_resources import container_resource_selection
+from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
+from loom.pipeline.runtime._resource_controls import resource_control_records
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import utc_timestamp
@@ -66,7 +69,6 @@ class ApptainerExecOptions:
     rocm: bool = False
     fakeroot: bool = False
     no_home: bool = False
-    cpu_memory_enforcement: str = "runtime"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -83,13 +85,6 @@ class ApptainerExecOptions:
             raise ApptainerOptionError(
                 "ApptainerExecOptions.nv and rocm cannot both be true"
             )
-        if not isinstance(self.cpu_memory_enforcement, str) or (
-            self.cpu_memory_enforcement not in {"runtime", "scheduling_only"}
-        ):
-            raise ApptainerOptionError(
-                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
-                "or 'scheduling_only'"
-            )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -99,7 +94,6 @@ class ApptainerExecOptions:
             "rocm": self.rocm,
             "fakeroot": self.fakeroot,
             "no_home": self.no_home,
-            "cpu_memory_enforcement": self.cpu_memory_enforcement,
         }
 
     @classmethod
@@ -108,11 +102,10 @@ class ApptainerExecOptions:
             return cls()
         mapping = _plain_mapping(data, path="ApptainerExecOptions")
         _reject_unknown(mapping, _EXEC_OPTIONS_FIELDS, path="ApptainerExecOptions")
-        enforcement = mapping.get("cpu_memory_enforcement", "runtime")
-        if not isinstance(enforcement, str):
+        if "cpu_memory_enforcement" in mapping:
             raise ApptainerOptionError(
-                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
-                "or 'scheduling_only'"
+                "ApptainerExecOptions.cpu_memory_enforcement was removed; "
+                "select CPU and memory controls with resource_policy.enforce"
             )
         return cls(
             command=_text(
@@ -133,7 +126,6 @@ class ApptainerExecOptions:
                 mapping.get("no_home", False),
                 path="ApptainerExecOptions.no_home",
             ),
-            cpu_memory_enforcement=enforcement,
         )
 
 
@@ -403,12 +395,85 @@ def build_apptainer_exec_command(
     worker_command: Sequence[str],
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None,
     host_environment: Mapping[str, str] | None = None,
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
+    resource_selection: Mapping[str, Sequence[str]] | None = None,
 ) -> ApptainerExecCommand:
-    """Return deterministic ``apptainer exec`` argv for one worker command."""
+    """Build argv from full demand and independently selected additional controls.
+
+    A standalone call resolves the new-job defaults; a supplied saved selection
+    is checked against the supplied concrete policy and demand. GPU binding uses
+    allocation-visible host tokens, never inferred device numbers. Driver access
+    and authored/inherited environment remain separate from added binding.
+    """
 
     container = _container_options(container_options)
     options = _exec_options(apptainer_options)
     worker = _argv_tuple(worker_command, path="worker_command")
+    try:
+        policy, entries, selection = container_resource_selection(
+            cast(ContainerResourceIntent | None, container.resources),
+            resource_policy,
+            resource_selection,
+            path="Apptainer resource policy",
+        )
+    except RuntimeResourceError as exc:
+        raise ApptainerOptionError(
+            f"container resource request is invalid: {exc}"
+        ) from exc
+    selected = set(selection["enforce"])
+    unsupported = selected - {"cpu", "memory", "gpu"}
+    if unsupported:
+        raise ApptainerOptionError(
+            f"Apptainer cannot enforce resource(s) {', '.join(sorted(unsupported))}; "
+            "remove them from resource_policy.enforce or use a supporting owner"
+        )
+    gpu = entries.get("gpu")
+    requested_binding_count = 0
+    visible_binding_count = 0
+    if gpu is not None and gpu.amount > 0 and not options.rocm:
+        options = replace(options, nv=True)
+    if "gpu" in selected:
+        from loom.pipeline.executors.gpu_visibility import (
+            CUDA_VISIBLE_DEVICES,
+            requested_gpu_count,
+            validate_cuda_visibility,
+        )
+
+        if options.rocm:
+            raise ApptainerOptionError(
+                "GPU binding requires NVIDIA passthrough; disable rocm or omit gpu enforcement"
+            )
+        environment = cast(ContainerEnvironment, container.environment)
+        if (
+            CUDA_VISIBLE_DEVICES in environment.variables
+            or CUDA_VISIBLE_DEVICES in environment.required_host_variables
+        ):
+            raise ApptainerOptionError(
+                "CUDA_VISIBLE_DEVICES is authored but GPU binding is owned by Loom's resource_policy; "
+                "remove the authored binding or omit gpu from resource_policy.enforce"
+            )
+        try:
+            binding = validate_cuda_visibility(
+                requested_gpu_count(entries),
+                os.environ if host_environment is None else host_environment,
+            )
+        except ApptainerOptionError as exc:
+            raise ApptainerOptionError(
+                f"requested GPU binding is unavailable: {exc}; supply a matching "
+                "allocation binding or omit gpu from resource_policy.enforce"
+            ) from exc
+        container = replace(
+            container,
+            environment=ContainerEnvironment(
+                variables={
+                    **environment.variables,
+                    CUDA_VISIBLE_DEVICES: ",".join(binding.cuda_visible_devices),
+                },
+                required_host_variables=environment.required_host_variables,
+            ),
+        )
+        requested_binding_count = binding.requested_gpu_count
+        visible_binding_count = len(binding.cuda_visible_devices)
     argv: list[str] = [options.command, "exec"]
     redacted: list[str] = [options.command, "exec"]
     if options.cleanenv:
@@ -421,7 +486,7 @@ def build_apptainer_exec_command(
         _append(argv, redacted, "--fakeroot")
     if options.no_home:
         _append(argv, redacted, "--no-home")
-    _append_resource_limits(argv, redacted, container, options)
+    _append_resource_limits(argv, redacted, entries, selected=selected)
     if container.workdir is not None:
         _append_option(argv, redacted, "--pwd", container.workdir)
     for mount in _sorted_mounts(container):
@@ -446,6 +511,25 @@ def build_apptainer_exec_command(
             "apptainer_options": options.to_dict(),
             "container": container.to_redacted_metadata(),
             "worker_command": list(worker),
+            "resource_policy": policy.to_dict(),
+            "resource_selection": {
+                key: list(value) for key, value in selection.items()
+            },
+            "resource_controls": resource_control_records(
+                entries=entries,
+                policy=policy,
+                selection=selection,
+                owner="apptainer",
+                mechanisms={
+                    "cpu": "container_cpu_flag",
+                    "memory": "container_memory_flag",
+                    "gpu": "cuda_visibility_binding",
+                },
+            ),
+            "gpu_visibility": {
+                "requested_gpu_count": requested_binding_count,
+                "visible_gpu_count": visible_binding_count,
+            },
         },
     )
 
@@ -453,30 +537,16 @@ def build_apptainer_exec_command(
 def _append_resource_limits(
     argv: list[str],
     redacted: list[str],
-    container: ContainerOptions,
-    options: ApptainerExecOptions,
+    entries: Mapping[str, ResourceEntry],
+    *,
+    selected: set[str],
 ) -> None:
     """Project direct CPU and memory intent to Apptainer cgroup flags."""
 
-    intent = cast(ContainerResourceIntent | None, container.resources)
-    if intent is None:
-        return
-    entries = cast(Mapping[str, ResourceEntry], intent.entries)
-    selected = {
-        kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
-    }
-    try:
-        validated = ResourceRequest(entries=selected).entries
-    except RuntimeResourceError as exc:
-        raise ApptainerOptionError(
-            f"container CPU/memory resource request is invalid: {exc}"
-        ) from exc
-    if not selected or options.cpu_memory_enforcement == "scheduling_only":
-        return
-    cpu = validated.get("cpu")
+    cpu = entries.get("cpu") if "cpu" in selected else None
     if cpu is not None:
         _append_option(argv, redacted, "--cpus", str(_cpu_count(cpu)))
-    memory = validated.get("memory")
+    memory = entries.get("memory") if "memory" in selected else None
     if memory is not None:
         _append_option(argv, redacted, "--memory", str(_memory_bytes(memory)))
 

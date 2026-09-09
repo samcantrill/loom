@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from loom.serialization._diagnostic_capture import _capture_exception_details
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-import os
 from pathlib import Path
 from typing import cast
 
@@ -17,7 +18,6 @@ from loom.pipeline.execution.models import (
     redact_executor_metadata,
 )
 from loom.pipeline.executors.containers import (
-    ContainerEnvironment,
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
@@ -31,17 +31,11 @@ from loom.pipeline.executors._reliability import (
     timeout_metadata,
     timeout_policy_from_request,
 )
-from loom.pipeline.executors.gpu_visibility import (
-    CUDA_VISIBLE_DEVICES,
-    GpuVisibilityEvidence,
-    project_apptainer_gpu_options,
-    requested_gpu_count,
-    validate_cuda_visibility,
-)
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime._resource_controls import with_resource_control_disposition
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
@@ -178,10 +172,13 @@ class ApptainerExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={
-                    "setup_error": setup_error.message,
-                    **dict(setup_error.details),
-                },
+                details=_capture_exception_details(
+                    exc,
+                    details={
+                        "setup_error": setup_error.message,
+                        **dict(setup_error.details),
+                    },
+                ),
             )
             return _failed_result(
                 request=request,
@@ -239,7 +236,9 @@ class ApptainerExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={"launch_error": launch_error},
+                details=_capture_exception_details(
+                    exc, details={"launch_error": launch_error}
+                ),
             )
             return _failed_result(
                 request=request,
@@ -350,6 +349,7 @@ class ApptainerExecutor:
                 metadata=metadata,
             )
 
+        metadata = with_resource_control_disposition(metadata, "applied")
         conflict = _process_conflict_failure(
             request=request,
             executor_name=self.name,
@@ -453,7 +453,7 @@ class _PreparedApptainerAttempt:
     path_parity: tuple[ContainerPathParitySummary, ...]
     worker_command: tuple[str, ...]
     command: ApptainerExecCommand
-    gpu_visibility: GpuVisibilityEvidence
+    gpu_visibility: Mapping[str, PlainData]
 
 
 def _prepare_apptainer_attempt(
@@ -493,12 +493,6 @@ def _prepare_apptainer_attempt(
         adapter_options,
         executor_name=executor_name,
     )
-    resources = cast(ResourceRequest, runtime.resources)
-    apptainer_options = project_apptainer_gpu_options(apptainer_options, resources)
-    gpu_visibility = validate_cuda_visibility(
-        requested_gpu_count(resources), os.environ
-    )
-    container = _with_cuda_visibility(container, gpu_visibility=gpu_visibility)
     worker_command = build_stage_worker_command(
         python_executable=python_executable,
         run_uri=request.run_uri,
@@ -511,13 +505,17 @@ def _prepare_apptainer_attempt(
         container_options=container,
         apptainer_options=apptainer_options,
         worker_command=worker_command,
+        resource_policy=runtime.resource_policy,
+        resource_selection=getattr(runtime, "resource_selection", None),
     )
     return _PreparedApptainerAttempt(
         container=container,
         path_parity=path_parity,
         worker_command=worker_command,
         command=command,
-        gpu_visibility=gpu_visibility,
+        gpu_visibility=cast(
+            Mapping[str, PlainData], command.metadata["gpu_visibility"]
+        ),
     )
 
 
@@ -626,36 +624,6 @@ def _with_required_path_mounts(
     )
 
 
-def _with_cuda_visibility(
-    container: ContainerOptions,
-    *,
-    gpu_visibility: GpuVisibilityEvidence,
-) -> ContainerOptions:
-    if gpu_visibility.requested_gpu_count == 0:
-        return container
-    environment = cast(ContainerEnvironment, container.environment)
-    if (
-        CUDA_VISIBLE_DEVICES in environment.variables
-        or CUDA_VISIBLE_DEVICES in environment.required_host_variables
-    ):
-        raise _ApptainerSetupError(
-            "CUDA_VISIBLE_DEVICES is owned by Loom's GPU resource projection"
-        )
-    return ContainerOptions(
-        image=container.image,
-        workdir=container.workdir,
-        mounts=cast(tuple[ContainerMount, ...], container.mounts),
-        environment=ContainerEnvironment(
-            variables={
-                **dict(environment.variables),
-                CUDA_VISIBLE_DEVICES: ",".join(gpu_visibility.cuda_visible_devices),
-            },
-            required_host_variables=environment.required_host_variables,
-        ),
-        resources=container.resources,
-    )
-
-
 def _local_store_path(path: Path, *, kind: str, executor_name: str) -> str:
     normalized = Path(path)
     if not normalized.is_absolute():
@@ -709,7 +677,9 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"read_error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc, details={"read_error": str(exc) or type(exc).__name__}
+            ),
         )
     if raw_result is None:
         details: dict[str, PlainData] = {"result": "missing"}
@@ -745,7 +715,10 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc,
+                details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            ),
         )
     if worker_result.run_uri != request.run_uri:
         return _failure(
@@ -966,7 +939,7 @@ def _process_metadata(
     worker_command: Sequence[str],
     container: ContainerOptions,
     path_parity: Sequence[ContainerPathParitySummary],
-    gpu_visibility: GpuVisibilityEvidence,
+    gpu_visibility: Mapping[str, PlainData],
     process: ApptainerCommandResult | None,
     started_at: str,
     finished_at: str,
@@ -978,15 +951,19 @@ def _process_metadata(
         "selected_command": command.argv[0],
         "apptainer_options": command.metadata["apptainer_options"],
         "worker_command": cast(list[PlainData], list(worker_command)),
-        "container": container.to_redacted_metadata(),
+        "container": command.metadata.get(
+            "container", container.to_redacted_metadata()
+        ),
         "path_parity": cast(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
-        "gpu_visibility": {
-            "requested_gpu_count": gpu_visibility.requested_gpu_count,
-            "visible_gpu_count": len(gpu_visibility.cuda_visible_devices),
+        **{
+            key: command.metadata[key]
+            for key in ("resource_policy", "resource_selection", "resource_controls")
+            if key in command.metadata
         },
+        "gpu_visibility": dict(gpu_visibility),
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -1010,6 +987,10 @@ def _process_metadata(
         )
     if launch_error is not None:
         metadata["launch_error"] = launch_error
+    if launch_error is not None or (
+        process is not None and (process.returncode != 0 or process.error is not None)
+    ):
+        metadata = with_resource_control_disposition(metadata, "failed")
     return redact_executor_metadata(metadata)
 
 

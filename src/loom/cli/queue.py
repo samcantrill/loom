@@ -179,8 +179,16 @@ def register_subparser(
         help="validate one protected coordinator role configuration",
     )
     _add_role_config_arguments(daemon_check)
-    daemon_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
-    daemon_check.add_argument("--probe-gpu", action="store_true", help="run an owned GPU test on an initialized, stopped local agent")
+    daemon_check.add_argument(
+        "--probe-io",
+        action="store_true",
+        help="probe writes only in existing execution-owned roots",
+    )
+    daemon_check.add_argument(
+        "--probe-gpu",
+        action="store_true",
+        help="run an owned GPU test on an initialized, stopped local agent",
+    )
     _add_output_options(daemon_check)
     daemon_check.set_defaults(handler=handle_daemon_check)
 
@@ -205,8 +213,16 @@ def register_subparser(
         help="validate one protected outbound-agent role configuration",
     )
     _add_role_config_arguments(agent_check)
-    agent_check.add_argument("--probe-io", action="store_true", help="probe writes only in existing execution-owned roots")
-    agent_check.add_argument("--probe-gpu", action="store_true", help="run an owned GPU test on an initialized, stopped agent")
+    agent_check.add_argument(
+        "--probe-io",
+        action="store_true",
+        help="probe writes only in existing execution-owned roots",
+    )
+    agent_check.add_argument(
+        "--probe-gpu",
+        action="store_true",
+        help="run an owned GPU test on an initialized, stopped agent",
+    )
     _add_output_options(agent_check)
     agent_check.set_defaults(handler=handle_agent_check)
 
@@ -1237,7 +1253,50 @@ def _emit_daemon_admission_payload(
         sys.stdout.write("  run-result diagnostic failure:\n")
         for line in diagnostic.splitlines():
             sys.stdout.write(f"    {line}\n")
+    for line in _admission_execution_failure_lines(payload):
+        sys.stdout.write(f"  {line}\n")
     return result
+
+
+def _admission_execution_failure_lines(payload: Mapping[str, PlainData]) -> list[str]:
+    """Render portable Loom wrapper chains without interpreting domain payloads."""
+
+    from collections.abc import Mapping, Sequence
+    from loom.diagnostics import render_diagnostic_failure
+
+    owners = payload.get("owners")
+    if not isinstance(owners, Mapping):
+        return []
+    owner = owners.get("run_result")
+    if not isinstance(owner, Mapping) or owner.get("availability") != "available":
+        return []
+    failures = owner.get("failures", ())
+    if not isinstance(failures, Sequence) or isinstance(failures, str):
+        return []
+    lines: list[str] = []
+    for failure in failures:
+        indent = ""
+        while isinstance(failure, Mapping):
+            lines.append(
+                f"{indent}stage {failure.get('stage_name')!r} failure: {failure.get('message')}"
+            )
+            details = failure.get("details")
+            if not isinstance(details, Mapping):
+                break
+            diagnostic = details.get("diagnostic_failure")
+            if diagnostic is not None:
+                lines.extend(
+                    indent + "  " + line
+                    for line in render_diagnostic_failure(diagnostic).splitlines()
+                )
+            traceback_text = details.get("traceback")
+            if isinstance(traceback_text, str):
+                lines.extend(
+                    indent + "  " + line for line in traceback_text.splitlines()
+                )
+            failure = details.get("worker_failure")
+            indent += "  "
+    return lines
 
 
 def _admission_diagnostic_failure(payload: Mapping[str, PlainData]) -> str | None:

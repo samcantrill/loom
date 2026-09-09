@@ -1,15 +1,18 @@
-"""Detached private diagnostics for failures while inspecting persisted state."""
+"""Detached diagnostics for inspection and portable execution failures."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from loom.serialization import PlainData
+from loom.serialization._diagnostic_capture import (
+    _MAX_NODES,
+    _SCHEMA,
+    _capture_exception_details as _capture_exception_details,
+    project_diagnostic_failure as project_diagnostic_failure,
+)
 
 
-_SCHEMA = "loom.diagnostic.v1"
-_MAX_NODES = 128
 _RELATIONS = frozenset({"cause", "context", "group_child"})
 _TRUNCATIONS = frozenset({"cycle", "limit"})
 
@@ -32,50 +35,6 @@ class _DiagnosticNode:
     links: tuple[_DiagnosticLink, ...]
 
 
-def project_diagnostic_failure(error: BaseException) -> dict[str, PlainData]:
-    """Detach native exception causality into the Loom diagnostic-v1 shape.
-
-    The projection contains only type labels, guarded messages, and causal links.
-    It deliberately does not retain tracebacks, notes, locals, or exception
-    attributes.
-    """
-
-    active: set[int] = set()
-    budget = [0]
-
-    def project_node(item: BaseException) -> dict[str, PlainData]:
-        budget[0] += 1
-        active.add(id(item))
-        links: list[PlainData] = []
-        try:
-            cause = item.__cause__
-            if cause is not None:
-                links.append(project_link("cause", cause))
-            elif not item.__suppress_context__ and item.__context__ is not None:
-                links.append(project_link("context", item.__context__))
-            if isinstance(item, BaseExceptionGroup):
-                for child in item.exceptions:
-                    links.append(project_link("group_child", child))
-            error_type = type(item)
-            return {
-                "type": f"{error_type.__module__}.{error_type.__qualname__}",
-                "message": _message(item),
-                "links": links,
-            }
-        finally:
-            active.remove(id(item))
-
-    def project_link(relation: str, item: BaseException) -> dict[str, PlainData]:
-        if id(item) in active:
-            return {"relation": relation, "truncation": "cycle"}
-        if budget[0] >= _MAX_NODES:
-            return {"relation": relation, "truncation": "limit"}
-        return {"relation": relation, "record": project_node(item)}
-
-    root = project_node(error)
-    return {"schema": _SCHEMA, **root}
-
-
 def render_diagnostic_failure(value: object) -> str:
     """Strictly validate and render a private ``loom.diagnostic.v1`` mapping."""
 
@@ -95,13 +54,6 @@ def render_diagnostic_failure(value: object) -> str:
 
     render_node(root, 0)
     return "\n".join(lines)
-
-
-def _message(error: BaseException) -> str:
-    try:
-        return str(error)
-    except Exception:  # noqa: BLE001 - formatting must not replace the failure
-        return "<exception message unavailable>"
 
 
 def _decode_root(value: object) -> _DiagnosticNode:

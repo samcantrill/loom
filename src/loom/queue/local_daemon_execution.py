@@ -25,6 +25,7 @@ from loom.pipeline.execution.reliability import (
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
+    StageWorkerResult,
 )
 from loom.pipeline.reliability import (
     RetryDecisionRecord,
@@ -59,6 +60,7 @@ from loom.queue._managed_local import (
     _assignment_from_dict,
     _read_decline_reason,
     _compose_agent_resource_providers,
+    _persist_managed_result,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -126,6 +128,7 @@ from loom.serialization import (
     ensure_plain_data,
     freeze_plain_data,
     json_loads,
+    thaw_plain_data,
 )
 from loom.timestamps import utc_timestamp
 
@@ -190,6 +193,54 @@ class ManagedLocalIntent:
 class LocalDaemonExecutionOutcome:
     state: LocalDaemonAdmissionState
     reason: str | None = None
+
+
+def _worker_runtime(
+    intent: ManagedLocalIntent, stage_name: str
+) -> ResolvedStageRuntimeOptions:
+    """Join the immutable post-demand placement to a worker's runtime handoff."""
+
+    placement = intent.placements[stage_name]
+    return replace(
+        intent.runtime[stage_name],
+        resources=placement.resource_request,
+        resource_policy=placement.resource_policy,
+        resource_selection=placement.resource_selection,
+    )
+
+
+def _require_retained_resource_handoff_match(
+    retained_runtime: Mapping[str, object],
+    expected_runtime: ResolvedStageRuntimeOptions,
+) -> None:
+    """Reject a retained worker whose resource meaning differs from placement.
+
+    This deliberately compares the persisted plain-data handoff rather than
+    object identity: durable decoders can yield tuples or immutable maps, while
+    placement remains the authority for demand, policy, and concrete selection.
+    """
+
+    fields = ("resources", "resource_policy", "resource_selection")
+    if any(field not in retained_runtime for field in fields):
+        raise QueueConflictError(
+            "retained worker resource handoff is incomplete; prepare a fresh identity"
+        )
+    expected = expected_runtime._to_worker_metadata()
+    retained = {field: retained_runtime[field] for field in fields}
+    projected = {field: expected[field] for field in fields}
+    try:
+        retained_plain = thaw_plain_data(
+            freeze_plain_data(retained, path="retained worker resource handoff"),
+            path="retained worker resource handoff",
+        )
+    except Exception as exc:
+        raise QueueConflictError(
+            "retained worker resource handoff is invalid; prepare a fresh identity"
+        ) from exc
+    if retained_plain != projected:
+        raise QueueConflictError(
+            "retained worker resource handoff differs from placement; investigate retained input or prepare a fresh identity"
+        )
 
 
 def _validate_agent_provider_composition(
@@ -1410,7 +1461,11 @@ class LocalDaemonExecution:
                 def wake_daemon(
                     _future: Future[None], target: LocalDaemon = daemon
                 ) -> None:
-                    target._wake.set()
+                    # Failed replay already has a pending owner. Retry on the
+                    # normal poll so self-wakes cannot starve operator access
+                    # to the cycle lock; successful progress is still immediate.
+                    if _future.exception() is None:
+                        target._wake.set()
 
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
@@ -1502,6 +1557,14 @@ class LocalDaemonExecution:
             assignment.run_uri,
             slurm_profiles=self._scheduling.available_slurm_profiles(),
         )
+        expected_runtime = _worker_runtime(intent, assignment.stage_name)
+        _require_retained_resource_handoff_match(
+            request.resolved_runtime, expected_runtime
+        )
+        retained_worker_request = StageWorkerRequest.from_dict(raw_worker_request)
+        _require_retained_resource_handoff_match(
+            retained_worker_request.resolved_runtime, expected_runtime
+        )
         scoped_authority = _ScopedCoordinatorAuthority(
             authority_store,
             run_uri=assignment.run_uri,
@@ -1514,7 +1577,7 @@ class LocalDaemonExecution:
                 authority=scoped_authority,
                 journal=self.journal,
                 assignment=assignment,
-                worker_request=StageWorkerRequest.from_dict(raw_worker_request),
+                worker_request=retained_worker_request,
                 claims=request.claims,
                 providers=self.providers,
                 run_store=self.run_store,
@@ -3067,7 +3130,8 @@ class LocalDaemonExecution:
                     stage_plan=stage_plan,
                     produced_outputs=_produced_outputs(snapshot),
                     fingerprint_context=intent.plan.fingerprint_context,
-                    resolved_runtime=intent.runtime[record.stage_name],
+                    resolved_runtime=_worker_runtime(intent, record.stage_name),
+                    metadata={},
                 )
             )
             if (
@@ -3077,6 +3141,10 @@ class LocalDaemonExecution:
                 or worker_request.executor_name != profile.executor_name
             ):
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
+            _require_retained_resource_handoff_match(
+                worker_request.resolved_runtime,
+                _worker_runtime(intent, record.stage_name),
+            )
             assignment = SlurmStageAssignment(
                 assignment_id=assignment_id,
                 operation_id=operation_id,
@@ -4439,7 +4507,9 @@ class LocalDaemonExecution:
         try:
             _validate_remote_semantic_data(
                 fingerprint=fingerprint,
-                resolved_runtime=intent.runtime[record.stage_name].to_safe_metadata(),
+                resolved_runtime=_worker_runtime(
+                    intent, record.stage_name
+                )._to_worker_metadata(),
                 worker_metadata={},
             )
             total_bytes = 0
@@ -4471,7 +4541,7 @@ class LocalDaemonExecution:
     ) -> bool:
         selected = getattr(decision, "selected")
         claims = tuple(selected.claims)
-        if not claims or len({claim.resource_kind for claim in claims}) != len(claims):
+        if len({claim.resource_kind for claim in claims}) != len(claims):
             raise QueueServiceError(
                 "managed daemon requires one exact claim per resource kind"
             )
@@ -4592,7 +4662,31 @@ class LocalDaemonExecution:
                 atoms=remote_target.availability_atoms,
                 reflected_claim_ids=remote_target.reflected_claim_ids,
             )
-        self.coordinator.publish_offer(offer_snapshot)
+        canonical_offer_id = self.coordinator.publish_offer(offer_snapshot)
+        if canonical_offer_id != offer_id:
+            # Reusing unchanged capacity evidence must also reuse its durable
+            # identity.  Nothing has been persisted under the proposed ID yet.
+            offer_id = canonical_offer_id
+            assignment_id = (
+                "assignment-"
+                + hashlib.sha256(
+                    (
+                        admission.admission_id
+                        + "\0"
+                        + record.stage_work_id
+                        + "\0"
+                        + offer_id
+                        + "\0"
+                        + str(record.projection_revision)
+                    ).encode("utf-8")
+                ).hexdigest()
+            )
+            assignment = replace(
+                assignment,
+                assignment_id=assignment_id,
+                offer_id=offer_id,
+                claim_id=f"claim-{assignment_id}",
+            )
         stage = intent.pipeline.get_stage(record.stage_name)
         stage_plan = next(
             item
@@ -4600,7 +4694,7 @@ class LocalDaemonExecution:
             if item.stage_name == record.stage_name
         )
         produced = _produced_outputs(snapshot)
-        runtime = intent.runtime[record.stage_name]
+        runtime = _worker_runtime(intent, record.stage_name)
         raw_worker_request = self.run_store.read_stage_worker_request(
             record.run_uri,
             record.stage_name,
@@ -4617,6 +4711,7 @@ class LocalDaemonExecution:
                 produced_outputs=produced,
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
+                metadata={},
             )
         )
         if (
@@ -4627,6 +4722,9 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "managed worker preparation identity differs from authority attempt"
             )
+        _require_retained_resource_handoff_match(
+            worker_request.resolved_runtime, runtime
+        )
         snapshot_revision = (
             remote_target.scheduling_availability_revision
             if remote_target is not None
@@ -4792,9 +4890,11 @@ class LocalDaemonExecution:
             self._local_assignment_futures[assignment.assignment_id] = prior
         while not accepted.wait(timeout=0.01):
             if prior.done():
-                # Preserve the existing saga failure semantics; an unaccepted
-                # launch is never reported as a background start.
+                # A completed no-start failure or terminal replay has no new
+                # start notification. Propagate errors, then let the next
+                # cycle project terminal truth without inventing a start.
                 prior.result()
+                return False
         return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
@@ -4951,7 +5051,7 @@ class LocalDaemonExecution:
         event_id: str,
         payload: Mapping[str, PlainData],
     ) -> int:
-        # Sequence 1 records a confirmed start or cancellation before start.
+        # Sequence 1 records a confirmed start or a proven no-start outcome.
         return (
             self.coordinator.record_event(
                 assignment_id, sequence + 1, event_id, payload
@@ -5009,6 +5109,16 @@ class LocalDaemonExecution:
                     f"{assignment_id}:start-prevented",
                     {"kind": "cancelled_before_start"},
                 )
+            elif (
+                report.status is StageStatus.FAILED and report.process_created is False
+            ):
+                self.coordinator.record_event(
+                    assignment_id,
+                    1,
+                    f"{assignment_id}:start-prevented",
+                    {"kind": "failed_before_start"},
+                )
+        self._persist_remote_report_result(str(record["run_uri"]), report, outputs)
         state = self.coordinator.state(assignment_id)
         if state == "running":
             self.coordinator.advance(
@@ -5025,6 +5135,40 @@ class LocalDaemonExecution:
                 expected="terminal",
                 next_state="logical_released",
             )
+
+    def _persist_remote_report_result(
+        self,
+        run_uri: str,
+        report: _RemoteExecutionReport,
+        outputs: Mapping[str, ArtifactRef],
+    ) -> None:
+        if report.schema_version == 1:
+            return
+        metadata: dict[str, PlainData] = {"process_created": report.process_created}
+        if report.resource_controls is not None:
+            metadata["resource_controls"] = [
+                dict(item) for item in report.resource_controls
+            ]
+        failure = (
+            None if report.failure is None else replace(report.failure, run_uri=run_uri)
+        )
+        _persist_managed_result(
+            self.run_store,
+            StageWorkerResult(
+                schema_version=1,
+                run_uri=run_uri,
+                stage_name=report.stage_name,
+                attempt=report.attempt,
+                status=report.status,
+                started_at=report.started_at,
+                finished_at=report.finished_at,
+                executor_name=report.executor_name,
+                outputs=outputs,
+                failure=failure,
+                exit_code=report.exit_code,
+                executor_metadata=metadata,
+            ),
+        )
 
     def remote_release(self, assignment_id: str) -> None:
         state = self.coordinator.state(assignment_id)
@@ -5327,6 +5471,7 @@ class LocalDaemonExecution:
                     },
                 ),
             )
+        self._persist_remote_report_result(record.assignment.run_uri, report, outputs)
         self.slurm_assignments.mark_terminal(assignment_id)
 
     def slurm_release(
@@ -5555,7 +5700,7 @@ def _run_result_owner_view(
     authority_failure: Exception | None = None,
     clock: Callable[[], str],
 ) -> Mapping[str, PlainData]:
-    """Project complete persisted stage failures as one fail-closed owner view."""
+    """Project persisted failures and launch controls as one fail-closed view."""
 
     observed_at = clock()
     try:
@@ -5584,10 +5729,40 @@ def _run_result_owner_view(
             raise QueueServiceError("run-store plan and pipeline disagree")
 
         failures: list[PlainData] = []
+        controls: list[PlainData] = []
         failed_stage_count = 0
         stages = {stage.stage_name: stage for stage in snapshot.stages}
         for stage_name in plan.stage_order:
             stage = stages.get(stage_name)
+            if (
+                stage is not None
+                and stage.status
+                in {StageStatus.SUCCEEDED, StageStatus.FAILED, StageStatus.CANCELLED}
+                and stage.attempts
+            ):
+                attempt = stage.attempts[-1].attempt
+                result_payload = store.read_stage_worker_result(
+                    admission.run_uri, stage_name, attempt=attempt
+                )
+                if result_payload is not None:
+                    result = StageWorkerResult.from_dict(result_payload)
+                    if (
+                        result.run_uri != admission.run_uri
+                        or result.stage_name != stage_name
+                        or result.attempt != attempt
+                    ):
+                        raise QueueServiceError(
+                            "persisted stage result conflicts with identity"
+                        )
+                    evidence = result.executor_metadata.get("resource_controls")
+                    if evidence is not None:
+                        controls.append(
+                            {
+                                "stage_name": stage_name,
+                                "attempt": attempt,
+                                "controls": evidence,
+                            }
+                        )
             if stage is None or stage.status is not StageStatus.FAILED:
                 continue
             failed_stage_count += 1
@@ -5623,12 +5798,13 @@ def _run_result_owner_view(
     return {
         "owner": "run-store",
         "availability": "available",
-        "state": "populated" if failures else "empty",
+        "state": "populated" if failures or controls else "empty",
         "observed_at": observed_at,
         "freshness": "current",
         "diagnostic": None,
         "diagnostic_failure": None,
         "failures": failures,
+        **({"resource_controls": controls} if controls else {}),
     }
 
 

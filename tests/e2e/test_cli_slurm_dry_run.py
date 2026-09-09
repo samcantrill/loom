@@ -88,6 +88,18 @@ def test_cli_slurm_dry_run_generates_artifacts_without_scheduler(
             assert all(Path(item["path"]).is_file() for item in result["script_paths"])
             assert (run_path / "plan.json").is_file()
             assert (run_path / "prepared_run.json").is_file()
+            if mode == "slurm-afterok":
+                private_path = Path(result["manifest_path"]).with_name(
+                    "execution-resources.json"
+                )
+                private = json.loads(private_path.read_text())
+                assert private["schema_version"] == 1
+                assert private["run_uri"] == path_to_run_uri(run_path)
+                assert set(private["stages"]) == {"build", "report"}
+                assert private["stages"]["build"]["resource_selection"] == {
+                    "account_for": [],
+                    "enforce": [],
+                }
             assert any(
                 warning["code"] == "executor.slurm.sbatch"
                 for warning in payload["warnings"]

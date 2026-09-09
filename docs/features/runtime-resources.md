@@ -99,6 +99,92 @@ make dry-run and preflight paths use the same normalized options as execution
 `ResourceRequest` is the scheduler-neutral declaration of resources requested
 by a stage.
 
+## Pipeline Accounting And Additional Controls
+
+`ResourcePolicy` is the pipeline-runtime selector applied after the complete
+semantic request has been normalized.  New pipeline invocations use
+`account_for: all` and `enforce: []`: Loom accounts for all present demand while
+requesting no additional container controls.  Each axis is independent; a list
+replaces that axis and an empty list deliberately selects nothing.  Null is not
+valid configuration.  Stage policy inherits the run policy when omitted.
+
+```yaml
+runtime:
+  resource_policy:
+    account_for: [gpu]
+    enforce: [gpu]
+```
+
+The saved placement retains the full normalized request and the resulting
+`resource_selection`.  Admission consumes only `account_for`; `enforce` never
+creates a reservation by itself.  Absent or zero demand is absent from either
+selection.  This configured-pipeline surface does not change the older
+whole-run queue API.
+
+Managed assignments with empty accounting still obey run concurrency, fencing,
+cancellation and release rules. They do not consume the unchanged capacity offer
+or create a hidden resource claim. Exact retained worker demand, policy and
+selection must match the accepted placement before dispatch or restart; a
+conflict requires investigation or a fresh execution identity, not rewriting
+the saved request.
+
+Display-safe runtime summaries retain resource attribute counts, not their
+values. The private worker handoff separately retains the complete normalized
+attributes so preparation and replay can compare the actual execution intent.
+
+### Managed Control And Failure Evidence
+
+The process owner retains requested controls with its immutable launch. A
+confirmed process launch changes that owner's records to `applied`, including
+when the application subsequently fails. This means the control was supplied,
+not that isolation was measured. A definitive setup failure is `unavailable` or
+`failed`, never `applied`; an indeterminate launch retains ownership until
+recovery establishes a safe outcome. Selecting an unsupported present control
+fails before launching, with guidance to correct the provider or remove the
+kind from `enforce`. Unselected and absent demands add no restriction.
+
+The agent journal saves a definitive no-start fact and its complete failure
+result in the same transaction. Local and remote restart use that result to
+repair interrupted workspace persistence, report the original nested cause and
+finish the existing fenced terminal/release sequence without launching again.
+An uncertain launch is still retained for containment/recovery; absence of a
+worker result alone never proves that no process was created.
+
+Control records contain only `resource`, `owner`, `mechanism`, and `disposition`.
+They are persisted with stage results and exposed by the admission run-result
+owner under `resource_controls`, grouped by stage and attempt. Missing legacy
+evidence remains unreported, distinct from an explicit empty control list.
+Remote reports use schema 2 for full `ExecutionFailure`, controls, and
+owner-proven `process_created` evidence. Legacy schema-1 reports and unversioned
+supervisor launches retain their exact original serialization and digest; new
+schema-2 launch evidence participates in launch identity.
+
+Native execution exceptions retain portable causes, implicit context and group
+children in `failure.details.diagnostic_failure`; formatted traceback text and
+notes are retained in `details.traceback` without frame locals or arbitrary
+exception attributes. Credential-shaped assignments are masked in newly captured
+messages and traceback text, including source lines. Arbitrary prose is not a
+secret-safe channel: do not put credentials into exception messages. Ordinary
+diagnostic paths remain useful evidence. Explicit downstream reported payloads
+are preserved without interpreting their domain structure or exposing a
+deliberately suppressed native cause.
+
+The coordinator persists failure and control evidence after fenced acceptance
+and before acknowledging completion/release. Commit replay repairs interrupted
+projection writes. Admission text renders nested Loom worker failures and native
+causes; JSON retains the structured envelope. Inspection does not need access to
+worker-local traceback files. These records are private execution diagnostics,
+not automatically sanitized public reports.
+
+Authenticated agent and SLURM report delivery accepts finite numeric details and
+native causal chains only within the schema-2 `failure` subtree. That subtree is
+limited to depth 512 and 256 entries per object/list; the complete agent request
+remains limited to 64 KiB. Supported clients check the same bounds before sending
+and explain which size or nesting limit to reduce. Failures are never flattened
+or silently removed to fit. Ordinary protocol JSON restrictions remain unchanged.
+Detailed inspection is the existing daemon-admission text/JSON view; the separate
+HTTP run-inspection status/location schema is unchanged and retains its 1-MiB cap.
+
 Current behavior:
 
 ```text

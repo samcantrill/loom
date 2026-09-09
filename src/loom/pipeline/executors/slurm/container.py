@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -39,7 +39,8 @@ from loom.pipeline.executors.gpu_visibility import (
     requested_gpu_count,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
-from loom.pipeline.runtime.capabilities import ResourceCapability
+from loom.pipeline.runtime import ResourcePolicy
+from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.stores.run_store import LocalRunStorePaths
 from loom.serialization import PlainData
 
@@ -77,7 +78,18 @@ def wrap_slurm_command_with_apptainer(
         if isinstance(container_options, ContainerOptions)
         else parse_container_options(container_options)
     )
-    container = _without_direct_cpu_memory_limits(container)
+    entries = resources.entries if isinstance(resources, ResourceRequest) else resources
+    if entries:
+        descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("apptainer")
+        container = replace(
+            container,
+            resources=ContainerResourceIntent(
+                entries=entries,
+                capabilities={
+                    kind: descriptor.capability_for(kind) for kind in entries
+                },
+            ),
+        )
     if requested_gpu_count(resources) > 0:
         environment = cast(ContainerEnvironment, container.environment)
         if (
@@ -91,6 +103,9 @@ def wrap_slurm_command_with_apptainer(
         container_options=container,
         apptainer_options=options,
         worker_command=command.argv,
+        # The outer allocation owns limits. Do not reapply its CPU/RAM cgroups
+        # or invent a second GPU allocation in the inner container.
+        resource_policy=ResourcePolicy(enforce=[]),
     )
     argv = tuple(apptainer_command.argv)
     return SlurmCommandArgv(
@@ -158,45 +173,14 @@ def prepare_slurm_container_options(
         environment=container.environment,
         resources=container.resources,
     )
-    invalid = [summary.to_dict() for summary in prepared.path_parity_summaries() if not summary.ok]
+    invalid = [
+        summary.to_dict()
+        for summary in prepared.path_parity_summaries()
+        if not summary.ok
+    ]
     if invalid:
         raise SlurmPlanningError("SLURM Apptainer path parity validation failed")
     return prepared
-
-
-def _without_direct_cpu_memory_limits(container: ContainerOptions) -> ContainerOptions:
-    """Keep SLURM as the CPU/memory enforcement owner for wrapped commands."""
-
-    intent = cast(ContainerResourceIntent | None, container.resources)
-    if intent is None:
-        return container
-    entries = {
-        kind: entry
-        for kind, entry in cast(Mapping[str, ResourceEntry], intent.entries).items()
-        if kind not in {"cpu", "memory"}
-    }
-    if len(entries) == len(cast(Mapping[str, ResourceEntry], intent.entries)):
-        return container
-    capabilities = cast(
-        Mapping[str, ResourceCapability],
-        {
-            kind: capability
-            for kind, capability in cast(
-                Mapping[str, object], intent.capabilities
-            ).items()
-            if kind in entries
-        },
-    )
-    return ContainerOptions(
-        image=container.image,
-        workdir=container.workdir,
-        mounts=container.mounts,
-        environment=container.environment,
-        resources=ContainerResourceIntent(
-            entries=entries,
-            capabilities=capabilities,
-        ),
-    )
 
 
 def resolve_slurm_container_target(
@@ -247,7 +231,10 @@ def resolve_slurm_container_target(
         raise SlurmPlanningError(
             f"container build target {target_name!r} did not produce an output"
         )
-    if cast(ContainerBuildOutputKind, output.kind) is not ContainerBuildOutputKind.APPTAINER_SIF:
+    if (
+        cast(ContainerBuildOutputKind, output.kind)
+        is not ContainerBuildOutputKind.APPTAINER_SIF
+    ):
         raise SlurmPlanningError(
             "SLURM Apptainer composition requires an apptainer_sif output"
         )

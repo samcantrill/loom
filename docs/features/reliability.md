@@ -564,7 +564,7 @@ uncertain group presence still retains capacity until absence is observed.
 
 Without an enabled timeout, container invocation keeps its existing behavior:
 no forced namespace, runtime-version restriction, or added CPU/RAM limits.
-Timeouts are independent of `cpu_memory_enforcement: scheduling_only`; they do
+Timeouts are independent of an empty `resource_policy.enforce`; they do
 not require cgroup delegation or host service changes.
 
 Stage 17 records Docker process timeout fields when supplied by the command

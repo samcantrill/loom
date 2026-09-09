@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
+from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.pipeline.early_stopping import (
     EarlyStopSignal,
     lifecycle_reason_from_early_stop,
@@ -73,6 +74,24 @@ class LocalExecutor:
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         try:
+            if not (
+                request.metadata.get("worker_request")
+                or request.metadata.get("resident_worker_request")
+            ):
+                from loom.pipeline.runtime.metadata import ResolvedStageRuntimeOptions
+                from loom.pipeline.runtime.resource_policy import ResourcePolicy
+                from loom.pipeline.resources import ResourceRequest
+
+                runtime = request.resolved_runtime
+                if isinstance(runtime, ResolvedStageRuntimeOptions):
+                    selected = cast(ResourcePolicy, runtime.resource_policy).select(
+                        cast(ResourceRequest, runtime.resources).entries
+                    )["enforce"]
+                    if selected:
+                        raise LocalExecutorError(
+                            f"native local execution cannot enforce {', '.join(selected)}; "
+                            "omit these kinds from resource_policy.enforce or use a supporting execution owner"
+                        )
             if self.capture_stdout_stderr:
                 with (
                     contextlib.redirect_stdout(stdout_buffer),
@@ -165,6 +184,7 @@ class LocalExecutor:
                 traceback_path=str(request.traceback_path),
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
+                details=_capture_exception_details(exc, traceback_text=traceback_text),
             )
             return StageExecutionResult(
                 stage_name=request.stage.name,

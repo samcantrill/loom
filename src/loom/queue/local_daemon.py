@@ -1792,7 +1792,7 @@ class LocalDaemon:
             # local launch has joined the continuous supervisor and completed
             # ordinary result/output/provider replay.
             execution.resume_retained_local_work()
-        except Exception:
+        except Exception as exc:
             if created_supervisor is not None:
                 self._shutdown_created_supervisor_if_empty(
                     created_supervisor,
@@ -1806,7 +1806,7 @@ class LocalDaemon:
             self._agent_id = None
             raise QueueServiceError(
                 "retained daemon owner state is unavailable"
-            ) from None
+            ) from exc
         thread = Thread(
             target=self._serve,
             name="loom-local-daemon-runtime",

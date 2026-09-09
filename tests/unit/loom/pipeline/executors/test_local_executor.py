@@ -11,6 +11,7 @@ from loom.pipeline import (
     StageSpec,
 )
 from loom.pipeline.execution import StageReportedFailure
+from loom.diagnostics import render_diagnostic_failure
 from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.planning import (
@@ -116,6 +117,30 @@ def test_local_executor_returns_structured_failure(tmp_path: Path) -> None:
     assert result.traceback_path is not None
 
 
+def test_local_executor_failure_is_portable_without_its_traceback_file(
+    tmp_path: Path,
+) -> None:
+    class NestedFailureStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            del context, inputs
+            try:
+                raise FileNotFoundError("missing /worker/dataset/input.json")
+            except FileNotFoundError as cause:
+                cause.add_note("Configure the dataset root for the selected worker.")
+                raise RuntimeError("training stage input preparation failed") from cause
+
+    result = LocalExecutor().execute(_request(tmp_path, NestedFailureStage()))
+
+    assert result.status is StageStatus.FAILED
+    assert result.failure is not None
+    assert result.traceback_path is not None
+    Path(result.traceback_path).unlink()
+    rendered = render_diagnostic_failure(result.failure.details["diagnostic_failure"])
+    assert "training stage input preparation failed" in rendered
+    assert "missing /worker/dataset/input.json" in rendered
+    assert "Configure the dataset root" in str(result.failure.details["traceback"])
+
+
 def test_local_executor_preserves_reported_failure_without_traceback(
     tmp_path: Path,
 ) -> None:
@@ -130,7 +155,9 @@ def test_local_executor_preserves_reported_failure_without_traceback(
     assert result.traceback_path is None
     assert result.failure is not None
     assert result.failure.message == "stage reported a domain failure"
-    assert result.failure.exception_type == "loom.pipeline.execution.StageReportedFailure"
+    assert (
+        result.failure.exception_type == "loom.pipeline.execution.StageReportedFailure"
+    )
     assert result.failure.details == {
         "domain_failure": {"schema": "domain.failure.v1", "value": (1,)}
     }

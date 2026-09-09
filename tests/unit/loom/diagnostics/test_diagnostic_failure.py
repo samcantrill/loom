@@ -7,11 +7,52 @@ import json
 import pytest
 
 from loom.diagnostics import DiagnosticFailureError, render_diagnostic_failure
-from loom.diagnostics.diagnostic_failure import project_diagnostic_failure
+from loom.diagnostics.diagnostic_failure import (
+    _capture_exception_details,
+    project_diagnostic_failure,
+)
 from loom.serialization import freeze_plain_data, thaw_plain_data
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_execution_details_capture_cause_notes_and_owner_context_without_locals() -> (
+    None
+):
+    private_local = "do-not-serialize-frame-locals"
+    cause = OSError("cannot read /worker/data/input.json")
+    cause.add_note("Check the dataset root on this worker.")
+    try:
+        raise RuntimeError("could not prepare the training input") from cause
+    except RuntimeError as error:
+        details = _capture_exception_details(error, details={"operation": "prepare"})
+
+    assert details["operation"] == "prepare"
+    rendered = render_diagnostic_failure(details["diagnostic_failure"])
+    assert "could not prepare the training input" in rendered
+    assert "cause:" in rendered
+    assert "cannot read /worker/data/input.json" in rendered
+    assert "Check the dataset root on this worker." in str(details["traceback"])
+    assert private_local not in json.dumps(details)
+
+
+def test_execution_capture_masks_credentials_without_removing_chain_or_paths() -> None:
+    cause = OSError("cannot read /worker/input.json; API_TOKEN='credential value'")
+    cause.add_note("Retry with password=another-value and the same input path.")
+    try:
+        raise RuntimeError("launch failed: TOKEN=secret") from cause
+    except RuntimeError as error:
+        details = _capture_exception_details(error)
+
+    encoded = json.dumps(details)
+    for credential in ("credential value", "another-value", "TOKEN=secret"):
+        assert credential not in encoded
+    rendered = render_diagnostic_failure(details["diagnostic_failure"])
+    assert "TOKEN=[redacted]" in rendered
+    assert "cause:" in rendered
+    assert "cannot read /worker/input.json" in rendered
+    assert "Retry with password=[redacted]" in str(details["traceback"])
 
 
 def test_projection_preserves_native_causality_groups_and_shared_occurrences() -> None:

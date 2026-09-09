@@ -128,12 +128,44 @@ def test_runtime_metadata_rejects_unknown_stage_options() -> None:
         )
 
 
+def test_worker_handoff_preserves_attributes_without_changing_safe_metadata() -> None:
+    runtime = ResolvedStageRuntimeOptions(
+        stage_id="train",
+        resources=ResourceRequest(
+            entries={
+                "gpu": ResourceEntry(
+                    kind="gpu", amount=1, attributes={"fabric_group": "private-fabric"}
+                )
+            }
+        ),
+    ).for_execution()
+
+    safe = runtime.to_safe_metadata()
+    worker = runtime._to_worker_metadata()
+    display = RuntimeMetadata(stages={"train": runtime}).to_dict()
+    safe_resources = cast(dict[str, object], safe["resources"])
+    safe_entries = cast(dict[str, object], safe_resources["entries"])
+    assert safe_entries["gpu"] == {
+        "kind": "gpu",
+        "amount": 1,
+        "unit": None,
+        "attribute_count": 1,
+    }
+    assert "private-fabric" not in repr(safe)
+    assert "private-fabric" not in repr(display)
+    assert worker["resources"] == cast(ResourceRequest, runtime.resources).to_dict()
+    assert "private-fabric" in repr(worker)
+    assert worker["resource_selection"] == {"account_for": ["gpu"], "enforce": []}
+
+
 def test_runtime_metadata_rejects_schema_version_mismatch() -> None:
     with pytest.raises(RuntimeResourceError, match="schema_version"):
         RuntimeMetadata(schema_version=999)
 
 
-def test_resolve_run_runtime_reliability_defaults_to_run_level_conservative_policy() -> None:
+def test_resolve_run_runtime_reliability_defaults_to_run_level_conservative_policy() -> (
+    None
+):
     resolved = resolve_run_runtime(RunOptions(), stage_ids=("train",))
 
     assert isinstance(resolved["train"], ResolvedStageRuntimeOptions)

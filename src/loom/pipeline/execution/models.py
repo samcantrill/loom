@@ -12,6 +12,7 @@ from uuid import uuid4
 from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
+from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.planning import (
     ExecutionPlan,
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
-STAGE_WORKER_REQUEST_SCHEMA_VERSION = 1
+STAGE_WORKER_REQUEST_SCHEMA_VERSION = 2
 STAGE_WORKER_RESULT_SCHEMA_VERSION = 1
 
 _VALID_FAILURE_TYPES = {
@@ -473,13 +474,15 @@ class StageWorkerRequest:
             raise RunRequestError(
                 "StageWorkerRequest.resolved_runtime must include executor"
             )
+        metadata = _plain_mapping(self.metadata, "metadata")
+        _validate_worker_resource_selection(runtime, metadata)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(
             self,
             "executor_metadata",
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        object.__setattr__(self, "metadata", metadata)
 
     def to_dict(self) -> dict[str, PlainData]:
         fingerprint = cast(StageFingerprintRecord, self.fingerprint)
@@ -528,7 +531,10 @@ class StageWorkerRequest:
                 optional={"executor_metadata", "metadata"},
             )
         except SchemaVersionError as exc:
-            raise RunRequestError(f"StageWorkerRequest.from_dict: {exc}") from exc
+            raise RunRequestError(
+                f"StageWorkerRequest.from_dict: {exc}; finish or cancel the saved "
+                "work in its pinned environment and prepare a fresh identity"
+            ) from exc
         return cls(
             schema_version=_int(mapping["schema_version"], "schema_version"),
             run_uri=_str(mapping["run_uri"], "run_uri"),
@@ -560,6 +566,50 @@ class StageWorkerRequest:
                 cast(Mapping[str, PlainData], mapping.get("metadata", {})),
                 "metadata",
             ),
+        )
+
+
+def _validate_worker_resource_selection(
+    runtime: Mapping[str, PlainData], metadata: Mapping[str, PlainData]
+) -> None:
+    """Reject a retained worker whose saved post-demand projection changed."""
+
+    selection = runtime.get("resource_selection")
+    if selection is None:
+        raise RunRequestError(
+            "StageWorkerRequest.resolved_runtime must include resource_selection"
+        )
+    resources = runtime.get("resources")
+    policy = runtime.get("resource_policy")
+    if not isinstance(resources, Mapping) or not isinstance(policy, Mapping):
+        raise RunRequestError(
+            "StageWorkerRequest resource selection requires resolved runtime policy and resources"
+        )
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        raise RunRequestError(
+            "StageWorkerRequest resolved runtime resources are invalid"
+        )
+    from loom.pipeline.runtime.resource_policy import (
+        ResourcePolicy,
+        validate_resource_selection,
+    )
+
+    try:
+        actual = validate_resource_selection(
+            selection,
+            entries,
+            ResourcePolicy.from_dict(policy),
+            path="StageWorkerRequest.resolved_runtime.resource_selection",
+        )
+    except RuntimeResourceError as exc:
+        raise RunRequestError(str(exc)) from exc
+    legacy = metadata.get("resource_selection")
+    if legacy is not None and legacy != {
+        key: list(value) for key, value in actual.items()
+    }:
+        raise RunRequestError(
+            "StageWorkerRequest metadata resource selection conflicts with resolved runtime"
         )
 
 

@@ -9,6 +9,7 @@ import traceback
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.pipeline.context import ProcessContainmentOwner, StageContext
 from loom.pipeline.errors import PipelineValidationError, StageContractError
 from loom.pipeline.executors import Executor, LocalExecutor
@@ -792,9 +793,19 @@ def _resolved_runtime_for_execution(
     executor = request.resolved_runtime.get("executor", request.executor_name)
     if not isinstance(executor, str) or not executor:
         executor = request.executor_name
+    resources = request.resolved_runtime.get("resources", {})
+    resource_policy = request.resolved_runtime.get("resource_policy", {})
+    resource_selection = request.resolved_runtime.get("resource_selection")
+    if resource_selection is None:
+        raise StageWorkerStateError(
+            "worker request resolved runtime lacks resource_selection"
+        )
     return ResolvedStageRuntimeOptions(
         stage_id=request.stage_name,
         executor=executor,
+        resources=cast(Mapping[str, object], resources),
+        resource_policy=cast(Mapping[str, object], resource_policy),
+        resource_selection=cast(Mapping[str, object], resource_selection),
         validator_registry=registry,
     )
 
@@ -923,7 +934,7 @@ def _failed_worker_result_from_exception(
         details=(
             {"domain_failure": reported_failure.domain_failure}
             if reported_failure is not None
-            else {}
+            else _capture_exception_details(exc)
         ),
     )
     return StageWorkerResult(

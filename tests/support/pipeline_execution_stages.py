@@ -23,13 +23,15 @@ class ReportedFailureStage:
     ) -> Mapping[str, ArtifactRef]:
         from loom.pipeline.execution import StageReportedFailure
 
-        del context, inputs
+        del inputs
         try:
             raise ValueError("private-native-failure-sentinel")
         except ValueError as cause:
             cause.add_note("private-native-note-sentinel")
             raise StageReportedFailure(
-                {"record": {"items": [1, None, "safe"]}}
+                {"record": {"threshold": 0.5}}
+                if context.stage_config.get("structured_float") is True
+                else {"record": {"items": [1, None, "safe"]}}
             ) from cause
 
 
@@ -171,6 +173,23 @@ class FailingStage:
                     raise RuntimeError("failing stage timed out waiting for marker")
                 time.sleep(0.01)
         raise RuntimeError("stage failed intentionally")
+
+
+class NestedFailureStage:
+    """Produce a native causal chain inside an actual resident worker."""
+
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        del context, inputs
+        try:
+            try:
+                raise FileNotFoundError("missing /worker/data/product.json")
+            except FileNotFoundError as cause:
+                cause.add_note("Prepare the product on the selected worker.")
+                raise ValueError("candidate product path is unusable") from cause
+        except ValueError as cause:
+            raise RuntimeError("could not prepare the experiment input") from cause
 
 
 class FailOnceThenProduceStage:

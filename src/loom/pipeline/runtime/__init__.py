@@ -51,6 +51,7 @@ from loom.pipeline.runtime.options import (
     parse_run_options,
     validate_stage_runtime_options,
 )
+from loom.pipeline.runtime.resource_policy import ALL_RESOURCES, ResourcePolicy
 from loom.pipeline.reliability import (
     FailureClassification,
     ReliabilityPolicy,
@@ -102,6 +103,7 @@ __all__ = [
     "CapabilityValidationResult",
     "DEFAULT_FAILURE_POLICY",
     "DEFAULT_MAX_PARALLEL_STAGES",
+    "ALL_RESOURCES",
     "ExecutionOptions",
     "ExecutionRoute",
     "ExecutionRouteKind",
@@ -109,6 +111,7 @@ __all__ = [
     "ExecutorDescriptorRegistry",
     "RunEnvironmentRequest",
     "RunOptions",
+    "ResourcePolicy",
     "RunStoreOptions",
     "ParallelExecutionOptions",
     "ResolvedStageRuntimeOptions",

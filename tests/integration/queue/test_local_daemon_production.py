@@ -286,8 +286,20 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
     ]
 
 
+@pytest.mark.parametrize(
+    ("account_for", "retained_worker"),
+    [
+        ("all", None),
+        ([], None),
+        ("all", "exact"),
+        ("all", "conflict"),
+    ],
+)
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
     tmp_path: Path,
+    account_for: str | list[str],
+    retained_worker: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_root = tmp_path / "runs"
     run_store = LocalRunStore(run_root)
@@ -364,6 +376,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={"resource_policy": {"account_for": account_for}},
         execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
@@ -382,6 +395,48 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         agent_resource_providers=(provider,),
     )
     LocalDaemon.initialize(config)
+    retained_path = run_store.local_stage_worker_request_path(run_uri, "preprocess")
+    retained_bytes: bytes | None = None
+    retained_mtime: int | None = None
+    rejected = Event()
+    if retained_worker is not None:
+        from loom.pipeline.execution import prepare_stage_attempt, StageWorkerRequest
+        import loom.queue.local_daemon_execution as execution_owner
+
+        intent = load_managed_local_intent(config, run_uri)
+        saved = prepare_stage_attempt(
+            run_store=run_store,
+            run_uri=run_uri,
+            stage=spec.get_stage("preprocess"),
+            stage_plan=plan.ordered_stage_plans[0],
+            fingerprint_context=intent.plan.fingerprint_context,
+            resolved_runtime=execution_owner._worker_runtime(intent, "preprocess"),
+        ).to_dict()
+        if retained_worker == "conflict":
+            runtime = cast(dict[str, Any], saved["resolved_runtime"])
+            runtime["resource_policy"] = {"account_for": [], "enforce": []}
+            runtime["resource_selection"] = {"account_for": [], "enforce": []}
+            StageWorkerRequest.from_dict(saved)
+            run_store.write_stage_worker_request(
+                run_uri, "preprocess", saved, attempt=1
+            )
+            original_compare = execution_owner._require_retained_resource_handoff_match
+
+            def observe_rejection(*args, **kwargs):
+                try:
+                    return original_compare(*args, **kwargs)
+                except QueueConflictError as error:
+                    assert "differs from placement" in str(error)
+                    rejected.set()
+                    raise
+
+            monkeypatch.setattr(
+                execution_owner,
+                "_require_retained_resource_handoff_match",
+                observe_rejection,
+            )
+        retained_bytes = retained_path.read_bytes()
+        retained_mtime = retained_path.stat().st_mtime_ns
     daemon = LocalDaemon(config)
     daemon.start()
     try:
@@ -389,7 +444,19 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         submitted = client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
+        if retained_worker == "conflict":
+            assert rejected.wait(5), (
+                "actual retained dispatch never rejected the conflict"
+            )
+            daemon.stop()
+            assert retained_path.read_bytes() == retained_bytes
+            assert retained_path.stat().st_mtime_ns == retained_mtime
+            assert _supervisor_launch_count(config) == 0
+            return
         completed = client.wait("queue-1", timeout_seconds=10)
+        if retained_worker == "exact":
+            assert retained_path.read_bytes() == retained_bytes
+            assert retained_path.stat().st_mtime_ns == retained_mtime
         owner_view = client.admission(submitted.admission_id).owners
         status = client.status()
 
@@ -468,10 +535,14 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "diagnostic",
             "diagnostic_failure",
             "failures",
+            "resource_controls",
         }
         assert direct_result["owner"] == "run-store"
         assert direct_result["availability"] == "available"
-        assert direct_result["state"] == "empty"
+        assert direct_result["state"] == "populated"
+        controls = cast(list[Mapping[str, object]], direct_result["resource_controls"])
+        assert [item["stage_name"] for item in controls] == ["preprocess", "train"]
+        assert thaw_plain_data(socket_result["resource_controls"]) == controls
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -481,10 +552,20 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "train",
         ]
         assert all(stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages)
-        assert provider.operations.count("prepare") == 2
-        assert provider.operations.count("activate") == 2
-        assert provider.operations.count("environment") == 2
-        assert provider.operations.count("release") == 2
+        expected_claims = 2 if account_for == "all" else 0
+        assert provider.operations.count("prepare") == expected_claims
+        assert provider.operations.count("activate") == expected_claims
+        # Default managed policy retains CPU admission but has no outer binding.
+        assert provider.operations.count("environment") == 0
+        assert provider.operations.count("release") == expected_claims
+        if account_for == []:
+            with sqlite3.connect(config.agent_journal) as conn:
+                rows = tuple(conn.execute("SELECT state, claims_json FROM assignments"))
+            assert len(rows) == 2
+            assert all(
+                state == "released" and json.loads(claims) == {"commands": []}
+                for state, claims in rows
+            )
         preprocess_artifacts = run_store.local_stage_artifact_dir(run_uri, "preprocess")
         assert (preprocess_artifacts / "payload" / "value.txt").read_text(
             encoding="utf-8"
@@ -1253,6 +1334,93 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         daemon.stop()
 
 
+@pytest.mark.parametrize("account_for", ["all", []])
+def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    account_for: str | list[PlainData],
+) -> None:
+    import loom.queue.local_daemon_execution as execution_owner
+
+    run_root = tmp_path / "runs"
+    store, run_uri, _pipeline = _persist_single_stage_run(
+        run_root,
+        resource_policy={"account_for": account_for, "enforce": ["cpu"]},
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    stalled = Event()
+
+    class ObservedStartNotification(Event):
+        """Bound the regression without fabricating a process-start event."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.completed_waits = 0
+
+        def wait(self, timeout: float | None = None) -> bool:
+            signalled = super().wait(timeout)
+            if not signalled and any(
+                future.done() and future.exception() is None
+                for future in tuple(execution._local_assignment_futures.values())
+            ):
+                self.completed_waits += 1
+                if self.completed_waits == 2:
+                    stalled.set()
+                    raise AssertionError(
+                        "daemon kept waiting after its no-start task completed"
+                    )
+            return signalled
+
+    monkeypatch.setattr(execution_owner, "Event", ObservedStartNotification)
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        submitted = client.submit(LocalDaemonAdmissionRequest("no-start", run_uri))
+        completed = client.wait("no-start", timeout_seconds=10)
+
+        assert not stalled.is_set()
+        assert completed.state is LocalDaemonAdmissionState.FAILED
+        assert authority.open_run(run_uri).status is RunStatus.FAILED
+        assert _supervisor_launch_count(config) == 0
+        assert execution.coordinator.list_run_live_states(run_uri) == ()
+        assert execution.journal is not None
+        assert execution.journal.retained_claim_commands() == ()
+        detail = client.admission(submitted.admission_id)
+        result = store.read_stage_worker_result(run_uri, "build", attempt=1)
+        assert result is not None
+        failure = cast(Mapping[str, PlainData], result["failure"])
+        assert "cpu" in cast(str, failure["message"])
+        assert "enforce: []" in cast(str, failure["message"])
+        metadata = cast(Mapping[str, PlainData], result["executor_metadata"])
+        assert metadata["process_created"] is False
+        assert metadata["resource_controls"] == [
+            {
+                "resource": "cpu",
+                "owner": "managed_provider",
+                "mechanism": None,
+                "disposition": "unavailable",
+            }
+        ]
+        run_result = cast(Mapping[str, object], detail.owners["run_result"])
+        assert run_result["availability"] == "available"
+        assert run_result["failures"]
+    finally:
+        daemon.stop()
+
+
 def test_completed_background_failure_replays_the_same_local_assignment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1278,7 +1446,14 @@ def test_completed_background_failure_replays_the_same_local_assignment(
     original_query = execution.supervisor.query
     third_query_entered = Event()
     allow_recovery = Event()
+    failed_replay_wake = Event()
     query_calls = 0
+    original_wake = daemon._wake.set
+
+    def observe_replay_wake() -> None:
+        if query_calls == 2:
+            failed_replay_wake.set()
+        original_wake()
 
     def fail_two_observers_then_recover(launch: object):
         nonlocal query_calls
@@ -1291,6 +1466,7 @@ def test_completed_background_failure_replays_the_same_local_assignment(
         return original_query(launch)  # type: ignore[arg-type]
 
     monkeypatch.setattr(execution.supervisor, "query", fail_two_observers_then_recover)
+    monkeypatch.setattr(daemon._wake, "set", observe_replay_wake)
     client = daemon.client_view(
         LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
     )
@@ -1299,6 +1475,9 @@ def test_completed_background_failure_replays_the_same_local_assignment(
             LocalDaemonAdmissionRequest("background-replay-item", run_uri)
         )
         assert third_query_entered.wait(5)
+        assert not failed_replay_wake.is_set(), (
+            "a failed replay must await the normal poll, not wake its own retry loop"
+        )
         with sqlite3.connect(config.execution_database) as conn:
             assignment_rows = tuple(
                 conn.execute(
@@ -1579,8 +1758,10 @@ def test_daemon_overlaps_independent_local_stages_in_one_run(
         daemon.stop()
 
 
+@pytest.mark.parametrize("retained_change", [None, "resources", "policy"])
 def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
     tmp_path: Path,
+    retained_change: str | None,
 ) -> None:
     run_root = tmp_path / "runs"
     run_uri = _persist_sleep_run(
@@ -1615,6 +1796,41 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
     assert retained[0].assignment.run_uri == run_uri
     assert _running_supervisor_identity(config) == (supervisor_id, process_id)
 
+    store = LocalRunStore(run_root)
+    request_path = store.local_stage_worker_request_path(run_uri, "slow")
+    original_request_bytes = request_path.read_bytes()
+    if retained_change is not None:
+        from loom.pipeline.execution import StageWorkerRequest
+        from loom.diagnostics import render_diagnostic_failure
+        from loom.diagnostics.diagnostic_failure import project_diagnostic_failure
+
+        payload = store.read_stage_worker_request(run_uri, "slow", attempt=1)
+        assert payload is not None
+        runtime = cast(dict[str, Any], payload["resolved_runtime"])
+        if retained_change == "resources":
+            runtime["resources"]["entries"]["cpu"]["amount"] = 2
+        else:
+            runtime["resource_policy"] = {"account_for": [], "enforce": []}
+            runtime["resource_selection"] = {"account_for": [], "enforce": []}
+        StageWorkerRequest.from_dict(payload)
+        store.write_stage_worker_request(run_uri, "slow", payload, attempt=1)
+        conflicting_bytes = request_path.read_bytes()
+        conflicting_mtime = request_path.stat().st_mtime_ns
+        with pytest.raises(
+            QueueServiceError, match="retained daemon owner state"
+        ) as rejected:
+            LocalDaemon(config).start()
+        assert (
+            "retained worker resource handoff differs from placement"
+            in render_diagnostic_failure(project_diagnostic_failure(rejected.value))
+        )
+        assert request_path.read_bytes() == conflicting_bytes
+        assert request_path.stat().st_mtime_ns == conflicting_mtime
+        assert _supervisor_launch_count(config) == 1
+        # The fixture restores the prior writer bytes; Loom never repairs a
+        # conflicting request by overwriting it or allocating replacement work.
+        request_path.write_bytes(original_request_bytes)
+    replay_mtime = request_path.stat().st_mtime_ns
     replacement = LocalDaemon(config)
     start_finished = Event()
     start_failures: list[BaseException] = []
@@ -1646,6 +1862,8 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
 
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
         assert _supervisor_launch_count(config) == 1
+        assert request_path.read_bytes() == original_request_bytes
+        assert request_path.stat().st_mtime_ns == replay_mtime
         assert (
             SQLiteAgentJournal(
                 config.agent_journal, _allow_initialize=False
@@ -2024,8 +2242,18 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         assert worker_result.status is StageStatus.FAILED
         assert worker_result.exit_code is None
         assert worker_result.signal == signal.SIGKILL
-        assert worker_result.executor_metadata == {
+        assert thaw_plain_data(
+            worker_result.executor_metadata, path="lost worker executor metadata"
+        ) == {
             "process_created": True,
+            "resource_controls": [
+                {
+                    "resource": "cpu",
+                    "owner": "managed_provider",
+                    "mechanism": None,
+                    "disposition": "not_requested",
+                }
+            ],
             "worker_result": "missing",
         }
         run_store = LocalRunStore(run_root)
@@ -2994,6 +3222,7 @@ def _persist_single_stage_run(
     *,
     skip: bool = False,
     factory_target: str = ("tests.support.pipeline_execution_stages.JsonProducerStage"),
+    resource_policy: Mapping[str, PlainData] | None = None,
 ) -> tuple[LocalRunStore, str, dict[str, object]]:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / "run-1")
@@ -3038,6 +3267,11 @@ def _persist_single_stage_run(
         plan=plan,
         pipeline=spec,
         execution_requirements=_execution_requirements(spec),
+        options=(
+            None
+            if resource_policy is None
+            else {"resource_policy": dict(resource_policy)}
+        ),
     )
     return run_store, run_uri, pipeline_config
 

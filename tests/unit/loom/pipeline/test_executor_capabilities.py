@@ -24,6 +24,7 @@ from loom.pipeline import (
     validate_executor_capabilities,
 )
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime import ResourcePolicy
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     RetryPolicy,
@@ -291,6 +292,7 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     result = validate_executor_capabilities(
         RunOptions(
             executor="docker",
+            resource_policy=ResourcePolicy(enforce="all"),
             adapter_options={
                 "container": {"image": {"reference": "python:3.12"}},
                 "container_build": {
@@ -343,13 +345,12 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
 
 
-def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
+def test_empty_enforcement_apptainer_resources_report_not_enforced() -> None:
     result = validate_executor_capabilities(
         RunOptions(
             executor="apptainer",
             adapter_options={
                 "container": {"image": {"reference": "analysis.sif"}},
-                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
             },
             stage_options={
                 "train": StageRuntimeOptions(
@@ -377,7 +378,7 @@ def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
 
 
 @pytest.mark.parametrize("scope", ("global", "inherited", "stage"))
-def test_scheduling_only_capabilities_include_authored_container_fallback(
+def test_empty_enforcement_capabilities_include_authored_container_fallback(
     scope: str,
 ) -> None:
     container = {
@@ -387,10 +388,7 @@ def test_scheduling_only_capabilities_include_authored_container_fallback(
             "capabilities": {"memory": {"support_level": "supported"}},
         },
     }
-    adapters: dict[str, Any] = {
-        "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
-        "container": container,
-    }
+    adapters: dict[str, Any] = {"container": container}
     stages: dict[str, Any] = {} if scope == "global" else {"train": {}}
     if scope == "stage":
         adapters.pop("container")
@@ -418,7 +416,6 @@ def test_nonempty_runtime_resources_replace_container_fallback_in_capabilities()
         {
             "executor": "apptainer",
             "adapter_options": {
-                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
                 "container": {
                     "image": {"reference": "analysis.sif"},
                     "resources": {
@@ -530,9 +527,9 @@ def test_local_resource_requests_warn_without_failing_validation() -> None:
     result.raise_for_errors()
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
     assert [diagnostic["code"] for diagnostic in diagnostics] == [
-        "resource.ignored",
-        "resource.ignored",
-        "resource.ignored",
+        "resource.not_requested",
+        "resource.not_requested",
+        "resource.not_requested",
     ]
     assert [diagnostic["resource_kind"] for diagnostic in diagnostics] == [
         "cpu",
@@ -632,6 +629,7 @@ def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:
     )
     options = RunOptions(
         executor="batch",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -679,6 +677,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
     )
     options = RunOptions(
         executor="fake",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -706,7 +705,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
         (item["resource_kind"], item["code"], item["severity"]) for item in diagnostics
     ] == [
         ("cpu", "resource.supported", "info"),
-        ("gpu", "resource.ignored", "warning"),
+        ("gpu", "resource.unsupported", "error"),
         ("memory", "resource.advisory", "warning"),
         ("test.scratch", "resource.unsupported", "error"),
     ]

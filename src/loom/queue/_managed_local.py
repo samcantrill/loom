@@ -27,9 +27,17 @@ from time import sleep
 from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
+from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.io.uris import uri_to_path
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
 from loom.pipeline.planning import StageFingerprintRecord
+from loom.pipeline.resources import ResourceEntry
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
+from loom.pipeline.runtime._resource_controls import (
+    ControlDisposition,
+    _validated_resource_controls,
+    resource_control_records,
+)
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
     LifecycleReason,
@@ -1277,8 +1285,6 @@ class SQLiteAgentJournal:
     ) -> AssignmentState:
         self._require_request(assignment)
         ordered = tuple(sorted(commands, key=lambda item: item.claim.resource_kind))
-        if not ordered:
-            raise ManagedLocalError("composite claim must not be empty")
         encoded_commands = _json(
             {"commands": [_claim_command_dict(command) for command in ordered]}
         )
@@ -1482,8 +1488,15 @@ class SQLiteAgentJournal:
         assignment_id: str,
         process_execution_id: str,
         launcher: Callable[[], str],
+        *,
+        start_failure: Callable[[ManagedProcessStartError], StageWorkerResult],
     ) -> str:
-        """Persist intent before exactly one launcher invocation."""
+        """Persist intent before one launch, and no-start proof with its result.
+
+        The caller projects a definitive start error into its assignment's result
+        identity. That portable result commits with the no-start fact, before
+        workspace or coordinator persistence can be interrupted.
+        """
         if not isinstance(process_execution_id, str) or not process_execution_id:
             raise ManagedLocalError("process_execution_id is required")
         with self._transaction() as conn:
@@ -1511,15 +1524,16 @@ class SQLiteAgentJournal:
             )
         try:
             process_id = launcher()
-        except ManagedProcessStartError:
-            self._set_start_failed(assignment_id)
+            if not isinstance(process_id, str) or not process_id:
+                raise ManagedProcessStartError("launcher proved no process identifier")
+        except ManagedProcessStartError as exc:
+            self._set_start_failed(
+                assignment_id, process_execution_id, start_failure(exc)
+            )
             raise
         except Exception:
             self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
             raise
-        if not isinstance(process_id, str) or not process_id:
-            self._set_start_failed(assignment_id)
-            raise ManagedProcessStartError("launcher proved no process identifier")
         if process_id != process_execution_id:
             self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
             raise ManagedLocalError("launcher returned an unexpected process identity")
@@ -1804,6 +1818,24 @@ class SQLiteAgentJournal:
             value = self._assignment(conn, assignment_id)["grant_fence"]
         return None if value is None else str(value)
 
+    def require_failed_before_start(self, assignment_id: str, *, fence: str) -> None:
+        """Require the exact owner-recorded failed launch, not a worker assertion."""
+
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            if (
+                row["grant_fence"] != fence
+                or not row["start_failed"]
+                or (
+                    state is not AssignmentState.START_FAILED
+                    and not _agent_at_or_after(state, AssignmentState.RESULT_DURABLE)
+                )
+            ):
+                raise ManagedLocalError(
+                    "assignment lacks exact definitive no-start failure proof"
+                )
+
     def read_availability_revision(self, assignment_id: str) -> str | None:
         """Return the already-published release revision for outbox replay."""
 
@@ -1849,9 +1881,7 @@ class SQLiteAgentJournal:
                 json.loads(cast(str, row["identity_json"]))
             )
             commands = _claim_commands_from_row(row)
-            if not commands or any(
-                command.assignment != assignment for command in commands
-            ):
+            if any(command.assignment != assignment for command in commands):
                 raise ManagedLocalError(
                     "assignment provider release evidence is incomplete"
                 )
@@ -2009,7 +2039,9 @@ class SQLiteAgentJournal:
             self._assignment(conn, assignment_id)
             if detail in GPU_DECLINE_REASONS:
                 self._append_event(
-                    conn, assignment_id, f"{assignment_id}:definitive_decline",
+                    conn,
+                    assignment_id,
+                    f"{assignment_id}:definitive_decline",
                     _json({"kind": "definitive_decline", "reason_code": detail}),
                 )
             conn.execute(
@@ -2019,13 +2051,33 @@ class SQLiteAgentJournal:
             )
         return AssignmentState.DECLINED
 
-    def _set_start_failed(self, assignment_id: str) -> AssignmentState:
+    def _set_start_failed(
+        self,
+        assignment_id: str,
+        process_execution_id: str,
+        result: StageWorkerResult,
+    ) -> AssignmentState:
+        if result.status is not StageStatus.FAILED:
+            raise ManagedLocalError("definitive start failure requires a failed result")
+        encoded = _json(result.to_dict())
         with self._transaction() as conn:
-            self._assignment(conn, assignment_id)
+            row = self._assignment(conn, assignment_id)
+            identity = json.loads(cast(str, row["identity_json"]))
+            if (
+                row["state"] != AssignmentState.START_INTENT.value
+                or row["process_execution_id"] != process_execution_id
+                or row["grant_fence"] is None
+                or result.run_uri != identity["run_uri"]
+                or result.stage_name != identity["stage_name"]
+                or result.attempt != identity["attempt"]
+            ):
+                raise ManagedLocalError(
+                    "no-start result conflicts with launch identity"
+                )
             conn.execute(
-                "UPDATE assignments SET state = ?, start_failed = 1 "
+                "UPDATE assignments SET state = ?, start_failed = 1, result_json = ? "
                 "WHERE assignment_id = ?",
-                (AssignmentState.START_FAILED.value, assignment_id),
+                (AssignmentState.START_FAILED.value, encoded, assignment_id),
             )
         return AssignmentState.START_FAILED
 
@@ -2147,7 +2199,8 @@ class SQLiteCoordinatorAssignments:
                     raise ManagedLocalError("managed offer replay conflicts")
                 return snapshot.offer_revision
             reused_availability = conn.execute(
-                "SELECT offer_revision FROM coordinator_offers "
+                "SELECT offer_revision, snapshot_json, consumed, is_current "
+                "FROM coordinator_offers "
                 "WHERE agent_id = ? AND session_id = ? "
                 "AND availability_revision = ?",
                 (
@@ -2157,8 +2210,30 @@ class SQLiteCoordinatorAssignments:
                 ),
             ).fetchone()
             if reused_availability is not None:
+                try:
+                    retained = cast(
+                        dict[str, object],
+                        json.loads(str(reused_availability["snapshot_json"])),
+                    )
+                    proposed = snapshot.to_dict()
+                    retained.pop("offer_revision")
+                    proposed.pop("offer_revision")
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ManagedLocalError(
+                        "managed offer snapshot is invalid"
+                    ) from exc
+                if (
+                    bool(reused_availability["is_current"])
+                    and not bool(reused_availability["consumed"])
+                    and _json(cast(Mapping[str, PlainData], retained))
+                    == _json(proposed)
+                ):
+                    # A no-claim assignment does not change capacity evidence.
+                    # Keep the original offer bytes and let its canonical identity
+                    # flow into the assignment rather than fabricating a revision.
+                    return cast(str, reused_availability["offer_revision"])
                 raise ManagedLocalError(
-                    "managed offer requires a fresh availability revision"
+                    "managed offer requires a fresh availability revision or current unconsumed matching availability"
                 )
             conn.execute(
                 "UPDATE coordinator_offers SET is_current = 0 "
@@ -2197,8 +2272,6 @@ class SQLiteCoordinatorAssignments:
         )
         receipt_value = cast(Mapping[str, object], json.loads(receipt))
         atoms = tuple(atom for claim in claims for atom in claim.atoms)
-        if not atoms:
-            raise ManagedLocalError("logical reservation requires capacity atoms")
         if any(atom.key not in self._capacity for atom in atoms):
             raise ManagedLocalError("claim uses atom outside configured capacity")
         requested: dict[tuple[str, str], Fraction] = {}
@@ -2303,7 +2376,7 @@ class SQLiteCoordinatorAssignments:
             ).fetchone()
             if offer_row is None or not bool(offer_row["is_current"]):
                 raise ManagedLocalError("assignment offer is missing or stale")
-            if bool(offer_row["consumed"]):
+            if claims and bool(offer_row["consumed"]):
                 raise ManagedLocalError(
                     "availability revision already has an unresolved admission"
                 )
@@ -2479,11 +2552,12 @@ class SQLiteCoordinatorAssignments:
                 "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
                 (_json(decided.to_dict()), assignment.stage_work_id),
             )
-            conn.execute(
-                "UPDATE coordinator_offers SET consumed = 1 "
-                "WHERE agent_id = ? AND session_id = ? AND offer_revision = ?",
-                (assignment.agent_id, assignment.session_id, assignment.offer_id),
-            )
+            if claims:
+                conn.execute(
+                    "UPDATE coordinator_offers SET consumed = 1 "
+                    "WHERE agent_id = ? AND session_id = ? AND offer_revision = ?",
+                    (assignment.agent_id, assignment.session_id, assignment.offer_id),
+                )
             return "reserved"
 
     def advance(self, assignment_id: str, *, expected: str, next_state: str) -> str:
@@ -3240,6 +3314,7 @@ def grant_and_start_managed_assignment(
     commands: Sequence[ClaimCommand],
     providers: Mapping[str, AgentResourceProvider],
     launcher: Callable[[], str],
+    start_failure: Callable[[ManagedProcessStartError], StageWorkerResult],
     process_execution_id: str | None = None,
 ) -> ExecutionFence:
     """Execute the bounded local admission-to-start saga for one reservation.
@@ -3277,7 +3352,9 @@ def grant_and_start_managed_assignment(
     if not _agent_at_or_after(activation, AssignmentState.ACTIVE):
         raise ManagedLocalError("managed assignment activation is indeterminate")
     process_id = process_execution_id or f"{assignment.assignment_id}:root"
-    journal.start_once(assignment.assignment_id, process_id, launcher)
+    journal.start_once(
+        assignment.assignment_id, process_id, launcher, start_failure=start_failure
+    )
     authority.confirm_execution_started(assignment.run_uri, fence=fence)
     return fence
 
@@ -3446,6 +3523,41 @@ def run_managed_local_assignment(
         assignment.assignment_id, expected="reserved", next_state="bound"
     )
     journal.persist_request(assignment, delivered.to_dict())
+    if journal.read_state(assignment.assignment_id) is AssignmentState.START_FAILED:
+        retained_fence = journal.read_grant_fence(assignment.assignment_id)
+        if retained_fence is None:
+            raise ManagedLocalError("failed launch has no retained grant")
+        journal.require_failed_before_start(
+            assignment.assignment_id, fence=retained_fence
+        )
+        retained_result = journal.read_result(assignment.assignment_id)
+        child_result = (
+            _map_resident_result_identity(
+                retained_result, worker_request=workspace.worker_request(), outputs={}
+            )
+            if retained_result is not None
+            else workspace.worker_result()
+        )
+        if child_result is None:
+            result_path = workspace.root / "worker-result.json"
+            if not result_path.is_file():
+                raise ManagedLocalError(
+                    "failed launch has no durable diagnostic result"
+                )
+            child_result = StageWorkerResult.from_dict(
+                json.loads(result_path.read_text())
+            )
+        if workspace.supervisor_launch_json() is None:
+            result_path = workspace.root / "worker-result.json"
+            if not result_path.is_file():
+                atomic_write_bytes(result_path, _json(child_result.to_dict()).encode())
+            workspace.persist_failed_before_start(child_result, fence=retained_fence)
+        journal.record_result(
+            assignment.assignment_id,
+            _map_resident_result_identity(
+                child_result, worker_request=worker_request, outputs={}
+            ).to_dict(),
+        )
     _emit_assignment_event(
         journal,
         coordinator,
@@ -3471,7 +3583,10 @@ def run_managed_local_assignment(
         reason_code = journal.read_decline_reason(assignment.assignment_id)
         if reason_code is not None:
             _emit_assignment_event(
-                journal, coordinator, assignment.assignment_id, "definitive_decline",
+                journal,
+                coordinator,
+                assignment.assignment_id,
+                "definitive_decline",
                 {"reason_code": reason_code},
             )
         _emit_assignment_event(
@@ -3551,6 +3666,7 @@ def run_managed_local_assignment(
                     outputs=worker_result.outputs,
                     assignment_id=assignment.assignment_id,
                 )
+            _persist_managed_result(run_store, worker_result)
             availability_revision = _release_revision(
                 journal=journal,
                 assignment=assignment,
@@ -3603,16 +3719,7 @@ def run_managed_local_assignment(
                 status=worker_result.status,
                 reason=_worker_terminal_reason(worker_result),
             )
-            if worker_result.status is StageStatus.FAILED:
-                failure = cast(ExecutionFailure, worker_result.failure)
-                # Publish diagnostic files only after the authority accepts the
-                # fenced result, and before terminal admission becomes visible.
-                run_store.write_stage_failure(
-                    assignment.run_uri,
-                    assignment.stage_name,
-                    failure.to_dict(),
-                    attempt=assignment.attempt,
-                )
+        _persist_managed_result(run_store, worker_result)
         coordinator.advance(
             assignment.assignment_id,
             expected=coordinator_expected,
@@ -3697,9 +3804,55 @@ def run_managed_local_assignment(
         return finalize_result(worker_result, coordinator_expected="granted")
 
     process_id = f"{assignment.assignment_id}:root"
-    environment = _worker_environment(
-        resident_launch_profile, workspace.root, commands, providers
-    )
+
+    def start_failure(error: ManagedProcessStartError) -> StageWorkerResult:
+        return _map_resident_result_identity(
+            _start_failed_worker_result(workspace.worker_request(), error),
+            worker_request=worker_request,
+            outputs={},
+        )
+
+    try:
+        environment = _worker_environment(
+            resident_launch_profile,
+            workspace.root,
+            commands,
+            providers,
+            cast(
+                Mapping[str, object],
+                delivered.resolved_runtime.get("resource_selection"),
+            ),
+        )
+    except ManagedProcessStartError as exc:
+
+        def fail_before_supervisor(error: ManagedProcessStartError = exc) -> str:
+            raise error
+
+        try:
+            journal.start_once(
+                assignment.assignment_id,
+                process_id,
+                fail_before_supervisor,
+                start_failure=start_failure,
+            )
+        except ManagedProcessStartError:
+            pass
+        journal.require_failed_before_start(
+            assignment.assignment_id, fence=fence.fencing_token
+        )
+        worker_result = cast(
+            StageWorkerResult, journal.read_result(assignment.assignment_id)
+        )
+        child_result = _map_resident_result_identity(
+            worker_result, worker_request=workspace.worker_request(), outputs={}
+        )
+        atomic_write_bytes(
+            workspace.root / "worker-result.json",
+            _json(child_result.to_dict()).encode("utf-8"),
+        )
+        workspace.persist_failed_before_start(child_result, fence=fence.fencing_token)
+        journal.record_result(assignment.assignment_id, worker_result.to_dict())
+        return finalize_result(worker_result, coordinator_expected="granted")
     expected_launch = ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
         continuity_epoch=supervisor.continuity_epoch,
@@ -3715,6 +3868,9 @@ def run_managed_local_assignment(
         workspace_root=workspace.root,
         profile=resident_launch_profile,
         environment=environment,
+        resource_controls=_managed_resource_controls(
+            worker_request.resolved_runtime, bindings_prepared=True
+        ),
     )
     encoded_launch = workspace.supervisor_launch_json()
     launch = (
@@ -3736,10 +3892,12 @@ def run_managed_local_assignment(
             raise
         if (
             receipt.state
-            not in {SupervisorLaunchState.STARTING, SupervisorLaunchState.RUNNING}
+            in {SupervisorLaunchState.NOT_ACCEPTED, SupervisorLaunchState.UNKNOWN}
             or receipt.process_id is None
         ):
-            raise ManagedProcessStartError("supervisor did not create a process root")
+            raise ManagedLocalError(
+                "supervisor has not established whether a process root was created"
+            )
         workspace.mark_process_started(process_id, receipt.process_id)
         return process_id
 
@@ -3750,9 +3908,12 @@ def run_managed_local_assignment(
                 assignment.assignment_id,
                 process_id,
                 launch_exact_worker,
+                start_failure=start_failure,
             )
-        except ManagedProcessStartError as exc:
-            worker_result = _start_failed_worker_result(worker_request, exc)
+        except ManagedProcessStartError:
+            worker_result = cast(
+                StageWorkerResult, journal.read_result(assignment.assignment_id)
+            )
             journal.record_result(assignment.assignment_id, worker_result.to_dict())
             return finalize_result(worker_result, coordinator_expected="granted")
         except Exception:
@@ -3836,6 +3997,7 @@ def run_managed_local_assignment(
             raise ManagedLocalError("supervisor result containment proof conflicts")
         child_result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
         workspace.persist_worker_result(child_result)
+        child_result = cast(StageWorkerResult, workspace.worker_result())
         report = workspace.retain_outputs()
         worker_result = _project_resident_result(
             child_result,
@@ -3846,6 +4008,28 @@ def run_managed_local_assignment(
         )
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
     return finalize_result(worker_result, coordinator_expected="running")
+
+
+def _persist_managed_result(
+    run_store: LocalRunStore, result: StageWorkerResult
+) -> None:
+    """Publish result/diagnostics after fenced acceptance and before release.
+
+    Existing attempt files are repairable projections of the retained terminal
+    report. A failed write must propagate so commit replay repairs it before
+    release is acknowledged.
+    """
+
+    run_store.write_stage_worker_result(
+        result.run_uri, result.stage_name, result.to_dict(), attempt=result.attempt
+    )
+    if result.status is StageStatus.FAILED:
+        run_store.write_stage_failure(
+            result.run_uri,
+            result.stage_name,
+            cast(ExecutionFailure, result.failure).to_dict(),
+            attempt=result.attempt,
+        )
 
 
 def _require_retained_launch_match(
@@ -3863,6 +4047,10 @@ def _require_retained_launch_match(
         or retained.bundle_digest != expected.bundle_digest
         or retained.workspace_root != expected.workspace_root
         or retained.profile.fingerprint != expected.profile.fingerprint
+        or (
+            retained.schema_version is not None
+            and retained.resource_controls != expected.resource_controls
+        )
     ):
         raise ManagedLocalError("retained supervisor launch identity conflicts")
 
@@ -4484,11 +4672,55 @@ class GpuResourceProvider(AtomResourceProvider):
         return {"CUDA_VISIBLE_DEVICES": ",".join(self.binding_for_claim(command))}
 
 
+def _managed_resource_controls(
+    runtime: Mapping[str, object],
+    *,
+    bindings_prepared: bool = False,
+    disposition: ControlDisposition = "requested",
+) -> tuple[Mapping[str, PlainData], ...] | None:
+    """Describe admitted demand using the actual managed environment owner.
+
+    Legacy handoffs without policy evidence stay unreported. A mechanism is
+    attributed only after the provider has supplied the selected binding.
+    """
+
+    if any(
+        key not in runtime
+        for key in ("resources", "resource_policy", "resource_selection")
+    ):
+        return None
+    resources = cast(Mapping[str, object], runtime["resources"])
+    raw_entries = cast(Mapping[str, object], resources["entries"])
+    entries = {
+        kind: ResourceEntry.from_dict(thaw_plain_data(value, path="resource entry"))
+        for kind, value in raw_entries.items()
+    }
+    selection = cast(Mapping[str, Sequence[str]], runtime["resource_selection"])
+    policy = ResourcePolicy.from_dict(
+        thaw_plain_data(runtime["resource_policy"], path="resource policy")
+    )
+    return _validated_resource_controls(
+        resource_control_records(
+            entries=entries,
+            policy=policy,
+            selection=selection,
+            owner="managed_provider",
+            mechanisms={
+                kind: "provider_environment_binding" for kind in selection["enforce"]
+            }
+            if bindings_prepared
+            else {},
+            selected_disposition=disposition,
+        )
+    )
+
+
 def _worker_environment(
     profile: ResidentWorkerLaunchProfile,
     workspace: Path,
     commands: Sequence[ClaimCommand],
     providers: Mapping[str, AgentResourceProvider],
+    resource_selection: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     """Construct the complete worker environment without ambient inheritance."""
 
@@ -4500,15 +4732,53 @@ def _worker_environment(
         "TMPDIR": str(workspace),
         **dict(profile.environment),
     }
+    enforce = None if resource_selection is None else resource_selection.get("enforce")
+    if enforce is not None and (
+        isinstance(enforce, str)
+        or not isinstance(enforce, Sequence)
+        or any(not isinstance(kind, str) for kind in enforce)
+    ):
+        raise ManagedLocalError("worker resource selection is invalid")
+    enforced_kinds = None if enforce is None else frozenset(enforce)
+    commands_by_kind = {command.claim.resource_kind: command for command in commands}
+    if enforced_kinds is not None:
+        for kind in sorted(enforced_kinds):
+            if kind not in commands_by_kind:
+                raise ManagedProcessStartError(
+                    f"selected {kind!r} control has no active claim; remove it from enforce, use enforce: [], or select a supporting execution owner"
+                )
+            if kind not in providers:
+                raise ManagedProcessStartError(
+                    f"selected {kind!r} control has no supporting provider; remove it from enforce, use enforce: [], or select a supporting execution owner"
+                )
     for command in commands:
-        contribution = dict(
-            providers[command.claim.resource_kind].worker_environment(command)
-        )
+        if (
+            enforced_kinds is not None
+            and command.claim.resource_kind not in enforced_kinds
+        ):
+            continue
+        try:
+            contribution = dict(
+                providers[command.claim.resource_kind].worker_environment(command)
+            )
+        except Exception as exc:
+            raise ManagedProcessStartError(
+                f"selected {command.claim.resource_kind!r} control binding failed before worker launch; "
+                "check the active provider binding, remove it from enforce, use enforce: [], "
+                "or select a supporting execution owner"
+            ) from exc
+        if enforced_kinds is not None and not contribution:
+            raise ManagedProcessStartError(
+                f"selected {command.claim.resource_kind!r} control has no provider binding; remove it from enforce, use enforce: [], or select a supporting execution owner"
+            )
         if any(
             not isinstance(key, str) or not key or not isinstance(value, str)
             for key, value in contribution.items()
         ):
-            raise ManagedLocalError("provider worker environment is invalid")
+            raise ManagedProcessStartError(
+                f"selected {command.claim.resource_kind!r} provider supplied an invalid worker environment; "
+                "correct the provider binding or remove this control from enforce"
+            )
         environment.update(contribution)
     return environment
 
@@ -4750,7 +5020,10 @@ def _start_failed_worker_result(
         stdout_path=request.stdout_path,
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
-        details={"process_created": False},
+        details=_capture_exception_details(error, details={"process_created": False}),
+    )
+    controls = _managed_resource_controls(
+        request.resolved_runtime, disposition="unavailable"
     )
     return StageWorkerResult(
         schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
@@ -4765,7 +5038,14 @@ def _start_failed_worker_result(
         stdout_path=request.stdout_path,
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
-        executor_metadata={"process_created": False},
+        executor_metadata={
+            "process_created": False,
+            **(
+                {"resource_controls": [dict(item) for item in controls]}
+                if controls is not None
+                else {}
+            ),
+        },
     )
 
 
@@ -4813,7 +5093,9 @@ def _managed_root_failed_worker_result(
         traceback_path=request.traceback_path,
         exit_code=exit_code,
         signal=process_signal,
-        details={"process_created": True, "worker_result": "missing"},
+        details=_capture_exception_details(
+            error, details={"process_created": True, "worker_result": "missing"}
+        ),
     )
     return StageWorkerResult(
         schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
@@ -4903,12 +5185,8 @@ def _validate_decision_receipt(
         )
     except Exception as exc:
         raise ManagedLocalError("decision component descriptors are invalid") from exc
-    if not parsed_components or len({item.kind for item in parsed_components}) != len(
-        parsed_components
-    ):
-        raise ManagedLocalError(
-            "decision component descriptors must be non-empty and unique"
-        )
+    if len({item.kind for item in parsed_components}) != len(parsed_components):
+        raise ManagedLocalError("decision component descriptors must be unique")
     if {item.kind for item in parsed_components} != {
         claim.resource_kind for claim in claims
     }:
@@ -4927,12 +5205,8 @@ def _validate_decision_receipt(
         )
     except Exception as exc:
         raise ManagedLocalError("decision provider descriptors are invalid") from exc
-    if not parsed_providers or len({item.kind for item in parsed_providers}) != len(
-        parsed_providers
-    ):
-        raise ManagedLocalError(
-            "decision provider descriptors must be non-empty and unique"
-        )
+    if len({item.kind for item in parsed_providers}) != len(parsed_providers):
+        raise ManagedLocalError("decision provider descriptors must be unique")
     if {item.kind for item in parsed_providers} != {
         claim.resource_kind for claim in claims
     }:

@@ -45,6 +45,7 @@ from loom.plugins.activation import (
 )
 
 from .errors import OutputValidationError, PipelineExecutionError, PlanExecutionError
+from ._resource_handoff import read_resource_handoff
 from .eventing import RuntimeEventDispatcher, emit_run_event, emit_stage_event
 from .lifecycle import (
     commit_stage_execution_result,
@@ -701,6 +702,22 @@ def _materialize_submitted_worker_request_if_needed(
         attempt=attempt,
     )
 
+    try:
+        resource_handoff = read_resource_handoff(
+            store_paths=cast(LocalRunStorePaths, run_store),
+            run_uri=run_uri,
+            manifest_relative_path=record.manifest_relative_path,
+            stage_name=stage_name,
+            registry=resource_validator_registry,
+        )
+    except Exception as exc:
+        raise ContinuationStateError(
+            "submitted stage cannot read its exact private execution-resource handoff: "
+            f"{exc}; finish with the pinned original runtime or prepare a fresh execution identity",
+            code="execution.stage_job.invalid_resource_handoff",
+            context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
+        ) from exc
+
     stage = _stage_spec_from_config_snapshot(
         run_store,
         run_uri,
@@ -747,6 +764,7 @@ def _materialize_submitted_worker_request_if_needed(
             runtime=runtime,
             stage_name=stage_name,
             continuation_executor=continuation_executor,
+            resource_handoff=resource_handoff,
         ),
         executor_metadata={"worker_command": "loom stage-job run"},
         metadata={
@@ -852,6 +870,7 @@ def _stage_runtime_metadata(
     runtime: Mapping[str, PlainData],
     stage_name: str,
     continuation_executor: str,
+    resource_handoff: Mapping[str, PlainData],
 ) -> Mapping[str, PlainData]:
     stages = runtime.get("stages")
     stage_runtime = (
@@ -861,6 +880,7 @@ def _stage_runtime_metadata(
     )
     return {
         **dict(cast(Mapping[str, PlainData], stage_runtime)),
+        **resource_handoff,
         "stage_id": stage_name,
         "executor": continuation_executor,
     }

@@ -15,6 +15,7 @@ from loom.pipeline import (
     StageContext,
     StageFactorySpec,
     StageSpec,
+    ResourcePolicy,
 )
 from loom.pipeline.execution import (
     ExecutionFailure,
@@ -144,6 +145,7 @@ def _request(
     resolved_runtime = ResolvedStageRuntimeOptions(
         stage_id="build",
         executor="docker",
+        resource_policy=ResourcePolicy(enforce="all"),
         resources=resources or ResourceRequest(),
         adapter_options=(
             adapter_options

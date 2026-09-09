@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -39,6 +40,7 @@ from loom.queue._managed_local import (
     ClaimOutcome,
     ManagedAssignment,
     ManagedLocalError,
+    ManagedProcessStartError,
     ObserveRequest,
     ProviderReleaseEvidence,
     SQLiteAgentJournal,
@@ -48,6 +50,8 @@ from loom.queue._managed_local import (
     _compose_agent_resource_providers,
     _configured_provider_descriptor,
     _managed_root_failed_worker_result,
+    _managed_resource_controls,
+    _start_failed_worker_result,
     _worker_environment,
 )
 from loom.pipeline.execution.models import StageWorkerResult
@@ -124,6 +128,11 @@ _MAX_BODY_BYTES = 65_536
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 _MAX_JSON_DEPTH = 8
 _MAX_JSON_COLLECTION = 64
+_MAX_FAILURE_JSON_DEPTH = 512
+_MAX_FAILURE_JSON_COLLECTION = 256
+_FAILURE_REPORT_OPERATIONS = frozenset(
+    {("agent", "output_manifest"), ("slurm_bootstrap", "report")}
+)
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
@@ -3459,12 +3468,20 @@ class LocalDaemonAgentHttpClient:
             )
         providers, execution_journal = self._runtime_owners(session)
         commands = execution_journal.assignment_claim_commands(assignment_id)
-        if not commands:
-            raise QueueConflictError("contained assignment claim is unavailable")
-        assignment = commands[0].assignment
+        assignment = ManagedAssignment(
+            assignment_id=request.assignment_id,
+            run_uri=f"loom-agent:{request.assignment_id}",
+            stage_work_id=request.stage_work_id,
+            stage_name=request.stage_name,
+            attempt=request.attempt,
+            attempt_id=request.attempt_id,
+            agent_id=session.agent_id,
+            session_id=session.session_id,
+            offer_id=request.offer_id,
+            claim_id=request.claim_id,
+        )
         if (
-            not isinstance(assignment, ManagedAssignment)
-            or assignment.assignment_id != assignment_id
+            assignment.assignment_id != assignment_id
             or assignment.session_id != session_id
             or any(command.assignment != assignment for command in commands)
         ):
@@ -3728,14 +3745,21 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote resident execution has no supervisor")
         launch: ResidentWorkerLaunch | None = None
         result_path = workspace.root / "worker-result.json"
-        cancelled_before_start = False
+        completed_before_start = False
         if execution_journal.read_state(assignment.assignment_id) in {
             AssignmentState.ACTIVE,
         }:
 
             def start_supervisor_launch() -> str:
                 environment = _worker_environment(
-                    profile.launch_profile, workspace.root, commands, providers
+                    profile.launch_profile,
+                    workspace.root,
+                    commands,
+                    providers,
+                    cast(
+                        Mapping[str, object],
+                        request.resolved_runtime.get("resource_selection"),
+                    ),
                 )
                 nonlocal launch
                 launch = ResidentWorkerLaunch(
@@ -3753,6 +3777,9 @@ class LocalDaemonAgentHttpClient:
                     workspace_root=workspace.root,
                     profile=profile.launch_profile,
                     environment=environment,
+                    resource_controls=_managed_resource_controls(
+                        request.resolved_runtime, bindings_prepared=True
+                    ),
                 )
                 workspace.persist_supervisor_launch(
                     json.dumps(
@@ -3762,14 +3789,14 @@ class LocalDaemonAgentHttpClient:
                 receipt = supervisor.launch(launch)
                 if (
                     receipt.state
-                    not in {
-                        SupervisorLaunchState.STARTING,
-                        SupervisorLaunchState.RUNNING,
+                    in {
+                        SupervisorLaunchState.NOT_ACCEPTED,
+                        SupervisorLaunchState.UNKNOWN,
                     }
                     or receipt.process_id is None
                 ):
                     raise QueueConflictError(
-                        "remote supervisor did not create a process root"
+                        "remote supervisor has not established whether a process root was created"
                     )
                 workspace.mark_process_started(execution_id, receipt.process_id)
                 return execution_id
@@ -3800,26 +3827,55 @@ class LocalDaemonAgentHttpClient:
                     execution_journal.record_cancelled_before_start(
                         assignment.assignment_id, result.to_dict()
                     )
-                    cancelled_before_start = True
+                    completed_before_start = True
                 else:
-                    execution_journal.start_once(
-                        assignment.assignment_id, execution_id, start_supervisor_launch
-                    )
-                    workspace.append_event(
-                        f"{request.assignment_id}:agent-process-started",
-                        {"kind": "process_started"},
-                    )
-                    self._assignment_call(
-                        session_id,
-                        request.assignment_id,
-                        lambda: self.confirm_started(
+                    try:
+                        execution_journal.start_once(
+                            assignment.assignment_id,
+                            execution_id,
+                            start_supervisor_launch,
+                            start_failure=lambda error: _start_failed_worker_result(
+                                workspace.worker_request(), error
+                            ),
+                        )
+                    except ManagedProcessStartError:
+                        result = cast(
+                            StageWorkerResult,
+                            execution_journal.read_result(assignment.assignment_id),
+                        )
+                        atomic_write_bytes(
+                            result_path,
+                            json.dumps(
+                                result.to_dict(),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            ).encode(),
+                        )
+                        execution_journal.require_failed_before_start(
+                            assignment.assignment_id, fence=fence
+                        )
+                        workspace.persist_failed_before_start(result, fence=fence)
+                        execution_journal.record_result(
+                            assignment.assignment_id, result.to_dict()
+                        )
+                        completed_before_start = True
+                    else:
+                        workspace.append_event(
+                            f"{request.assignment_id}:agent-process-started",
+                            {"kind": "process_started"},
+                        )
+                        self._assignment_call(
                             session_id,
                             request.assignment_id,
-                            fence=fence,
-                            process_execution_id=execution_id,
-                        ),
-                    )
-        if not cancelled_before_start:
+                            lambda: self.confirm_started(
+                                session_id,
+                                request.assignment_id,
+                                fence=fence,
+                                process_execution_id=execution_id,
+                            ),
+                        )
+        if not completed_before_start:
             self._flush_workspace_events(session_id, workspace)
         if launch is None:
             retained_launch = workspace.supervisor_launch_json()
@@ -3855,9 +3911,9 @@ class LocalDaemonAgentHttpClient:
             execution_journal,
             fence=fence,
             authorization_revision=authorization_revision,
-            persist_result=not cancelled_before_start,
+            persist_result=not completed_before_start,
             result_path_label="remote execution completion",
-            # Pre-start cancellation has no supervised launch for restart replay.
+            # A proven no-start outcome completes without a supervisor to join.
             suspend_requested=suspend_requested if launch is not None else None,
         )
 
@@ -3908,8 +3964,68 @@ class LocalDaemonAgentHttpClient:
             commands = execution_journal.assignment_claim_commands(assignment_id)
             launch_json = workspace.supervisor_launch_json()
             if launch_json is None:
-                # A pre-launch operation has no evidence allowing a new start
-                # after application restart; keep it unavailable for the owner.
+                retained_fence = execution_journal.read_grant_fence(assignment_id)
+                retained_result = (
+                    execution_journal.read_result(assignment_id)
+                    if execution_journal.definitive_start_failed(assignment_id)
+                    else workspace.worker_result()
+                )
+                if retained_fence is None:
+                    continue
+                if (
+                    retained_result is None
+                    and execution_journal.read_state(assignment_id)
+                    is AssignmentState.START_FAILED
+                ):
+                    result_path = workspace.root / "worker-result.json"
+                    if result_path.is_file():
+                        retained_result = StageWorkerResult.from_dict(
+                            json.loads(result_path.read_text())
+                        )
+                if (
+                    retained_result is not None
+                    and retained_result.status is StageStatus.FAILED
+                ):
+                    execution_journal.require_failed_before_start(
+                        assignment_id, fence=retained_fence
+                    )
+                    result_path = workspace.root / "worker-result.json"
+                    if not result_path.is_file():
+                        atomic_write_bytes(
+                            result_path,
+                            _canonical_json(retained_result.to_dict()).encode(),
+                        )
+                    workspace.persist_failed_before_start(
+                        retained_result, fence=retained_fence
+                    )
+                    execution_journal.record_result(
+                        assignment_id, retained_result.to_dict()
+                    )
+                elif (
+                    retained_result is not None
+                    and retained_result.status is StageStatus.CANCELLED
+                ):
+                    if execution_journal.read_result(assignment_id) != retained_result:
+                        continue
+                else:
+                    # Absence of a launch alone cannot establish safe release.
+                    continue
+                completed.append(
+                    self._complete_remote_result_and_release(
+                        session,
+                        request,
+                        workspace,
+                        assignment,
+                        commands,
+                        providers,
+                        execution_journal,
+                        fence=retained_fence,
+                        authorization_revision=0,
+                        persist_result=False,
+                        result_path_label="remote no-start restart completion",
+                        suspend_requested=suspend_requested,
+                    )
+                )
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = supervisor.query(launch)
@@ -4076,20 +4192,32 @@ class LocalDaemonAgentHttpClient:
         """Own normal and restart result/output/outbox completion ordering."""
 
         result_path = workspace.root / "worker-result.json"
-        result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
-        cancelled_before_start = (
-            result.status is StageStatus.CANCELLED
+        result = (
+            StageWorkerResult.from_dict(json.loads(result_path.read_text()))
+            if persist_result
+            else workspace.worker_result()
+        )
+        if result is None:
+            raise QueueConflictError("remote completion has no durable result")
+        completed_before_start = (
+            result.status in {StageStatus.CANCELLED, StageStatus.FAILED}
             and workspace.supervisor_launch_json() is None
         )
+        if completed_before_start and result.status is StageStatus.FAILED:
+            execution_journal.require_failed_before_start(
+                request.assignment_id, fence=fence
+            )
+            workspace.persist_failed_before_start(result, fence=fence)
         if persist_result:
             workspace.persist_worker_result(result)
+            result = cast(StageWorkerResult, workspace.worker_result())
             execution_journal.record_result(assignment.assignment_id, result.to_dict())
         report = workspace.retain_outputs()
         workspace.append_event(
             f"{request.assignment_id}:result-output-durable",
             {"kind": "result_and_output_durable", "status": report.status.value},
         )
-        if not cancelled_before_start:
+        if not completed_before_start:
             self._flush_workspace_events(session.session_id, workspace)
         authorization = self._fresh_transfer_authorization(
             session_id=session.session_id,
@@ -4151,7 +4279,7 @@ class LocalDaemonAgentHttpClient:
                 session.session_id, request.assignment_id, fence=fence
             ),
         )
-        if cancelled_before_start:
+        if completed_before_start:
             self._flush_workspace_events(session.session_id, workspace)
         next_revision = self._release_provider_claims(
             session,
@@ -4648,6 +4776,8 @@ class LocalDaemonAgentHttpClient:
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
+        if (role, operation) in _FAILURE_REPORT_OPERATIONS:
+            _decode(body, failure_report=True)
         try:
             connection.request(
                 "POST",
@@ -4800,13 +4930,18 @@ class _Handler(BaseHTTPRequestHandler):
                 or int(length) > _MAX_BODY_BYTES
             ):
                 raise QueueServiceError("agent protocol body is invalid")
-            payload = _decode(self.rfile.read(int(length)))
             segments = self.path.split("/")
             if len(segments) != 4 or segments[0] or segments[1] != "v1":
                 raise QueueServiceError("agent protocol operation is unsupported")
             role_name, operation = segments[2:]
             if role_name != mapped_role:
                 raise QueueServiceError("agent TLS credential is not authorized")
+            raw = self.rfile.read(int(length))
+            payload = (
+                _decode(raw, failure_report=True)
+                if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
+                else _decode(raw)
+            )
             principal = LocalDaemonPrincipal(
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
@@ -5590,23 +5725,38 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes) -> Mapping[str, object]:
+def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]:
     if len(raw) > _MAX_BODY_BYTES:
-        raise QueueServiceError("agent protocol body is too large")
+        raise QueueServiceError(
+            "agent protocol body is too large (maximum 65536 bytes); "
+            "reduce the report or message size"
+        )
     try:
         value = json.loads(
             raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
         )
+    except RecursionError as exc:
+        raise QueueServiceError("agent protocol JSON is too deeply nested") from exc
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
-    _bounded_json(value, depth=0)
+    report = value.get("report") if failure_report else None
+    if (
+        isinstance(report, Mapping)
+        and type(report.get("schema_version")) is int
+        and report["schema_version"] == 2
+        and "failure" in report
+    ):
+        _bounded_failure_json(report["failure"])
+        _bounded_json({**value, "report": {**report, "failure": None}}, depth=0)
+    else:
+        _bounded_json(value, depth=0)
     return value
 
 
 def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
-    """Decode the bounded Phase 1 result envelope without widening agent input."""
+    """Decode the closed status/location envelope without widening agent input."""
 
     if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
         raise QueueServiceError("run inspection response is too large")
@@ -5614,12 +5764,48 @@ def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
         value = json.loads(
             raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
         )
+    except RecursionError as exc:
+        raise QueueServiceError("run inspection response is too deeply nested") from exc
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise QueueServiceError("run inspection response JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("run inspection response is not an object")
     _bounded_json(value, depth=0, max_collection=256)
     return value
+
+
+def _bounded_failure_json(value: object) -> None:
+    """Validate only the declared report failure's bounded plain-data subtree."""
+
+    pending = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > _MAX_FAILURE_JSON_DEPTH:
+            raise QueueServiceError(
+                "agent report failure JSON is too deeply nested (maximum depth 512); "
+                "reduce failure detail nesting"
+            )
+        if isinstance(item, Mapping):
+            if len(item) > _MAX_FAILURE_JSON_COLLECTION:
+                raise QueueServiceError(
+                    "agent report failure object is too large (maximum 256 entries); "
+                    "reduce failure detail collections"
+                )
+            if any(not isinstance(key, str) for key in item):
+                raise QueueServiceError("agent report failure object key is invalid")
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            if len(item) > _MAX_FAILURE_JSON_COLLECTION:
+                raise QueueServiceError(
+                    "agent report failure collection is too large (maximum 256 items); "
+                    "reduce failure detail collections"
+                )
+            pending.extend((child, depth + 1) for child in item)
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise QueueServiceError("agent report failure JSON value is non-finite")
+        elif item is not None and not isinstance(item, (str, int, bool)):
+            raise QueueServiceError("agent report failure JSON value is invalid")
 
 
 def _bounded_json(

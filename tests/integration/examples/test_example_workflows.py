@@ -78,7 +78,7 @@ def test_example_resource_preflight_reports_resource_warnings_and_strict_exit(
 
     assert fields["normal_status"] == "WARN"
     assert fields["strict_status"] == "WARN"
-    assert "resource.ignored" in fields["diagnostic_codes"].split(",")
+    assert "resource.not_requested" in fields["diagnostic_codes"].split(",")
 
 
 def test_example_resource_leases_coordinate_blocked_then_released_state(

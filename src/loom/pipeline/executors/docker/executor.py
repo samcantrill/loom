@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.serialization._diagnostic_capture import _capture_exception_details
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,7 @@ from loom.pipeline.executors.errors import ExecutorError
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime._resource_controls import with_resource_control_disposition
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
@@ -122,10 +125,13 @@ class DockerExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={
-                    "setup_error": setup_error.message,
-                    **dict(setup_error.details),
-                },
+                details=_capture_exception_details(
+                    exc,
+                    details={
+                        "setup_error": setup_error.message,
+                        **dict(setup_error.details),
+                    },
+                ),
             )
             return _failed_result(
                 request=request,
@@ -157,7 +163,9 @@ class DockerExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={"launch_error": launch_error},
+                details=_capture_exception_details(
+                    exc, details={"launch_error": launch_error}
+                ),
             )
             return _failed_result(
                 request=request,
@@ -223,6 +231,7 @@ class DockerExecutor:
                 metadata=metadata,
             )
 
+        metadata = with_resource_control_disposition(metadata, "applied")
         conflict = _process_conflict_failure(
             request=request,
             worker_result=worker_result,
@@ -338,6 +347,8 @@ def _prepare_docker_attempt(
         container_options=container,
         docker_options=docker_options,
         worker_command=worker_command,
+        resource_policy=runtime.resource_policy,
+        resource_selection=getattr(runtime, "resource_selection", None),
     )
     return _PreparedDockerAttempt(
         container=container,
@@ -466,7 +477,9 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"read_error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc, details={"read_error": str(exc) or type(exc).__name__}
+            ),
         )
     if raw_result is None:
         return _failure(
@@ -488,7 +501,10 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc,
+                details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            ),
         )
     if worker_result.run_uri != request.run_uri:
         return _failure(
@@ -708,6 +724,11 @@ def _process_metadata(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
+        **{
+            key: command.metadata[key]
+            for key in ("resource_policy", "resource_selection", "resource_controls")
+            if key in command.metadata
+        },
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -730,6 +751,10 @@ def _process_metadata(
         )
     if launch_error is not None:
         metadata["launch_error"] = launch_error
+    if launch_error is not None or (
+        process is not None and (process.returncode != 0 or process.error is not None)
+    ):
+        metadata = with_resource_control_disposition(metadata, "failed")
     return redact_executor_metadata(metadata)
 
 

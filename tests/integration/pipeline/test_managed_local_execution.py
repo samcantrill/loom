@@ -28,6 +28,7 @@ from loom.queue._managed_local import (
     run_managed_local_assignment,
 )
 from loom.queue._agent_process_supervisor import (
+    AgentProcessSupervisorError,
     AgentProcessSupervisorClient,
     AgentProcessSupervisorService,
     ResidentWorkerLaunchProfile,
@@ -44,6 +45,8 @@ from loom.pipeline.orchestration import (
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.diagnostics import render_diagnostic_failure
+from loom.pipeline.execution.models import ExecutionFailure
 from loom.pipeline.runtime.placement import (
     StagePlacementPolicy,
     resolve_stage_placement,
@@ -276,7 +279,10 @@ def _offer_snapshot(
 
 @pytest.mark.parametrize(
     ("release_crash_point", "reason_code"),
-    (("availability_published", "external_process_detected"), ("final_event_acknowledged", None)),
+    (
+        ("availability_published", "external_process_detected"),
+        ("final_event_acknowledged", None),
+    ),
 )
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
@@ -490,10 +496,26 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     assert observed.live_claim_ids == ()
 
 
+@pytest.mark.parametrize(
+    ("failure_mode", "restart_barrier"),
+    [
+        ("application", None),
+        ("unsupported", None),
+        ("unsupported", "diagnostic_write"),
+        ("provider_error", None),
+        ("provider_error", "no_start_commit"),
+        ("supervisor_no_root", "no_start_commit"),
+        ("unknown", None),
+    ],
+)
 def test_managed_local_failure_terminalizes_before_capacity_release(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    restart_barrier: str | None,
 ) -> None:
+    no_start = failure_mode in {"unsupported", "provider_error"}
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "failed-run")
     run_store.create_run(run_uri)
@@ -531,7 +553,12 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
         resolved_runtime=ResolvedStageRuntimeOptions(
-            stage_id="build", executor="local"
+            stage_id="build",
+            executor="local",
+            resources={
+                "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+            },
+            resource_policy={"enforce": ["cpu"] if no_start else []},
         ),
     )
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
@@ -600,6 +627,32 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     agent_root = tmp_path / "agent"
     journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
     supervisor, launch_profile = resident_owner(agent_root, assignment.agent_id)
+    if no_start:
+
+        def forbidden_launch(*_args, **_kwargs):
+            pytest.fail("a failed control must not invoke the process supervisor")
+
+        monkeypatch.setattr(supervisor, "launch", forbidden_launch)
+    if failure_mode == "provider_error":
+
+        def failed_binding(_command):
+            raise OSError("configured binding is unavailable at /worker/bindings")
+
+        monkeypatch.setattr(provider, "worker_environment", failed_binding)
+    if failure_mode == "supervisor_no_root":
+
+        def no_process_root(_launch):
+            raise AgentProcessSupervisorError("resident root was not created")
+
+        monkeypatch.setattr(supervisor, "launch", no_process_root)
+    if failure_mode == "unknown":
+        original_launch = supervisor.launch
+
+        def lost_launch_response(launch):
+            original_launch(launch)
+            raise TimeoutError("process launch response was lost")
+
+        monkeypatch.setattr(supervisor, "launch", lost_launch_response)
 
     def execute():
         return run_managed_local_assignment(
@@ -618,6 +671,78 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             resident_launch_profile=launch_profile,
         )
 
+    if failure_mode == "unknown":
+        with pytest.raises(TimeoutError, match="launch response was lost"):
+            execute()
+        assert coordinator.state(assignment.assignment_id) == "unknown"
+        assert (
+            journal.read_state(assignment.assignment_id)
+            is AssignmentState.START_UNKNOWN
+        )
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "unknown-launch")
+        ).live_claim_ids
+        assert run_store.read_stage_failure(run_uri, "build") is None
+        return
+    if restart_barrier == "no_start_commit":
+        original_commit = journal._set_start_failed
+
+        class ApplicationStopped(BaseException):
+            pass
+
+        def interrupted_no_start_commit(*args, **kwargs):
+            original_commit(*args, **kwargs)
+            raise ApplicationStopped("application stopped after no-start commit")
+
+        monkeypatch.setattr(journal, "_set_start_failed", interrupted_no_start_commit)
+        with pytest.raises(ApplicationStopped, match="after no-start commit"):
+            execute()
+        assert coordinator.state(assignment.assignment_id) == "granted"
+        assert (
+            journal.read_state(assignment.assignment_id) is AssignmentState.START_FAILED
+        )
+        retained = journal.read_result(assignment.assignment_id)
+        assert retained is not None
+        assert retained.run_uri == run_uri
+        assert isinstance(retained.failure, ExecutionFailure)
+        assert (
+            "resident root was not created"
+            if failure_mode == "supervisor_no_root"
+            else "configured binding is unavailable at /worker/bindings"
+        ) in str(retained.failure.details)
+        monkeypatch.setattr(
+            supervisor,
+            "launch",
+            lambda _launch: pytest.fail("no-start replay must not launch"),
+        )
+        assert not tuple(agent_root.rglob("worker-result.json"))
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "after-no-start-commit")
+        ).live_claim_ids
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+        coordinator = SQLiteCoordinatorAssignments(coordinator_path, (atom,))
+        assert execute().worker_result == retained
+    if restart_barrier == "diagnostic_write":
+        original_write = run_store.write_stage_failure
+
+        def interrupted_diagnostic_write(*_args, **_kwargs):
+            raise OSError("diagnostic persistence interrupted")
+
+        monkeypatch.setattr(
+            run_store, "write_stage_failure", interrupted_diagnostic_write
+        )
+        with pytest.raises(OSError, match="diagnostic persistence interrupted"):
+            execute()
+        assert coordinator.state(assignment.assignment_id) == "granted"
+        assert (
+            journal.read_state(assignment.assignment_id)
+            is AssignmentState.RESULT_DURABLE
+        )
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "during-interruption")
+        ).live_claim_ids
+        monkeypatch.setattr(run_store, "write_stage_failure", original_write)
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
     receipt = execute()
     replay = execute()
 
@@ -627,6 +752,20 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     assert authority.snapshot(run_uri).stages[0].status is StageStatus.FAILED
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
+    failure = receipt.worker_result.failure
+    assert isinstance(failure, ExecutionFailure)
+    assert run_store.read_stage_failure(run_uri, "build") == failure.to_dict()
+    if no_start:
+        assert receipt.worker_result.executor_metadata["process_created"] is False
+        controls = receipt.worker_result.executor_metadata["resource_controls"]
+        assert isinstance(controls, (list, tuple))
+        assert isinstance(controls[0], Mapping)
+        assert controls[0]["disposition"] == "unavailable"
+        assert "enforce" in failure.message
+        if failure_mode == "provider_error":
+            rendered = render_diagnostic_failure(failure.details["diagnostic_failure"])
+            assert "configured binding is unavailable at /worker/bindings" in rendered
+            assert "cause:" in rendered
     observed = provider.observe(
         ObserveRequest("agent-local", "session-1", "observe-after-failure")
     )
@@ -636,7 +775,10 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
 
 @pytest.mark.parametrize(
     ("release_crash_point", "reason_code"),
-    (("availability_published", "external_process_detected"), ("final_event_acknowledged", None)),
+    (
+        ("availability_published", "external_process_detected"),
+        ("final_event_acknowledged", None),
+    ),
 )
 def test_definitive_decline_replays_after_unbind_response_is_lost(
     tmp_path: Path,
@@ -752,7 +894,9 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     if reason_code is not None:
         prepare = provider.prepare
         monkeypatch.setattr(
-            provider, "prepare", lambda command: replace(prepare(command), detail=reason_code)
+            provider,
+            "prepare",
+            lambda command: replace(prepare(command), detail=reason_code),
         )
     with pytest.raises(TimeoutError, match="unbind response was lost"):
         execute()
@@ -1040,6 +1184,9 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
                 left_assignment.assignment_id,
                 f"{left_assignment.assignment_id}:root",
                 forbidden_relaunch,
+                start_failure=lambda _error: pytest.fail(
+                    "confirmed replay must not fail"
+                ),
             )
             == f"{left_assignment.assignment_id}:root"
         )

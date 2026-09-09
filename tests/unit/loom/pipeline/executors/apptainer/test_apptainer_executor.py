@@ -15,6 +15,7 @@ from loom.pipeline import (
     StageContext,
     StageFactorySpec,
     StageSpec,
+    ResourcePolicy,
 )
 from loom.pipeline.execution import (
     ExecutionFailure,
@@ -112,6 +113,7 @@ def _request(
     executor_name: str = "apptainer",
     adapter_options: dict[str, PlainData] | None = None,
     resources: ResourceRequest | None = None,
+    resource_policy: ResourcePolicy | None = None,
 ) -> tuple[LocalRunStore, str, StageExecutionRequest]:
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
@@ -140,6 +142,7 @@ def _request(
         stage_id="build",
         executor=executor_name,
         resources=resources or ResourceRequest(),
+        resource_policy=resource_policy or ResourcePolicy(enforce="all"),
         adapter_options=(
             adapter_options
             if adapter_options is not None
@@ -654,6 +657,12 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     ).execute(request)
 
     assert result.status == StageStatus.FAILED
+    controls = cast(
+        tuple[Mapping[str, object], ...], result.executor_metadata["resource_controls"]
+    )
+    assert [(item["resource"], item["disposition"]) for item in controls] == [
+        ("cpu", "failed")
+    ]
     failure = cast(ExecutionFailure, result.failure)
     assert "inspect the runtime stderr" in failure.message
     assert "unsupported --cpus/--memory options" in failure.message
@@ -662,7 +671,33 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     )
 
 
-def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
+def test_application_failure_preserves_validated_control_delivery(
+    tmp_path: Path,
+) -> None:
+    resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
+    store, run_uri, request = _request(tmp_path, resources=resources)
+
+    def write_failure(_command: ApptainerExecCommand) -> None:
+        store.write_stage_worker_result(
+            run_uri, "build", _worker_failure(run_uri).to_dict(), attempt=1
+        )
+
+    result = ApptainerExecutor(
+        run_store=store,
+        apptainer_command_runner=RecordingApptainerRunner(
+            returncode=1, callback=write_failure
+        ),
+    ).execute(request)
+    assert result.status is StageStatus.FAILED
+    controls = cast(
+        tuple[Mapping[str, object], ...], result.executor_metadata["resource_controls"]
+    )
+    assert [(item["resource"], item["disposition"]) for item in controls] == [
+        ("cpu", "applied")
+    ]
+
+
+def test_empty_enforcement_missing_result_does_not_claim_resource_limit_failure(
     tmp_path: Path,
 ) -> None:
     resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
@@ -671,8 +706,8 @@ def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
         resources=resources,
         adapter_options={
             "container": {"image": {"reference": "analysis.sif"}},
-            "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
         },
+        resource_policy=ResourcePolicy(enforce=[]),
     )
 
     result = ApptainerExecutor(

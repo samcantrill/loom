@@ -7,10 +7,14 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from loom.pipeline.execution import PreparedRunRecord
+from loom.pipeline.execution._resource_handoff import write_resource_handoff
 from loom.pipeline.executors.apptainer import ApptainerExecOptions
 from loom.pipeline.executors.containers import ContainerBuildResult, ContainerOptions
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime._resource_controls import resource_control_records
+from loom.pipeline.runtime.metadata import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.stores.run_store import (
     LegacyRunStore as RunStore,
@@ -122,6 +126,7 @@ def plan_afterok_slurm_dry_run(
     options: SlurmOptions | None = None,
     stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
+    stage_runtime: Mapping[str, ResolvedStageRuntimeOptions] | None = None,
     container_options: SlurmContainerInput | None = None,
     stage_container_options: SlurmStageContainerInputs | None = None,
     apptainer_options: SlurmApptainerOptionInput | None = None,
@@ -131,7 +136,14 @@ def plan_afterok_slurm_dry_run(
     created_at: str | None = None,
     plugin_selectors: Sequence[str] = (),
 ) -> SlurmDryRunPlanningResult:
-    """Read persisted state and write afterok SLURM dry-run artifacts."""
+    """Read persisted state and write afterok SLURM dry-run artifacts.
+
+    Supply ``stage_runtime`` from the resolved invocation to retain exact inner
+    resource intent for delayed worker creation. It must cover every RUN stage;
+    ``stage_resources`` independently describes the outer SLURM allocation.
+    Omitting runtime permits planning/inspection, but cannot reconstruct a new
+    delayed worker. Retained preparation identities cannot change resource intent.
+    """
 
     plan, prepared_run = _read_persisted_state(run_store=run_store, run_uri=run_uri)
     _validate_local_store_paths(run_store)
@@ -160,6 +172,18 @@ def plan_afterok_slurm_dry_run(
         stage_apptainer_options=stage_apptainer_options,
         plugin_selectors=plugin_selectors,
     )
+    if stage_runtime is not None:
+        write_resource_handoff(
+            store_paths=cast(LocalRunStorePaths, run_store),
+            run_uri=run_uri,
+            manifest_relative_path=cast(str, planned_submission.manifest_relative_path),
+            stage_names=tuple(
+                stage.stage_name
+                for stage in plan.ordered_stage_plans
+                if stage.action == PlanAction.RUN
+            ),
+            stage_runtime=stage_runtime,
+        )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
         job.logical_key: render_slurm_script(
@@ -210,7 +234,7 @@ def build_single_job_planned_submission(
         command,
         container_options=container_options,
         apptainer_options=apptainer_options,
-        resources=None,
+        resources=resources,
     )
     manifest_relative_path = slurm_manifest_relative_path(planning_id)
     job = _build_job(
@@ -384,6 +408,7 @@ def build_slurm_plan_metadata(
                 "stdout_relative_path": job.stdout_relative_path,
                 "stderr_relative_path": job.stderr_relative_path,
                 "dependency_job_keys": list(job.dependency_job_keys),
+                "resource_controls": _planned_resource_controls(job),
             }
             for job in cast(tuple[SlurmPlannedJob, ...], submission.jobs)
         ],
@@ -402,6 +427,36 @@ def build_slurm_plan_metadata(
             for item in container_build_results_metadata(container_build_results)
         ]
     return metadata
+
+
+def _planned_resource_controls(job: SlurmPlannedJob) -> list[PlainData]:
+    """Report allocation delegation and the separate inner-container choice."""
+
+    entries = {
+        kind: ResourceEntry.from_dict(value) for kind, value in job.resources.items()
+    }
+    allocation_policy = ResourcePolicy(enforce="all")
+    records = resource_control_records(
+        entries=entries,
+        policy=allocation_policy,
+        selection=allocation_policy.select(entries),
+        owner="slurm",
+        mechanisms={kind: "sbatch_allocation" for kind in entries},
+        selected_disposition="delegated",
+    )
+    container = cast(SlurmCommandArgv, job.command).metadata.get("container_command")
+    if isinstance(container, Mapping):
+        records.extend(
+            cast(Sequence[PlainData], container.get("resource_controls", ()))
+        )
+    return sorted(
+        records,
+        key=lambda item: (
+            cast(Mapping[str, str], item)["resource"],
+            cast(Mapping[str, str], item)["owner"],
+            cast(Mapping[str, str | None], item)["mechanism"] or "",
+        ),
+    )
 
 
 def _build_job(
