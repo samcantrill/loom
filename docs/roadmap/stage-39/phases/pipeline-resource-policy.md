@@ -468,6 +468,24 @@ and byte overflow fail explicitly. Preserve ordinary-depth/float/key rejection,
 duplicate/non-finite rejection, exact envelopes and legacy report replay. Cover
 both authenticated report operations without requiring live SLURM.
 
+The independent startup finding establishes a current producer below the limit:
+`ExecutionFailure.details` with a 495-level nested mapping can be constructed and
+serialized into a small valid schema-2 report, but report decoding raises
+`RecursionError` inside plain-data normalization. The bounded correction therefore
+includes stack-safe traversal at the existing serialization/plain.py owner for
+the report/persistence freeze, thaw and plain-normalization paths. Preserve the
+existing accepted scalar/container types, finite-number/key validation, immutable
+copies and canonical JSON/digest behavior; do not change the interpreter recursion
+limit, add a second failure serializer, or loosen unrelated protocol bounds.
+Test accepted near-limit data through actual report normalization and both report
+operations, not merely the JSON checker. Cover adjacent serialization behavior
+and the full phase gate because this helper has multiple existing consumers.
+
+Use the same report-bound validator on supported clients' serialized outbound
+report bodies so structural/byte overflow has an actionable local explanation
+before sending. The server independently validates the serialization boundary;
+its fixed authentication/error envelopes remain unchanged.
+
 Targeted independent startup review of this amendment is pending before runtime
 edits. A passing review admits completion in the manager's existing recovery
 correction, not a new executor/refiner pass. Fresh full validation and independent
