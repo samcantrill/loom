@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked; delayed-SLURM private handoff amendment approval required
+- Status: in_progress; approved delayed-SLURM handoff amendment in startup review
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -16,7 +16,8 @@
 - Blockers: see Delayed Submission Handoff Finding below. The approved transport
   amendment passes its targeted checks, but complete default validation at
   `29292c8` has one delayed-SLURM failure. A private durable handoff amendment
-  requires approval/review. No PR submission or independent full-diff review yet.
+  is approved and requires targeted startup review before runtime edits. No PR
+  submission or independent full-diff review yet.
 
 ## Objective And Context
 
@@ -523,7 +524,7 @@ actual retained local/SLURM exact/conflict paths. Ruff, type and diff checks pas
 The now-stale summary run was stopped gracefully before these edits; no process
 remains in its group. Both final gates must be fresh after this checkpoint.
 
-### Delayed Submission Handoff Finding — Amendment Required
+### Approved Delayed Submission Handoff Amendment
 
 The complete default gate at `29292c8` finishes without a stall: 3,088 passed,
 one failed, two skipped and 156 deselected (`validate-pr-final.log`). The supported
@@ -545,24 +546,67 @@ not an authoritative complete invocation; whole-run continuation already reports
 insufficient prepared state. Neither current defaults, recomposed configuration
 nor the outer SLURM allocation can safely stand in for the missing inner intent.
 
-Recommended targeted amendment, pending maintainer approval: retain the complete
-normalized resources, resolved policy and exact selection as a private, versioned
-execution handoff at an existing durable preparation owner, before information is
-reduced for display. Delayed worker creation consumes that saved handoff; safe
-summaries remain unchanged. The amendment must name the authoritative producer,
-consumer, version/identity and legacy-missing-state behavior before coding. Reuse
-existing artifacts where their contracts permit; do not add a parallel lifecycle
-store, infer omitted values or rewrite existing saved identities. Keep original
-runtime/pinned-environment guidance for state that cannot be replayed faithfully.
+Maintainer approval admits this targeted amendment and one independent startup
+review, followed by manager-local implementation after a pass. It does not reset
+the executor/refiner budget or authorize Phase 2/physical execution.
+
+The existing SLURM generated-artifact directory owns one private preparation
+document, `slurm/submissions/<planning_id>/execution-resources.json`. Neither
+`runtime.json`, the artifact-safe `PreparedRunRecord`, nor public planning/live
+manifest summaries gain raw resource attributes. This document is execution
+input, not a lifecycle store or another complete invocation format. Its lifetime
+is that of the existing submission directory; it contains only resource intent,
+not environment, adapter payloads, credentials, or new lifecycle state.
+
+- Producer: `plan_afterok_slurm_dry_run` accepts optional keyword-only
+  `stage_runtime: Mapping[str, ResolvedStageRuntimeOptions]`. CLI dry-run and live
+  afterok paths pass the actual resolved runtime options (including programmatic
+  overrides), before reducing them to display metadata. Resolve concrete selection
+  once with the existing direct effective-demand owner. Save exactly the RUN job
+  stages; require their complete coverage and matching stage identities. Outer
+  `stage_resources` remains the separately mapped SLURM allocation authority.
+- Durable schema version 1 has exactly `schema_version`, `run_uri`,
+  `manifest_relative_path`, and `stages`. Each stage value has exactly `resources`
+  (full normalized request), `resource_policy` (both resolved axes), and
+  `resource_selection` (both exact sorted lists). The run URI, existing immutable
+  manifest path/planning ID and stage name bind its execution identity. Existing
+  resource codecs and selection comparison own semantic validation; no downstream
+  target imports, factories or configuration instantiation are added.
+- Publication precedes script/manifest publication and any scheduler call. Use
+  atomic create-if-absent at the existing store-owned generated-artifact path;
+  retain exact bytes on identical preparation, reject changed content for the
+  same identity before overwriting anything. Existing live preparations missing
+  this file must not be silently retrofitted. New files are owner-readable/writable;
+  private means excluded from public summary projection, not a new security service.
+- Consumer: `_materialize_submitted_worker_request_if_needed` uses the already
+  validated submitted-operation manifest path to read this document, verifies
+  schema/run/path/stage identity, and copies the saved three fields over the
+  existing safe non-resource stage metadata. It never reconstructs resources from
+  display counts, outer allocation, a recomposed config or new defaults. Existing
+  stage-spec/input reconstruction is unchanged; complete whole-run continuation
+  remains unsupported. Once a worker request exists, its current exact replay
+  path remains authoritative and does not rewrite or require a new preparation.
+- Missing, malformed, incompatible or conflicting handoff fails before worker
+  materialization/launch, with a preserved cause and guidance to finish in the
+  pinned original runtime or prepare a fresh execution identity. Legacy summaries
+  and manifests remain inspectable with unchanged schemas and bytes. Omitting the
+  new optional argument still permits dry-run inspection/submission planning,
+  but cannot establish executable delayed reconstruction; document this limit.
+
+Private helpers and module layout are implementation discretion. Reuse existing
+local generated-artifact path and atomic-write utilities; no new public store
+method, registry, generic snapshot API, public manifest schema, or implicit upgrade.
 
 Required proof for that amendment: actual delayed start with nonempty resource
 attributes and runtime overrides preserves exact resources/policy/selection;
 safe summaries omit attribute values; exact replay preserves bytes/identity;
-missing or incompatible private state fails actionably before launch. Reuse the
+missing or incompatible private state fails actionably before launch. Include
+different outer allocation, retained same-identity conflict, and CLI preparation
+coverage so the test cannot pass with a test-only producer. Reuse the
 existing afterok, preparation and retained-worker harnesses, then fresh full gates
 and the still-required full Phase 1 independent review. The transport amendment's
-startup pass does not review this new durable-owner decision. Its implementation
-is paused pending approval and a targeted amendment/review; no new pass is assumed.
+startup pass does not review this new durable-owner decision. Runtime edits wait
+for the now-approved targeted startup review; full Phase 1 review remains separate.
 
 The completed separate summary corroborates this finding. At `29292c8`, package
 (123), unit (2,179), contract (301) and e2e (69) suites pass; integration has 418

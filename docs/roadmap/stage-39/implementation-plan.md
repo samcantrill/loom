@@ -1,6 +1,6 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: blocked; Phase 1 delayed-SLURM private handoff amendment approval required
+Status: in_progress; approved Phase 1 delayed-SLURM amendment in startup review
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -9,9 +9,9 @@ Current phase: 1 — pipeline-resource-policy
 Blockers: the complete default gate at `29292c8` has one delayed-SLURM continuation
 failure among 3,088 passes. That route reconstructs execution resources from safe
 summaries containing attribute counts rather than values; distinct full requests
-can have identical summaries. See the phase card's Delayed Submission Handoff
-Finding. Retaining a separate private durable execution handoff requires a targeted
-amendment and startup review before implementation, not removal of display safety
+can have identical summaries. See the phase card's Approved Delayed Submission
+Handoff Amendment. The maintainer approved the private durable handoff amendment;
+its targeted startup review is required before implementation, not removal of display safety
 or reconstruction from current defaults/outer allocation. The approved transport
 amendment is implemented and its targeted checks pass. Full gates, independent
 full-diff review and PR submission remain incomplete.
@@ -91,7 +91,7 @@ targeted checks; the delayed-SLURM durable handoff remains the technical blocker
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -125,10 +125,11 @@ targeted checks; the delayed-SLURM durable handoff remains the technical blocker
   after one bounded correction for stack-safe plain-data normalization;
   implementation completes the existing manager recovery correction.
   This is not a new executor/refiner budget or permission to add an inspection API.
-- Remaining gate: after the safe-display/private-worker correction at `29292c8`,
-  delayed SLURM reveals a missing durable full-runtime owner. Approval of its
-  targeted amendment/review is pending; no new serializer/store/schema cut or
-  further executor/refiner pass is silently authorized by the transport approval.
+- Delayed handoff amendment: approved; the existing SLURM submission directory
+  retains a private version-1 execution-resource document for delayed worker
+  creation. The phase card specifies producer, consumer, exact identity/replay,
+  safe-display separation and legacy refusal. Independent targeted startup review
+  precedes manager implementation; no further executor/refiner pass is admitted.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
@@ -146,5 +147,5 @@ targeted checks; the delayed-SLURM durable handoff remains the technical blocker
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`. Targeted checks pass, but the complete default gate has one delayed-SLURM failure among 3,088 passes. Full-diff independent review and PR remain pending | Private durable delayed-execution handoff amendment needs approval; bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`. Targeted checks pass, but the complete default gate has one delayed-SLURM failure among 3,088 passes. Approved amendment in startup review; full-diff independent review and PR remain pending | Private delayed-execution handoff not implemented; bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
