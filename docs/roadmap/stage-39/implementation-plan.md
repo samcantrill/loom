@@ -1,17 +1,17 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: blocked; Phase 1 transport amendment approval required
+Status: in_progress; approved Phase 1 transport amendment startup review pending
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: Phase 1's Transport Boundary Finding requires a targeted amendment to
-reconcile portable failure data with the generic HTTP JSON limits. Integration,
+Blockers: none awaiting maintainer approval. Phase 1's Approved Transport Amendment
+requires targeted independent startup review before its implementation. Integration,
 no-start waiter and failed-replay wake corrections pass their focused checks;
 the complete local-daemon file now passes 65 tests in the isolated no-extra
 environment. Fresh full gates, independent implementation review and PR submission
-remain incomplete and cannot establish R3 while its transport contract is unresolved.
+remain incomplete; targeted results alone do not establish the complete R3 path.
 
 ## Summary
 
@@ -85,7 +85,7 @@ remain incomplete and cannot establish R3 while its transport contract is unreso
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -113,6 +113,11 @@ remain incomplete and cannot establish R3 while its transport contract is unreso
   Existing three corrections remain consumed; the approved
   recovery has one executor delivery and at most one qualified correction, not
   a reset of the original budget. No PR opens with known blockers.
+- Transport amendment: maintainer approved failure-only finite plain data,
+  depth 512 and collection size 256, with unchanged byte caps and ordinary
+  protocol constraints. One targeted independent startup review is pending;
+  implementation then completes the existing manager recovery correction.
+  This is not a new executor/refiner budget or permission to add an inspection API.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
@@ -130,5 +135,5 @@ remain incomplete and cannot establish R3 while its transport contract is unreso
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`; subsequent integration/no-start corrections at `db1b7a6` and the failed-replay wake correction have focused evidence in the phase card, including 65 passing isolated local-daemon tests. Fresh full gates and independent review remain pending | Portable failure HTTP constraint amendment needs approval and review; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`; integration/no-start corrections at `db1b7a6` and failed-replay wake correction at `64612b6` have focused evidence, including 65 passing isolated local-daemon tests. Approved transport amendment startup review, fresh full gates and full-diff independent review remain pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |

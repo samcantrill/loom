@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked; recovery corrections validated locally, transport amendment approval required
+- Status: in_progress; approved transport amendment startup review pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -13,8 +13,8 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: R3's portable failure contract conflicts with the retained generic
-  HTTP JSON limits; see Transport Boundary Finding below. Full gates and required
+- Blockers: none awaiting maintainer approval. See Approved Transport Amendment;
+  its targeted startup review precedes implementation. Full gates and required
   independent implementation review remain incomplete. No PR submission.
 
 ## Objective And Context
@@ -242,7 +242,7 @@ gate/review/merge ownership follows the canonical phase workflow.
   unmet fixed contracts below, so completion is not accepted
 - Refiner: correction `1198c1a` and related repair `68a37ad` returned;
   manager verified the changes and added discriminating integration coverage
-- Pre-submit: blocked by the remaining findings below; no PR opened or pushed
+- Pre-submit: pending approved transport correction and fresh gates; no PR opened or pushed
 - Independent implementation review: not started
 - Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
   its separately returned repair, and manager correction `6474206`. Do not reset
@@ -258,7 +258,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
 | Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
 | Full gates | The latest `make validate-pr` passed repository-wide lint and Pyright, then failed/interrupted in default tests: 681 passed, 8 failed, 2 skipped, 156 deselected. Current capability/default-expectation corrections pass 21 targeted tests; SLURM continuation corrections pass 5 plus 18 adjacent consumers. Following the no-start waiter and failed-replay wake corrections, the complete local-daemon file passes 65 tests in the isolated no-extra environment. Earlier full receipts and `build/test-summary.md` remain stale; both final gates must run after the transport amendment is resolved. |
-| PR, review, and merge | Blocked before submission. Required independent implementation review has not run. No PR, push or merge occurred. |
+| PR, review, and merge | Approved transport amendment awaits targeted startup review and implementation before fresh gates. Required full-diff independent implementation review has not run. No PR, push or merge occurred. |
 | Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
 ### Manager Pre-Submit Corrections
@@ -416,7 +416,7 @@ without changing the production 60-second indeterminate-operation retry window.
 Fresh full validation and independent full-diff review are still required. These
 focused results do not admit PR submission or phase completion.
 
-### Transport Boundary Finding — Amendment Required
+### Approved Transport Amendment
 
 Read-only public-data reproduction on `2e4d0c9` (runtime equals committed recovery
 `4a81fcf` plus upstream #291) establishes a remaining R3 producer/transport gap:
@@ -427,28 +427,51 @@ detail `{"threshold": 0.5}` produces an 846-byte report rejected as an invalid J
 value. Both are reachable current failure producers, not forged internal state.
 The HTTP request handler runs this generic decoder before the report codec; its
 depth-8/int-only policy prevents complete failure delivery despite the new carrier.
-The remote inspection-response decoder shares the depth checker and needs the
-same boundary reconciliation. The passing short-chain socket-client test does
-not establish these deeper HTTP report/inspection cases.
+The passing short-chain socket-client test does not establish deeper HTTP report
+delivery followed by coordinator persistence and client inspection.
 
-R3 currently says existing transport bounds apply. Do not silently widen all
-protocol traffic or flatten/drop the failure to satisfy those bounds. Recommended
-targeted amendment: admit the existing failure plain-data types (including finite
-floats) and bounded causal/nested structure specifically at report and inspection
-failure payloads; preserve existing byte caps, strict surrounding envelopes,
-ordinary request limits, legacy replay and explicit overflow errors. Name the
-dedicated structural limits and validation owner before coding. Proposed limits
-are depth 512 and collection size 256 within the declared failure payload only:
-the existing 128-node diagnostic graph can require roughly three JSON levels per
-causal link. The existing 64-KiB agent body and 1-MiB inspection-response caps stay
-unchanged; finite floats are accepted only inside failure plain data. These are
-proposed, not approved, limits. Shared transport failure-payload validation owns
-them; generic requests retain depth 8 and their existing scalar/collection rules.
-Require real three-level/structured-detail HTTP report and remote-client tests,
-plus unchanged rejection of invalid ordinary protocol data and genuine overflow.
-This needs approval of the changed transport constraint; no runtime change for
-this finding or new review/refiner pass has been made. The manager's one recovery
-correction remains open, not reset.
+The maintainer approved the targeted amendment: accept existing failure plain-data
+types (including finite floats and string keys) and bounded causal/nested structure
+only within declared failure payloads. One transport failure-payload validator owns
+depth 512 (relative to that payload root) and collection size 256. The existing
+128-node diagnostic graph can require roughly three JSON levels per causal link.
+Keep the 64-KiB agent body and 1-MiB HTTP inspection-response caps, strict surrounding
+envelopes, exact report schemas, authentication, legacy replay/digests and explicit
+overflow errors. Generic requests retain depth 8, collection size 64 and their
+existing scalar/key rules; ordinary inspection JSON retains collection size 256.
+Do not flatten, stringify or silently drop failures to fit these bounds.
+
+Current route inventory: authenticated `agent/output_manifest` and
+`slurm_bootstrap/report` carry `_RemoteExecutionReport` schema 2 at `report`, with
+the declared subtree at `report.failure`. Choose the exception using the exact
+authenticated operation and current report version, never by finding arbitrary
+keys named `failure`. Existing report and operation codecs retain semantic and
+exact-field ownership. Malformed JSON, duplicate keys and non-finite values,
+including numeric overflow, remain rejected with an explicit transport error.
+
+Detailed admission inspection currently returns existing
+`owners.run_result.failures` and `diagnostic_failure` through the daemon socket;
+that decoder already accepts nested plain data. The separate HTTP query
+`RunInspectionResult` is a closed status/location schema with no detailed-failure
+field. Its shared depth checker does not justify adding a hypothetical field or
+widening arbitrary response data: retain its schema and limits unchanged. Prove
+the supported complete path with a real CPU worker producing at least three native
+causal nodes and structured finite-float details, actual TLS HTTP report delivery,
+coordinator persistence under a different root, and text/JSON admission inspection
+with worker-file access forbidden. Existing HTTP query bounds/authorization tests
+must still pass. If evidence identifies another existing declared failure subtree,
+apply the same failure validator there; do not introduce an endpoint/schema.
+
+Boundary checks must show accepted finite floats, string keys and near-limit
+nested/collection data only within the declared subtree; genuine depth, collection
+and byte overflow fail explicitly. Preserve ordinary-depth/float/key rejection,
+duplicate/non-finite rejection, exact envelopes and legacy report replay. Cover
+both authenticated report operations without requiring live SLURM.
+
+Targeted independent startup review of this amendment is pending before runtime
+edits. A passing review admits completion in the manager's existing recovery
+correction, not a new executor/refiner pass. Fresh full validation and independent
+review of the entire Phase 1 diff remain required before PR/merge.
 
 Current full-gate evidence: repository-wide lint and Pyright passed after test-only
 type narrowing, but default tests failed/interrupted with 681 passed, 8 failed,
@@ -514,13 +537,11 @@ recovery cases finish in approximately 3.3–3.6 seconds. This resolves the repr
 retry-wake starvation finding without claiming a fresh repository-wide gate.
 Changed-file Ruff, Pyright and diff checks pass. No diagnostic runner remains live.
 
-Continuation is now blocked on the unchanged, unapproved transport constraint
-amendment above. It has persisted across the prior implementation continuation,
-the maintainer's blocker-explanation request and the current correction. The
-already-approved integration and lifecycle corrections are recorded; no further
-executor/refiner pass, transport widening, full-gate claim, independent review or
-PR submission is authorized by these subset results. Approval of the targeted
-transport contract and its review is required before completing R3 and final gates.
+Continuation is approved through the targeted transport review and existing
+manager correction. Integration and lifecycle results are retained evidence, not
+a full-gate claim. After the transport checks, run fresh full gates, perform the
+required independent full Phase 1 review, then submit and merge only if all gates
+pass. Phase 2 and physical Stage 81 execution remain outside this recovery scope.
 
 ### R1 — Canonical Offer Reuse
 
@@ -596,8 +617,9 @@ New writers emit schema 2; readers accept exact schema-1 and schema-2 field sets
 Legacy decode/re-encode returns the original shape/canonical digest without new
 fields, inferred controls or start proof. Current scalar summary and identity
 must agree with nested failure. Remote-agent and SLURM report/store/commit paths
-share this contract; enclosing database versions stay unchanged. Existing transport
-bounds apply, with actionable failure rather than silent truncation on overflow.
+share this contract; enclosing database versions stay unchanged. Existing byte and
+ordinary-envelope bounds apply; the Approved Transport Amendment owns recognized
+failure-subtree structural rules. Overflow is actionable, never silently truncated.
 
 The existing retained `ResidentWorkerLaunch` document gains explicit schema 2 and
 `resource_controls`. Unversioned legacy documents preserve their old shape and
