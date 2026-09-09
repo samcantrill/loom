@@ -113,6 +113,7 @@ def _request(
     executor_name: str = "apptainer",
     adapter_options: dict[str, PlainData] | None = None,
     resources: ResourceRequest | None = None,
+    resource_policy: ResourcePolicy | None = None,
 ) -> tuple[LocalRunStore, str, StageExecutionRequest]:
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
@@ -141,7 +142,7 @@ def _request(
         stage_id="build",
         executor=executor_name,
         resources=resources or ResourceRequest(),
-        resource_policy=ResourcePolicy(enforce="all"),
+        resource_policy=resource_policy or ResourcePolicy(enforce="all"),
         adapter_options=(
             adapter_options
             if adapter_options is not None
@@ -664,7 +665,7 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     )
 
 
-def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
+def test_empty_enforcement_missing_result_does_not_claim_resource_limit_failure(
     tmp_path: Path,
 ) -> None:
     resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
@@ -673,8 +674,8 @@ def test_scheduling_only_missing_result_does_not_claim_resource_limit_failure(
         resources=resources,
         adapter_options={
             "container": {"image": {"reference": "analysis.sif"}},
-            "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
         },
+        resource_policy=ResourcePolicy(enforce=[]),
     )
 
     result = ApptainerExecutor(

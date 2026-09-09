@@ -23,6 +23,7 @@ from loom.pipeline.executors.containers import (
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime.resource_policy import ResourcePolicy, coerce_resource_policy
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import utc_timestamp
@@ -66,7 +67,6 @@ class ApptainerExecOptions:
     rocm: bool = False
     fakeroot: bool = False
     no_home: bool = False
-    cpu_memory_enforcement: str = "runtime"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -83,13 +83,6 @@ class ApptainerExecOptions:
             raise ApptainerOptionError(
                 "ApptainerExecOptions.nv and rocm cannot both be true"
             )
-        if not isinstance(self.cpu_memory_enforcement, str) or (
-            self.cpu_memory_enforcement not in {"runtime", "scheduling_only"}
-        ):
-            raise ApptainerOptionError(
-                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
-                "or 'scheduling_only'"
-            )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -99,7 +92,6 @@ class ApptainerExecOptions:
             "rocm": self.rocm,
             "fakeroot": self.fakeroot,
             "no_home": self.no_home,
-            "cpu_memory_enforcement": self.cpu_memory_enforcement,
         }
 
     @classmethod
@@ -108,11 +100,10 @@ class ApptainerExecOptions:
             return cls()
         mapping = _plain_mapping(data, path="ApptainerExecOptions")
         _reject_unknown(mapping, _EXEC_OPTIONS_FIELDS, path="ApptainerExecOptions")
-        enforcement = mapping.get("cpu_memory_enforcement", "runtime")
-        if not isinstance(enforcement, str):
+        if "cpu_memory_enforcement" in mapping:
             raise ApptainerOptionError(
-                "ApptainerExecOptions.cpu_memory_enforcement must be 'runtime' "
-                "or 'scheduling_only'"
+                "ApptainerExecOptions.cpu_memory_enforcement was removed; "
+                "select CPU and memory controls with resource_policy.enforce"
             )
         return cls(
             command=_text(
@@ -133,7 +124,6 @@ class ApptainerExecOptions:
                 mapping.get("no_home", False),
                 path="ApptainerExecOptions.no_home",
             ),
-            cpu_memory_enforcement=enforcement,
         )
 
 
@@ -403,6 +393,7 @@ def build_apptainer_exec_command(
     worker_command: Sequence[str],
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None,
     host_environment: Mapping[str, str] | None = None,
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
 ) -> ApptainerExecCommand:
     """Return deterministic ``apptainer exec`` argv for one worker command."""
 
@@ -421,7 +412,9 @@ def build_apptainer_exec_command(
         _append(argv, redacted, "--fakeroot")
     if options.no_home:
         _append(argv, redacted, "--no-home")
-    _append_resource_limits(argv, redacted, container, options)
+    _append_resource_limits(
+        argv, redacted, container, policy=_resource_policy(resource_policy)
+    )
     if container.workdir is not None:
         _append_option(argv, redacted, "--pwd", container.workdir)
     for mount in _sorted_mounts(container):
@@ -454,7 +447,8 @@ def _append_resource_limits(
     argv: list[str],
     redacted: list[str],
     container: ContainerOptions,
-    options: ApptainerExecOptions,
+    *,
+    policy: ResourcePolicy,
 ) -> None:
     """Project direct CPU and memory intent to Apptainer cgroup flags."""
 
@@ -462,8 +456,11 @@ def _append_resource_limits(
     if intent is None:
         return
     entries = cast(Mapping[str, ResourceEntry], intent.entries)
+    selected_kinds = set(policy.select(entries)["enforce"])
     selected = {
-        kind: entry for kind, entry in entries.items() if kind in {"cpu", "memory"}
+        kind: entry
+        for kind, entry in entries.items()
+        if kind in {"cpu", "memory"} and kind in selected_kinds
     }
     try:
         validated = ResourceRequest(entries=selected).entries
@@ -471,7 +468,7 @@ def _append_resource_limits(
         raise ApptainerOptionError(
             f"container CPU/memory resource request is invalid: {exc}"
         ) from exc
-    if not selected or options.cpu_memory_enforcement == "scheduling_only":
+    if not selected:
         return
     cpu = validated.get("cpu")
     if cpu is not None:
@@ -602,6 +599,14 @@ def _exec_options(
         value
         if isinstance(value, ApptainerExecOptions)
         else ApptainerExecOptions.from_dict(value)
+    )
+
+
+def _resource_policy(
+    value: ResourcePolicy | Mapping[str, object] | None,
+) -> ResourcePolicy:
+    return ResourcePolicy() if value is None else coerce_resource_policy(
+        value, path="resource_policy"
     )
 
 

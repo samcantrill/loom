@@ -515,6 +515,7 @@ def _prepare_apptainer_attempt(
         container_options=container,
         apptainer_options=apptainer_options,
         worker_command=worker_command,
+        resource_policy=runtime.resource_policy,
     )
     return _PreparedApptainerAttempt(
         container=container,
@@ -554,11 +555,7 @@ def _with_runtime_resources(
     runtime: ResolvedStageRuntimeOptions,
     executor_name: str,
 ) -> ContainerOptions:
-    full_resources = cast(ResourceRequest, runtime.resources)
-    selected = runtime.resource_policy.select(full_resources.entries)["enforce"]
-    resources = ResourceRequest(
-        entries={key: full_resources.entries[key] for key in selected}
-    )
+    resources = cast(ResourceRequest, runtime.resources)
     container_resources = container.resources
     if resources.entries:
         descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve(executor_name)

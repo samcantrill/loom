@@ -22,6 +22,7 @@ from loom.pipeline.executors.containers import (
 )
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.runtime.capabilities import ResourceCapability, ResourceSupportLevel
+from loom.pipeline.runtime.resource_policy import ResourcePolicy, coerce_resource_policy
 from loom.serialization import (
     PlainData,
     freeze_plain_data,
@@ -561,6 +562,7 @@ def build_docker_run_command(
     container_options: ContainerOptions | Mapping[str, object],
     worker_command: Sequence[str],
     docker_options: DockerOptions | Mapping[str, object] | None = None,
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
 ) -> DockerRunCommand:
     """Return deterministic ``docker run`` argv for one prepared worker command."""
 
@@ -580,7 +582,10 @@ def build_docker_run_command(
     for mount in _sorted_mounts(container):
         _append_option(argv, redacted, "--mount", _mount_argument(mount))
     _append_environment(argv, redacted, cast(ContainerEnvironment, container.environment))
-    for flag, value in _resource_flags(cast(ContainerResourceIntent | None, container.resources)):
+    policy = _resource_policy(resource_policy)
+    for flag, value in _resource_flags(
+        cast(ContainerResourceIntent | None, container.resources), policy=policy
+    ):
         _append_option(argv, redacted, flag, value)
     image = cast(ContainerImageReference, container.image).reference
     _append(argv, redacted, image)
@@ -730,13 +735,18 @@ def _append_environment(
 
 def _resource_flags(
     resources: ContainerResourceIntent | None,
+    *,
+    policy: ResourcePolicy,
 ) -> tuple[tuple[str, str], ...]:
     if resources is None:
         return ()
     flags: list[tuple[str, str]] = []
     entries = cast(Mapping[str, ResourceEntry], resources.entries)
     capabilities = cast(Mapping[str, ResourceCapability], resources.capabilities)
+    selected = set(policy.select(entries)["enforce"])
     for kind, entry in sorted(entries.items()):
+        if kind not in selected:
+            continue
         capability = capabilities.get(kind)
         if capability is None:
             raise DockerOptionError(f"Docker resource {kind!r} is missing capability")
@@ -811,6 +821,14 @@ def _docker_options(
     value: DockerOptions | Mapping[str, object] | None,
 ) -> DockerOptions:
     return value if isinstance(value, DockerOptions) else DockerOptions.from_dict(value)
+
+
+def _resource_policy(
+    value: ResourcePolicy | Mapping[str, object] | None,
+) -> ResourcePolicy:
+    return ResourcePolicy() if value is None else coerce_resource_policy(
+        value, path="resource_policy"
+    )
 
 
 def _run_command(value: DockerRunCommand) -> DockerRunCommand:

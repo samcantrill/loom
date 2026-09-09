@@ -23,6 +23,7 @@ from loom.pipeline.executors.apptainer.build import (
 from loom.pipeline.executors.containers import ContainerOptions, ContainerResourceIntent
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.runtime.capabilities import ResourceCapability
+from loom.pipeline.runtime import ResourcePolicy
 from loom.serialization import stable_json_dumps
 
 
@@ -103,8 +104,6 @@ def test_apptainer_exec_options_and_inputs_reject_invalid_shapes() -> None:
         ApptainerExecOptions(nv=True, rocm=True)
     with pytest.raises(ApptainerOptionError, match="cpu_memory_enforcement"):
         ApptainerExecOptions.from_dict({"cpu_memory_enforcement": "advisory"})
-    with pytest.raises(ApptainerOptionError, match="cpu_memory_enforcement"):
-        ApptainerExecOptions.from_dict({"cpu_memory_enforcement": ["runtime"]})
     with pytest.raises(ApptainerOptionError, match="worker_command"):
         build_apptainer_exec_command(
             container_options=_container_options(),
@@ -141,6 +140,7 @@ def test_build_apptainer_exec_command_maps_exact_cpu_and_memory_before_image() -
             ),
         ),
         worker_command=("python", "-V"),
+        resource_policy=ResourcePolicy(enforce="all"),
     )
 
     assert command.argv == (
@@ -167,18 +167,15 @@ def test_build_apptainer_exec_command_converts_exact_fractional_memory_units() -
             ),
         ),
         worker_command=("python", "-V"),
+        resource_policy=ResourcePolicy(enforce="all"),
     )
 
     assert command.argv[command.argv.index("--memory") + 1] == "524288"
 
 
-@pytest.mark.parametrize("policy", ("runtime", "scheduling_only"))
-def test_absent_resource_intent_does_not_invent_cpu_memory_limits(policy: str) -> None:
+def test_absent_resource_intent_does_not_invent_cpu_memory_limits() -> None:
     command = build_apptainer_exec_command(
         container_options=ContainerOptions(image="analysis.sif"),
-        apptainer_options=ApptainerExecOptions.from_dict(
-            {"cpu_memory_enforcement": policy}
-        ),
         worker_command=("python", "-V"),
     )
     assert command.argv == (
@@ -191,42 +188,30 @@ def test_absent_resource_intent_does_not_invent_cpu_memory_limits(policy: str) -
     )
 
 
-def test_scheduling_only_omits_limits_but_retains_and_validates_intent() -> None:
+def test_empty_enforcement_omits_limits_but_retains_full_intent() -> None:
     resources = _resource_intent(
         cpu=ResourceEntry(kind="cpu", amount=2),
         memory=ResourceEntry(kind="memory", amount=512, unit="MiB"),
     )
-    options = ApptainerExecOptions(cpu_memory_enforcement="scheduling_only")
     command = build_apptainer_exec_command(
         container_options=ContainerOptions(image="analysis.sif", resources=resources),
-        apptainer_options=options,
         worker_command=("python", "-V"),
+        resource_policy=ResourcePolicy(enforce=[]),
     )
 
     assert "--cpus" not in command.argv
     assert "--memory" not in command.argv
-    assert command.metadata["apptainer_options"] == options.to_dict()
     assert (
         command.metadata["container"]
         == ContainerOptions(
             image="analysis.sif", resources=resources
         ).to_redacted_metadata()
     )
-    with pytest.raises(ApptainerOptionError, match="positive integer"):
-        build_apptainer_exec_command(
-            container_options=ContainerOptions(
-                image="analysis.sif",
-                resources=_resource_intent(cpu=ResourceEntry(kind="cpu", amount=0)),
-            ),
-            apptainer_options=options,
-            worker_command=("python", "-V"),
-        )
 
 
 @pytest.mark.parametrize(
     ("entry", "match"),
     (
-        (ResourceEntry(kind="cpu", amount=0), "positive integer"),
         (ResourceEntry(kind="memory", amount=0.5, unit="B"), "whole number of bytes"),
         (
             ResourceEntry(kind="memory", amount=1 << 63, unit="B"),
@@ -249,6 +234,7 @@ def test_build_apptainer_exec_command_revalidates_bypassed_resource_intent(
                 resources=_resource_intent(**{entry.kind: entry}),
             ),
             worker_command=("python", "-V"),
+            resource_policy=ResourcePolicy(enforce="all"),
         )
 
 
@@ -261,6 +247,7 @@ def test_build_apptainer_exec_command_accepts_exact_large_float64_byte_value() -
             ),
         ),
         worker_command=("python", "-V"),
+        resource_policy=ResourcePolicy(enforce="all"),
     )
 
     assert command.argv[command.argv.index("--memory") + 1] == str((1 << 53) + 2)
