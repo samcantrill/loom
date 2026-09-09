@@ -867,6 +867,10 @@ class _ResidentAssignmentBundle:
             safe_metadata["stage_resources"] = worker_request.metadata[
                 "stage_resources"
             ]
+        if "resource_selection" in worker_request.metadata:
+            safe_metadata["resource_selection"] = worker_request.metadata[
+                "resource_selection"
+            ]
         return cls(
             assignment_id=assignment_id,
             stage_work_id=stage_work_id,

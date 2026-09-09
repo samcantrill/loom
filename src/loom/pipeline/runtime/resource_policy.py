@@ -78,7 +78,12 @@ class ResourcePolicy:
                 sorted(
                     name
                     for name, entry in present.items()
-                    if getattr(entry, "amount", entry) != 0
+                    if (
+                        entry.get("amount")
+                        if isinstance(entry, Mapping)
+                        else getattr(entry, "amount", entry)
+                    )
+                    != 0
                 )
             )
         else:

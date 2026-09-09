@@ -250,6 +250,10 @@ class SlurmStageDelivery:
         metadata: dict[str, PlainData] = {}
         if "stage_resources" in worker_request.metadata:
             metadata["stage_resources"] = worker_request.metadata["stage_resources"]
+        if "resource_selection" in worker_request.metadata:
+            metadata["resource_selection"] = worker_request.metadata[
+                "resource_selection"
+            ]
         return cls(
             assignment_id=assignment.assignment_id,
             stage_work_id=assignment.stage_work_id,

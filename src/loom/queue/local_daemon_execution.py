@@ -3068,6 +3068,14 @@ class LocalDaemonExecution:
                     produced_outputs=_produced_outputs(snapshot),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=intent.runtime[record.stage_name],
+                    metadata={
+                        "resource_selection": {
+                            key: list(value)
+                            for key, value in intent.placements[
+                                record.stage_name
+                            ].resource_selection.items()
+                        }
+                    },
                 )
             )
             if (
@@ -4617,6 +4625,14 @@ class LocalDaemonExecution:
                 produced_outputs=produced,
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
+                metadata={
+                    "resource_selection": {
+                        key: list(value)
+                        for key, value in intent.placements[
+                            record.stage_name
+                        ].resource_selection.items()
+                    }
+                },
             )
         )
         if (

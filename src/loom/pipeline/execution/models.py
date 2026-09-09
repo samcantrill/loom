@@ -473,13 +473,15 @@ class StageWorkerRequest:
             raise RunRequestError(
                 "StageWorkerRequest.resolved_runtime must include executor"
             )
+        metadata = _plain_mapping(self.metadata, "metadata")
+        _validate_worker_resource_selection(runtime, metadata)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(
             self,
             "executor_metadata",
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        object.__setattr__(self, "metadata", metadata)
 
     def to_dict(self) -> dict[str, PlainData]:
         fingerprint = cast(StageFingerprintRecord, self.fingerprint)
@@ -563,6 +565,39 @@ class StageWorkerRequest:
                 cast(Mapping[str, PlainData], mapping.get("metadata", {})),
                 "metadata",
             ),
+        )
+
+
+def _validate_worker_resource_selection(
+    runtime: Mapping[str, PlainData], metadata: Mapping[str, PlainData]
+) -> None:
+    """Reject a retained worker whose saved post-demand projection changed."""
+
+    selection = metadata.get("resource_selection")
+    if selection is None:
+        return
+    if not isinstance(selection, Mapping):
+        raise RunRequestError("StageWorkerRequest.metadata.resource_selection is invalid")
+    resources = runtime.get("resources")
+    policy = runtime.get("resource_policy")
+    if not isinstance(resources, Mapping) or not isinstance(policy, Mapping):
+        raise RunRequestError(
+            "StageWorkerRequest resource selection requires resolved runtime policy and resources"
+        )
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        raise RunRequestError("StageWorkerRequest resolved runtime resources are invalid")
+    from loom.pipeline.runtime.resource_policy import ResourcePolicy
+
+    expected = ResourcePolicy.from_dict(policy).select(entries)
+    actual = {
+        key: tuple(value)
+        for key, value in selection.items()
+        if isinstance(key, str) and not isinstance(value, str)
+    }
+    if actual != expected:
+        raise RunRequestError(
+            "StageWorkerRequest resource selection conflicts with saved runtime"
         )
 
 

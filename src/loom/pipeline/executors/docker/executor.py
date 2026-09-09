@@ -709,6 +709,9 @@ def _process_metadata(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
+        "resource_controls": _resource_controls(
+            container, command, launched=process is not None
+        ),
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -736,6 +739,37 @@ def _process_metadata(
 
 def _redacted_argv(command: DockerRunCommand) -> Sequence[str]:
     return cast(Sequence[str], command.redacted_argv)
+
+
+def _resource_controls(
+    container: ContainerOptions, command: DockerRunCommand, *, launched: bool
+) -> list[PlainData]:
+    """Record requested Docker controls without exposing raw allocation bindings."""
+
+    intent = cast(ContainerResourceIntent | None, container.resources)
+    if intent is None:
+        return []
+    flags = {"cpu": "--cpus", "memory": "--memory"}
+    argv = set(command.argv)
+    controls: list[PlainData] = []
+    for resource in sorted(cast(Mapping[str, object], intent.entries)):
+        mechanism = flags.get(resource)
+        selected = mechanism is not None and mechanism in argv
+        controls.append(
+            {
+                "resource": resource,
+                "owner": "docker",
+                "mechanism": mechanism,
+                "disposition": (
+                    "applied"
+                    if selected and launched
+                    else "requested"
+                    if selected
+                    else "not_requested"
+                ),
+            }
+        )
+    return controls
 
 
 def _coerce_setup_error(exc: BaseException) -> _DockerSetupError:

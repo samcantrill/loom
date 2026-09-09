@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -329,3 +329,17 @@ def test_scheduling_only_retains_effective_resources_without_direct_flags(
         "nv": False,
         "rocm": False,
     }
+    assert [dict(item) for item in cast(tuple[Mapping[str, object], ...], metadata["resource_controls"])] == [
+        {
+            "resource": "cpu",
+            "owner": "apptainer",
+            "mechanism": "--cpus",
+            "disposition": "not_requested",
+        },
+        {
+            "resource": "memory",
+            "owner": "apptainer",
+            "mechanism": "--memory",
+            "disposition": "not_requested",
+        },
+    ]
