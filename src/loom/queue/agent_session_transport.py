@@ -3735,7 +3735,11 @@ class LocalDaemonAgentHttpClient:
 
             def start_supervisor_launch() -> str:
                 environment = _worker_environment(
-                    profile.launch_profile, workspace.root, commands, providers
+                    profile.launch_profile,
+                    workspace.root,
+                    commands,
+                    providers,
+                    cast(Mapping[str, object], request.resolved_runtime.get("resource_selection")),
                 )
                 nonlocal launch
                 launch = ResidentWorkerLaunch(

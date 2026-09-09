@@ -792,9 +792,17 @@ def _resolved_runtime_for_execution(
     executor = request.resolved_runtime.get("executor", request.executor_name)
     if not isinstance(executor, str) or not executor:
         executor = request.executor_name
+    resources = request.resolved_runtime.get("resources", {})
+    resource_policy = request.resolved_runtime.get("resource_policy", {})
+    resource_selection = request.resolved_runtime.get("resource_selection")
+    if resource_selection is None:
+        raise RunRequestError("worker request resolved runtime lacks resource_selection")
     return ResolvedStageRuntimeOptions(
         stage_id=request.stage_name,
         executor=executor,
+        resources=cast(Mapping[str, object], resources),
+        resource_policy=cast(Mapping[str, object], resource_policy),
+        resource_selection=cast(Mapping[str, object], resource_selection),
         validator_registry=registry,
     )
 

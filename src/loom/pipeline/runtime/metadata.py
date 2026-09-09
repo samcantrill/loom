@@ -56,6 +56,7 @@ class ResolvedStageRuntimeOptions:
     resource_policy: ResourcePolicy | Mapping[str, object] = field(
         default_factory=ResourcePolicy
     )
+    resource_selection: Mapping[str, tuple[str, ...]] | Mapping[str, object] | None = None
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
@@ -96,6 +97,27 @@ class ResolvedStageRuntimeOptions:
                 path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_policy",
             ),
         )
+        if self.resource_selection is not None:
+            from loom.pipeline.runtime.resource_policy import validate_resource_selection
+
+            object.__setattr__(
+                self,
+                "resource_selection",
+                validate_resource_selection(
+                    self.resource_selection,
+                    cast(ResourceRequest, self.resources).entries,
+                    cast(ResourcePolicy, self.resource_policy),
+                    path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_selection",
+                ),
+            )
+        else:
+            object.__setattr__(
+                self,
+                "resource_selection",
+                cast(ResourcePolicy, self.resource_policy).select(
+                    cast(ResourceRequest, self.resources).entries
+                ),
+            )
         object.__setattr__(
             self,
             "run_environment",
@@ -121,7 +143,9 @@ class ResolvedStageRuntimeOptions:
         return {
             "stage_id": self.stage_id,
             "executor": self.executor,
-            "resources": _resource_request_metadata(resources),
+            # This crosses the exact worker handoff, not the display-only
+            # runtime summary: retain the complete normalized demand for replay.
+            "resources": resources.to_dict(),
             "execution": execution.to_safe_metadata(),
             "reliability": (
                 cast(ReliabilityPolicy, self.reliability).to_dict()
@@ -134,6 +158,10 @@ class ResolvedStageRuntimeOptions:
             },
             "adapter_options": _adapter_metadata(self.adapter_options),
             "resource_policy": resource_policy.to_dict(),
+            "resource_selection": {
+                key: list(value)
+                for key, value in cast(Mapping[str, tuple[str, ...]], self.resource_selection).items()
+            },
         }
 
 
@@ -205,7 +233,7 @@ def resolve_run_runtime(
     run_execution = cast(ExecutionOptions, normalized.execution)
     run_reliability = cast(ReliabilityPolicy | None, normalized.reliability)
     run_environment = cast(RunEnvironmentRequest, normalized.environment)
-    run_resource_policy = cast(ResourcePolicy, normalized.resource_policy)
+    run_resource_policy = cast(ResourcePolicy, normalized.resource_policy).resolved()
     executor = normalized.executor or "local"
     resolved: dict[str, ResolvedStageRuntimeOptions] = {}
     for stage_id in stage_id_tuple:

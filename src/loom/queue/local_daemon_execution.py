@@ -202,6 +202,7 @@ def _worker_runtime(
         intent.runtime[stage_name],
         resources=placement.resource_request,
         resource_policy=placement.resource_policy,
+        resource_selection=placement.resource_selection,
     )
 
 
@@ -3081,14 +3082,7 @@ class LocalDaemonExecution:
                     produced_outputs=_produced_outputs(snapshot),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=_worker_runtime(intent, record.stage_name),
-                    metadata={
-                        "resource_selection": {
-                            key: list(value)
-                            for key, value in intent.placements[
-                                record.stage_name
-                            ].resource_selection.items()
-                        }
-                    },
+                    metadata={},
                 )
             )
             if (
@@ -4640,14 +4634,7 @@ class LocalDaemonExecution:
                 produced_outputs=produced,
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
-                metadata={
-                    "resource_selection": {
-                        key: list(value)
-                        for key, value in intent.placements[
-                            record.stage_name
-                        ].resource_selection.items()
-                    }
-                },
+                metadata={},
             )
         )
         if (

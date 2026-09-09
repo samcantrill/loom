@@ -12,6 +12,7 @@ from uuid import uuid4
 from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
+from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.planning import (
     ExecutionPlan,
@@ -573,11 +574,9 @@ def _validate_worker_resource_selection(
 ) -> None:
     """Reject a retained worker whose saved post-demand projection changed."""
 
-    selection = metadata.get("resource_selection")
+    selection = runtime.get("resource_selection")
     if selection is None:
-        return
-    if not isinstance(selection, Mapping):
-        raise RunRequestError("StageWorkerRequest.metadata.resource_selection is invalid")
+        raise RunRequestError("StageWorkerRequest.resolved_runtime must include resource_selection")
     resources = runtime.get("resources")
     policy = runtime.get("resource_policy")
     if not isinstance(resources, Mapping) or not isinstance(policy, Mapping):
@@ -587,25 +586,19 @@ def _validate_worker_resource_selection(
     entries = resources.get("entries")
     if not isinstance(entries, Mapping):
         raise RunRequestError("StageWorkerRequest resolved runtime resources are invalid")
-    from loom.pipeline.runtime.resource_policy import ResourcePolicy
-
-    expected = ResourcePolicy.from_dict(policy).select(entries)
-    if (
-        set(selection) != {"account_for", "enforce"}
-        or any(
-            isinstance(value, str) or not isinstance(value, Sequence)
-            for value in selection.values()
+    from loom.pipeline.runtime.resource_policy import ResourcePolicy, validate_resource_selection
+    try:
+        actual = validate_resource_selection(
+            selection,
+            entries,
+            ResourcePolicy.from_dict(policy),
+            path="StageWorkerRequest.resolved_runtime.resource_selection",
         )
-    ):
-        raise RunRequestError("StageWorkerRequest.metadata.resource_selection is invalid")
-    actual = {
-        key: tuple(cast(str, item) for item in cast(Sequence[object], value))
-        for key, value in selection.items()
-    }
-    if actual != expected:
-        raise RunRequestError(
-            "StageWorkerRequest resource selection conflicts with saved runtime"
-        )
+    except RuntimeResourceError as exc:
+        raise RunRequestError(str(exc)) from exc
+    legacy = metadata.get("resource_selection")
+    if legacy is not None and legacy != {key: list(value) for key, value in actual.items()}:
+        raise RunRequestError("StageWorkerRequest metadata resource selection conflicts with resolved runtime")
 
 
 @dataclass(frozen=True, slots=True)

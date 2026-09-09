@@ -3698,7 +3698,11 @@ def run_managed_local_assignment(
 
     process_id = f"{assignment.assignment_id}:root"
     environment = _worker_environment(
-        resident_launch_profile, workspace.root, commands, providers
+        resident_launch_profile,
+        workspace.root,
+        commands,
+        providers,
+        cast(Mapping[str, object], delivered.resolved_runtime.get("resource_selection")),
     )
     expected_launch = ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
@@ -4489,6 +4493,7 @@ def _worker_environment(
     workspace: Path,
     commands: Sequence[ClaimCommand],
     providers: Mapping[str, AgentResourceProvider],
+    resource_selection: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     """Construct the complete worker environment without ambient inheritance."""
 
@@ -4500,7 +4505,17 @@ def _worker_environment(
         "TMPDIR": str(workspace),
         **dict(profile.environment),
     }
+    enforce = None if resource_selection is None else resource_selection.get("enforce")
+    if enforce is not None and (
+        isinstance(enforce, str)
+        or not isinstance(enforce, Sequence)
+        or any(not isinstance(kind, str) for kind in enforce)
+    ):
+        raise ManagedLocalError("worker resource selection is invalid")
+    enforced_kinds = None if enforce is None else frozenset(enforce)
     for command in commands:
+        if enforced_kinds is not None and command.claim.resource_kind not in enforced_kinds:
+            continue
         contribution = dict(
             providers[command.claim.resource_kind].worker_environment(command)
         )

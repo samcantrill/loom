@@ -76,7 +76,7 @@ def test_resource_policy_is_strict_and_selects_only_present_kinds() -> None:
 def test_resource_policy_all_and_zero_demand_are_distinct() -> None:
     policy = ResourcePolicy.from_dict({"enforce": "all"})
 
-    assert policy == ResourcePolicy(account_for="all", enforce="all")
+    assert policy.to_dict() == {"enforce": "all"}
     assert policy.select({"cpu": 2, "gpu": 0}) == {
         "account_for": ("cpu",),
         "enforce": ("cpu",),

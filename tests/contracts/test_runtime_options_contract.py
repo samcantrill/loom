@@ -34,6 +34,18 @@ def test_run_options_plain_data_serialization_contract() -> None:
     assert RunOptions.from_dict(document).to_dict() == document
 
 
+def test_sparse_resource_policy_axes_survive_run_and_stage_round_trip() -> None:
+    options = RunOptions(
+        resource_policy={"account_for": ["gpu"]},
+        stage_options={"train": {"resource_policy": {"enforce": []}}},
+    )
+
+    document = options.to_dict()
+    assert document["resource_policy"] == {"account_for": ["gpu"]}
+    assert document["stage_options"]["train"]["resource_policy"] == {"enforce": []}
+    assert RunOptions.from_dict(document).to_dict() == document
+
+
 def test_run_options_adapt_to_planning_owned_models() -> None:
     options = RunOptions(
         selectors={

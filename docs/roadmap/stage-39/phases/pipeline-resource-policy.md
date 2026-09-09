@@ -272,3 +272,14 @@ verified M2/M3/M5 against the current reachable preparation/launch owners. All
 18 summary skips were verified from JUnit as opt-in container acceptance. Both
 final gates must cover the corrected stable implementation; earlier green
 evidence remains an initial-delivery receipt only.
+
+### Refiner Correction Receipt
+
+M1–M3 correction completed locally: sparse policy axes now survive typed and
+mapping round trips; the required post-demand policy, full demand and selection
+travel in `resolved_runtime` and are validated on worker replay; managed local
+and remote worker environments apply provider bindings only for selected
+enforcement kinds. The focused policy, worker, preparation and managed queue
+slices were rerun after the correction. Empty-accounting lifecycle coverage and
+the manager-owned common control receipts remain part of the integrated final
+gate.
