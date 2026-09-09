@@ -366,7 +366,20 @@ The single finding at `a07e290a` was the omitted local restart comparison; the
 bounded correction and targeted independent confirmation resolve it through R2's
 shared owner and actual restart mismatch/exact-replay oracle. No runtime validation
 was claimed by this review. Recovery executor delivery is now admitted; its one
-qualified implementation-correction allowance is unspent.
+qualified implementation-correction allowance is now in progress, manager-owned.
+
+Recovery audit at `c38994e`: the executor delivered R1 scheduling and R2 comparison
+code plus a partial R3 report/R4 no-start path. Completion is not accepted. The
+single scoped correction completes already-approved R2 retained-file integration
+oracles, R3 portable capture/launch carrier/persistence/inspection and legacy
+replay tests, and R4 actual binding-error wrapping plus local/remote restart and
+terminal/release ordering. In particular, remote restart still skips a no-launch
+workspace, provider exceptions can bypass definitive no-start capture, the remote
+event path still distinguishes cancellation only, and no new portable capture or
+client rendering is present. These are unmet R2–R4 contracts, not new scope. The
+executor-reported journey results are not full gates; final evidence must name
+the exact tests and preserved receipts, including a genuine remote sequential
+account-none pipeline. No further executor/refiner pass is admitted by this record.
 
 Evidence: clean tree `b94b89d` joins checkpoint `6474206` to develop `000f34f`
 (PR #290). That upstream delta adds managed-lifecycle examples/tests but changes
