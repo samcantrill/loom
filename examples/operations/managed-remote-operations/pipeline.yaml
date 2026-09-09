@@ -1,12 +1,17 @@
 pipeline:
-  name: managed-remote-operations
+  name: managed-remote-lifecycle
   stages:
-    - name: produce
+    - name: work
       factory:
-        _target_: stages.RemoteCpuStage
+        _target_: stages.WorkStage
+        init:
+          duration_seconds: 20
+      resources:
+        entries:
+          cpu: {kind: cpu, amount: 1, unit: count}
       outputs:
         report:
-          artifact_type: text
-          codec_key: text.v1
+          artifact_type: json
+          codec_key: json.v1
 runtime:
   executor: local

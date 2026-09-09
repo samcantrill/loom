@@ -65,6 +65,9 @@ def main() -> None:
     try:
         started = _wait_for_status(endpoint)
         _observe_service_tree(first.pid, started_pids)
+        cancellation = _run_cancellation(
+            config, environment, endpoint, service.daemon.run_store_root
+        )
         submitted = _run_cli(
             "queue",
             "daemon-submit",
@@ -142,6 +145,8 @@ def main() -> None:
                 "started_pids": sorted(started_pids),
                 "coordinator_id": started["coordinator_id"],
                 "status": "SUCCEEDED",
+                "cancellation": cancellation,
+                "capacity_reused": True,
                 "restarted": True,
                 "io_probe": "PASS",
                 "root": str(root),
@@ -149,6 +154,66 @@ def main() -> None:
             sort_keys=True,
         )
     )
+
+
+def _run_cancellation(
+    config: Path, environment: Path, endpoint: Path, run_root: Path
+) -> dict[str, object]:
+    receipt = prepare_managed_local_run(
+        config, HERE / "pipeline-cancel.yaml", "cancelled-example", env_file=environment
+    )
+    submitted = _run_cli(
+        "queue",
+        "daemon-submit",
+        "--endpoint",
+        str(endpoint),
+        "cancelled-example",
+        receipt.run_uri,
+    )
+    completed = _run_cli(
+        "queue",
+        "daemon-wait",
+        "--endpoint",
+        str(endpoint),
+        "cancelled-example",
+        "--timeout",
+        "15",
+    )
+    inspected = _run_cli("inspect-run", receipt.run_uri, "--endpoint", str(endpoint))
+    detail = _run_cli(
+        "queue",
+        "daemon-admission",
+        "--endpoint",
+        str(endpoint),
+        str(submitted["admission_id"]),
+    )
+    assignments = detail["owners"]["assignment"]["assignments"]
+    downstream_started = any(item["stage_name"] == "downstream" for item in assignments)
+    axes = {axis["name"]: axis["state"] for axis in inspected["axes"]}
+    stages = {stage["stage_name"]: stage for stage in inspected["stages"]}
+    downstream_output = (
+        LocalRunStore(run_root).local_artifact_root(receipt.run_uri)
+        / "downstream"
+        / "data.json"
+    )
+    if (
+        completed.get("state") != "CANCELLED"
+        or axes["lifecycle"] != "CANCELLED"
+        or stages["stop_early"]["state"] != "CANCELLED"
+        or [item["stage_name"] for item in assignments] != ["stop_early"]
+        or any(item["state"] != "released" for item in assignments)
+        or downstream_output.exists()
+    ):
+        raise RuntimeError(f"controlled cancellation did not settle: {inspected}")
+    return {
+        "admission_state": completed["state"],
+        "run_state": axes["lifecycle"],
+        "stage_state": stages["stop_early"]["state"],
+        "downstream_started": downstream_started,
+        "assignment_released": assignments[0]["state"] == "released",
+        "downstream_output_exists": downstream_output.exists(),
+        "run_uri": receipt.run_uri,
+    }
 
 
 def _example_root() -> Path:

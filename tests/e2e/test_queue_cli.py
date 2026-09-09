@@ -191,9 +191,14 @@ def test_managed_remote_operations_manifest_claims_match_journey() -> None:
         root = Path(journey["root"])
         assert journey["authenticated"] is True
         assert journey["agent_id"] == "machine-B"
-        assert journey["cpu_artifact"] == "remote CPU artifact"
         assert journey["final_operation"] == "example-remote-resume"
         assert journey["io_probe"] == "PASS"
+        assert journey["result"] == "SUCCEEDED"
+        assert journey["foreground_stop_returncode"] == 0
+        assert journey["retained_while_stopped"] is True
+        assert journey["initial_attempt"] == journey["completed_attempt"] == 1
+        assert journey["assignment_released"] is True
+        assert journey["report_value"] == 42
         assert (root / "tls" / "ca.crt").is_file()
         assert (root / "tls" / "server.crt").is_file()
         assert (root / "tls" / "agent.crt").is_file()
@@ -571,6 +576,14 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
             assert journey["status"] == "SUCCEEDED"
             assert journey["restarted"] is True
             assert journey["io_probe"] == "PASS"
+            assert journey["capacity_reused"] is True
+            cancellation = journey["cancellation"]
+            assert cancellation["admission_state"] == "CANCELLED"
+            assert cancellation["run_state"] == "CANCELLED"
+            assert cancellation["stage_state"] == "CANCELLED"
+            assert cancellation["downstream_started"] is False
+            assert cancellation["assignment_released"] is True
+            assert cancellation["downstream_output_exists"] is False
             root = Path(journey["root"])
             roots.add(root)
             assert (root / "deployment" / "coordinator" / "control.sqlite").is_file()
@@ -600,3 +613,30 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
             assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
         assert len(roots) == 2
         assert len(identities) == 1
+
+
+def test_managed_local_queue_embedding_prepares_and_executes() -> None:
+    with tempfile.TemporaryDirectory(prefix="loom-embedding-e2e-") as output:
+        script = (
+            REPO_ROOT
+            / "examples"
+            / "operations"
+            / "managed-local-queue"
+            / "run_managed_local_queue.py"
+        )
+        environment = {**os.environ, "TMPDIR": output}
+        environment.pop("LOOM_EXAMPLE_OUTPUT_ROOT", None)
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=script.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = result.stdout.splitlines()
+        assert "  status: SUCCEEDED" in lines
+        assert "  stages: produce,consume" in lines
+        assert "  preparation_replayed: True" in lines
+        assert "  report: consumed {'value': 42}" in lines

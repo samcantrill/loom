@@ -29,8 +29,8 @@ uv sync --locked --no-dev --extra config
 ```
 
 The automatic demo below creates a fresh temporary deployment; it does not use
-previously edited machine files. It runs a CPU stage, verifies its report in the
-agent's assignment artifacts, exercises authenticated drain/resume, and shuts
+previously edited machine files. It runs a CPU stage, verifies its relayed JSON report on the
+coordinator, exercises authenticated drain/resume, restarts the agent during supervised work, and finally shuts
 down both services. It needs OpenSSL for disposable localhost certificates.
 Run it from the repository root:
 
@@ -148,9 +148,9 @@ profile = service.daemon.remote_profiles[0]
 receipt = prepare_managed_run(
     service,
     compose_config("pipeline.yaml"),
-    "remote-cpu-run",
+    "remote-lifecycle",
     execution_requirements={
-        "produce": ExecutionRequirement(
+        "work": ExecutionRequirement(
             profile.project_fingerprint,
             profile.environment_fingerprint,
             profile.executor_fingerprint,
@@ -159,24 +159,67 @@ receipt = prepare_managed_run(
 )
 print(receipt.run_uri)
 PY
-loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" remote-cpu-run "$RUN_URI"
+loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" remote-lifecycle "$RUN_URI"
 loom queue daemon-status --endpoint "$LOOM_ENDPOINT"
-loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" remote-cpu-run --timeout 15
+loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" remote-lifecycle --timeout 40
 loom inspect-run "$RUN_URI" --endpoint "$LOOM_ENDPOINT"
 # Stop the two services and use the same daemon-serve/agent-serve commands to restart.
 ```
 
-The CPU report is retained under the agent root at
-`assignments/<assignment-id>/artifacts/produce/report.txt`; coordinator status
-does not imply the agent's files are mounted on the coordinator host. This
-example inspects the local agent artifact directly during its loopback demo.
+The JSON report is relayed to the coordinator and contains `value: 42`.
 For cancellation, issue `loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT"
-remote-cpu-run` before waiting. A fast job may already have finished; a request
+remote-lifecycle` before waiting. A fast job may already have finished; a request
 alone does not establish process termination or resource release. Use wait and
 inspection, then Ctrl-C each service and restart with the same roots.
 
 The optional IO probe qualifies only the selected temporary execution roots.
 Unrun GPU checks and deferred busy-device probes provide no compute evidence.
+
+## Active-work restart
+
+After guarded resume, the runner submits the prepared run. `WorkStage` simulates
+20 seconds of bounded work before writing a JSON report. The duration is in
+`pipeline.yaml`; it leaves time for foreground stop/restart. Readiness uses
+bounded public inspections rather than a fixed startup delay. The journey fails
+if it misses the running stage and retained-work window.
+
+Once `loom inspect-run` reports the stage and run as `RUNNING`, the runner sends
+`SIGINT` to the foreground agent and confirms its exit. It checks that the same
+attempt, assignment, and claim remain active, then starts `agent-serve` again
+with the same configuration and persistent root.
+
+Stopping the foreground application preserves supervised work, journals,
+fences, and resource claims. It does not cancel the run or retire the agent
+session. Startup can reconcile retained work before the agent advertises normal
+availability, so the example waits for run completion directly after restart.
+
+The final checks require success through the original attempt and assignment,
+the relayed report value `42`, and assignment state `released`. Public
+`daemon-admission` details supply attempt and claim identity. The current managed
+`inspect-run` response reports stage states but can omit attempt numbers and
+artifact locations. On this coordinator host, the runner reads the committed
+snapshot through the configured `CoordinatorAuthorityStore.open_run` and loads
+its artifact reference with `LocalArtifactStore.load`, which checks the checksum
+and decodes the JSON. The report also
+records the worker PID for final process cleanup checks. Dedicated supervisor
+regressions cover unchanged worker process identity and duplicate-launch
+prevention. See the shared [resident agent lifecycle](../../../docs/features/queue.md#cli-operation)
+and [cancellation and settlement contract](../../../docs/features/queue.md#status-and-cancellation).
+
+The artifact read uses the authority selected by that same service configuration:
+
+```python
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+
+authority = service.daemon.coordinator_authority_factory(receipt.run_uri)
+snapshot = authority.open_run(receipt.run_uri)
+(stage,) = snapshot.stages
+(fact,) = stage.artifact_facts
+artifacts = LocalArtifactStore(
+    LocalRunStore(run_store_root).local_artifact_root(receipt.run_uri)
+)
+report = artifacts.load(fact.artifact, expected_type="json")
+```
 
 ## Variants
 
