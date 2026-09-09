@@ -21,6 +21,7 @@ from loom.pipeline.execution import (
     StageWorkerResult,
     redact_executor_metadata,
 )
+from loom.pipeline.execution.models import STAGE_WORKER_REQUEST_SCHEMA_VERSION
 from loom.pipeline.planning import (
     FingerprintContext,
     PlanSelectors,
@@ -61,7 +62,7 @@ def _artifact_ref() -> ArtifactRef:
 def _worker_request() -> StageWorkerRequest:
     stage = _minimal_pipeline_spec().get_stage("build")
     return StageWorkerRequest(
-        schema_version=1,
+        schema_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         run_uri="file:///tmp/run",
         stage_name="build",
         attempt=1,

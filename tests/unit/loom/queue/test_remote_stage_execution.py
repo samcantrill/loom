@@ -12,7 +12,11 @@ import pytest
 import loom.queue._remote_stage_execution as remote_stage_execution
 import loom.queue.agent_sessions as agent_sessions
 from loom.artifacts import ArtifactRef
-from loom.pipeline.execution.models import StageWorkerRequest, StageWorkerResult
+from loom.pipeline.execution.models import (
+    STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+    StageWorkerRequest,
+    StageWorkerResult,
+)
 from loom.pipeline.planning import StageFingerprintPayload, StageFingerprintRecord
 from loom.pipeline.status import StageStatus
 from loom.queue import (
@@ -97,7 +101,7 @@ def _request(
     stage_config: dict[str, str] | None = None,
 ) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
-        1,
+        STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         "run-opaque-1",
         "build",
         1,

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
-STAGE_WORKER_REQUEST_SCHEMA_VERSION = 1
+STAGE_WORKER_REQUEST_SCHEMA_VERSION = 2
 STAGE_WORKER_RESULT_SCHEMA_VERSION = 1
 
 _VALID_FAILURE_TYPES = {
@@ -528,7 +528,10 @@ class StageWorkerRequest:
                 optional={"executor_metadata", "metadata"},
             )
         except SchemaVersionError as exc:
-            raise RunRequestError(f"StageWorkerRequest.from_dict: {exc}") from exc
+            raise RunRequestError(
+                f"StageWorkerRequest.from_dict: {exc}; finish or cancel the saved "
+                "work in its pinned environment and prepare a fresh identity"
+            ) from exc
         return cls(
             schema_version=_int(mapping["schema_version"], "schema_version"),
             run_uri=_str(mapping["run_uri"], "run_uri"),

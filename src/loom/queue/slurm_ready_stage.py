@@ -45,7 +45,7 @@ from ._remote_stage_execution import (
 from .errors import QueueConflictError, QueueServiceError
 
 
-SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 3
+SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 4
 _ASSIGNMENT_TABLE = "slurm_stage_assignments"
 _OUTPUT_TABLE = "slurm_stage_outputs"
 
@@ -299,6 +299,11 @@ class SlurmStageDelivery:
     @classmethod
     def from_dict(cls, value: object) -> "SlurmStageDelivery":
         mapping = _mapping(value, "SLURM delivery")
+        if mapping.get("schema_version") != SLURM_STAGE_DELIVERY_SCHEMA_VERSION:
+            raise QueueServiceError(
+                "SLURM delivery schema is unsupported; finish or cancel the saved "
+                "work in its pinned environment and prepare a fresh identity"
+            )
         expected = {
             "schema_version",
             "assignment_id",
