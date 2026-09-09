@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; approved correction of the no-start persistence gap
+- Status: pr_open; corrected implementation, independent review and both full gates passed
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -14,9 +14,9 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: independent full-diff review at `f96eb105` found one verified R4
-  journal/result atomicity gap. Follow-up below is approved on 2026-09-10;
-  PR #292 must not merge until correction, fresh gates and review confirmation pass.
+- Blockers: no known product blocker; existing-reviewer confirmation PASS at
+  `77388fe` resolves the R4 finding. Fresh `make validate-pr` passed; the separate
+  suite summary remains pending before merge.
 
 ## Objective And Context
 
@@ -239,41 +239,41 @@ gate/review/merge ownership follows the canonical phase workflow.
 - Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
   passed after the bounded `SlurmStageDelivery` replay correction; final plan approved
 - Additional phase planning: not needed; current contracts and upstream join are explicit
-- Implementation: approved Phase 1 and recovery amendments implemented through
-  `49799dc`; current full validation passes, independent review remains required
+- Implementation: approved Phase 1, recovery amendments and atomic no-start
+  correction implemented through `77388fe`; both current full gates pass
 - Refiner: correction `1198c1a` and related repair `68a37ad` returned;
   manager verified the changes and added discriminating integration coverage
-- Pre-submit: PASS on source `49799dc` against unchanged published develop
+- Pre-submit: PASS on source `77388fe` against unchanged published develop
   `998b07c`; both full gates pass, no known blocker or future-phase implementation
-- Independent implementation review: not started
-- Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
-  its separately returned repair, and manager correction `6474206`. Do not reset
-  the budget by relabelling further work. Resume through a reviewed targeted
-  amendment with explicit recovery scope, not another unbounded correction.
+- Independent implementation review: PASS; the full-diff review's sole atomicity
+  finding is resolved by the existing reviewer's bounded confirmation at `77388fe`
+- Blocker corrections: approval on 2026-09-10 removes the correction-count limit
+  for necessary in-scope fixes, not scope, review or physical-execution gates
 - PR and merge: #292 open, non-draft and mergeable; base develop and title verified;
-  merge waits for the required independent review
+  ready for verified merge after final remote head/base inspection
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Source | `49799dc5558c68520b1bd3285477989631ee14c9` against published develop `998b07c`; later lifecycle metadata edits do not invalidate this source receipt |
+| Source | `77388fe66989304f415d6f1f33230763c0efa663` against published develop `998b07c`; later lifecycle metadata edits do not invalidate this source receipt |
 | Implementation | Independent pipeline accounting/enforcement; exact managed/worker handoffs; no-claim offer reuse; portable native/reported failures and truthful control/no-start evidence; bounded authenticated transport; immutable private delayed-SLURM resource preparation; dependency-neutral capture |
-| Targeted evidence | Latest capture, executor, bounded report, delayed handoff, CLI and adjacent continuation selection: 115 passed (`capture-and-handoff-after.xml`) |
-| Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,096 passed / 2 skipped / 156 deselected (1,004.93s), config-extra 162 passed / 18 skipped / 3,101 deselected (155.99s), sdist and wheel builds |
-| Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 424, e2e 70, config-extra 162; total 3,260 passed, no failures/errors, 18 opt-in skips (1,464.45s). Generated 2026-09-09T13:08:09Z |
-| Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-complete.log,test-summary-complete.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
-| PR, review, merge | PR #292 open to develop with approved title. Independent entire-diff review BLOCK at `f96eb105`: verified early no-start persistence gap below; no other blockers reported. No remote merge claimed |
+| Targeted evidence | Atomicity crash oracles reproduce before correction (2 failures), affected journal/local/remote selection passes 42 tests, and strengthened crash selection passes 3 cases including supervisor-proven no-root. Prior capture/handoff selection: 115 passed |
+| Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,099 passed / 2 skipped / 156 deselected (1,018.25s), config-extra 162 passed / 18 skipped / 3,104 deselected (159.42s), sdist and wheel builds |
+| Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 427, e2e 70, config-extra 162; total 3,263 passed, no failures/errors, 18 opt-in skips (1,481.11s). Generated 2026-09-09T19:28:12Z |
+| Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-atomic.log,test-summary-atomic.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
+| PR, review, merge | PR #292 open to develop with approved title; ready for verified merge. Full-diff review's sole atomicity finding resolved; existing reviewer confirmation PASS at `77388fe`. No remote merge claimed |
 | Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Preserve worktree and evidence until merge; Phase 2 and Stage 81 physical continuation excluded |
 
 ## Independent Implementation Review
 
-Disposition: BLOCK at `f96eb105`, covering the entire Phase 1 diff against
-published develop `998b07c`. The manager verified the sole product finding in
-source and the existing restart oracle. No additional blockers were reported.
-The passing source `49799dc` receipts remain accurate but do not prove this
-earlier crash boundary. A private copy of `build/`, `.loom/` and `dist/` is retained
-at `stage-39-p1-evidence-iPO6xw` under the manifest's worktree root.
+Current disposition: PASS after the existing reviewer's bounded confirmation at
+`77388fe`. The initial full-diff review at `f96eb105` against develop `998b07c`
+found the sole R4 blocker below; no additional blockers were reported. The
+manager verified both the source finding and corrected identity/replay/crash
+oracles. Prior source `49799dc` full receipts remain historical evidence; their
+private `build/`, `.loom/` and `dist/` copy is retained at
+`stage-39-p1-evidence-iPO6xw` under the manifest's worktree root.
 
 R4 requires durable owner-proven no-start failure, complete nested explanation,
 idempotent interrupted completion and exact release. The supported selected
@@ -336,8 +336,16 @@ local supervisor's definitive no-root error after its launch intent is retained.
 Those cases prove original nested details, no application launch on replay,
 exact result identity/bytes by value, terminal completion and exact claim release.
 Type checking passes (`no-start-atomic-pyright-final.log`); changed-file Ruff and
-diff checks pass. Required fresh full gates and existing-reviewer confirmation
-remain pending; the preceding full receipts do not validate this correction.
+diff checks pass. Independent bounded confirmation PASS at `77388fe` confirms
+atomic failure evidence, exact identity mapping, local/remote repair, no relaunch,
+terminal/idempotent release, and unchanged indeterminate containment. Fresh
+`make validate-pr` passes (`validate-pr-atomic.log`): Ruff/Pyright, default
+3,099 passed / 2 skipped / 156 deselected (1,018.25s), config-extra 162 passed /
+18 skipped / 3,104 deselected (159.42s), and wheel/sdist builds. The separate
+`make test-summary` gate passes at the same source: 3,263 passed, no failures or
+errors, 18 opt-in skips, 1,481.11s; generated 2026-09-09T19:28:12Z. Both commands
+exited zero. The phase is ready for verified merge; later metadata-only edits do
+not change the validated implementation.
 
 ## Approved Recovery Amendment
 

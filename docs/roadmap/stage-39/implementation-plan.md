@@ -1,21 +1,19 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; approved correction of the no-start persistence gap
+Status: pr_open; corrected implementation, independent review and both full gates passed
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: independent entire-diff review at `f96eb105` found that definitive
-START_FAILED proof can commit before its diagnostic result. Interruption in that
-window leaves local/remote replay unable to complete and release exact claims.
-The manager verified the source path and missing early-crash oracle. Phase 1's
-Independent Implementation Review section owns the finding and proposed bounded
-correction. On 2026-09-10 the maintainer approved the correction and as many
-further in-scope correctness corrections as necessary, followed by return to
-rphys Stage 81. PR #292 remains open to develop, not merge eligible until fixed.
-Source `49799dc` still passes both full gates: suite summary 3,260 passed, zero
-failures/errors, 18 opt-in skips. Those checks do not cover the newly found window.
+Blockers: no known product blocker. The existing independent reviewer confirmed
+the no-start atomicity correction PASS at `77388fe`; the manager verified its
+identity/replay implementation and causal crash oracles. Fresh `make validate-pr`
+and `make test-summary` pass at that source; PR #292 is ready for verified merge.
+Phase 1's Independent Implementation Review section owns the correction
+and evidence. Approval on 2026-09-10 permits necessary in-scope correctness
+corrections followed by return to rphys Stage 81. Prior source receipts do not
+substitute for the current gates.
 
 ## Summary
 
@@ -89,7 +87,7 @@ failures/errors, 18 opt-in skips. Those checks do not cover the newly found wind
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | pr_open | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -130,8 +128,9 @@ failures/errors, 18 opt-in skips. Those checks do not cover the newly found wind
   PASS at `c5b23a7`; manager implementation admitted with no further executor/refiner pass.
 - Independent implementation review: BLOCK at `f96eb105`; one verified R4
   journal/result atomicity finding, no additional blockers reported across the
-  entire Phase 1 diff. Both full gates passed, but the accepted interrupted
-  no-start completion contract remains unmet. Maintainer approval on 2026-09-10
+  entire Phase 1 diff. The existing reviewer's bounded confirmation PASS at
+  `77388fe` resolves that finding; the manager verified the returned result.
+  Maintainer approval on 2026-09-10
   removes the correction-count limit for necessary in-scope fixes and admits
   manager-local correction, fresh gates and existing-reviewer confirmation.
   It does not authorize speculative scope or reset the full-review budget.
@@ -152,5 +151,5 @@ failures/errors, 18 opt-in skips. Those checks do not cover the newly found wind
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#292](https://github.com/samcantrill/loom/pull/292), blocked; not merged | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; independent review BLOCK on R4 early persistence window | Interrupted definitive no-start may retain ownership indefinitely; no physical proof | Preserve phase worktree; private evidence archive `stage-39-p1-evidence-iPO6xw` under the recorded worktree root |
+| 1 | [#292](https://github.com/samcantrill/loom/pull/292), open; ready for merge | Correction `77388fe`: targeted checks, independent confirmation, `make validate-pr` and `make test-summary` PASS (3,263 passed, no failures/errors) | No physical isolation or scientific proof | Preserve phase worktree until verified merge and evidence archive; preceding archive `stage-39-p1-evidence-iPO6xw` under the recorded worktree root |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
