@@ -3,7 +3,7 @@ title: Managed Remote Operations
 summary: Discover and control an authenticated remote managed agent with exact fences.
 capability: operations
 level: advanced
-introduced_in: v29
+introduced_in: v85
 status: runnable
 validation: full
 surface: cli
@@ -13,6 +13,7 @@ surface_invocations:
   - cli:queue agent-init
   - cli:queue agent-serve
   - cli:queue daemon-agent
+  - cli:queue daemon-check
   - cli:queue daemon-agent-drain
   - cli:queue daemon-agent-resume
   - cli:queue daemon-agents

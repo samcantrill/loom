@@ -138,6 +138,7 @@ def _pid_exists(pid: int) -> bool:
 
 
 def test_managed_remote_operations_manifest_claims_match_journey() -> None:
+    pytest.importorskip("dotenv")
     with tempfile.TemporaryDirectory(prefix="loom-remote-e2e-") as output:
         result = _run_operation_journey("managed-remote-operations", Path(output))
         journey = _assert_manifest_claims_match_journey(
@@ -150,6 +151,18 @@ def test_managed_remote_operations_manifest_claims_match_journey() -> None:
         assert (root / "tls" / "ca.crt").is_file()
         assert (root / "tls" / "server.crt").is_file()
         assert (root / "tls" / "agent.crt").is_file()
+        assert (root / "agent.yaml").read_text(encoding="utf-8") == (
+            REPO_ROOT
+            / "examples"
+            / "operations"
+            / "managed-remote-operations"
+            / "agent.yaml.example"
+        ).read_text(encoding="utf-8")
+        assert "unqualified" not in (root / "coordinator.yaml").read_text(
+            encoding="utf-8"
+        )
+        for name in ("coordinator.yaml", "coordinator.env", "agent.yaml", "agent.env"):
+            assert (root / name).stat().st_mode & 0o777 == 0o600
         assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
 
 
@@ -496,6 +509,7 @@ def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
 
 
 def test_managed_local_basic_manifest_claims_match_journey() -> None:
+    pytest.importorskip("dotenv")
     with tempfile.TemporaryDirectory(prefix="loom-local-e2e-") as output:
         output_root = Path(output)
         roots: set[Path] = set()
@@ -511,5 +525,26 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
             assert (root / "deployment" / "coordinator" / "control.sqlite").is_file()
             assert (root / "deployment" / "coordinator" / "execution.sqlite").is_file()
             assert (root / "deployment" / "agent" / "journal.sqlite").is_file()
+            assert (root / "coordinator.yaml").read_text(encoding="utf-8") == (
+                REPO_ROOT
+                / "examples"
+                / "operations"
+                / "managed-local-basic"
+                / "coordinator.yaml.example"
+            ).read_text(encoding="utf-8")
+            assert (root / "agent.yaml").read_text(encoding="utf-8") == (
+                REPO_ROOT
+                / "examples"
+                / "operations"
+                / "managed-local-basic"
+                / "agent.yaml.example"
+            ).read_text(encoding="utf-8")
+            for name in (
+                "coordinator.yaml",
+                "coordinator.env",
+                "agent.yaml",
+                "agent.env",
+            ):
+                assert (root / name).stat().st_mode & 0o777 == 0o600
             assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
         assert len(roots) == 2

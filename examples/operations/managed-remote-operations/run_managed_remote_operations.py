@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any, cast
@@ -31,36 +32,61 @@ def main() -> None:
     root = example_root("managed-remote-operations")
     credentials = generate_mutual_tls(root / "tls")
     port = available_port()
-    coordinator_config = root / "coordinator.yaml"
-    agent_config = root / "agent.yaml"
     checkout = Path(__file__).resolve().parents[3]
-    write_protected(agent_config, _agent_yaml(root, checkout, port))
-    readiness = recorder.cli("queue", "agent-check", str(agent_config))
+    coordinator_config, coordinator_environment, agent_config, agent_environment = (
+        _copy_role_inputs(root, credentials, checkout, port)
+    )
+    readiness = recorder.cli(
+        "queue", "agent-check", str(agent_config), "--env-file", str(agent_environment)
+    )
     descriptor = next(
         check["details"]["evidence"]["descriptor"]
         for check in cast(list[dict[str, Any]], readiness["checks"])
         if check["check_id"] == "execution.identity"
     )
-    write_protected(
+    _record_observed_remote_profile(
         coordinator_config,
-        _coordinator_yaml(
-            root,
-            descriptor,
-            port,
-            certificate_fingerprint(credentials["agent"].with_suffix(".crt")),
-        ),
+        descriptor,
+        certificate_fingerprint(credentials["agent"].with_suffix(".crt")),
     )
-    recorder.cli("queue", "daemon-init", str(coordinator_config))
-    recorder.cli("queue", "agent-init", str(agent_config))
+    recorder.cli(
+        "queue",
+        "daemon-check",
+        str(coordinator_config),
+        "--env-file",
+        str(coordinator_environment),
+    )
+    recorder.cli(
+        "queue",
+        "daemon-init",
+        str(coordinator_config),
+        "--env-file",
+        str(coordinator_environment),
+    )
+    recorder.cli(
+        "queue", "agent-init", str(agent_config), "--env-file", str(agent_environment)
+    )
 
     endpoint = root / "deployment" / "coordinator" / "daemon.sock"
-    daemon = recorder.start_cli("queue", "daemon-serve", str(coordinator_config))
+    daemon = recorder.start_cli(
+        "queue",
+        "daemon-serve",
+        str(coordinator_config),
+        "--env-file",
+        str(coordinator_environment),
+    )
     agent = None
     try:
         status = wait_until(
             lambda: _running_daemon_status(recorder, daemon, endpoint), timeout=15
         )
-        agent = recorder.start_cli("queue", "agent-serve", str(agent_config))
+        agent = recorder.start_cli(
+            "queue",
+            "agent-serve",
+            str(agent_config),
+            "--env-file",
+            str(agent_environment),
+        )
         projection = wait_until(
             lambda: _available_agent(recorder, daemon, endpoint), timeout=20
         )
@@ -191,79 +217,76 @@ def _available_agent(
     return None
 
 
-def _coordinator_yaml(
-    root: Path, descriptor: dict[str, object], port: int, fingerprint: str
-) -> str:
-    return f"""
-schema_version: 3
-kind: loom.coordinator-service
-deployment_root: {_quoted(root / "deployment")}
-run_store_root: {_quoted(root / "runs")}
-machine_id: local-machine
-poll_interval_seconds: 0.05
-max_accepted_time_step_seconds: 3600
-authority:
-  kind: embedded
-local_agent: null
-remote_profiles: {json.dumps([descriptor])}
-agent_policy:
-  revision: policy-1
-  agents:
-    - credential_id: remote-agent-certificate
-      principal_id: remote-agent-principal
-      agent_id: machine-B
-      pools: [default]
-      capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]
-      gpu_devices: []
-  principals: []
-  local_owner:
-    actions: [drain, resume]
-    agent_ids: [machine-B]
-    pools: [default]
-agent_server:
-  host: localhost
-  port: {port}
-  certificate_path: {_quoted(root / "tls" / "server.crt")}
-  private_key_path: {_quoted(root / "tls" / "server.key")}
-  client_ca_path: {_quoted(root / "tls" / "ca.crt")}
-  credential_fingerprints:
-    {json.dumps(fingerprint)}: remote-agent-certificate
-"""
+def _copy_role_inputs(
+    root: Path, credentials: dict[str, Path], checkout: Path, port: int
+) -> tuple[Path, Path, Path, Path]:
+    """Copy templates, then provide protected role-local machine values."""
+
+    here = Path(__file__).resolve().parent
+    for name in ("coordinator.yaml", "agent.yaml"):
+        destination = root / name
+        shutil.copyfile(here / f"{name}.example", destination)
+        destination.chmod(0o600)
+
+    coordinator_environment = root / "coordinator.env"
+    _write_environment(
+        coordinator_environment,
+        {
+            "LOOM_DEPLOYMENT_ROOT": str(root / "deployment"),
+            "LOOM_RUN_STORE_ROOT": str(root / "runs"),
+            "LOOM_MACHINE_ID": "local-machine",
+            "LOOM_AGENT_PORT": str(port),
+            "LOOM_SERVER_CERTIFICATE": str(credentials["server"].with_suffix(".crt")),
+            "LOOM_SERVER_PRIVATE_KEY": str(credentials["server"].with_suffix(".key")),
+            "LOOM_CLIENT_CA": str(credentials["ca"].with_suffix(".crt")),
+        },
+    )
+    agent_environment = root / "agent.env"
+    _write_environment(
+        agent_environment,
+        {
+            "LOOM_AGENT_ROOT": str(root / "outbound-agent"),
+            "LOOM_COORDINATOR_URL": f"https://localhost:{port}",
+            "LOOM_SERVER_CA": str(credentials["ca"].with_suffix(".crt")),
+            "LOOM_AGENT_CERTIFICATE": str(credentials["agent"].with_suffix(".crt")),
+            "LOOM_AGENT_PRIVATE_KEY": str(credentials["agent"].with_suffix(".key")),
+            "LOOM_PROJECT_ROOT": str(checkout),
+            "LOOM_PYTHON": str(Path(sys.executable).absolute()),
+        },
+    )
+    return (
+        root / "coordinator.yaml",
+        coordinator_environment,
+        root / "agent.yaml",
+        agent_environment,
+    )
 
 
-def _agent_yaml(root: Path, checkout: Path, port: int) -> str:
-    return f"""
-schema_version: 3
-kind: loom.outbound-agent-service
-agent_root: {_quoted(root / "outbound-agent")}
-url: https://localhost:{port}
-server_ca_path: {_quoted(root / "tls" / "ca.crt")}
-certificate_path: {_quoted(root / "tls" / "agent.crt")}
-private_key_path: {_quoted(root / "tls" / "agent.key")}
-reconnect_seconds: 0.05
-resident_profiles:
-  - descriptor:
-      profile_id: remote-default
-      revision: v1
-    project_root: {_quoted(checkout)}
-    python_executable: {json.dumps(str(Path(sys.executable).absolute()))}
-    cpu_capacity: 1
-    memory_capacity_bytes: 0
-    gpu_devices: []
-    environment: {{}}
-    readiness:
-      source_roots: [src/loom]
-registration:
-  config_revision: remote-config-v1
-  inventory_revision: remote-inventory-v1
-  availability_revision: remote-availability-v1
-  pools: [default]
-  capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]
-"""
+def _record_observed_remote_profile(
+    coordinator_config: Path, descriptor: dict[str, object], certificate: str
+) -> None:
+    source = coordinator_config.read_text(encoding="utf-8")
+    profile_placeholder = "remote_profiles: []"
+    credential_placeholder = "credential_fingerprints: {}"
+    if (
+        source.count(profile_placeholder) != 1
+        or source.count(credential_placeholder) != 1
+    ):
+        raise RuntimeError("remote coordinator template has no observation slots")
+    write_protected(
+        coordinator_config,
+        source.replace(
+            profile_placeholder, f"remote_profiles: {json.dumps([descriptor])}"
+        ).replace(
+            credential_placeholder,
+            "credential_fingerprints:\n"
+            f"    {json.dumps(certificate)}: remote-agent-certificate",
+        ),
+    )
 
 
-def _quoted(path: Path) -> str:
-    return json.dumps(str(path.resolve()))
+def _write_environment(path: Path, values: dict[str, str]) -> None:
+    write_protected(path, "".join(f"{key}={value}\n" for key, value in values.items()))
 
 
 if __name__ == "__main__":

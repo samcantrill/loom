@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -20,18 +21,23 @@ HERE = Path(__file__).resolve().parent
 
 def main() -> None:
     root = _example_root()
-    config = _write_service_config(root)
+    config, environment = _copy_role_inputs(root)
     endpoint = root / "deployment" / "coordinator" / "daemon.sock"
-    _run_cli("queue", "daemon-init", str(config))
-    receipt = prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+    _run_cli("queue", "daemon-check", str(config), "--env-file", str(environment))
+    _run_cli("queue", "daemon-init", str(config), "--env-file", str(environment))
+    receipt = prepare_managed_local_run(
+        config, HERE / "pipeline.yaml", "starter-run", env_file=environment
+    )
     if (
-        prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+        prepare_managed_local_run(
+            config, HERE / "pipeline.yaml", "starter-run", env_file=environment
+        )
         != receipt
     ):
         raise RuntimeError("matching preparation replay changed the run identity")
 
     started_pids: set[int] = set()
-    first = _start_service(config, started_pids)
+    first = _start_service(config, environment, started_pids)
     try:
         started = _wait_for_status(endpoint)
         _observe_service_tree(first.pid, started_pids)
@@ -66,7 +72,7 @@ def main() -> None:
     finally:
         _stop_service(first)
 
-    second = _start_service(config, started_pids)
+    second = _start_service(config, environment, started_pids)
     try:
         restarted = _wait_for_status(endpoint)
         _observe_service_tree(second.pid, started_pids)
@@ -98,6 +104,7 @@ def main() -> None:
                 "surfaces": [
                     "cli:inspect-run",
                     "cli:queue daemon-admission",
+                    "cli:queue daemon-check",
                     "cli:queue daemon-init",
                     "cli:queue daemon-serve",
                     "cli:queue daemon-status",
@@ -122,64 +129,40 @@ def _example_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="managed-local-basic-", dir=output)).resolve()
 
 
-def _write_service_config(root: Path) -> Path:
-    config = root / "coordinator-service.yaml"
-    agent = root / "agent-service.yaml"
-    agent.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "kind": "loom.local-agent-service",
-                "agent_root": "deployment/agent",
-                "resident_profiles": [
-                    {
-                        "descriptor": {
-                            "profile_id": "starter-local",
-                            "revision": "v1",
-                        },
-                        "project_root": str(HERE),
-                        "python_executable": str(Path(sys.executable).absolute()),
-                        "cpu_capacity": 1,
-                        "memory_capacity_bytes": 0,
-                        "gpu_devices": [],
-                        "environment": {},
-                        "readiness": {
-                            "imports": ["loom", "stages"],
-                            "import_roots": {"stages": "."},
-                            "source_roots": ["stages.py"],
-                        },
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+def _copy_role_inputs(root: Path) -> tuple[Path, Path]:
+    """Copy maintained role templates and write this machine's protected values."""
+
+    for name in ("coordinator.yaml", "agent.yaml"):
+        source = HERE / f"{name}.example"
+        destination = root / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+
+    coordinator_environment = root / "coordinator.env"
+    _write_environment(
+        coordinator_environment,
+        {
+            "LOOM_DEPLOYMENT_ROOT": str(root / "deployment"),
+            "LOOM_RUN_STORE_ROOT": str(root / "runs"),
+            "LOOM_MACHINE_ID": "starter-machine",
+        },
     )
-    agent.chmod(0o600)
-    config.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "kind": "loom.coordinator-service",
-                "deployment_root": "deployment",
-                "run_store_root": "runs",
-                "machine_id": "starter-machine",
-                "poll_interval_seconds": 0.01,
-                "max_accepted_time_step_seconds": 60,
-                "local_agent": {"config": "agent-service.yaml", "env_file": None},
-                "remote_profiles": [],
-                "agent_policy": {
-                    "revision": "starter-1",
-                    "agents": [],
-                    "principals": [],
-                },
-                "agent_server": None,
-                "authority": {"kind": "embedded"},
-            }
-        ),
-        encoding="utf-8",
+    _write_environment(
+        root / "agent.env",
+        {
+            "LOOM_AGENT_ROOT": str(root / "deployment" / "agent"),
+            "LOOM_PROJECT_ROOT": str(HERE),
+            "LOOM_PYTHON": str(Path(sys.executable).absolute()),
+        },
     )
-    config.chmod(0o600)
-    return config
+    return root / "coordinator.yaml", coordinator_environment
+
+
+def _write_environment(path: Path, values: dict[str, str]) -> None:
+    path.write_text(
+        "".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8"
+    )
+    path.chmod(0o600)
 
 
 def _run_cli(*args: str) -> dict[str, object]:
@@ -203,9 +186,20 @@ def _run_cli(*args: str) -> dict[str, object]:
     return payload
 
 
-def _start_service(config: Path, started_pids: set[int]) -> subprocess.Popen[str]:
+def _start_service(
+    config: Path, environment: Path, started_pids: set[int]
+) -> subprocess.Popen[str]:
     process = subprocess.Popen(
-        [_loom_cli(), "queue", "daemon-serve", str(config), "--format", "json"],
+        [
+            _loom_cli(),
+            "queue",
+            "daemon-serve",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--format",
+            "json",
+        ],
         cwd=HERE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

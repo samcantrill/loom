@@ -1,17 +1,33 @@
 # Managed Local Basic
 
-This directory is a copyable single-machine starter. Edit `stages.py` and
-`pipeline.yaml`, then run the lifecycle runner from the copied directory:
+This directory is a copyable single-machine CPU dummy starter. Copy the four
+role templates, set the machine values in the two `.env` files, and protect the
+actual files before editing `stages.py` and `pipeline.yaml`:
+
+```sh
+cp coordinator.yaml.example coordinator.yaml
+cp coordinator.env.example coordinator.env
+cp agent.yaml.example agent.yaml
+cp agent.env.example agent.env
+chmod 600 coordinator.yaml coordinator.env agent.yaml agent.env
+```
+
+`LOOM_PYTHON` must name an already-installed uv or pip environment that contains
+Loom and this copied project. Loom does not create an environment, run `uv sync`,
+install packages, or pull source. Preserve `.venv/bin/python` when that is the
+selected interpreter; resolving it can select the wrong environment.
+
+Run the lifecycle runner from the copied directory:
 
 ```sh
 python run_managed_local_basic.py
 ```
 
-The runner writes protected schema-v3 coordinator and referenced local-agent
-configurations for its fresh output root. The agent selects the runner's installed
-Python and copied project directory; role loading checks that installation and
-derives its software descriptor. It initializes once with `loom queue daemon-init` and calls
-`prepare_managed_local_run` for `starter-run`. Preparation persists the normal
+The runner copies the maintained schema-v3 coordinator and referenced local-agent
+templates into a fresh output root, writes protected machine env files, checks
+the selected installation, and derives its software descriptor. It initializes
+once with `loom queue daemon-init` and calls `prepare_managed_local_run` for
+`starter-run`. Preparation persists the normal
 run evidence and embedded authority, but never starts the daemon or submits
 work. Repeating preparation is an exact no-write replay; change the run name
 after a partial or changed preparation.
@@ -22,7 +38,7 @@ after a partial or changed preparation.
 from loom.queue import prepare_managed_local_run
 
 receipt = prepare_managed_local_run(
-    "coordinator-service.yaml", "pipeline.yaml", "starter-run"
+    "coordinator.yaml", "pipeline.yaml", "starter-run", env_file="coordinator.env"
 )
 ```
 
@@ -34,15 +50,28 @@ epoch, and retained terminal admission state. The runner checks that its
 foreground service processes have exited.
 
 The generated protected config deliberately has mode `0600`; it names the
-copied project and its installed Python environment. It is not a remote-agent,
+copied project and its installed Python environment. The actual role files are
+ignored by Git. It is not a remote-agent,
 TLS, SLURM, content-relay, or process-manager installation example. For those
 advanced routes, see `managed-remote-operations` and
 `managed-ready-stage-slurm`.
 
+For an operator-run lifecycle, use the same explicit inputs for every command:
+
+```sh
+loom queue daemon-check coordinator.yaml --env-file coordinator.env
+loom queue daemon-init coordinator.yaml --env-file coordinator.env
+loom queue daemon-serve coordinator.yaml --env-file coordinator.env
+# In another terminal: prepare, daemon-submit, daemon-status, daemon-wait.
+# Use daemon-cancel for a submitted run; a cancellation request is not proof
+# that a worker stopped or that capacity is free.
+# Stop the service, then daemon-serve with the same files to restart it.
+```
+
 
 Optional GPU qualification is a maintenance operation. After initializing a GPU
 agent with a declared Torch runtime, and before starting its owning service, run
-`loom queue daemon-check coordinator-service.yaml --probe-gpu`.
+`loom queue daemon-check coordinator.yaml --env-file coordinator.env --probe-gpu`.
 Use the role files produced or copied for your deployment. A running or retained
 agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
 cleanup. The existing agent journal retains any uncertain claim across restart.

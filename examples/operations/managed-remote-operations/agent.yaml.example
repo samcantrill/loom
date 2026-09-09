@@ -1,0 +1,26 @@
+schema_version: 3
+kind: loom.outbound-agent-service
+agent_root: ${oc.env:LOOM_AGENT_ROOT}
+url: ${oc.env:LOOM_COORDINATOR_URL}
+server_ca_path: ${oc.env:LOOM_SERVER_CA}
+certificate_path: ${oc.env:LOOM_AGENT_CERTIFICATE}
+private_key_path: ${oc.env:LOOM_AGENT_PRIVATE_KEY}
+reconnect_seconds: 0.05
+resident_profiles:
+  - descriptor:
+      profile_id: remote-default
+      revision: v1
+    project_root: ${oc.env:LOOM_PROJECT_ROOT}
+    python_executable: ${oc.env:LOOM_PYTHON}
+    cpu_capacity: 1
+    memory_capacity_bytes: 0
+    gpu_devices: []
+    environment: {}
+    readiness:
+      source_roots: [src/loom]
+registration:
+  config_revision: remote-config-v1
+  inventory_revision: remote-inventory-v1
+  availability_revision: remote-availability-v1
+  pools: [default]
+  capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]

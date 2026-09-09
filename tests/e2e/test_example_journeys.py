@@ -20,6 +20,19 @@ REPO_ROOT = next(
 EXAMPLES_ROOT = REPO_ROOT / "examples"
 
 
+def test_e2e_managed_role_templates_keep_machine_inputs_out_of_shared_yaml() -> None:
+    for name in ("managed-local-basic", "managed-remote-operations"):
+        example = EXAMPLES_ROOT / "operations" / name
+        coordinator = (example / "coordinator.yaml.example").read_text(encoding="utf-8")
+        agent = (example / "agent.yaml.example").read_text(encoding="utf-8")
+        assert "${oc.env:" in coordinator
+        assert "${oc.env:" in agent
+        assert (example / "coordinator.env.example").is_file()
+        assert (example / "agent.env.example").is_file()
+        assert "unqualified" not in coordinator
+        assert "unqualified" not in agent
+
+
 def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
     script = EXAMPLES_ROOT / "execution" / "local" / "run_pipeline.py"
     output_root = tmp_path / "local"
@@ -50,7 +63,12 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
 
 
 def test_e2e_example_authority_lifecycle_cli(tmp_path: Path) -> None:
-    script = EXAMPLES_ROOT / "operations" / "authority-lifecycle" / "run_authority_lifecycle.py"
+    script = (
+        EXAMPLES_ROOT
+        / "operations"
+        / "authority-lifecycle"
+        / "run_authority_lifecycle.py"
+    )
     payload = _parse_summary(_run_example_script(script, tmp_path / "authority"))
 
     summary = payload["authority_lifecycle"]
@@ -64,7 +82,11 @@ def test_e2e_example_authority_lifecycle_cli(tmp_path: Path) -> None:
 
 def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
     script = (
-        EXAMPLES_ROOT / "execution" / "slurm" / "dry-run-basics" / "run_dry_run_basics.py"
+        EXAMPLES_ROOT
+        / "execution"
+        / "slurm"
+        / "dry-run-basics"
+        / "run_dry_run_basics.py"
     )
     output_root = tmp_path / "slurm"
     summaries = _parse_slurm_summaries(_run_example_script(script, output_root))
@@ -111,10 +133,18 @@ def test_e2e_example_service_less_slurm_reopens_without_a_service(
     }
 
 
-def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Path) -> None:
-    script = EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_docker_pipeline.py"
+def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(
+    tmp_path: Path,
+) -> None:
+    script = (
+        EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_docker_pipeline.py"
+    )
     failure_script = (
-        EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_failure_diagnostics.py"
+        EXAMPLES_ROOT
+        / "execution"
+        / "containers"
+        / "docker"
+        / "run_failure_diagnostics.py"
     )
     output_root = tmp_path / "docker"
     payload = _parse_summary(_run_example_script(script, output_root))
@@ -126,9 +156,7 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert _require_int(payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
-    failure_payload = _parse_summary(
-        _run_example_script(failure_script, output_root)
-    )
+    failure_payload = _parse_summary(_run_example_script(failure_script, output_root))
 
     assert failure_payload["run_status"] == "FAILED"
     assert failure_payload["failure_executor"] == "docker"
@@ -206,7 +234,9 @@ def _parse_summary(output: str) -> dict[str, object]:
         while stack and indent <= stack[-1][0]:
             stack.pop()
         if not stack:
-            raise AssertionError(f"could not parse line without a parent container: {raw_line!r}")
+            raise AssertionError(
+                f"could not parse line without a parent container: {raw_line!r}"
+            )
 
         current = stack[-1][1]
         if not value:

@@ -1,0 +1,33 @@
+schema_version: 3
+kind: loom.coordinator-service
+deployment_root: ${oc.env:LOOM_DEPLOYMENT_ROOT}
+run_store_root: ${oc.env:LOOM_RUN_STORE_ROOT}
+machine_id: ${oc.env:LOOM_MACHINE_ID}
+poll_interval_seconds: 0.05
+max_accepted_time_step_seconds: 3600
+authority:
+  kind: embedded
+local_agent: null
+# Replace this empty list only with the descriptor observed from agent-check.
+remote_profiles: []
+agent_policy:
+  revision: policy-1
+  agents:
+    - credential_id: remote-agent-certificate
+      principal_id: remote-agent-principal
+      agent_id: machine-B
+      pools: [default]
+      capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]
+      gpu_devices: []
+  principals: []
+  local_owner:
+    actions: [drain, resume]
+    agent_ids: [machine-B]
+    pools: [default]
+agent_server:
+  host: localhost
+  port: ${oc.env:LOOM_AGENT_PORT}
+  certificate_path: ${oc.env:LOOM_SERVER_CERTIFICATE}
+  private_key_path: ${oc.env:LOOM_SERVER_PRIVATE_KEY}
+  client_ca_path: ${oc.env:LOOM_CLIENT_CA}
+  credential_fingerprints: {}
