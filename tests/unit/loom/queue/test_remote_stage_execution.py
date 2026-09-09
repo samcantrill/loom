@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 from dataclasses import replace
 import json
@@ -411,10 +412,10 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     else:
         assert report.resource_controls == ({**controls[0], "disposition": "applied"},)
         if report.failure is not None:
-            assert (
-                report.failure.executor_metadata["resource_controls"][0]["disposition"]
-                == "applied"
-            )
+            failure_controls = report.failure.executor_metadata["resource_controls"]
+            assert isinstance(failure_controls, (list, tuple))
+            assert isinstance(failure_controls[0], Mapping)
+            assert failure_controls[0]["disposition"] == "applied"
     saved = workspace.worker_result()
     assert saved is not None
     assert saved.executor_metadata["application_detail"] == "retained"

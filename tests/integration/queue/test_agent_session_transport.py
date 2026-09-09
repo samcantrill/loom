@@ -2734,11 +2734,16 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         agent.publish_offer(offer, idempotency_key="offer-restart")
         supervisor = agent._supervisor  # noqa: SLF001 - causal service boundary
         assert supervisor is not None
+        execution_owner = daemon._execution
+        assert execution_owner is not None
+        original_write_failure = execution_owner.run_store.write_stage_failure
+        interrupted_write = Event()
+        retained_report: str | None = None
+
+        def forbidden_launch(*_args, **_kwargs):
+            pytest.fail("failed control setup must not reach the supervisor")
+
         if no_start:
-
-            def forbidden_launch(*_args, **_kwargs):
-                pytest.fail("failed control setup must not reach the supervisor")
-
             monkeypatch.setattr(supervisor, "launch", forbidden_launch)
         if restart_barrier == "binding_failure_before_result_commit":
             providers, _journal = agent._runtime_owners(session)
@@ -2763,10 +2768,6 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
 
             monkeypatch.setattr(supervisor, "launch", interrupt_launch)
         elif restart_barrier == "diagnostic_write":
-            execution_owner = daemon._execution
-            assert execution_owner is not None
-            original_write_failure = execution_owner.run_store.write_stage_failure
-            interrupted_write = Event()
 
             def interrupt_diagnostic_write(*args, **kwargs):
                 interrupted_write.set()
@@ -3458,7 +3459,9 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
             )
             assert result["state"] == "RELEASED", result
             results.append(result)
-            session = _session_from_value(cast(Mapping[str, object], result["session"]))
+            session = _session_from_value(
+                cast(Mapping[str, PlainData], result["session"])
+            )
         return results
 
     try:
@@ -3925,7 +3928,10 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         for run_uri in (remote_run, local_run):
             result = store.read_stage_worker_result(run_uri, "capture", attempt=1)
             assert result is not None
-            controls = result["executor_metadata"]["resource_controls"]
+            metadata = result["executor_metadata"]
+            assert isinstance(metadata, dict)
+            controls = metadata["resource_controls"]
+            assert isinstance(controls, list)
             assert {
                 "resource": "gpu",
                 "owner": "managed_provider",

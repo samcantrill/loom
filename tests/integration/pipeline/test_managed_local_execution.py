@@ -711,6 +711,8 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     if no_start:
         assert receipt.worker_result.executor_metadata["process_created"] is False
         controls = receipt.worker_result.executor_metadata["resource_controls"]
+        assert isinstance(controls, (list, tuple))
+        assert isinstance(controls[0], Mapping)
         assert controls[0]["disposition"] == "unavailable"
         assert "enforce" in failure.message
         if failure_mode == "provider_error":

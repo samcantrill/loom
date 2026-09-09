@@ -692,6 +692,7 @@ def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> Non
 def test_empty_claims_reuse_current_offer_without_consuming_capacity(tmp_path) -> None:
     _provider_value, command = _provider()
     first = command.assignment
+    assert isinstance(first, ManagedAssignment)
     second = replace(
         first,
         assignment_id="assignment-empty-2",

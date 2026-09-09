@@ -7,14 +7,15 @@
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
 - Worktree: `stage-39-p1-pipeline-resource-policy` under the manifest's root
-- Base revision: published develop `000f34f`, merged without conflicts in
-  `b94b89d`; original approved planning packet imported from `6c1a0edc`
+- Base revision: published develop `998b07c`, merged without conflicts in
+  `2e4d0c9`; original approved planning packet imported from `6c1a0edc`
 - PR target: develop
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: no unresolved startup decision; R1–R4 implementation obligations remain
-  open and must pass before PR submission
+- Blockers: R3's portable failure contract conflicts with the retained generic
+  HTTP JSON limits; see Transport Boundary Finding below. Full gates and required
+  independent implementation review remain incomplete. No PR submission.
 
 ## Objective And Context
 
@@ -414,6 +415,44 @@ without accounting has a passing no-claim/no-start remote restart case. The prio
 without changing the production 60-second indeterminate-operation retry window.
 Fresh full validation and independent full-diff review are still required. These
 focused results do not admit PR submission or phase completion.
+
+### Transport Boundary Finding — Amendment Required
+
+Read-only public-data reproduction on `2e4d0c9` (runtime equals committed recovery
+`4a81fcf` plus upstream #291) establishes a remaining R3 producer/transport gap:
+`_capture_exception_details` and `_RemoteExecutionReport(schema_version=2)` accept
+a three-node native cause chain, but `agent_session_transport._decode` rejects
+the resulting 1,742-byte report as too deeply nested. A valid `ExecutionFailure`
+detail `{"threshold": 0.5}` produces an 846-byte report rejected as an invalid JSON
+value. Both are reachable current failure producers, not forged internal state.
+The HTTP request handler runs this generic decoder before the report codec; its
+depth-8/int-only policy prevents complete failure delivery despite the new carrier.
+The remote inspection-response decoder shares the depth checker and needs the
+same boundary reconciliation. The passing short-chain socket-client test does
+not establish these deeper HTTP report/inspection cases.
+
+R3 currently says existing transport bounds apply. Do not silently widen all
+protocol traffic or flatten/drop the failure to satisfy those bounds. Recommended
+targeted amendment: admit the existing failure plain-data types (including finite
+floats) and bounded causal/nested structure specifically at report and inspection
+failure payloads; preserve existing byte caps, strict surrounding envelopes,
+ordinary request limits, legacy replay and explicit overflow errors. Name the
+dedicated structural limits and validation owner before coding. Proposed limits
+are depth 512 and collection size 256 within the declared failure payload only:
+the existing 128-node diagnostic graph can require roughly three JSON levels per
+causal link. The existing 64-KiB agent body and 1-MiB inspection-response caps stay
+unchanged; finite floats are accepted only inside failure plain data. These are
+proposed, not approved, limits. Shared transport failure-payload validation owns
+them; generic requests retain depth 8 and their existing scalar/collection rules.
+Require real three-level/structured-detail HTTP report and remote-client tests,
+plus unchanged rejection of invalid ordinary protocol data and genuine overflow.
+This needs approval of the changed transport constraint; no runtime change for
+this finding or new review/refiner pass has been made. The manager's one recovery
+correction remains open, not reset.
+
+Current full-gate attempt: repository-wide lint and Pyright pass after test-only
+type narrowing; default tests are running. These pending results cannot resolve
+the transport finding. Independent review, PR and merge remain unstarted.
 
 ### R1 — Canonical Offer Reuse
 

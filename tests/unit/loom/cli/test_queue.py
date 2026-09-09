@@ -434,7 +434,7 @@ def test_admission_text_and_json_preserve_portable_worker_failure_chain(
         message="worker stage failed",
         details={"worker_failure": inner.to_dict()},
     )
-    payload = {
+    payload: dict[str, object] = {
         "owners": {
             "run_result": {
                 "availability": "available",

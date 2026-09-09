@@ -6,8 +6,9 @@ Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: no unresolved startup decision; R1–R4 implementation and validation
-remain required before PR submission
+Blockers: Phase 1's Transport Boundary Finding requires a targeted amendment to
+reconcile portable failure data with the generic HTTP JSON limits. Full gates,
+independent implementation review and PR submission remain incomplete.
 
 ## Summary
 
@@ -109,8 +110,8 @@ remain required before PR submission
   Existing three corrections remain consumed; the approved
   recovery has one executor delivery and at most one qualified correction, not
   a reset of the original budget. No PR opens with known blockers.
-- Current source: checkpoint `6474206` reconciled to published develop `000f34f`
-  through merge `b94b89d`; preserve PR #290's new managed-lifecycle journeys.
+- Current source: recovery checkpoint `4a81fcf` reconciled to published develop
+  `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
   Phase 1 implementation review and verified merge/cleanup are required. This
   recovery request excludes Phase 2 execution and physical Stage 81 continuation.
