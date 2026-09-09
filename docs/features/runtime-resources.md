@@ -165,6 +165,15 @@ causes; JSON retains the structured envelope. Inspection does not need access to
 worker-local traceback files. These records are private execution diagnostics,
 not automatically sanitized public reports.
 
+Authenticated agent and SLURM report delivery accepts finite numeric details and
+native causal chains only within the schema-2 `failure` subtree. That subtree is
+limited to depth 512 and 256 entries per object/list; the complete agent request
+remains limited to 64 KiB. Supported clients check the same bounds before sending
+and explain which size or nesting limit to reduce. Failures are never flattened
+or silently removed to fit. Ordinary protocol JSON restrictions remain unchanged.
+Detailed inspection is the existing daemon-admission text/JSON view; the separate
+HTTP run-inspection status/location schema is unchanged and retains its 1-MiB cap.
+
 Current behavior:
 
 ```text

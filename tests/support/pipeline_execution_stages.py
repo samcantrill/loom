@@ -23,13 +23,15 @@ class ReportedFailureStage:
     ) -> Mapping[str, ArtifactRef]:
         from loom.pipeline.execution import StageReportedFailure
 
-        del context, inputs
+        del inputs
         try:
             raise ValueError("private-native-failure-sentinel")
         except ValueError as cause:
             cause.add_note("private-native-note-sentinel")
             raise StageReportedFailure(
-                {"record": {"items": [1, None, "safe"]}}
+                {"record": {"threshold": 0.5}}
+                if context.stage_config.get("structured_float") is True
+                else {"record": {"items": [1, None, "safe"]}}
             ) from cause
 
 
@@ -181,9 +183,12 @@ class NestedFailureStage:
     ) -> Mapping[str, ArtifactRef]:
         del context, inputs
         try:
-            raise FileNotFoundError("missing /worker/data/product.json")
-        except FileNotFoundError as cause:
-            cause.add_note("Prepare the product on the selected worker.")
+            try:
+                raise FileNotFoundError("missing /worker/data/product.json")
+            except FileNotFoundError as cause:
+                cause.add_note("Prepare the product on the selected worker.")
+                raise ValueError("candidate product path is unusable") from cause
+        except ValueError as cause:
             raise RuntimeError("could not prepare the experiment input") from cause
 
 

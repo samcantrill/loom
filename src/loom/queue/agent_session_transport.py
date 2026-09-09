@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -127,6 +128,11 @@ _MAX_BODY_BYTES = 65_536
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 _MAX_JSON_DEPTH = 8
 _MAX_JSON_COLLECTION = 64
+_MAX_FAILURE_JSON_DEPTH = 512
+_MAX_FAILURE_JSON_COLLECTION = 256
+_FAILURE_REPORT_OPERATIONS = frozenset(
+    {("agent", "output_manifest"), ("slurm_bootstrap", "report")}
+)
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
@@ -4756,6 +4762,8 @@ class LocalDaemonAgentHttpClient:
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
+        if (role, operation) in _FAILURE_REPORT_OPERATIONS:
+            _decode(body, failure_report=True)
         try:
             connection.request(
                 "POST",
@@ -4908,13 +4916,18 @@ class _Handler(BaseHTTPRequestHandler):
                 or int(length) > _MAX_BODY_BYTES
             ):
                 raise QueueServiceError("agent protocol body is invalid")
-            payload = _decode(self.rfile.read(int(length)))
             segments = self.path.split("/")
             if len(segments) != 4 or segments[0] or segments[1] != "v1":
                 raise QueueServiceError("agent protocol operation is unsupported")
             role_name, operation = segments[2:]
             if role_name != mapped_role:
                 raise QueueServiceError("agent TLS credential is not authorized")
+            raw = self.rfile.read(int(length))
+            payload = (
+                _decode(raw, failure_report=True)
+                if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
+                else _decode(raw)
+            )
             principal = LocalDaemonPrincipal(
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
@@ -5698,23 +5711,38 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes) -> Mapping[str, object]:
+def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]:
     if len(raw) > _MAX_BODY_BYTES:
-        raise QueueServiceError("agent protocol body is too large")
+        raise QueueServiceError(
+            "agent protocol body is too large (maximum 65536 bytes); "
+            "reduce the report or message size"
+        )
     try:
         value = json.loads(
             raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
         )
+    except RecursionError as exc:
+        raise QueueServiceError("agent protocol JSON is too deeply nested") from exc
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
-    _bounded_json(value, depth=0)
+    report = value.get("report") if failure_report else None
+    if (
+        isinstance(report, Mapping)
+        and type(report.get("schema_version")) is int
+        and report["schema_version"] == 2
+        and "failure" in report
+    ):
+        _bounded_failure_json(report["failure"])
+        _bounded_json({**value, "report": {**report, "failure": None}}, depth=0)
+    else:
+        _bounded_json(value, depth=0)
     return value
 
 
 def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
-    """Decode the bounded Phase 1 result envelope without widening agent input."""
+    """Decode the closed status/location envelope without widening agent input."""
 
     if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
         raise QueueServiceError("run inspection response is too large")
@@ -5722,12 +5750,48 @@ def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
         value = json.loads(
             raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
         )
+    except RecursionError as exc:
+        raise QueueServiceError("run inspection response is too deeply nested") from exc
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise QueueServiceError("run inspection response JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("run inspection response is not an object")
     _bounded_json(value, depth=0, max_collection=256)
     return value
+
+
+def _bounded_failure_json(value: object) -> None:
+    """Validate only the declared report failure's bounded plain-data subtree."""
+
+    pending = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > _MAX_FAILURE_JSON_DEPTH:
+            raise QueueServiceError(
+                "agent report failure JSON is too deeply nested (maximum depth 512); "
+                "reduce failure detail nesting"
+            )
+        if isinstance(item, Mapping):
+            if len(item) > _MAX_FAILURE_JSON_COLLECTION:
+                raise QueueServiceError(
+                    "agent report failure object is too large (maximum 256 entries); "
+                    "reduce failure detail collections"
+                )
+            if any(not isinstance(key, str) for key in item):
+                raise QueueServiceError("agent report failure object key is invalid")
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            if len(item) > _MAX_FAILURE_JSON_COLLECTION:
+                raise QueueServiceError(
+                    "agent report failure collection is too large (maximum 256 items); "
+                    "reduce failure detail collections"
+                )
+            pending.extend((child, depth + 1) for child in item)
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise QueueServiceError("agent report failure JSON value is non-finite")
+        elif item is not None and not isinstance(item, (str, int, bool)):
+            raise QueueServiceError("agent report failure JSON value is invalid")
 
 
 def _bounded_json(

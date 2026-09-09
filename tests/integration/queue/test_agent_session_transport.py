@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any, cast
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ import loom.queue.agent_session_transport as agent_session_transport
 import loom.queue.deployment as queue_deployment
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.pipeline import PipelineSpec
+from loom.pipeline.execution.models import ExecutionFailure
 from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
@@ -89,6 +91,7 @@ from loom.queue._remote_stage_execution import (
     ResidentExecutionProfile,
     ResidentGpuDevice,
     ResidentProfileDescriptor,
+    _RemoteExecutionReport,
 )
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -1566,6 +1569,7 @@ def _prepare_remote_producer_run(
     sequential: bool = False,
     enforce: tuple[str, ...] = (),
     native_failure: bool = False,
+    reported_failure: bool = False,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1578,10 +1582,15 @@ def _prepare_remote_producer_run(
                     "_target_": (
                         "tests.support.pipeline_execution_stages.NestedFailureStage"
                         if native_failure
+                        else "tests.support.pipeline_execution_stages.ReportedFailureStage"
+                        if reported_failure
                         else "tests.support.pipeline_execution_stages.JsonProducerStage"
                     )
                 },
-                "config": {"value": value},
+                "config": {
+                    "value": value,
+                    **({"structured_float": True} if reported_failure else {}),
+                },
                 "resources": {
                     "entries": (
                         resource_entries
@@ -2565,6 +2574,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("binding_failure_before_result_commit", False),
         ("missing_claim_before_result_commit", False),
         ("native_failure_before_result_commit", False),
+        ("reported_failure_before_result_commit", False),
         ("diagnostic_write", False),
     ),
 )
@@ -2585,6 +2595,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         "native_failure_before_result_commit",
         "diagnostic_write",
     }
+    reported_failure = restart_barrier == "reported_failure_before_result_commit"
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -2619,6 +2630,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         else "all",
         enforce=("cpu",) if no_start else (),
         native_failure=native_failure,
+        reported_failure=reported_failure,
         machine_id="agent-a",
         value=42,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -2790,7 +2802,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             monkeypatch.setattr(
                 agent, "commit_result", interrupt_after_failed_projection
             )
-        elif restart_barrier == "before_result_commit" or no_start or native_failure:
+        elif (
+            restart_barrier == "before_result_commit"
+            or no_start
+            or native_failure
+            or reported_failure
+        ):
 
             def interrupt_result(*args: object, **kwargs: object) -> object:
                 raise RuntimeError("simulated agent application restart")
@@ -2890,11 +2907,13 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             )
         assert coordinator.wait("restart-item", timeout_seconds=10).state is (
             LocalDaemonAdmissionState.FAILED
-            if no_start or native_failure
+            if no_start or native_failure or reported_failure
             else LocalDaemonAdmissionState.SUCCEEDED
         )
         assert authority.open_run(run_uri).status is (
-            RunStatus.FAILED if no_start or native_failure else RunStatus.SUCCEEDED
+            RunStatus.FAILED
+            if no_start or native_failure or reported_failure
+            else RunStatus.SUCCEEDED
         )
         if no_start:
             failure = runs.read_stage_failure(run_uri, "build")
@@ -2916,14 +2935,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 )
             assert replacement._execution_journal is not None
             assert replacement._execution_journal.retained_claim_commands() == ()
-        if native_failure:
+        if native_failure or reported_failure:
             import io
             from loom.cli.main import main
             from loom.queue import LocalDaemonSocketServer
 
             failure = runs.read_stage_failure(run_uri, "build")
             assert failure is not None and failure["run_uri"] == run_uri
-            assert "missing /worker/data/product.json" in json.dumps(failure)
+            if native_failure:
+                assert "missing /worker/data/product.json" in json.dumps(failure)
+            else:
+                assert failure["details"] == {
+                    "domain_failure": {"record": {"threshold": 0.5}}
+                }
+                assert "private-native" not in json.dumps(failure)
             socket_server = LocalDaemonSocketServer(daemon, config.endpoint)
             socket_server.start()
             original_open = Path.open
@@ -2957,12 +2982,17 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                         == 0
                     )
                 rendered = text_output.getvalue()
-                assert "could not prepare the experiment input" in rendered
-                assert (
-                    "builtins.FileNotFoundError: missing /worker/data/product.json"
-                    in rendered
-                )
-                assert "Prepare the product on the selected worker." in rendered
+                if native_failure:
+                    assert "could not prepare the experiment input" in rendered
+                    assert "candidate product path is unusable" in rendered
+                    assert (
+                        "builtins.FileNotFoundError: missing /worker/data/product.json"
+                        in rendered
+                    )
+                    assert "Prepare the product on the selected worker." in rendered
+                else:
+                    assert "stage reported a domain failure" in rendered
+                    assert "private-native" not in rendered
                 view = json.loads(json_output.getvalue())["result"]["owners"][
                     "run_result"
                 ]
@@ -4130,6 +4160,110 @@ def test_gpu_model_fallback_uses_daemon_accepted_time(
         daemon.stop()
 
 
+def _nested_report_detail(depth: int) -> Any:
+    value: Any = 0.5
+    for _ in range(depth):
+        value = {"nested": value}
+    return value
+
+
+def _failure_report(details: Mapping[str, PlainData]) -> _RemoteExecutionReport:
+    failure = ExecutionFailure(
+        1,
+        "loom-agent:assignment-1",
+        "build",
+        1,
+        "2020-01-01T00:00:01Z",
+        "local",
+        "stage_exception",
+        "stage failed",
+        details=details,
+    )
+    return _RemoteExecutionReport(
+        assignment_id="assignment-1",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at=failure.failed_at,
+        executor_name="local",
+        failure_type=failure.failure_type,
+        message=failure.message,
+        failure=failure,
+        schema_version=2,
+    )
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"threshold": 0.5, "": None, "key-" * 50: "path evidence"},
+        {"items": [0.5] * 256},
+        {str(index): 0.5 for index in range(256)},
+        _nested_report_detail(511),
+    ],
+    ids=["plain-types", "list-limit", "object-limit", "depth-limit"],
+)
+def test_report_failure_decoder_preserves_bounded_plain_data_and_codec_round_trip(
+    details: Mapping[str, PlainData],
+) -> None:
+    report = _failure_report(details)
+    encoded = json.dumps({"report": report.to_dict()}).encode()
+    decoded = _decode(encoded, failure_report=True)
+    replayed = _RemoteExecutionReport.from_dict(decoded["report"])
+    assert json.dumps({"report": replayed.to_dict()}).encode() == encoded
+    with pytest.raises(QueueServiceError):
+        _decode(encoded)
+    with pytest.raises(QueueServiceError):
+        _decode_run_inspection_response(encoded)
+
+
+@pytest.mark.parametrize(
+    ("details", "message"),
+    [
+        (_nested_report_detail(512), "maximum depth 512"),
+        ({"items": [0.5] * 257}, "maximum 256 items"),
+        ({str(index): 0.5 for index in range(257)}, "maximum 256 entries"),
+        ({"traceback": "x" * 65_536}, "maximum 65536 bytes"),
+    ],
+    ids=["depth-overflow", "list-overflow", "object-overflow", "byte-overflow"],
+)
+def test_report_failure_decoder_rejects_genuine_overflow(
+    details: Mapping[str, PlainData], message: str
+) -> None:
+    encoded = json.dumps({"report": _failure_report(details).to_dict()}).encode()
+    with pytest.raises(QueueServiceError, match=message):
+        _decode(encoded, failure_report=True)
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_report_failure_decoder_rejects_nonfinite_numbers(number: str) -> None:
+    encoded = (
+        '{"report":{"schema_version":2,"failure":{"details":{"x":' + number + "}}}}"
+    ).encode()
+    with pytest.raises(QueueServiceError, match="JSON.*(invalid|non-finite)"):
+        _decode(encoded, failure_report=True)
+
+
+def test_failure_report_exception_cannot_widen_surrounding_or_legacy_fields() -> None:
+    value: dict[str, Any] = {"report": _failure_report({"threshold": 0.5}).to_dict()}
+    for misplaced in (
+        {"failure": value["report"]["failure"]},
+        {**value, "authorization_revision": 0.5},
+        {**value, "unknown": _nested_report_detail(9)},
+        {**value, "": "invalid envelope key"},
+        {"report": {**value["report"], "schema_version": 1}},
+        {"report": {**value["report"], "schema_version": 2.0}},
+    ):
+        with pytest.raises(QueueServiceError):
+            _decode(json.dumps(misplaced).encode(), failure_report=True)
+    with pytest.raises(QueueServiceError, match="JSON is invalid"):
+        _decode(
+            b'{"report":{"schema_version":2,"failure":{"x":1,"x":2}}}',
+            failure_report=True,
+        )
+
+
 def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() -> None:
     with pytest.raises(QueueServiceError, match="JSON is invalid"):
         _decode(b'{"value":1,"value":2}')
@@ -4139,6 +4273,10 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b'{"a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":1}}}}}}}}}')
     with pytest.raises(QueueServiceError, match="too large"):
         _decode(b"{" + b" " * 65_536 + b"}")
+    with pytest.raises(QueueServiceError, match="deeply nested"):
+        _decode(b'{"nested":' * 1500 + b"0" + b"}" * 1500)
+    with pytest.raises(QueueServiceError, match="JSON value is invalid"):
+        _decode(b'{"value":0.5}')
 
 
 def test_run_inspection_response_decoder_preserves_phase_one_limits() -> None:
@@ -5665,11 +5803,8 @@ def test_loopback_query_preserves_a_256_record_phase_one_result(
     assert decode_run_inspection_response(remote) == result
 
 
-def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
-    tmp_path: Path,
-) -> None:
-    credentials = _credentials(tmp_path / "tls")
-    profile = SlurmReadyStageProfile(
+def _slurm_bootstrap_profile(tmp_path: Path) -> SlurmReadyStageProfile:
+    return SlurmReadyStageProfile(
         profile_id="training",
         partition="gpu",
         max_outstanding=1,
@@ -5695,6 +5830,13 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
             ),
         ),
     )
+
+
+def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    profile = _slurm_bootstrap_profile(tmp_path)
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
@@ -5753,6 +5895,134 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
             )
         with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
             client.handshake(role="client")
+    finally:
+        client.close()
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize(
+    ("role", "operation", "certificate"),
+    [("agent", "output_manifest", "agent"), ("slurm_bootstrap", "report", "other")],
+)
+def test_loopback_report_routes_preserve_near_limit_failure_and_strict_envelopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    operation: str,
+    certificate: str,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=_policy(),
+        slurm_profiles=(_slurm_bootstrap_profile(tmp_path),),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    received: list[dict[str, PlainData]] = []
+
+    def declare_outputs(*_args, report: _RemoteExecutionReport, **_kwargs):
+        received.append(report.to_dict())
+        return {"accepted": True}
+
+    def declare_report(_assignment, _incarnation, _fence, report):
+        received.append(_RemoteExecutionReport.from_dict(report).to_dict())
+
+    monkeypatch.setattr(
+        daemon,
+        "agent_view",
+        lambda _principal: SimpleNamespace(declare_outputs=declare_outputs),
+    )
+    monkeypatch.setattr(
+        daemon,
+        "slurm_bootstrap_view",
+        lambda _principal: SimpleNamespace(declare_report=declare_report),
+    )
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential",
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "slurm-credential",
+            },
+        ),
+    )
+    server.start()
+    client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials[certificate].with_suffix(".crt"),
+            credentials[certificate].with_suffix(".key"),
+        )
+    )
+    report = _failure_report(_nested_report_detail(511)).to_dict()
+    envelope: dict[str, PlainData] = {
+        "assignment_id": "assignment-1",
+        "fence": "fence-1",
+        "report": report,
+        **(
+            {
+                "session_id": "session-1",
+                "authorization_id": "authorization-1",
+                "authorization_revision": 1,
+            }
+            if role == "agent"
+            else {"incarnation": "incarnation-1"}
+        ),
+    }
+    try:
+        client._call(operation, envelope, role=role)
+        assert json.dumps(received) == json.dumps([report])
+        assert client._connection is not None
+        overflow_items: list[PlainData] = [0.5] * 257
+        oversized = {
+            **envelope,
+            "report": _failure_report({"items": overflow_items}).to_dict(),
+        }
+        with monkeypatch.context() as outbound:
+
+            def must_not_send(*_args, **_kwargs):
+                pytest.fail("invalid outbound report must fail before HTTP submission")
+
+            outbound.setattr(client._connection, "request", must_not_send)
+            with pytest.raises(QueueServiceError, match="maximum 256 items"):
+                client._call(operation, oversized, role=role)
+
+        # Bypass the client validator to exercise the independently bounded server.
+        for rejected in (oversized, {**envelope, "unexpected": "field"}):
+            client._call(operation, envelope, role=role)
+            connection = client._connection
+            assert connection is not None
+            connection.request(
+                "POST",
+                f"/v1/{role}/{operation}",
+                body=json.dumps(rejected).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            assert response.status == 403
+            assert json.loads(response.read())["error"] == "agent_protocol_rejected"
+            client._close_connection()
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client._call(operation, envelope, role="client")
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client._call("event", envelope, role=role)
+        assert len(received) == 3
     finally:
         client.close()
         server.stop()

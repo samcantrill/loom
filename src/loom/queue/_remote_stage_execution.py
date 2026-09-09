@@ -1101,7 +1101,7 @@ class _RemoteOutputArtifact:
 
 @dataclass(frozen=True, slots=True)
 class _RemoteExecutionReport:
-    """Path-free terminal worker facts; the coordinator restores its run URI."""
+    """Portable terminal worker facts; the coordinator restores its run URI."""
 
     assignment_id: str
     stage_name: str

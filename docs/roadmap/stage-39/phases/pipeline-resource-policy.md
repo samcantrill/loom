@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; approved transport amendment startup review pending
+- Status: in_progress; transport amendment implemented, fresh full gates pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -14,7 +14,7 @@
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
 - Blockers: none awaiting maintainer approval. See Approved Transport Amendment;
-  its targeted startup review precedes implementation. Full gates and required
+  its targeted startup review passed at `93488a6`. Full gates and required
   independent implementation review remain incomplete. No PR submission.
 
 ## Objective And Context
@@ -258,7 +258,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
 | Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
 | Full gates | The latest `make validate-pr` passed repository-wide lint and Pyright, then failed/interrupted in default tests: 681 passed, 8 failed, 2 skipped, 156 deselected. Current capability/default-expectation corrections pass 21 targeted tests; SLURM continuation corrections pass 5 plus 18 adjacent consumers. Following the no-start waiter and failed-replay wake corrections, the complete local-daemon file passes 65 tests in the isolated no-extra environment. Earlier full receipts and `build/test-summary.md` remain stale; both final gates must run after the transport amendment is resolved. |
-| PR, review, and merge | Approved transport amendment awaits targeted startup review and implementation before fresh gates. Required full-diff independent implementation review has not run. No PR, push or merge occurred. |
+| PR, review, and merge | Transport amendment startup passed at `93488a6`; implementation and targeted checks pass. Fresh full gates and required full-diff independent implementation review remain pending. No PR, push or merge occurred. |
 | Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
 ### Manager Pre-Submit Corrections
@@ -486,10 +486,28 @@ report bodies so structural/byte overflow has an actionable local explanation
 before sending. The server independently validates the serialization boundary;
 its fixed authentication/error envelopes remain unchanged.
 
-Targeted independent startup review of this amendment is pending before runtime
-edits. A passing review admits completion in the manager's existing recovery
-correction, not a new executor/refiner pass. Fresh full validation and independent
-review of the entire Phase 1 diff remain required before PR/merge.
+Targeted independent startup review PASS at `93488a6004bd67dfded10d5786c31038156dc651`
+after one bounded normalization correction. This admits completion in the manager's
+existing recovery correction, not a new executor/refiner pass. Fresh full validation
+and independent review of the entire Phase 1 diff remain required before PR/merge.
+
+Implementation evidence: both exact authenticated report operations select the
+failure-only validator, reused before outbound submission. Ordinary response and
+query limits remain unchanged. Plain-data normalization now traverses explicitly
+without consuming one Python call stack per nested level, retaining scalar/key
+validation, frozen/mutable copies and canonical replay bytes. The deep conversion
+test fails before the change (`plain-depth-before.xml`) and passes afterward;
+the complete serialization/report/diagnostic selection passes 61 tests
+(`plain-depth-after.xml`). The transport selection passes 22 tests
+(`transport-amendment-after.xml`): both actual TLS report routes at depth 512,
+finite/string-key/collection boundaries, rejected overflow and misplaced data,
+unchanged query behavior, actual three-node native failure and worker-generated
+float domain payload, retained-result/repaired-diagnostic replay, and socket text/
+JSON inspection with worker files forbidden. Fake-SLURM native failure and adjacent
+reported-worker handling pass two checks (`transport-producers.xml`). Type checks,
+changed-file Ruff and diff checks pass. Float evidence is generated by the worker,
+not placed in ordinary assignment configuration; that protocol remains unchanged.
+These results admit fresh full validation, not phase completion or physical proof.
 
 Current full-gate evidence: repository-wide lint and Pyright passed after test-only
 type narrowing, but default tests failed/interrupted with 681 passed, 8 failed,

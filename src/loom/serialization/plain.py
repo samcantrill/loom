@@ -17,43 +17,40 @@ PlainData = None | bool | int | float | str | list["PlainData"] | dict[str, "Pla
 def is_plain_data(value: Any) -> bool:
     """Return true when a value is valid plain structured data."""
 
-    if value is None or isinstance(value, (bool, int, str)):
-        return True
-    if isinstance(value, float):
-        return _is_finite_float(value)
-    if isinstance(value, list):
-        return all(is_plain_data(item) for item in value)
-    if isinstance(value, tuple):
-        return all(is_plain_data(item) for item in value)
-    if isinstance(value, dict):
-        return all(
-            isinstance(key, str) and is_plain_data(val) for key, val in value.items()
-        )
-    return False
+    pending = [(value, False)]
+    active: set[int] = set()
+    while pending:
+        item, finished = pending.pop()
+        if finished:
+            active.remove(id(item))
+        elif isinstance(item, (dict, list, tuple)):
+            if id(item) in active:
+                return False
+            if isinstance(item, dict) and any(not isinstance(key, str) for key in item):
+                return False
+            active.add(id(item))
+            pending.append((item, True))
+            children = item.values() if isinstance(item, dict) else item
+            pending.extend((child, False) for child in children)
+        elif isinstance(item, float):
+            if not _is_finite_float(item):
+                return False
+        elif item is not None and not isinstance(item, (bool, int, str)):
+            return False
+    return True
 
 
 def ensure_plain_data(value: Any, *, path: str = "$") -> PlainData:
     """Ensure a value is valid plain data and return a normalized copy."""
 
-    if isinstance(value, Mapping):
-        return _convert_mapping(value, path)
-    if isinstance(value, (list, tuple)):
-        return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
-    if not is_plain_data(value):
-        raise _value_error(path, value)
-    return _to_plain(value, path)
+    return _copy_plain_data(value, path)
 
 
 def to_plain_data(value: Any, *, path: str = "$") -> PlainData:
     """Convert a supported object into plain structured data."""
 
-    if is_plain_data(value):
-        return _to_plain(value, path)
-
-    if isinstance(value, Mapping):
-        return _convert_mapping(value, path)
-    if isinstance(value, (list, tuple)):
-        return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    if is_plain_data(value) or isinstance(value, (Mapping, list, tuple)):
+        return _copy_plain_data(value, path)
 
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
@@ -72,26 +69,57 @@ def to_plain_data(value: Any, *, path: str = "$") -> PlainData:
 def freeze_plain_data(value: Any, *, path: str = "$") -> Any:
     """Convert plain data into an immutable representation."""
 
-    validated = ensure_plain_data(value, path=path)
-    return _freeze_plain_data(validated)
+    return _copy_plain_data(value, path, frozen=True)
 
 
 def thaw_plain_data(value: Any, *, path: str = "$") -> PlainData:
     """Convert frozen plain data into mutable dict/list structures."""
 
-    return _thaw_plain_data(value, path)
+    return _copy_plain_data(value, path)
 
 
-def _convert_mapping(value: Mapping[Any, Any], path: str) -> dict[str, PlainData]:
-    output: dict[str, PlainData] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise PlainDataError(f"Invalid mapping key at {path}: keys must be strings")
-        output[key] = _to_plain(item, f"{path}[{key!r}]")
-    return output
+def _copy_plain_data(value: Any, path: str, *, frozen: bool = False) -> Any:
+    """Copy a plain tree without using Python stack frames for its depth."""
+
+    pending = [(value, path, False)]
+    converted: list[Any] = []
+    active: set[int] = set()
+    while pending:
+        item, item_path, finished = pending.pop()
+        if finished:
+            count = len(item)
+            children = converted[-count:] if count else []
+            if count:
+                del converted[-count:]
+            if isinstance(item, Mapping):
+                result = dict(zip(item, children, strict=True))
+                converted.append(MappingProxyType(result) if frozen else result)
+            else:
+                converted.append(tuple(children) if frozen else children)
+            active.remove(id(item))
+        elif isinstance(item, (Mapping, list, tuple)):
+            if id(item) in active:
+                raise PlainDataError(f"Invalid plain data at {item_path}: cycle")
+            if isinstance(item, Mapping):
+                entries = list(item.items())
+                if any(not isinstance(key, str) for key, _ in entries):
+                    raise PlainDataError(
+                        f"Invalid mapping key at {item_path}: keys must be strings"
+                    )
+            else:
+                entries = list(enumerate(item))
+            active.add(id(item))
+            pending.append((item, item_path, True))
+            pending.extend(
+                (child, f"{item_path}[{key!r}]", False)
+                for key, child in reversed(entries)
+            )
+        else:
+            converted.append(_plain_scalar(item, item_path))
+    return converted[0]
 
 
-def _to_plain(value: Any, path: str) -> PlainData:
+def _plain_scalar(value: Any, path: str) -> PlainData:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -102,12 +130,6 @@ def _to_plain(value: Any, path: str) -> PlainData:
         return value
     if isinstance(value, float):
         return _coerce_float(value, path)
-    if isinstance(value, Mapping):
-        return _convert_mapping(value, path)
-    if isinstance(value, list):
-        return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
-    if isinstance(value, tuple):
-        return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, set | frozenset):
         raise PlainDataError(
             f"Invalid plain data at {path}: set-like values are not supported"
@@ -122,9 +144,7 @@ def _to_plain(value: Any, path: str) -> PlainData:
         raise PlainDataError(
             f"Invalid plain data at {path}: callables are not supported"
         )
-    if not is_plain_data(value):
-        raise _value_error(path, value)
-    return value
+    raise _value_error(path, value)
 
 
 def _coerce_float(value: float, path: str) -> float:
@@ -149,38 +169,3 @@ def _takes_no_args(func: Callable[..., object]) -> bool:
         return len(signature.parameters) == 0
     except (ValueError, TypeError):
         return False
-
-
-def _freeze_plain_data(value: Any) -> Any:
-    if isinstance(value, dict):
-        return MappingProxyType(
-            {key: _freeze_plain_data(item) for key, item in value.items()}
-        )
-    if isinstance(value, list):
-        return tuple(_freeze_plain_data(item) for item in value)
-    return value
-
-
-def _thaw_plain_data(value: Any, path: str) -> PlainData:
-    if isinstance(value, Mapping):
-        return _thaw_mapping(value, path)
-    if isinstance(value, list):
-        return [
-            _thaw_plain_data(item, f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    if isinstance(value, tuple):
-        return [
-            _thaw_plain_data(item, f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    return _to_plain(value, path)
-
-
-def _thaw_mapping(value: Mapping[Any, Any], path: str) -> dict[str, PlainData]:
-    output: dict[str, PlainData] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise PlainDataError(f"Invalid mapping key at {path}: keys must be strings")
-        output[key] = _thaw_plain_data(item, f"{path}[{key!r}]")
-    return output
