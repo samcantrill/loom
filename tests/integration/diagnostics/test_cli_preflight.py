@@ -203,7 +203,7 @@ def test_preflight_resource_warnings_and_strict_exit(tmp_path: Path) -> None:
     assert payload["result"]["status"] == "WARN"
     check = payload["result"]["checks"][0]
     assert check["check_id"] == "resources.capabilities"
-    assert check["details"]["diagnostics"][0]["code"] == "resource.ignored"
+    assert check["details"]["diagnostics"][0]["code"] == "resource.not_requested"
     assert stderr.getvalue() == ""
 
     strict_stdout = io.StringIO()

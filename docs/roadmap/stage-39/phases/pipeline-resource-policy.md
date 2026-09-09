@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; transport amendment implemented, fresh full gates pending
+- Status: blocked; delayed-SLURM private handoff amendment approval required
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -13,9 +13,10 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: none awaiting maintainer approval. See Approved Transport Amendment;
-  its targeted startup review passed at `93488a6`. Full gates and required
-  independent implementation review remain incomplete. No PR submission.
+- Blockers: see Delayed Submission Handoff Finding below. The approved transport
+  amendment passes its targeted checks, but complete default validation at
+  `29292c8` has one delayed-SLURM failure. A private durable handoff amendment
+  requires approval/review. No PR submission or independent full-diff review yet.
 
 ## Objective And Context
 
@@ -242,7 +243,7 @@ gate/review/merge ownership follows the canonical phase workflow.
   unmet fixed contracts below, so completion is not accepted
 - Refiner: correction `1198c1a` and related repair `68a37ad` returned;
   manager verified the changes and added discriminating integration coverage
-- Pre-submit: pending approved transport correction and fresh gates; no PR opened or pushed
+- Pre-submit: blocked by the delayed-SLURM durable handoff finding; no PR opened or pushed
 - Independent implementation review: not started
 - Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
   its separately returned repair, and manager correction `6474206`. Do not reset
@@ -257,8 +258,8 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Implementation and changed paths | Checkpoint `6474206` adds full-intent container validation, saved-selection-aware builders, selection-aware capability/preflight, truthful direct-container launch receipts, native unsupported-control rejection, and direct handoff finalization after container/runtime precedence. Refiner commits preserve sparse axes and worker policy/selection, gate provider bindings, and begin empty-claim lifecycle support. Recovery delivery `b8e33bb` canonically reuses unchanged unconsumed offers for no-claim work, makes later assignments use that canonical ID, compares retained runtime demand/policy/selection at local restart, ready-stage SLURM and dispatch, carries full schema-2 remote failures/start proof, and records definitive selected-control no-start results through local and remote terminal paths. This is not a complete Phase 1 implementation. |
 | Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
 | Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
-| Full gates | At `cba8d4d`, repository lint/Pyright passed and the complete default suite finished: 3,083 passed, 5 failed, 2 skipped, 156 deselected. The findings were top-level non-finite error wording, a stale worker fixture missing the mandatory selection (three cases), and safe display metadata exposing full resource attributes. The bounded correction restores wording, updates the fixture and separates private full worker metadata from the existing safe projection; 105 selected checks pass. The stale summary run was deliberately interrupted and its process group exited. Fresh full gates remain required. |
-| PR, review, and merge | Transport amendment startup passed at `93488a6`; implementation and targeted checks pass. Fresh full gates and required full-diff independent implementation review remain pending. No PR, push or merge occurred. |
+| Full gates | At `29292c8`, repository lint/Pyright pass and the complete default suite finishes with 3,088 passed, 1 failed, 2 skipped, 156 deselected (970.83 seconds). The failure is delayed SLURM's selected-resource worker materialization from display-safe metadata. Default-gate failure prevents the config-extra/build targets from running. The separate summary finishes with 3,250 passed, 3 failed, 18 skipped: the same delayed-SLURM case and two stale optional preflight assertions. Those two expectations are corrected to the accepted `resource.not_requested` code and both targeted tests pass. No fresh passing full gate is claimed; no validation command remains running. |
+| PR, review, and merge | Transport amendment startup passed at `93488a6`; implementation and targeted checks pass. Delayed-SLURM handoff amendment approval/review is now required. Full gates and full-diff independent implementation review remain incomplete. No PR, push or merge occurred. |
 | Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
 ### Manager Pre-Submit Corrections
@@ -521,6 +522,59 @@ models, safe-versus-private metadata, serialization, worker/report consumers and
 actual retained local/SLURM exact/conflict paths. Ruff, type and diff checks pass.
 The now-stale summary run was stopped gracefully before these edits; no process
 remains in its group. Both final gates must be fresh after this checkpoint.
+
+### Delayed Submission Handoff Finding — Amendment Required
+
+The complete default gate at `29292c8` finishes without a stall: 3,088 passed,
+one failed, two skipped and 156 deselected (`validate-pr-final.log`). The supported
+failure is `test_live_afterok_submitted_stage_job_materializes_worker_request_at_start[selected]`.
+The selected CPU/memory request is written by `build_runtime_metadata(...).to_dict()`
+as display-safe resource records. At delayed start, continuation.py's
+`_stage_runtime_metadata` passes those records to `ResourceRequest.from_dict`,
+which correctly rejects `attribute_count` as an execution-resource field.
+
+This is a lossy-owner mismatch, not just a renamed field. Two current GPU requests
+with different `fabric_group` values produce different private worker handoffs but
+identical safe summaries. Replacing every count with empty attributes would erase
+accepted demand. Reverting the safe projection would expose values through the
+existing public display API. The immediate/local/managed preparation and retained
+comparison routes now use the private full projection correctly; delayed afterok
+preparation has no saved worker yet and only reads `runtime.json`'s safe summary.
+The existing prepared-run record is also an artifact-safe summary/ref contract,
+not an authoritative complete invocation; whole-run continuation already reports
+insufficient prepared state. Neither current defaults, recomposed configuration
+nor the outer SLURM allocation can safely stand in for the missing inner intent.
+
+Recommended targeted amendment, pending maintainer approval: retain the complete
+normalized resources, resolved policy and exact selection as a private, versioned
+execution handoff at an existing durable preparation owner, before information is
+reduced for display. Delayed worker creation consumes that saved handoff; safe
+summaries remain unchanged. The amendment must name the authoritative producer,
+consumer, version/identity and legacy-missing-state behavior before coding. Reuse
+existing artifacts where their contracts permit; do not add a parallel lifecycle
+store, infer omitted values or rewrite existing saved identities. Keep original
+runtime/pinned-environment guidance for state that cannot be replayed faithfully.
+
+Required proof for that amendment: actual delayed start with nonempty resource
+attributes and runtime overrides preserves exact resources/policy/selection;
+safe summaries omit attribute values; exact replay preserves bytes/identity;
+missing or incompatible private state fails actionably before launch. Reuse the
+existing afterok, preparation and retained-worker harnesses, then fresh full gates
+and the still-required full Phase 1 independent review. The transport amendment's
+startup pass does not review this new durable-owner decision. Its implementation
+is paused pending approval and a targeted amendment/review; no new pass is assumed.
+
+The completed separate summary corroborates this finding. At `29292c8`, package
+(123), unit (2,179), contract (301) and e2e (69) suites pass; integration has 418
+passes/one failure, and config-extra has 160 passes/two failures/18 opt-in skips.
+The two optional failures are stale `resource.ignored` assertions in the existing
+CLI preflight and resource-preflight example tests, not different runtime defects.
+They now assert the accepted empty-enforcement `resource.not_requested` code while
+retaining WARN and strict-exit checks; both pass (`optional-policy-expectations.xml`,
+3.78 seconds). `test-summary-final.log` and `build/test-summary.md` retain the full
+failed-gate evidence. Source remains `29292c8`; only those test expectations and
+current phase status change afterward. The phase worktree and logs are retained;
+no PR, full-diff review, merge, physical execution or cleanup was attempted.
 
 Current full-gate evidence: repository-wide lint and Pyright passed after test-only
 type narrowing, but default tests failed/interrupted with 681 passed, 8 failed,

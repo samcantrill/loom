@@ -1,22 +1,23 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; Phase 1 transport amendment implemented, fresh full gates pending
+Status: blocked; Phase 1 delayed-SLURM private handoff amendment approval required
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: none awaiting maintainer approval. Phase 1's Approved Transport Amendment
-passed targeted independent startup review at `93488a6`. Integration,
-no-start waiter and failed-replay wake corrections pass their focused checks;
-the complete local-daemon file now passes 65 tests in the isolated no-extra
-environment. Fresh full gates, independent implementation review and PR submission
-remain incomplete. The implemented transport amendment passes its 22 selected
-HTTP/replay/inspection checks, 61 serialization/report/diagnostic checks and two
-adjacent producer checks; these targeted results are not the full phase gate.
-The first complete default gate then found five remaining metadata/fixture/message
-failures among 3,083 passes. Their bounded correction passes 105 selected checks;
-fresh full gates are required before submission.
+Blockers: the complete default gate at `29292c8` has one delayed-SLURM continuation
+failure among 3,088 passes. That route reconstructs execution resources from safe
+summaries containing attribute counts rather than values; distinct full requests
+can have identical summaries. See the phase card's Delayed Submission Handoff
+Finding. Retaining a separate private durable execution handoff requires a targeted
+amendment and startup review before implementation, not removal of display safety
+or reconstruction from current defaults/outer allocation. The approved transport
+amendment is implemented and its targeted checks pass. Full gates, independent
+full-diff review and PR submission remain incomplete.
+The completed summary at `29292c8` has 3,250 passes, three failures and 18 opt-in
+skips. Two stale optional preflight assertions are corrected and pass their two
+targeted checks; the delayed-SLURM durable handoff remains the technical blocker.
 
 ## Summary
 
@@ -90,7 +91,7 @@ fresh full gates are required before submission.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -124,6 +125,10 @@ fresh full gates are required before submission.
   after one bounded correction for stack-safe plain-data normalization;
   implementation completes the existing manager recovery correction.
   This is not a new executor/refiner budget or permission to add an inspection API.
+- Remaining gate: after the safe-display/private-worker correction at `29292c8`,
+  delayed SLURM reveals a missing durable full-runtime owner. Approval of its
+  targeted amendment/review is pending; no new serializer/store/schema cut or
+  further executor/refiner pass is silently authorized by the transport approval.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
@@ -141,5 +146,5 @@ fresh full gates are required before submission.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`; integration/no-start corrections at `db1b7a6` and failed-replay wake correction at `64612b6` have focused evidence, including 65 passing isolated local-daemon tests. Transport startup passed at `93488a6`; amendment targeted checks pass. Fresh full gates and full-diff independent review remain pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`. Targeted checks pass, but the complete default gate has one delayed-SLURM failure among 3,088 passes. Full-diff independent review and PR remain pending | Private durable delayed-execution handoff amendment needs approval; bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
