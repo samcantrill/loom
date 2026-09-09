@@ -234,18 +234,41 @@ gate/review/merge ownership follows the canonical phase workflow.
 - Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
   passed after the bounded `SlurmStageDelivery` replay correction; final plan approved
 - Additional phase planning: not needed; current contracts and upstream join are explicit
-- Implementation: complete at `fce80162e49d60ae6f4f6cb093260f3d300d19df`
-- Refiner / pre-submit / independent implementation review: not started
-- Blocker corrections: 0/3
+- Implementation: initial executor delivery at `fce8016`; manager pre-submit found
+  unmet fixed contracts below, so completion is not accepted
+- Refiner: one scoped correction of policy composition/retained handoff and managed
+  launch consumption is assigned; manager owns the separate direct-control/evidence correction
+- Pre-submit: blocked by the qualified findings below; no PR opened
+- Independent implementation review: not started
+- Blocker corrections: 1/3 assigned (the one refiner pass); manager direct-control
+  correction will be the second pass, not an expansion of acceptance
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added the public, sparse two-axis `ResourcePolicy`; composed it independently through runtime profiles; and stored post-demand selections with full placement demand. Admission, local/remote/SLURM worker handoffs and retained codecs now consume or validate that exact selection. Docker and Apptainer use selected controls without restoring filtered authored intent; SLURM retains full allocation demand while avoiding duplicate inner CPU/RAM limits. Capability/preflight diagnostics, executable metadata, removed-switch guidance, public exports, and resource/container documentation now describe the same policy. |
-| Tests added or updated | Extended runtime option/profile, placement/admission, worker codec/replay, direct Docker/Apptainer command and executor, queue handoff, capability/preflight, package-import, and opt-in container-acceptance coverage. The discriminating cases cover sparse inherit/clear, zero-demand omission, retained-selection conflicts, empty enforcement retaining intent but emitting no controls, and removed `cpu_memory_enforcement` guidance. |
+| Implementation and changed paths | Initial policy/profile, placement, schema-version and container changes are committed; manager verification found that sparse round-trip, authoritative worker selection, managed binding selection, capability behavior and control evidence remain incomplete. See the required corrections below; the initial delivery is not accepted as Phase 1 complete. |
+| Tests added or updated | Initial focused tests and maintained suites pass, but the required old-writer SLURM integration, saved-selection mismatch, actual local/remote binding-none lease lifecycle and several public policy/control boundary oracles were not added. Existing green suites do not establish those contracts. |
 | Validated revision/tree state and evidence | Source/test tree `fce80162e49d60ae6f4f6cb093260f3d300d19df` passed the targeted policy, admission/handoff, container-command, capability, and preflight slices during implementation. Fresh `make validate-pr` passed Ruff, Pyright (0 errors), default (3,023 passed; 155 deselected), config-extra (161 passed; 18 expected skips; 3,026 deselected), and source/wheel builds. Fresh `make test-summary` passed package 123, unit 2,153, contract 300, integration 379, E2E 68, and config-extra 161 tests, with zero failures/errors and the same 18 expected skips. |
 | Validation-relevant changes after evidence | None. This completion record is documentation-only evidence metadata. |
 | PR, review, and merge | Pending manager pre-submit checks and required independent implementation review; no PR was prepared or pushed by the executor. |
 | Residual risk and cleanup | The seven `LOOM_RUN_*` physical container/GPU/SIF/live-SLURM acceptance switches were unset, so no physical execution was authorized; the 18 config-extra physical acceptance skips are expected. Fake-command coverage proves selection and evidence plumbing, not host isolation or a live scheduler. Phase 2 whole-run policy/provider work remains unchanged; phase worktree remains active. |
+
+### Manager Pre-Submit Corrections
+
+These are missing approved Phase 1 contracts, not new design requirements.
+
+| Finding | Evidence and material consequence | Smallest required correction and oracle | Owner |
+| --- | --- | --- | --- |
+| M1 — sparse policy changes at serialization | On `fce8016`, a run with GPU-only accounting and stage `{enforce: []}` resolves GPU-only before `RunOptions.to_dict/from_dict`, but resolves `account_for: all` afterwards. `ResourcePolicy(enforce=[])` also eagerly fills the omitted axis, and `StageRuntimeOptions.to_dict` loses axis presence. | Preserve omission inside the one policy value until new-invocation composition; exact typed and mapping save/load/profile paths must retain independent inheritance. Reject non-list plain-data selectors and explicit null. | Refiner |
+| M2 — saved worker selection is optional and not authoritative | `StageWorkerRequest` checks optional `metadata.resource_selection` and returns early if absent; the approved location is required post-demand `resolved_runtime`. Managed replay checks only identity, not equality to saved placement. Worker execution reconstruction currently discards saved policy/demand. | Carry the saved full demand/policy/selection through the exact runtime mapping, validate at current worker/resident/SLURM codecs, compare retained local and SLURM requests to authoritative placement, and consume without fresh defaults. Add the required old-writer and mismatch integrations, not only version-constant edits. | Refiner |
+| M3 — managed/no-resource execution does not consume policy | `_managed_local._worker_environment` and remote launch unconditionally merge every provider binding; native serial ignores unsupported selected controls; the resident bundle rejects empty claims although accounted demand can now be empty. | Select actual job bindings from admitted selection, preserve claims/renewal/release and separate readiness probes, fail unsupported selected controls before application, and support account-none without a hidden resource claim while retaining assignment/lifecycle ownership. Cover actual local/remote environment, empty-accounting lifecycle and unchanged probe behavior. | Refiner |
+| M4 — direct control support/semantics still diverge | Public Docker capability validation rejects GPU demand even with `enforce: []`; Apptainer's public builder validates only selected CPU/RAM and ignores explicitly selected unsupported kinds/GPU applicability. Builders reselect rather than consume a prepared projection and omit policy/selection command evidence. | Use the composed policy and full effective demand at existing mapping owners, validate full canonical semantics independently of selected representability, honor saved selection, reject only selected unsupported controls, preserve driver access versus binding and all supported SLURM allocation/inner-control boundaries. Add public builder, capability/preflight and direct-route oracles. | Manager |
+| M5 — control receipts overstate application | Container helpers infer controls by scanning all argv, call any non-null outer process result applied, and label `--nv` as GPU control. Known creation failure and payload arguments can therefore fabricate application; current SLURM/managed evidence is missing. | Produce the approved common shape from actual mapping/launch facts, keep setup failure failed or uncertain requested, never treat driver access as binding/isolation, report absent demand and delegated/inner-none honestly, and preserve existing structured failure context. Add fake setup/application failure and metadata/inspection comparisons. | Manager; refiner supplies managed binding facts |
+
+The manager reproduced M1 and Docker's M4 through read-only public API calls and
+verified M2/M3/M5 against the current reachable preparation/launch owners. All
+18 summary skips were verified from JUnit as opt-in container acceptance. Both
+final gates must cover the corrected stable implementation; earlier green
+evidence remains an initial-delivery receipt only.
