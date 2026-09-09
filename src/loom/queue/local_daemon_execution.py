@@ -25,6 +25,7 @@ from loom.pipeline.execution.reliability import (
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
+    StageWorkerResult,
 )
 from loom.pipeline.reliability import (
     RetryDecisionRecord,
@@ -59,6 +60,7 @@ from loom.queue._managed_local import (
     _assignment_from_dict,
     _read_decline_reason,
     _compose_agent_resource_providers,
+    _persist_managed_result,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -5043,7 +5045,7 @@ class LocalDaemonExecution:
         event_id: str,
         payload: Mapping[str, PlainData],
     ) -> int:
-        # Sequence 1 records a confirmed start or cancellation before start.
+        # Sequence 1 records a confirmed start or a proven no-start outcome.
         return (
             self.coordinator.record_event(
                 assignment_id, sequence + 1, event_id, payload
@@ -5094,13 +5096,6 @@ class LocalDaemonExecution:
                     },
                 ),
             )
-            if report.status is StageStatus.FAILED and report.failure is not None:
-                self.run_store.write_stage_failure(
-                    str(record["run_uri"]),
-                    str(record["stage_name"]),
-                    replace(report.failure, run_uri=str(record["run_uri"])).to_dict(),
-                    attempt=cast(int, record["attempt"]),
-                )
             if report.status is StageStatus.CANCELLED and not record["start_permitted"]:
                 self.coordinator.record_event(
                     assignment_id,
@@ -5108,6 +5103,16 @@ class LocalDaemonExecution:
                     f"{assignment_id}:start-prevented",
                     {"kind": "cancelled_before_start"},
                 )
+            elif (
+                report.status is StageStatus.FAILED and report.process_created is False
+            ):
+                self.coordinator.record_event(
+                    assignment_id,
+                    1,
+                    f"{assignment_id}:start-prevented",
+                    {"kind": "failed_before_start"},
+                )
+        self._persist_remote_report_result(str(record["run_uri"]), report, outputs)
         state = self.coordinator.state(assignment_id)
         if state == "running":
             self.coordinator.advance(
@@ -5124,6 +5129,40 @@ class LocalDaemonExecution:
                 expected="terminal",
                 next_state="logical_released",
             )
+
+    def _persist_remote_report_result(
+        self,
+        run_uri: str,
+        report: _RemoteExecutionReport,
+        outputs: Mapping[str, ArtifactRef],
+    ) -> None:
+        if report.schema_version == 1:
+            return
+        metadata: dict[str, PlainData] = {"process_created": report.process_created}
+        if report.resource_controls is not None:
+            metadata["resource_controls"] = [
+                dict(item) for item in report.resource_controls
+            ]
+        failure = (
+            None if report.failure is None else replace(report.failure, run_uri=run_uri)
+        )
+        _persist_managed_result(
+            self.run_store,
+            StageWorkerResult(
+                schema_version=1,
+                run_uri=run_uri,
+                stage_name=report.stage_name,
+                attempt=report.attempt,
+                status=report.status,
+                started_at=report.started_at,
+                finished_at=report.finished_at,
+                executor_name=report.executor_name,
+                outputs=outputs,
+                failure=failure,
+                exit_code=report.exit_code,
+                executor_metadata=metadata,
+            ),
+        )
 
     def remote_release(self, assignment_id: str) -> None:
         state = self.coordinator.state(assignment_id)
@@ -5426,15 +5465,7 @@ class LocalDaemonExecution:
                     },
                 ),
             )
-            if report.status is StageStatus.FAILED and report.failure is not None:
-                self.run_store.write_stage_failure(
-                    record.assignment.run_uri,
-                    record.assignment.stage_name,
-                    replace(
-                        report.failure, run_uri=record.assignment.run_uri
-                    ).to_dict(),
-                    attempt=record.assignment.attempt,
-                )
+        self._persist_remote_report_result(record.assignment.run_uri, report, outputs)
         self.slurm_assignments.mark_terminal(assignment_id)
 
     def slurm_release(
@@ -5663,7 +5694,7 @@ def _run_result_owner_view(
     authority_failure: Exception | None = None,
     clock: Callable[[], str],
 ) -> Mapping[str, PlainData]:
-    """Project complete persisted stage failures as one fail-closed owner view."""
+    """Project persisted failures and launch controls as one fail-closed view."""
 
     observed_at = clock()
     try:
@@ -5692,10 +5723,40 @@ def _run_result_owner_view(
             raise QueueServiceError("run-store plan and pipeline disagree")
 
         failures: list[PlainData] = []
+        controls: list[PlainData] = []
         failed_stage_count = 0
         stages = {stage.stage_name: stage for stage in snapshot.stages}
         for stage_name in plan.stage_order:
             stage = stages.get(stage_name)
+            if (
+                stage is not None
+                and stage.status
+                in {StageStatus.SUCCEEDED, StageStatus.FAILED, StageStatus.CANCELLED}
+                and stage.attempts
+            ):
+                attempt = stage.attempts[-1].attempt
+                result_payload = store.read_stage_worker_result(
+                    admission.run_uri, stage_name, attempt=attempt
+                )
+                if result_payload is not None:
+                    result = StageWorkerResult.from_dict(result_payload)
+                    if (
+                        result.run_uri != admission.run_uri
+                        or result.stage_name != stage_name
+                        or result.attempt != attempt
+                    ):
+                        raise QueueServiceError(
+                            "persisted stage result conflicts with identity"
+                        )
+                    evidence = result.executor_metadata.get("resource_controls")
+                    if evidence is not None:
+                        controls.append(
+                            {
+                                "stage_name": stage_name,
+                                "attempt": attempt,
+                                "controls": evidence,
+                            }
+                        )
             if stage is None or stage.status is not StageStatus.FAILED:
                 continue
             failed_stage_count += 1
@@ -5731,12 +5792,13 @@ def _run_result_owner_view(
     return {
         "owner": "run-store",
         "availability": "available",
-        "state": "populated" if failures else "empty",
+        "state": "populated" if failures or controls else "empty",
         "observed_at": observed_at,
         "freshness": "current",
         "diagnostic": None,
         "diagnostic_failure": None,
         "failures": failures,
+        **({"resource_controls": controls} if controls else {}),
     }
 
 

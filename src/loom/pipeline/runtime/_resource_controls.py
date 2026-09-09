@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Literal, cast
 
 from loom.pipeline.resources import ResourceEntry
@@ -19,6 +20,57 @@ ControlDisposition = Literal[
     "unavailable",
     "failed",
 ]
+
+
+def _validated_resource_controls(
+    value: object,
+) -> tuple[Mapping[str, PlainData], ...] | None:
+    """Validate the shared closed record shape at report/launch boundaries."""
+
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError("resource controls must be a sequence or null")
+    dispositions = {
+        "not_requested",
+        "not_applicable",
+        "requested",
+        "applied",
+        "delegated",
+        "unavailable",
+        "failed",
+    }
+    records: list[Mapping[str, PlainData]] = []
+    previous: tuple[str, str, str] | None = None
+    for record in value:
+        if not isinstance(record, Mapping) or set(record) != {
+            "resource",
+            "owner",
+            "mechanism",
+            "disposition",
+        }:
+            raise ValueError("resource control record has invalid fields")
+        resource, owner = record["resource"], record["owner"]
+        mechanism, disposition = record["mechanism"], record["disposition"]
+        if (
+            not isinstance(resource, str)
+            or not resource
+            or not isinstance(owner, str)
+            or not owner
+            or (
+                mechanism is not None
+                and (not isinstance(mechanism, str) or not mechanism)
+            )
+            or not isinstance(disposition, str)
+            or disposition not in dispositions
+        ):
+            raise ValueError("resource control record is invalid")
+        key = (resource, owner, mechanism or "")
+        if previous is not None and key <= previous:
+            raise ValueError("resource control records must be unique and sorted")
+        previous = key
+        records.append(MappingProxyType(dict(record)))
+    return tuple(records)
 
 
 def resource_control_records(

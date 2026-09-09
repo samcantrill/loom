@@ -1,9 +1,11 @@
-"""Detached private diagnostics for failures while inspecting persisted state."""
+"""Detached diagnostics for inspection and portable execution failures."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import re
+import traceback
 
 from loom.serialization import PlainData
 
@@ -12,6 +14,47 @@ _SCHEMA = "loom.diagnostic.v1"
 _MAX_NODES = 128
 _RELATIONS = frozenset({"cause", "context", "group_child"})
 _TRUNCATIONS = frozenset({"cycle", "limit"})
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?i)(\b[\w-]*(?:api[_-]?key|auth|credential|password|secret|token)[\w-]*"
+    r"\s*=\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s\"'&,;)]+)"
+)
+
+
+def _capture_exception_details(
+    error: BaseException,
+    *,
+    details: Mapping[str, PlainData] | None = None,
+    traceback_text: str | None = None,
+) -> dict[str, PlainData]:
+    """Capture native causality beside existing owner-supplied failure details.
+
+    The formatted traceback includes notes and source locations, but not locals
+    or arbitrary exception attributes. Credential assignments are masked in both
+    messages and traceback source lines; arbitrary prose is not a secret-safe
+    channel. The detached record does not need the original traceback file.
+    """
+
+    return {
+        **dict(details or {}),
+        "diagnostic_failure": _redact_captured_diagnostic(
+            project_diagnostic_failure(error)
+        ),
+        "traceback": _redact_captured_diagnostic(
+            traceback_text
+            if traceback_text is not None
+            else "".join(traceback.format_exception(error))
+        ),
+    }
+
+
+def _redact_captured_diagnostic(value: PlainData) -> PlainData:
+    if isinstance(value, str):
+        return _CREDENTIAL_ASSIGNMENT.sub(r"\1[redacted]", value)
+    if isinstance(value, dict):
+        return {key: _redact_captured_diagnostic(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_captured_diagnostic(item) for item in value]
+    return value
 
 
 class DiagnosticFailureError(ValueError):

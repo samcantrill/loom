@@ -386,6 +386,35 @@ Evidence: clean tree `b94b89d` joins checkpoint `6474206` to develop `000f34f`
 none of these scheduling/report/runtime owners. Preserve those journeys in final
 validation and leave the original dirty checkout untouched.
 
+Current manager correction checkpoint (still one continuous correction): native
+capture now preserves portable causes/tracebacks while masking credential-shaped
+assignments; explicit downstream reported failures retain their opaque boundary.
+Launch schema 2 carries producer-owned control records, with writer-shaped legacy
+launch serialization/digest coverage. Confirmed launch controls join resident
+results, including application failure, and reach coordinator attempt storage and
+admission inspection. Local/remote selected-control errors preserve their cause;
+exact journal/fence proof admits no-start completion and remote restart, while an
+unknown launch retains ownership. Existing stores, protocol events and release
+owners are reused; no new lifecycle store or provider registry was added. Local
+restart wraps retained-state rejection with its native cause. The ready-stage
+SLURM bootstrap now emits the same schema-2 portable report and producer-owned
+SBATCH delegation evidence; legacy report replay remains unchanged.
+
+Verified evidence before full gates: the retained `recovery-core.xml` checkpoint
+contains 190 passing selected tests. Subsequent R2 local dispatch exact/conflict
+cases passed (2), local restart exact/resource/policy cases passed (3), and the
+complete fake-SLURM integration/assignment-unit selection passed (19), including
+retained-file comparison and a native failure through report/commit/replay. Remote
+interrupted diagnostic persistence now has a passing restart test that asserts
+retained report bytes, held claims, nonterminal admission and repaired client
+inspection. Both actual local/remote GPU environment comparisons assert persisted
+applied versus not-requested control evidence (2 passed). Selected enforcement
+without accounting has a passing no-claim/no-start remote restart case. The prior
+20-second test timeout was corrected by interrupting at the failed-write boundary,
+without changing the production 60-second indeterminate-operation retry window.
+Fresh full validation and independent full-diff review are still required. These
+focused results do not admit PR submission or phase completion.
+
 ### R1 — Canonical Offer Reuse
 
 Keep the SQLite tables and unique `(agent_id, session_id, availability_revision)`

@@ -397,6 +397,78 @@ def test_queue_daemon_admission_renders_private_diagnostic_failure(
     assert json.loads(json_stdout.getvalue())["result"] == payload
 
 
+def test_admission_text_and_json_preserve_portable_worker_failure_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.diagnostics.diagnostic_failure import _capture_exception_details
+    from loom.pipeline.execution.models import ExecutionFailure
+    from loom.queue import LocalDaemonSocketClient
+
+    cause = FileNotFoundError("missing /worker/data/product.json")
+    cause.add_note("Prepare the product on the worker first.")
+    try:
+        raise RuntimeError("training input preparation failed") from cause
+    except RuntimeError as error:
+        details = _capture_exception_details(error)
+    inner = ExecutionFailure(
+        schema_version=1,
+        run_uri="loom-agent:assignment-1",
+        stage_name="fit",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="stage_exception",
+        message="training input preparation failed",
+        details=details,
+        traceback_path="/worker/unavailable/traceback.log",
+    )
+    outer = ExecutionFailure(
+        schema_version=1,
+        run_uri="coordinator-run",
+        stage_name="fit",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="subprocess",
+        failure_type="stage_exception",
+        message="worker stage failed",
+        details={"worker_failure": inner.to_dict()},
+    )
+    payload = {
+        "owners": {
+            "run_result": {
+                "availability": "available",
+                "failures": [outer.to_dict()],
+            }
+        }
+    }
+
+    class Result:
+        def to_dict(self) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr(LocalDaemonSocketClient, "admission", lambda *_args: Result())
+    command = [
+        "queue",
+        "daemon-admission",
+        "--endpoint",
+        str(tmp_path / "absent.sock"),
+        "admission",
+    ]
+    text_output, json_output = io.StringIO(), io.StringIO()
+    assert main(command, stdout=text_output, stderr=io.StringIO()) == 0
+    rendered = text_output.getvalue()
+    assert "stage 'fit' failure: worker stage failed" in rendered
+    assert "builtins.FileNotFoundError: missing /worker/data/product.json" in rendered
+    assert "Prepare the product on the worker first." in rendered
+    assert "cause:" in rendered
+    assert (
+        main([*command, "--format", "json"], stdout=json_output, stderr=io.StringIO())
+        == 0
+    )
+    assert json.loads(json_output.getvalue())["result"] == payload
+
+
 def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -514,9 +586,7 @@ def test_queue_scheduling_reload_rejection_exits_nonzero(
             "scheduling_epoch": request.expected_scheduling_epoch,
         }
 
-    monkeypatch.setattr(
-        LocalDaemonSocketClient, "reload_scheduling", reload_scheduling
-    )
+    monkeypatch.setattr(LocalDaemonSocketClient, "reload_scheduling", reload_scheduling)
     stdout = io.StringIO()
 
     exit_code = main(

@@ -28,6 +28,7 @@ from typing import Mapping, cast
 from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
 
 
@@ -156,6 +157,8 @@ class ResidentWorkerLaunch:
     workspace_root: Path
     profile: ResidentWorkerLaunchProfile
     environment: Mapping[str, str]
+    resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
+    schema_version: int | None = 2
 
     def __post_init__(self) -> None:
         for name in (
@@ -189,6 +192,17 @@ class ResidentWorkerLaunch:
             raise AgentProcessSupervisorError("resident launch environment is invalid")
         object.__setattr__(self, "workspace_root", workspace)
         object.__setattr__(self, "environment", environment)
+        if self.schema_version is not None and (
+            type(self.schema_version) is not int or self.schema_version != 2
+        ):
+            raise AgentProcessSupervisorError("supervisor launch schema is invalid")
+        if self.schema_version is None and self.resource_controls is not None:
+            raise AgentProcessSupervisorError("legacy launch carries current evidence")
+        try:
+            controls = _validated_resource_controls(self.resource_controls)
+        except ValueError as exc:
+            raise AgentProcessSupervisorError(str(exc)) from exc
+        object.__setattr__(self, "resource_controls", controls)
 
     @property
     def spec_digest(self) -> str:
@@ -208,6 +222,7 @@ class ResidentWorkerLaunch:
                 "profile_fingerprint": self.profile.fingerprint,
                 "profile": _profile_value(self.profile),
                 "environment": self.environment,
+                **_launch_evidence_value(self),
             }
         )
 
@@ -624,6 +639,17 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     )
 
 
+def _launch_evidence_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
+    if launch.schema_version is None:
+        return {}
+    return {
+        "schema_version": launch.schema_version,
+        "resource_controls": None
+        if launch.resource_controls is None
+        else [dict(record) for record in launch.resource_controls],
+    }
+
+
 def _launch_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
     return {
         "supervisor_id": launch.supervisor_id,
@@ -638,6 +664,7 @@ def _launch_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
         "workspace_root": str(launch.workspace_root),
         "profile": _profile_value(launch.profile),
         "environment": dict(launch.environment),
+        **_launch_evidence_value(launch),
     }
 
 
@@ -656,7 +683,13 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
         "profile",
         "environment",
     }
-    if not isinstance(value, Mapping) or set(value) != fields:
+    if not isinstance(value, Mapping):
+        raise AgentProcessSupervisorError("supervisor launch request is invalid")
+    if "schema_version" in value:
+        fields |= {"schema_version", "resource_controls"}
+        if type(value["schema_version"]) is not int or value["schema_version"] != 2:
+            raise AgentProcessSupervisorError("supervisor launch schema is invalid")
+    if set(value) != fields:
         raise AgentProcessSupervisorError("supervisor launch request is invalid")
     environment = value["environment"]
     if not isinstance(environment, Mapping):
@@ -676,6 +709,10 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
         environment={
             cast(str, key): cast(str, item) for key, item in environment.items()
         },
+        schema_version=cast(int | None, value.get("schema_version")),
+        resource_controls=cast(
+            tuple[Mapping[str, PlainData], ...] | None, value.get("resource_controls")
+        ),
     )
 
 

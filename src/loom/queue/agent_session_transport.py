@@ -49,6 +49,7 @@ from loom.queue._managed_local import (
     _compose_agent_resource_providers,
     _configured_provider_descriptor,
     _managed_root_failed_worker_result,
+    _managed_resource_controls,
     _start_failed_worker_result,
     _worker_environment,
 )
@@ -3738,7 +3739,7 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote resident execution has no supervisor")
         launch: ResidentWorkerLaunch | None = None
         result_path = workspace.root / "worker-result.json"
-        cancelled_before_start = False
+        completed_before_start = False
         if execution_journal.read_state(assignment.assignment_id) in {
             AssignmentState.ACTIVE,
         }:
@@ -3770,6 +3771,9 @@ class LocalDaemonAgentHttpClient:
                     workspace_root=workspace.root,
                     profile=profile.launch_profile,
                     environment=environment,
+                    resource_controls=_managed_resource_controls(
+                        request.resolved_runtime, bindings_prepared=True
+                    ),
                 )
                 workspace.persist_supervisor_launch(
                     json.dumps(
@@ -3779,14 +3783,14 @@ class LocalDaemonAgentHttpClient:
                 receipt = supervisor.launch(launch)
                 if (
                     receipt.state
-                    not in {
-                        SupervisorLaunchState.STARTING,
-                        SupervisorLaunchState.RUNNING,
+                    in {
+                        SupervisorLaunchState.NOT_ACCEPTED,
+                        SupervisorLaunchState.UNKNOWN,
                     }
                     or receipt.process_id is None
                 ):
                     raise QueueConflictError(
-                        "remote supervisor did not create a process root"
+                        "remote supervisor has not established whether a process root was created"
                     )
                 workspace.mark_process_started(execution_id, receipt.process_id)
                 return execution_id
@@ -3817,7 +3821,7 @@ class LocalDaemonAgentHttpClient:
                     execution_journal.record_cancelled_before_start(
                         assignment.assignment_id, result.to_dict()
                     )
-                    cancelled_before_start = True
+                    completed_before_start = True
                 else:
                     try:
                         execution_journal.start_once(
@@ -3838,10 +3842,14 @@ class LocalDaemonAgentHttpClient:
                                 allow_nan=False,
                             ).encode(),
                         )
-                        workspace.persist_failed_before_start(result)
+                        execution_journal.require_failed_before_start(
+                            assignment.assignment_id, fence=fence
+                        )
+                        workspace.persist_failed_before_start(result, fence=fence)
                         execution_journal.record_result(
                             assignment.assignment_id, result.to_dict()
                         )
+                        completed_before_start = True
                     else:
                         workspace.append_event(
                             f"{request.assignment_id}:agent-process-started",
@@ -3857,7 +3865,7 @@ class LocalDaemonAgentHttpClient:
                                 process_execution_id=execution_id,
                             ),
                         )
-        if not cancelled_before_start:
+        if not completed_before_start:
             self._flush_workspace_events(session_id, workspace)
         if launch is None:
             retained_launch = workspace.supervisor_launch_json()
@@ -3893,9 +3901,9 @@ class LocalDaemonAgentHttpClient:
             execution_journal,
             fence=fence,
             authorization_revision=authorization_revision,
-            persist_result=not cancelled_before_start,
+            persist_result=not completed_before_start,
             result_path_label="remote execution completion",
-            # Pre-start cancellation has no supervised launch for restart replay.
+            # A proven no-start outcome completes without a supervisor to join.
             suspend_requested=suspend_requested if launch is not None else None,
         )
 
@@ -3946,8 +3954,58 @@ class LocalDaemonAgentHttpClient:
             commands = execution_journal.assignment_claim_commands(assignment_id)
             launch_json = workspace.supervisor_launch_json()
             if launch_json is None:
-                # A pre-launch operation has no evidence allowing a new start
-                # after application restart; keep it unavailable for the owner.
+                retained_fence = execution_journal.read_grant_fence(assignment_id)
+                retained_result = workspace.worker_result()
+                if retained_fence is None:
+                    continue
+                if (
+                    retained_result is None
+                    and execution_journal.read_state(assignment_id)
+                    is AssignmentState.START_FAILED
+                ):
+                    result_path = workspace.root / "worker-result.json"
+                    if result_path.is_file():
+                        retained_result = StageWorkerResult.from_dict(
+                            json.loads(result_path.read_text())
+                        )
+                if (
+                    retained_result is not None
+                    and retained_result.status is StageStatus.FAILED
+                ):
+                    execution_journal.require_failed_before_start(
+                        assignment_id, fence=retained_fence
+                    )
+                    workspace.persist_failed_before_start(
+                        retained_result, fence=retained_fence
+                    )
+                    execution_journal.record_result(
+                        assignment_id, retained_result.to_dict()
+                    )
+                elif (
+                    retained_result is not None
+                    and retained_result.status is StageStatus.CANCELLED
+                ):
+                    if execution_journal.read_result(assignment_id) != retained_result:
+                        continue
+                else:
+                    # Absence of a launch alone cannot establish safe release.
+                    continue
+                completed.append(
+                    self._complete_remote_result_and_release(
+                        session,
+                        request,
+                        workspace,
+                        assignment,
+                        commands,
+                        providers,
+                        execution_journal,
+                        fence=retained_fence,
+                        authorization_revision=0,
+                        persist_result=False,
+                        result_path_label="remote no-start restart completion",
+                        suspend_requested=suspend_requested,
+                    )
+                )
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = supervisor.query(launch)
@@ -4114,20 +4172,32 @@ class LocalDaemonAgentHttpClient:
         """Own normal and restart result/output/outbox completion ordering."""
 
         result_path = workspace.root / "worker-result.json"
-        result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
-        cancelled_before_start = (
-            result.status is StageStatus.CANCELLED
+        result = (
+            StageWorkerResult.from_dict(json.loads(result_path.read_text()))
+            if persist_result
+            else workspace.worker_result()
+        )
+        if result is None:
+            raise QueueConflictError("remote completion has no durable result")
+        completed_before_start = (
+            result.status in {StageStatus.CANCELLED, StageStatus.FAILED}
             and workspace.supervisor_launch_json() is None
         )
+        if completed_before_start and result.status is StageStatus.FAILED:
+            execution_journal.require_failed_before_start(
+                request.assignment_id, fence=fence
+            )
+            workspace.persist_failed_before_start(result, fence=fence)
         if persist_result:
             workspace.persist_worker_result(result)
+            result = cast(StageWorkerResult, workspace.worker_result())
             execution_journal.record_result(assignment.assignment_id, result.to_dict())
         report = workspace.retain_outputs()
         workspace.append_event(
             f"{request.assignment_id}:result-output-durable",
             {"kind": "result_and_output_durable", "status": report.status.value},
         )
-        if not cancelled_before_start:
+        if not completed_before_start:
             self._flush_workspace_events(session.session_id, workspace)
         authorization = self._fresh_transfer_authorization(
             session_id=session.session_id,
@@ -4189,7 +4259,7 @@ class LocalDaemonAgentHttpClient:
                 session.session_id, request.assignment_id, fence=fence
             ),
         )
-        if cancelled_before_start:
+        if completed_before_start:
             self._flush_workspace_events(session.session_id, workspace)
         next_revision = self._release_provider_claims(
             session,

@@ -1,4 +1,4 @@
-"""Durable coordinator and path-free bootstrap contracts for ready-stage SLURM."""
+"""Durable SLURM bootstrap contracts and portable terminal diagnostics."""
 
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ from loom.pipeline.execution.models import (
 )
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
 from loom.pipeline.planning import StageFingerprintRecord
+from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.runtime._resource_controls import resource_control_records
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -1374,6 +1377,14 @@ class SlurmBootstrapWorkspace:
         return self.delivery().worker_request(self.root)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:
+        """Retain a result produced inside the acknowledged bootstrap root.
+
+        The accepted ready-stage script allocates the full normalized demand
+        through SBATCH. This reports delegation, not measured isolation or an
+        additional native-process limit. Replay uses the retained report without
+        launching a new root or upgrading legacy evidence.
+        """
+
         delivery = self.delivery()
         if (
             result.run_uri != f"loom-slurm:{delivery.assignment_id}"
@@ -1419,6 +1430,18 @@ class SlurmBootstrapWorkspace:
                     )
                 )
         failure = cast(ExecutionFailure | None, result.failure)
+        entries = ResourceRequest.from_dict(
+            delivery.resolved_runtime["resources"]
+        ).entries
+        allocation_policy = ResourcePolicy(enforce="all")
+        controls = resource_control_records(
+            entries=entries,
+            policy=allocation_policy,
+            selection=allocation_policy.select(entries),
+            owner="slurm",
+            mechanisms={kind: "sbatch_allocation" for kind in entries},
+            selected_disposition="delegated",
+        )
         report = _RemoteExecutionReport(
             assignment_id=delivery.assignment_id,
             stage_name=delivery.stage_name,
@@ -1429,9 +1452,15 @@ class SlurmBootstrapWorkspace:
             executor_name=result.executor_name,
             outputs=tuple(outputs),
             failure_type=None if failure is None else failure.failure_type,
-            message=None if failure is None else "resident stage execution failed",
+            message=None if failure is None else failure.message,
             exception_type=None if failure is None else failure.exception_type,
             exit_code=result.exit_code,
+            failure=failure,
+            resource_controls=cast(
+                tuple[Mapping[str, PlainData], ...], tuple(controls)
+            ),
+            process_created=True,
+            schema_version=2,
         )
         encoded = (_json(report.to_dict()) + "\n").encode()
         if self._retained_report_path.exists():

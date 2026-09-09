@@ -39,6 +39,7 @@ from loom.queue.agent_sessions import (
     _target_remote_delivery,
 )
 from loom.queue.agent_session_transport import _RemoteAgentJournal
+from loom.queue._agent_process_supervisor import ResidentWorkerLaunch, _launch_value
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -328,6 +329,100 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
         workspace.mark_process_started("execution-2", 102)
 
 
+@pytest.mark.parametrize("status", [StageStatus.SUCCEEDED, StageStatus.FAILED])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
+    tmp_path: Path,
+    status: StageStatus,
+    legacy: bool,
+) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    controls = (
+        {
+            "resource": "gpu",
+            "owner": "managed_provider",
+            "mechanism": "provider_environment_binding",
+            "disposition": "requested",
+        },
+    )
+    launch = ResidentWorkerLaunch(
+        supervisor_id="supervisor-1",
+        continuity_epoch="epoch-1",
+        agent_id="agent-1",
+        session_id="session-1",
+        assignment_id=request.assignment_id,
+        process_execution_id="execution-1",
+        execution_fence="fence-1",
+        launch_operation_id="launch-1",
+        bundle_digest="a" * 64,
+        workspace_root=workspace.root,
+        profile=profile.launch_profile,
+        environment={},
+        schema_version=None if legacy else 2,
+        resource_controls=None if legacy else controls,
+    )
+    workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
+    workspace.mark_process_started("execution-1", 101)
+    output = workspace.root / "result.data"
+    output.write_bytes(b"output")
+    failure = (
+        None
+        if status is StageStatus.SUCCEEDED
+        else ExecutionFailure(
+            schema_version=1,
+            run_uri=f"loom-agent:{request.assignment_id}",
+            stage_name=request.stage_name,
+            attempt=request.attempt,
+            failed_at="2020-01-01T00:00:01Z",
+            executor="local",
+            failure_type="stage_exception",
+            message="application failed after launch",
+        )
+    )
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=status,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+        executor_name="local",
+        failure=failure,
+        outputs={"result": ArtifactRef("result", output.as_uri(), "bytes")}
+        if status is StageStatus.SUCCEEDED
+        else {},
+        executor_metadata={"process_created": False, "application_detail": "retained"},
+    )
+    result_path = workspace.root / "worker-result.json"
+    result_path.write_text(json.dumps(result.to_dict()))
+    original_bytes = result_path.read_bytes()
+    workspace.persist_worker_result(result)
+    report = workspace.retain_outputs()
+    assert report.process_created is True
+    if legacy:
+        assert report.resource_controls is None
+    else:
+        assert report.resource_controls == ({**controls[0], "disposition": "applied"},)
+        if report.failure is not None:
+            assert (
+                report.failure.executor_metadata["resource_controls"][0]["disposition"]
+                == "applied"
+            )
+    saved = workspace.worker_result()
+    assert saved is not None
+    assert saved.executor_metadata["application_detail"] == "retained"
+    workspace.persist_worker_result(result)
+    assert workspace.retain_outputs().to_dict() == report.to_dict()
+    assert result_path.read_bytes() == original_bytes
+
+
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
@@ -438,13 +533,51 @@ def test_resident_no_start_failure_is_durable_without_process_identity(
         failure=failure,
         exit_code=1,
     )
-    workspace.persist_failed_before_start(result)
+    with pytest.raises(QueueConflictError, match="grant or supervisor"):
+        workspace.persist_failed_before_start(result, fence="wrong-fence")
+    workspace.persist_failed_before_start(result, fence="fence-1")
     report = workspace.retain_outputs()
     assert report.process_created is False
     assert report.failure == failure
     assert (
         _RemoteExecutionReport.from_dict(report.to_dict()).to_dict() == report.to_dict()
     )
+
+
+def test_legacy_report_writer_shape_and_digest_do_not_acquire_current_fields() -> None:
+    legacy = {
+        "schema_version": 1,
+        "assignment_id": "assignment-1",
+        "stage_name": "build",
+        "attempt": 1,
+        "status": "FAILED",
+        "started_at": "2020-01-01T00:00:00Z",
+        "finished_at": "2020-01-01T00:00:01Z",
+        "executor_name": "local",
+        "outputs": [],
+        "failure_type": "stage_exception",
+        "message": "resident stage execution failed",
+        "exception_type": "builtins.RuntimeError",
+        "exit_code": 1,
+    }
+    encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+    report = _RemoteExecutionReport.from_dict(json.loads(encoded))
+    replay = json.dumps(report.to_dict(), sort_keys=True, separators=(",", ":"))
+    assert replay == encoded
+    assert (
+        hashlib.sha256(replay.encode()).digest()
+        == hashlib.sha256(encoded.encode()).digest()
+    )
+    assert report.failure is None
+    assert report.resource_controls is None
+    assert report.process_created is None
+    with pytest.raises(QueueServiceError):
+        _RemoteExecutionReport.from_dict({**legacy, "resource_controls": None})
+    for invalid_version in (True, 1.0, "1"):
+        with pytest.raises(QueueServiceError, match="schema is unsupported"):
+            _RemoteExecutionReport.from_dict(
+                {**legacy, "schema_version": invalid_version}
+            )
 
 
 def test_current_remote_report_preserves_full_failure_and_owner_start_proof(

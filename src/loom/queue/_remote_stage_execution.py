@@ -1,14 +1,16 @@
-"""Private, path-free data contracts for remote managed-stage execution.
+"""Private remote execution contracts and portable terminal diagnostics.
 
 The coordinator retains authoritative run and source-path identities. A remote
 agent receives only immutable semantic data and derives every local path from
 its protected root and the assigned identity.
+Terminal diagnostics may retain explanatory messages and source paths; they do
+not make worker-local diagnostic files a dependency of coordinator inspection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import base64
 import hashlib
 import json
@@ -34,6 +36,10 @@ from loom.pipeline.execution.models import (
     StageWorkerResult,
 )
 from loom.pipeline.planning import StageFingerprintRecord
+from loom.pipeline.runtime._resource_controls import (
+    _validated_resource_controls,
+    with_resource_control_disposition,
+)
 from loom.pipeline.status import StageStatus
 from loom.scheduling import (
     CapacityAtom,
@@ -49,7 +55,10 @@ from loom.serialization import (
     thaw_plain_data,
 )
 
-from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+from ._agent_process_supervisor import (
+    ResidentWorkerLaunchProfile,
+    _launch_from_value,
+)
 from .errors import QueueConflictError, QueueServiceError
 
 
@@ -1112,7 +1121,7 @@ class _RemoteExecutionReport:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if self.schema_version not in {1, 2}:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1219,40 +1228,11 @@ class _RemoteExecutionReport:
             self.process_created, bool
         ):
             raise QueueServiceError("remote result process proof is invalid")
-        controls = self.resource_controls
-        if controls is not None:
-            controls = tuple(controls)
-            valid_dispositions = {
-                "not_requested",
-                "not_applicable",
-                "requested",
-                "applied",
-                "delegated",
-                "unavailable",
-                "failed",
-            }
-            previous: tuple[str, str, str] | None = None
-            for record in controls:
-                if set(record) != {"resource", "owner", "mechanism", "disposition"}:
-                    raise QueueServiceError("remote resource control record is invalid")
-                resource = record["resource"]
-                owner = record["owner"]
-                mechanism = record["mechanism"]
-                disposition = record["disposition"]
-                if (
-                    not isinstance(resource, str)
-                    or not isinstance(owner, str)
-                    or (mechanism is not None and not isinstance(mechanism, str))
-                    or disposition not in valid_dispositions
-                ):
-                    raise QueueServiceError("remote resource control record is invalid")
-                key = (resource, owner, "" if mechanism is None else mechanism)
-                if previous is not None and key < previous:
-                    raise QueueServiceError(
-                        "remote resource control records are unsorted"
-                    )
-                previous = key
-            object.__setattr__(self, "resource_controls", controls)
+        try:
+            controls = _validated_resource_controls(self.resource_controls)
+        except ValueError as exc:
+            raise QueueServiceError(f"remote {exc}") from exc
+        object.__setattr__(self, "resource_controls", controls)
 
     def to_dict(self) -> dict[str, PlainData]:
         result: dict[str, PlainData] = {
@@ -1680,15 +1660,73 @@ class _ResidentAssignmentWorkspace:
             or result.attempt != request.attempt
         ):
             raise QueueConflictError("resident worker result identity conflicts")
-        encoded = _canonical_json(result.to_dict())
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT state, result_json FROM request WHERE singleton = 1"
+                "SELECT state, result_json, process_execution_id, supervisor_launch_json "
+                "FROM request WHERE singleton = 1"
             ).fetchone()
             if row is None or str(row["state"]) not in {"STARTED", "RESULT"}:
                 raise QueueConflictError(
                     "resident worker result requires a confirmed process start"
                 )
+            if (
+                row["process_execution_id"] is not None
+                and row["supervisor_launch_json"] is not None
+            ):
+                launch = _launch_from_value(
+                    json.loads(str(row["supervisor_launch_json"]))
+                )
+                if launch.resource_controls is not None:
+                    applied = with_resource_control_disposition(
+                        {
+                            "resource_controls": [
+                                dict(item) for item in launch.resource_controls
+                            ]
+                        },
+                        "applied",
+                    )
+                    existing = (
+                        _validated_resource_controls(
+                            result.executor_metadata.get("resource_controls")
+                        )
+                        or ()
+                    )
+                    records = {
+                        (
+                            str(item["resource"]),
+                            str(item["owner"]),
+                            str(item["mechanism"] or ""),
+                        ): dict(item)
+                        for item in (
+                            *existing,
+                            *cast(
+                                Sequence[Mapping[str, PlainData]],
+                                applied["resource_controls"],
+                            ),
+                        )
+                    }
+                    metadata = {
+                        **result.executor_metadata,
+                        "resource_controls": cast(
+                            list[PlainData], [records[key] for key in sorted(records)]
+                        ),
+                    }
+                    result = replace(
+                        result,
+                        executor_metadata=metadata,
+                        failure=None
+                        if result.failure is None
+                        else replace(
+                            cast(ExecutionFailure, result.failure),
+                            executor_metadata={
+                                **cast(
+                                    ExecutionFailure, result.failure
+                                ).executor_metadata,
+                                **metadata,
+                            },
+                        ),
+                    )
+            encoded = _canonical_json(result.to_dict())
             if row["result_json"] is not None and str(row["result_json"]) != encoded:
                 raise QueueConflictError("resident worker result replay conflicts")
             conn.execute(
@@ -1728,7 +1766,9 @@ class _ResidentAssignmentWorkspace:
                 (encoded,),
             )
 
-    def persist_failed_before_start(self, result: StageWorkerResult) -> None:
+    def persist_failed_before_start(
+        self, result: StageWorkerResult, *, fence: str
+    ) -> None:
         """Persist a proved pre-supervisor setup failure for terminal replay."""
 
         request = self.request()
@@ -1742,12 +1782,16 @@ class _ResidentAssignmentWorkspace:
         encoded = _canonical_json(result.to_dict())
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT state, process_execution_id, result_json FROM request "
+                "SELECT state, process_execution_id, result_json, fence, supervisor_launch_json FROM request "
                 "WHERE singleton = 1"
             ).fetchone()
             if row is None or str(row["state"]) not in {"GRANTED", "RESULT"}:
                 raise QueueConflictError(
                     "resident no-start result requires a durable grant"
+                )
+            if row["fence"] != fence or row["supervisor_launch_json"] is not None:
+                raise QueueConflictError(
+                    "resident no-start proof conflicts with grant or supervisor launch"
                 )
             if row["process_execution_id"] is not None:
                 raise QueueConflictError("resident no-start proof conflicts with start")

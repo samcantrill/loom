@@ -286,10 +286,20 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
     ]
 
 
-@pytest.mark.parametrize("account_for", ["all", []])
+@pytest.mark.parametrize(
+    ("account_for", "retained_worker"),
+    [
+        ("all", None),
+        ([], None),
+        ("all", "exact"),
+        ("all", "conflict"),
+    ],
+)
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
     tmp_path: Path,
     account_for: str | list[str],
+    retained_worker: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_root = tmp_path / "runs"
     run_store = LocalRunStore(run_root)
@@ -385,6 +395,48 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         agent_resource_providers=(provider,),
     )
     LocalDaemon.initialize(config)
+    retained_path = run_store.local_stage_worker_request_path(run_uri, "preprocess")
+    retained_bytes: bytes | None = None
+    retained_mtime: int | None = None
+    rejected = Event()
+    if retained_worker is not None:
+        from loom.pipeline.execution import prepare_stage_attempt, StageWorkerRequest
+        import loom.queue.local_daemon_execution as execution_owner
+
+        intent = load_managed_local_intent(config, run_uri)
+        saved = prepare_stage_attempt(
+            run_store=run_store,
+            run_uri=run_uri,
+            stage=spec.get_stage("preprocess"),
+            stage_plan=plan.ordered_stage_plans[0],
+            fingerprint_context=intent.plan.fingerprint_context,
+            resolved_runtime=execution_owner._worker_runtime(intent, "preprocess"),
+        ).to_dict()
+        if retained_worker == "conflict":
+            runtime = cast(dict[str, Any], saved["resolved_runtime"])
+            runtime["resource_policy"] = {"account_for": [], "enforce": []}
+            runtime["resource_selection"] = {"account_for": [], "enforce": []}
+            StageWorkerRequest.from_dict(saved)
+            run_store.write_stage_worker_request(
+                run_uri, "preprocess", saved, attempt=1
+            )
+            original_compare = execution_owner._require_retained_resource_handoff_match
+
+            def observe_rejection(*args, **kwargs):
+                try:
+                    return original_compare(*args, **kwargs)
+                except QueueConflictError as error:
+                    assert "differs from placement" in str(error)
+                    rejected.set()
+                    raise
+
+            monkeypatch.setattr(
+                execution_owner,
+                "_require_retained_resource_handoff_match",
+                observe_rejection,
+            )
+        retained_bytes = retained_path.read_bytes()
+        retained_mtime = retained_path.stat().st_mtime_ns
     daemon = LocalDaemon(config)
     daemon.start()
     try:
@@ -392,7 +444,19 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         submitted = client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
+        if retained_worker == "conflict":
+            assert rejected.wait(5), (
+                "actual retained dispatch never rejected the conflict"
+            )
+            daemon.stop()
+            assert retained_path.read_bytes() == retained_bytes
+            assert retained_path.stat().st_mtime_ns == retained_mtime
+            assert _supervisor_launch_count(config) == 0
+            return
         completed = client.wait("queue-1", timeout_seconds=10)
+        if retained_worker == "exact":
+            assert retained_path.read_bytes() == retained_bytes
+            assert retained_path.stat().st_mtime_ns == retained_mtime
         owner_view = client.admission(submitted.admission_id).owners
         status = client.status()
 
@@ -471,10 +535,14 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "diagnostic",
             "diagnostic_failure",
             "failures",
+            "resource_controls",
         }
         assert direct_result["owner"] == "run-store"
         assert direct_result["availability"] == "available"
-        assert direct_result["state"] == "empty"
+        assert direct_result["state"] == "populated"
+        controls = cast(list[Mapping[str, object]], direct_result["resource_controls"])
+        assert [item["stage_name"] for item in controls] == ["preprocess", "train"]
+        assert thaw_plain_data(socket_result["resource_controls"]) == controls
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -1592,8 +1660,10 @@ def test_daemon_overlaps_independent_local_stages_in_one_run(
         daemon.stop()
 
 
+@pytest.mark.parametrize("retained_change", [None, "resources", "policy"])
 def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
     tmp_path: Path,
+    retained_change: str | None,
 ) -> None:
     run_root = tmp_path / "runs"
     run_uri = _persist_sleep_run(
@@ -1628,6 +1698,41 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
     assert retained[0].assignment.run_uri == run_uri
     assert _running_supervisor_identity(config) == (supervisor_id, process_id)
 
+    store = LocalRunStore(run_root)
+    request_path = store.local_stage_worker_request_path(run_uri, "slow")
+    original_request_bytes = request_path.read_bytes()
+    if retained_change is not None:
+        from loom.pipeline.execution import StageWorkerRequest
+        from loom.diagnostics import render_diagnostic_failure
+        from loom.diagnostics.diagnostic_failure import project_diagnostic_failure
+
+        payload = store.read_stage_worker_request(run_uri, "slow", attempt=1)
+        assert payload is not None
+        runtime = cast(dict[str, Any], payload["resolved_runtime"])
+        if retained_change == "resources":
+            runtime["resources"]["entries"]["cpu"]["amount"] = 2
+        else:
+            runtime["resource_policy"] = {"account_for": [], "enforce": []}
+            runtime["resource_selection"] = {"account_for": [], "enforce": []}
+        StageWorkerRequest.from_dict(payload)
+        store.write_stage_worker_request(run_uri, "slow", payload, attempt=1)
+        conflicting_bytes = request_path.read_bytes()
+        conflicting_mtime = request_path.stat().st_mtime_ns
+        with pytest.raises(
+            QueueServiceError, match="retained daemon owner state"
+        ) as rejected:
+            LocalDaemon(config).start()
+        assert (
+            "retained worker resource handoff differs from placement"
+            in render_diagnostic_failure(project_diagnostic_failure(rejected.value))
+        )
+        assert request_path.read_bytes() == conflicting_bytes
+        assert request_path.stat().st_mtime_ns == conflicting_mtime
+        assert _supervisor_launch_count(config) == 1
+        # The fixture restores the prior writer bytes; Loom never repairs a
+        # conflicting request by overwriting it or allocating replacement work.
+        request_path.write_bytes(original_request_bytes)
+    replay_mtime = request_path.stat().st_mtime_ns
     replacement = LocalDaemon(config)
     start_finished = Event()
     start_failures: list[BaseException] = []
@@ -1659,6 +1764,8 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
 
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
         assert _supervisor_launch_count(config) == 1
+        assert request_path.read_bytes() == original_request_bytes
+        assert request_path.stat().st_mtime_ns == replay_mtime
         assert (
             SQLiteAgentJournal(
                 config.agent_journal, _allow_initialize=False

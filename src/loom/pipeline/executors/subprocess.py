@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.diagnostics.diagnostic_failure import _capture_exception_details
+
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -209,7 +211,9 @@ class SubprocessExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={"launch_error": str(exc) or type(exc).__name__},
+                details=_capture_exception_details(
+                    exc, details={"launch_error": str(exc) or type(exc).__name__}
+                ),
             )
             return _failed_result(
                 request=request,
@@ -438,7 +442,9 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"read_error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc, details={"read_error": str(exc) or type(exc).__name__}
+            ),
         )
     if raw_result is None:
         return _failure(
@@ -460,7 +466,10 @@ def _read_worker_result(
             exit_code=process_exit_code,
             signal=process_signal,
             metadata=process_metadata,
-            details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            details=_capture_exception_details(
+                exc,
+                details={"result": "invalid", "error": str(exc) or type(exc).__name__},
+            ),
         )
     if worker_result.run_uri != request.run_uri:
         return _failure(

@@ -176,6 +176,103 @@ def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile)
     return run_uri
 
 
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_retained_slurm_worker_is_compared_before_submission_and_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    conflicting: bool,
+) -> None:
+    from loom.pipeline.execution import prepare_stage_attempt, StageWorkerRequest
+    from loom.queue.local_daemon_execution import load_managed_local_intent
+    from loom.queue._agent_process_supervisor import AgentProcessSupervisorError
+    import loom.queue.local_daemon_execution as execution_owner
+
+    runner = FakeSlurmCommandRunner(starting_job_id=1400)
+    profile = _profile(runner, capability_path=tmp_path / "capability")
+    run_root = tmp_path / "runs"
+    run_uri = _persist_rejected_slurm_run(run_root, profile)
+    store = LocalRunStore(run_root)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        slurm_profiles=(profile,),
+    )
+    LocalDaemon.initialize(config)
+    intent = load_managed_local_intent(config, run_uri)
+    saved = prepare_stage_attempt(
+        run_store=store,
+        run_uri=run_uri,
+        stage=intent.pipeline.get_stage("train"),
+        stage_plan=intent.plan.ordered_stage_plans[0],
+        fingerprint_context=intent.plan.fingerprint_context,
+        resolved_runtime=execution_owner._worker_runtime(intent, "train"),
+    ).to_dict()
+    if conflicting:
+        runtime = cast(dict[str, object], saved["resolved_runtime"])
+        runtime["resource_policy"] = {"account_for": [], "enforce": []}
+        runtime["resource_selection"] = {"account_for": [], "enforce": []}
+        StageWorkerRequest.from_dict(saved)
+        store.write_stage_worker_request(run_uri, "train", saved, attempt=1)
+    request_path = store.local_stage_worker_request_path(run_uri, "train")
+    original_bytes, original_mtime = (
+        request_path.read_bytes(),
+        request_path.stat().st_mtime_ns,
+    )
+    observed = Event()
+    original_compare = execution_owner._require_retained_resource_handoff_match
+
+    def compare(*args, **kwargs):
+        try:
+            result = original_compare(*args, **kwargs)
+        except QueueConflictError as exc:
+            assert "differs from placement" in str(exc)
+            observed.set()
+            raise
+        return result
+
+    monkeypatch.setattr(
+        execution_owner, "_require_retained_resource_handoff_match", compare
+    )
+    original_sbatch = runner.sbatch
+
+    def submit(*args, **kwargs):
+        result = original_sbatch(*args, **kwargs)
+        observed.set()
+        return result
+
+    monkeypatch.setattr(runner, "sbatch", submit)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    supervisor = execution.supervisor
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("retained-worker", run_uri))
+        assert observed.wait(5), "retained SLURM worker boundary was not reached"
+        daemon.stop()
+        assert request_path.read_bytes() == original_bytes
+        assert request_path.stat().st_mtime_ns == original_mtime
+        submissions = [call for call in runner.calls if call[0] == "sbatch"]
+        if conflicting:
+            assert submissions == []
+            assert execution.slurm_assignments.list_run_unreleased(run_uri) == ()
+        else:
+            assert len(submissions) == 1
+            assert len(execution.slurm_assignments.list_run_unreleased(run_uri)) == 1
+    finally:
+        daemon.stop()
+        if supervisor is not None:
+            try:
+                supervisor.shutdown_for_test()
+            except AgentProcessSupervisorError as exc:
+                assert str(exc) == "managed supervisor endpoint is unavailable"
+
+
 def test_slurm_containment_requires_exact_positive_echo() -> None:
     runner = FakeSlurmCommandRunner()
     request = {
@@ -234,6 +331,7 @@ def _exercise_mixed_route_run(
     terminal_boundary: str | None = None,
     *,
     guarded_recovery: bool = False,
+    native_failure: bool = False,
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     containment_helper = _positive_containment_helper() if guarded_recovery else None
@@ -273,7 +371,11 @@ def _exercise_mixed_route_run(
             {
                 "name": "train",
                 "factory": {
-                    "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                    "_target_": (
+                        "tests.support.pipeline_execution_stages.NestedFailureStage"
+                        if native_failure
+                        else "tests.support.pipeline_execution_stages.TextConsumerStage"
+                    )
                 },
                 "depends_on": ["preprocess"],
                 "inputs": {"data": "preprocess.data"},
@@ -706,6 +808,15 @@ def _exercise_mixed_route_run(
             process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
         )
         report = workspace.retain_result(worker_result)
+        assert report.schema_version == 2
+        assert report.process_created is True
+        assert report.resource_controls is not None
+        assert {
+            "resource": "cpu",
+            "owner": "slurm",
+            "mechanism": "sbatch_allocation",
+            "disposition": "delegated",
+        } in report.resource_controls
         view.declare_report(assignment_id, incarnation, fence, report)
         original_publish = slurm_ready_stage._publish_staged_file
         crash_injected = False
@@ -795,6 +906,29 @@ def _exercise_mixed_route_run(
             view.release(assignment_id, incarnation)
 
             completed = client.wait("mixed-route", timeout_seconds=10)
+            if native_failure:
+                assert completed.state is LocalDaemonAdmissionState.FAILED
+                assert report.schema_version == 2
+                assert report.failure is not None
+                saved_failure = run_store.read_stage_failure(run_uri, "train")
+                assert saved_failure is not None
+                assert saved_failure["run_uri"] == run_uri
+                assert saved_failure["details"] == report.failure.to_dict()["details"]
+                saved_text = json.dumps(saved_failure)
+                assert "could not prepare the experiment input" in saved_text
+                assert "missing /worker/data/product.json" in saved_text
+                assert "Prepare the product on the selected worker." in saved_text
+                saved_result = run_store.read_stage_worker_result(
+                    run_uri, "train", attempt=1
+                )
+                assert saved_result is not None
+                assert saved_result["failure"] == saved_failure
+                assert authority.open_run(run_uri).status is RunStatus.FAILED
+                assert (
+                    execution.slurm_assignments.read(assignment_id).state == "released"
+                )
+                assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+                return
             assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
             released_operation = daemon.wait_operation(
                 record.assignment.operation_id, timeout=2
@@ -893,6 +1027,12 @@ def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch)
+
+
+def test_slurm_native_failure_retains_portable_cause_through_result_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exercise_mixed_route_run(tmp_path, monkeypatch, native_failure=True)
 
 
 def test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot(

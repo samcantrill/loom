@@ -9,6 +9,7 @@ import traceback
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.diagnostics.diagnostic_failure import _capture_exception_details
 from loom.pipeline.context import ProcessContainmentOwner, StageContext
 from loom.pipeline.errors import PipelineValidationError, StageContractError
 from loom.pipeline.executors import Executor, LocalExecutor
@@ -933,7 +934,7 @@ def _failed_worker_result_from_exception(
         details=(
             {"domain_failure": reported_failure.domain_failure}
             if reported_failure is not None
-            else {}
+            else _capture_exception_details(exc)
         ),
     )
     return StageWorkerResult(

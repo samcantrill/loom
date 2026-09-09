@@ -1563,6 +1563,9 @@ def _prepare_remote_producer_run(
     requirement: ExecutionRequirement | None = None,
     resource_entries: Mapping[str, object] | None = None,
     account_for: str | list[str] = "all",
+    sequential: bool = False,
+    enforce: tuple[str, ...] = (),
+    native_failure: bool = False,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1573,7 +1576,9 @@ def _prepare_remote_producer_run(
                 "name": "build",
                 "factory": {
                     "_target_": (
-                        "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        "tests.support.pipeline_execution_stages.NestedFailureStage"
+                        if native_failure
+                        else "tests.support.pipeline_execution_stages.JsonProducerStage"
                     )
                 },
                 "config": {"value": value},
@@ -1589,6 +1594,22 @@ def _prepare_remote_producer_run(
             }
         ],
     }
+    if sequential:
+        pipeline_config["stages"].append(
+            {
+                "name": "consume",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                },
+                "depends_on": ["build"],
+                "inputs": {"data": "build.data"},
+                "resources": {
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                },
+                "placement": {"target": machine_id},
+                "outputs": {"text": {"artifact_type": "text", "codec_key": "text.v1"}},
+            }
+        )
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,
@@ -1611,7 +1632,9 @@ def _prepare_remote_producer_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
-        options={"resource_policy": {"account_for": account_for}},
+        options={
+            "resource_policy": {"account_for": account_for, "enforce": list(enforce)}
+        },
         execution_requirements={
             stage_name: (
                 requirement
@@ -2538,6 +2561,11 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("before_result_commit", False),
         ("before_coordinator_release", False),
         ("after_supervisor_accept", True),
+        ("failed_before_result_commit", False),
+        ("binding_failure_before_result_commit", False),
+        ("missing_claim_before_result_commit", False),
+        ("native_failure_before_result_commit", False),
+        ("diagnostic_write", False),
     ),
 )
 def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
@@ -2548,6 +2576,15 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
 ) -> None:
     """A fresh application joins one exact operation across every crash barrier."""
 
+    no_start = restart_barrier in {
+        "failed_before_result_commit",
+        "binding_failure_before_result_commit",
+        "missing_claim_before_result_commit",
+    }
+    native_failure = restart_barrier in {
+        "native_failure_before_result_commit",
+        "diagnostic_write",
+    }
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -2577,6 +2614,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     run_uri, authority = _prepare_remote_producer_run(
         runs,
         run_name="restart-run",
+        account_for=[]
+        if restart_barrier == "missing_claim_before_result_commit"
+        else "all",
+        enforce=("cpu",) if no_start else (),
+        native_failure=native_failure,
         machine_id="agent-a",
         value=42,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -2692,6 +2734,21 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         agent.publish_offer(offer, idempotency_key="offer-restart")
         supervisor = agent._supervisor  # noqa: SLF001 - causal service boundary
         assert supervisor is not None
+        if no_start:
+
+            def forbidden_launch(*_args, **_kwargs):
+                pytest.fail("failed control setup must not reach the supervisor")
+
+            monkeypatch.setattr(supervisor, "launch", forbidden_launch)
+        if restart_barrier == "binding_failure_before_result_commit":
+            providers, _journal = agent._runtime_owners(session)
+
+            def unavailable_binding(_command):
+                raise OSError("binding unavailable at /worker/configured-binding")
+
+            monkeypatch.setattr(
+                providers["cpu"], "worker_environment", unavailable_binding
+            )
         if restart_barrier in {
             "before_supervisor_accept",
             "after_supervisor_accept",
@@ -2705,7 +2762,34 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 raise RuntimeError("simulated agent application restart")
 
             monkeypatch.setattr(supervisor, "launch", interrupt_launch)
-        elif restart_barrier == "before_result_commit":
+        elif restart_barrier == "diagnostic_write":
+            execution_owner = daemon._execution
+            assert execution_owner is not None
+            original_write_failure = execution_owner.run_store.write_stage_failure
+            interrupted_write = Event()
+
+            def interrupt_diagnostic_write(*args, **kwargs):
+                interrupted_write.set()
+                raise OSError("diagnostic persistence interrupted")
+
+            monkeypatch.setattr(
+                execution_owner.run_store,
+                "write_stage_failure",
+                interrupt_diagnostic_write,
+            )
+            original_commit_result = agent.commit_result
+
+            def interrupt_after_failed_projection(*args, **kwargs):
+                try:
+                    return original_commit_result(*args, **kwargs)
+                except QueueServiceError as exc:
+                    assert interrupted_write.is_set()
+                    raise RuntimeError("simulated agent application restart") from exc
+
+            monkeypatch.setattr(
+                agent, "commit_result", interrupt_after_failed_projection
+            )
+        elif restart_barrier == "before_result_commit" or no_start or native_failure:
 
             def interrupt_result(*args: object, **kwargs: object) -> object:
                 raise RuntimeError("simulated agent application restart")
@@ -2728,9 +2812,38 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 sequence=1,
                 wait_timeout_ms=5_000,
             )
-            coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
-            with pytest.raises(RuntimeError, match="application restart"):
-                execution.result(timeout=20)
+            submitted = coordinator.submit(
+                LocalDaemonAdmissionRequest("restart-item", run_uri)
+            )
+            if restart_barrier == "diagnostic_write":
+                with pytest.raises(RuntimeError, match="application restart"):
+                    execution.result(timeout=20)
+                assert interrupted_write.is_set()
+                with sqlite3.connect(config.control_database) as conn:
+                    assert (
+                        conn.execute("SELECT state FROM remote_assignments").fetchone()[
+                            0
+                        ]
+                        == "RESULT_RETAINED"
+                    )
+                    retained_report = conn.execute(
+                        "SELECT report_json FROM remote_assignments"
+                    ).fetchone()[0]
+                assert runs.read_stage_failure(run_uri, "build") is None
+                assert agent._execution_journal is not None
+                assert agent._execution_journal.retained_claim_commands()
+                reconciled = execution_owner.reconcile_admission(
+                    daemon.admission_for_run_uri(run_uri)
+                )
+                assert reconciled.state is LocalDaemonAdmissionState.ACTIVE
+                monkeypatch.setattr(
+                    execution_owner.run_store,
+                    "write_stage_failure",
+                    original_write_failure,
+                )
+            else:
+                with pytest.raises(RuntimeError, match="application restart"):
+                    execution.result(timeout=20)
         if shared_inventory:
             assert agent._execution_journal is not None
             assert {
@@ -2743,10 +2856,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         replacement_supervisor = replacement._supervisor  # noqa: SLF001
         assert replacement_supervisor is not None
         assert replacement_supervisor.supervisor_id == supervisor_id
+        if no_start:
+            monkeypatch.setattr(replacement_supervisor, "launch", forbidden_launch)
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
+        if restart_barrier == "diagnostic_write":
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT report_json FROM remote_assignments"
+                    ).fetchone()[0]
+                    == retained_report
+                )
         released = cast(Mapping[str, object], replayed["session"])
         replacement.publish_offer(
             replace(
@@ -2761,12 +2884,91 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         with sqlite3.connect(
             cast(Path, remote_config.agent_root) / "supervisor" / "supervisor.sqlite"
         ) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
-        assert (
-            coordinator.wait("restart-item", timeout_seconds=10).state
-            is LocalDaemonAdmissionState.SUCCEEDED
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == (
+                0 if no_start else 1
+            )
+        assert coordinator.wait("restart-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.FAILED
+            if no_start or native_failure
+            else LocalDaemonAdmissionState.SUCCEEDED
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert authority.open_run(run_uri).status is (
+            RunStatus.FAILED if no_start or native_failure else RunStatus.SUCCEEDED
+        )
+        if no_start:
+            failure = runs.read_stage_failure(run_uri, "build")
+            assert failure is not None
+            assert "enforce" in str(failure["message"])
+            if restart_barrier == "missing_claim_before_result_commit":
+                assert "no active claim" in str(failure["message"])
+            if restart_barrier == "binding_failure_before_result_commit":
+                assert (
+                    "binding unavailable at /worker/configured-binding"
+                    in json.dumps(failure)
+                )
+            with sqlite3.connect(config.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT state FROM coordinator_assignments"
+                    ).fetchone()[0]
+                    == "released"
+                )
+            assert replacement._execution_journal is not None
+            assert replacement._execution_journal.retained_claim_commands() == ()
+        if native_failure:
+            import io
+            from loom.cli.main import main
+            from loom.queue import LocalDaemonSocketServer
+
+            failure = runs.read_stage_failure(run_uri, "build")
+            assert failure is not None and failure["run_uri"] == run_uri
+            assert "missing /worker/data/product.json" in json.dumps(failure)
+            socket_server = LocalDaemonSocketServer(daemon, config.endpoint)
+            socket_server.start()
+            original_open = Path.open
+
+            def without_worker_files(path: Path, *args, **kwargs):
+                if path.is_relative_to(cast(Path, remote_config.agent_root)):
+                    raise AssertionError("client inspection must not read worker files")
+                return original_open(path, *args, **kwargs)
+
+            try:
+                with monkeypatch.context() as inspection_patch:
+                    inspection_patch.setattr(Path, "open", without_worker_files)
+                    command = [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                    ]
+                    text_output, json_output = io.StringIO(), io.StringIO()
+                    errors = io.StringIO()
+                    assert main(command, stdout=text_output, stderr=errors) == 0, (
+                        errors.getvalue()
+                    )
+                    assert (
+                        main(
+                            [*command, "--format", "json"],
+                            stdout=json_output,
+                            stderr=io.StringIO(),
+                        )
+                        == 0
+                    )
+                rendered = text_output.getvalue()
+                assert "could not prepare the experiment input" in rendered
+                assert (
+                    "builtins.FileNotFoundError: missing /worker/data/product.json"
+                    in rendered
+                )
+                assert "Prepare the product on the selected worker." in rendered
+                view = json.loads(json_output.getvalue())["result"]["owners"][
+                    "run_result"
+                ]
+                assert view["availability"] == "available"
+                assert view["failures"] == [failure]
+            finally:
+                socket_server.stop()
     finally:
         if replacement is not None:
             replacement_supervisor = replacement._supervisor  # noqa: SLF001
@@ -3090,10 +3292,13 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
         daemon.stop()
 
 
-@pytest.mark.parametrize("account_for", ["all", []])
+@pytest.mark.parametrize(
+    ("account_for", "sequential"), [("all", False), ([], False), ([], True)]
+)
 def test_two_remote_agents_execute_two_globally_selected_runs(
     tmp_path: Path,
     account_for: str | list[str],
+    sequential: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -3120,6 +3325,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         store,
         run_name="remote-a",
         account_for=account_for,
+        sequential=sequential,
         machine_id="agent-a",
         value=1,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -3128,6 +3334,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         store,
         run_name="remote-b",
         account_for=account_for,
+        sequential=sequential,
         machine_id="agent-b",
         value=2,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -3222,6 +3429,38 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         )
         return session
 
+    def execute_pipeline(client: LocalDaemonAgentHttpClient, session: AgentSession):
+        from loom.queue.agent_sessions import _session_from_value
+
+        results = []
+        for sequence in range(1, 3 if sequential else 2):
+            if sequence > 1:
+                client.publish_offer(
+                    AgentOffer(
+                        session.session_id,
+                        session.coordinator_epoch,
+                        session.config_revision,
+                        session.inventory_revision,
+                        session.availability_revision,
+                        1,
+                        0,
+                        30,
+                        _resident_provider_descriptors(profile, session.agent_id),
+                        resident_profiles=(descriptor,),
+                    ),
+                    idempotency_key=f"followup-{session.session_id}",
+                )
+            result = client.execute_one(
+                session.session_id,
+                session.availability_revision,
+                sequence=sequence,
+                wait_timeout_ms=5_000,
+            )
+            assert result["state"] == "RELEASED", result
+            results.append(result)
+            session = _session_from_value(cast(Mapping[str, object], result["session"]))
+        return results
+
     try:
         session_a = register(agent_a, "a")
         session_b = register(agent_b, "b")
@@ -3230,35 +3469,32 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         )
         with ThreadPoolExecutor(max_workers=2) as workers:
             execution_a = workers.submit(
-                agent_a.execute_one,
-                session_a.session_id,
-                session_a.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
+                execute_pipeline,
+                agent_a,
+                session_a,
             )
             execution_b = workers.submit(
-                agent_b.execute_one,
-                session_b.session_id,
-                session_b.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
+                execute_pipeline,
+                agent_b,
+                session_b,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("item-a", run_a))
             coordinator.submit(LocalDaemonAdmissionRequest("item-b", run_b))
-            result_a = execution_a.result(timeout=20)
-            result_b = execution_b.result(timeout=20)
+            result_a = execution_a.result(timeout=30)
+            result_b = execution_b.result(timeout=30)
         completed_a = coordinator.wait("item-a", timeout_seconds=10)
         completed_b = coordinator.wait("item-b", timeout_seconds=10)
 
-        assert result_a["state"] == "RELEASED"
-        assert result_b["state"] == "RELEASED"
+        assert len(result_a) == len(result_b) == (2 if sequential else 1)
         assert completed_a.state is LocalDaemonAdmissionState.SUCCEEDED
         assert completed_b.state is LocalDaemonAdmissionState.SUCCEEDED
         for snapshot in (authority_a.open_run(run_a), authority_b.open_run(run_b)):
             assert snapshot.status is RunStatus.SUCCEEDED
-            assert snapshot.stages[0].status is StageStatus.SUCCEEDED
-            output = snapshot.stages[0].artifact_facts[0].artifact
-            assert Path(output.uri.removeprefix("file://")).is_file()
+            assert len(snapshot.stages) == (2 if sequential else 1)
+            for stage in snapshot.stages:
+                assert stage.status is StageStatus.SUCCEEDED
+                output = stage.artifact_facts[0].artifact
+                assert Path(output.uri.removeprefix("file://")).is_file()
         with sqlite3.connect(config.execution_database) as conn:
             assignments = tuple(
                 conn.execute(
@@ -3266,9 +3502,15 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
                     "ORDER BY agent_id"
                 )
             )
-        assert assignments == (
-            ("agent-a", "released"),
-            ("agent-b", "released"),
+            if account_for == []:
+                assert (
+                    conn.execute("SELECT COUNT(*) FROM coordinator_atoms").fetchone()[0]
+                    == 0
+                )
+        assert assignments == tuple(
+            (agent_id, "released")
+            for agent_id in ("agent-a", "agent-b")
+            for _ in range(2 if sequential else 1)
         )
     finally:
         agent_a.close()
@@ -3679,6 +3921,19 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         assert preprocess_output["pid"] != os.getpid()
         assert remote_output["pid"] != os.getpid()
         assert local_output["pid"] != os.getpid()
+
+        for run_uri in (remote_run, local_run):
+            result = store.read_stage_worker_result(run_uri, "capture", attempt=1)
+            assert result is not None
+            controls = result["executor_metadata"]["resource_controls"]
+            assert {
+                "resource": "gpu",
+                "owner": "managed_provider",
+                "mechanism": "provider_environment_binding" if enforce_gpu else None,
+                "disposition": "applied" if enforce_gpu else "not_requested",
+            } in controls
+            assert local_binding not in json.dumps(controls)
+            assert remote_binding not in json.dumps(controls)
 
         with sqlite3.connect(config.execution_database) as conn:
             assignments = set(

@@ -173,6 +173,20 @@ class FailingStage:
         raise RuntimeError("stage failed intentionally")
 
 
+class NestedFailureStage:
+    """Produce a native causal chain inside an actual resident worker."""
+
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        del context, inputs
+        try:
+            raise FileNotFoundError("missing /worker/data/product.json")
+        except FileNotFoundError as cause:
+            cause.add_note("Prepare the product on the selected worker.")
+            raise RuntimeError("could not prepare the experiment input") from cause
+
+
 class FailOnceThenProduceStage:
     def run(
         self,

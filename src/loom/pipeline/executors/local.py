@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
+from loom.diagnostics.diagnostic_failure import _capture_exception_details
 from loom.pipeline.early_stopping import (
     EarlyStopSignal,
     lifecycle_reason_from_early_stop,
@@ -183,6 +184,7 @@ class LocalExecutor:
                 traceback_path=str(request.traceback_path),
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
+                details=_capture_exception_details(exc, traceback_text=traceback_text),
             )
             return StageExecutionResult(
                 stage_name=request.stage.name,
