@@ -275,11 +275,13 @@ evidence remains an initial-delivery receipt only.
 
 ### Refiner Correction Receipt
 
-M1–M3 correction completed locally: sparse policy axes now survive typed and
-mapping round trips; the required post-demand policy, full demand and selection
-travel in `resolved_runtime` and are validated on worker replay; managed local
-and remote worker environments apply provider bindings only for selected
-enforcement kinds. The focused policy, worker, preparation and managed queue
-slices were rerun after the correction. Empty-accounting lifecycle coverage and
-the manager-owned common control receipts remain part of the integrated final
-gate.
+The refiner correction preserves sparse policy axes through typed and mapping
+round trips, rejects non-list authored selectors, carries the exact post-demand
+policy, full demand and selection in `resolved_runtime`, and validates worker
+replay. Managed local and remote worker environments apply provider bindings
+only for selected enforcement kinds. Empty claim commands are now admitted by
+the existing assignment, reservation, activation and resident-bundle paths;
+their lifecycle evidence remains the same assignment/fence record rather than
+a synthetic reservation. Focused policy, worker, journal and resident slices
+were rerun after the correction; the required end-to-end account-none and
+old-writer SLURM delivery integrations remain required final-gate evidence.

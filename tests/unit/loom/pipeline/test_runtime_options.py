@@ -71,6 +71,9 @@ def test_resource_policy_is_strict_and_selects_only_present_kinds() -> None:
     assert ResourcePolicy.from_dict(policy.to_dict()) == policy
     with pytest.raises(RuntimeResourceError):
         ResourcePolicy.from_dict({"account_for": None, "enforce": []})
+    for invalid in ({"gpu"}, ("gpu",), {"gpu": True}):
+        with pytest.raises(RuntimeResourceError):
+            ResourcePolicy.from_dict({"account_for": invalid})
 
 
 def test_resource_policy_all_and_zero_demand_are_distinct() -> None:

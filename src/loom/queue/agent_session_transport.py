@@ -3459,12 +3459,20 @@ class LocalDaemonAgentHttpClient:
             )
         providers, execution_journal = self._runtime_owners(session)
         commands = execution_journal.assignment_claim_commands(assignment_id)
-        if not commands:
-            raise QueueConflictError("contained assignment claim is unavailable")
-        assignment = commands[0].assignment
+        assignment = ManagedAssignment(
+            assignment_id=request.assignment_id,
+            run_uri=f"loom-agent:{request.assignment_id}",
+            stage_work_id=request.stage_work_id,
+            stage_name=request.stage_name,
+            attempt=request.attempt,
+            attempt_id=request.attempt_id,
+            agent_id=session.agent_id,
+            session_id=session.session_id,
+            offer_id=request.offer_id,
+            claim_id=request.claim_id,
+        )
         if (
-            not isinstance(assignment, ManagedAssignment)
-            or assignment.assignment_id != assignment_id
+            assignment.assignment_id != assignment_id
             or assignment.session_id != session_id
             or any(command.assignment != assignment for command in commands)
         ):

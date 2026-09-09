@@ -1277,8 +1277,6 @@ class SQLiteAgentJournal:
     ) -> AssignmentState:
         self._require_request(assignment)
         ordered = tuple(sorted(commands, key=lambda item: item.claim.resource_kind))
-        if not ordered:
-            raise ManagedLocalError("composite claim must not be empty")
         encoded_commands = _json(
             {"commands": [_claim_command_dict(command) for command in ordered]}
         )
@@ -1849,7 +1847,7 @@ class SQLiteAgentJournal:
                 json.loads(cast(str, row["identity_json"]))
             )
             commands = _claim_commands_from_row(row)
-            if not commands or any(
+            if any(
                 command.assignment != assignment for command in commands
             ):
                 raise ManagedLocalError(
@@ -2197,8 +2195,6 @@ class SQLiteCoordinatorAssignments:
         )
         receipt_value = cast(Mapping[str, object], json.loads(receipt))
         atoms = tuple(atom for claim in claims for atom in claim.atoms)
-        if not atoms:
-            raise ManagedLocalError("logical reservation requires capacity atoms")
         if any(atom.key not in self._capacity for atom in atoms):
             raise ManagedLocalError("claim uses atom outside configured capacity")
         requested: dict[tuple[str, str], Fraction] = {}

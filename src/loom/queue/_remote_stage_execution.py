@@ -804,7 +804,6 @@ class _ResidentAssignmentBundle:
             )
         if (
             any(not isinstance(item, ResourceClaim) for item in claims)
-            or not claims
             or len(claims) > 8
             or len({item.resource_kind for item in claims}) != len(claims)
         ):

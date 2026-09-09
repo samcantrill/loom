@@ -64,6 +64,14 @@ class ResourcePolicy:
 
     @classmethod
     def from_dict(cls, value: object) -> "ResourcePolicy":
+        # Frozen worker handoffs retain plain-data lists as tuples.  They have
+        # already crossed the strict external codec; do not reinterpret a
+        # caller-supplied tuple as authored plain data.
+        if isinstance(value, MappingProxyType):
+            value = {
+                key: list(item) if isinstance(item, tuple) else item
+                for key, item in value.items()
+            }
         mapping = sparse_resource_policy(value, path="ResourcePolicy")
         instance = cls.__new__(cls)
         for axis in _AXES:
@@ -132,6 +140,8 @@ def sparse_resource_policy(value: object, *, path: str) -> Mapping[str, object]:
     for axis, raw in value.items():
         if raw is None:
             raise RuntimeResourceError(f"{path}.{axis} cannot be null")
+        if raw != ALL_RESOURCES and not isinstance(raw, list):
+            raise RuntimeResourceError(f"{path}.{axis} must be 'all' or a list")
         normalized = _identifiers(raw, path=f"{path}.{axis}")
         result[axis] = normalized if isinstance(normalized, str) else list(normalized)
     return MappingProxyType(result)

@@ -22,6 +22,7 @@ from loom.pipeline.execution import (
     run_stage_worker,
 )
 from loom.pipeline.execution.models import StageWorkerRequest
+from loom.pipeline.execution.errors import RunRequestError
 from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 from loom.pipeline.execution.lifecycle import write_run_status
 from loom.pipeline.planning import plan_pipeline
@@ -223,6 +224,19 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
         "name": "snapshot-demo",
         "stages": [{"name": "build"}],
     }
+
+
+def test_worker_request_rejects_saved_selection_that_conflicts_with_demand(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_run(tmp_path)
+    payload = store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert payload is not None
+    runtime = cast(dict[str, object], payload["resolved_runtime"])
+    runtime["resource_selection"] = {"account_for": ["gpu"], "enforce": []}
+
+    with pytest.raises(RunRequestError, match="conflicts"):
+        StageWorkerRequest.from_dict(payload)
 
 
 def test_resident_stage_worker_passes_containment_owner_to_stage_context(
