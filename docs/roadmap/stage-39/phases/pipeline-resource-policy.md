@@ -394,17 +394,22 @@ withholding, cancellation and release checks remain required.
 
 ### R2 — Authoritative Retained Worker Comparison
 
-At local `_execute` and `_dispatch_slurm_ready`, compare decoded retained full
-normalized demand, concrete policy axes and saved selection with
+At local `_execute`, `_dispatch_slurm_ready` and restart
+`_reconcile_retained_local_assignment`, compare decoded retained full normalized
+demand, concrete policy axes and saved selection with
 `_worker_runtime(intent, stage_name)` before input delivery or launch. Use canonical
 plain data so tuple/list or immutable-map differences are not false conflicts.
+Use one comparison owner shared by these entry points; `resume_retained_local_work`
+must not bypass it by going directly to reconciliation.
 Keep identity and internal codec checks. This is Loom handoff validation, never
 downstream factory/dataset/model instantiation. Name the disagreement and advise
 investigating retained input or preparing a fresh identity; do not overwrite it.
 
-Proof uses actual retained files on both routes: an internally consistent resource
-handoff mismatch is rejected before delivery/start without changing bytes or
-timestamps, while exact replay succeeds. Codec-only mismatch tests are insufficient.
+Proof uses actual retained files on local scheduling, ready-stage SLURM and local
+application-restart routes: an internally consistent resource handoff mismatch is
+rejected before delivery/supervisor invocation without changing bytes or timestamps,
+while exact replay (including restart) succeeds. Codec-only mismatch tests are
+insufficient.
 
 ### R3 — Portable Failure And Control Evidence
 

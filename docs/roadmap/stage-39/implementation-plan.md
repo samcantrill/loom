@@ -102,7 +102,10 @@ the four implementation findings remain open until executable evidence passes
   contract reopening; the subsequently discovered boundaries below do.
 - Current gate: recovery requested by the maintainer on 2026-09-09; the concrete
   R1–R4 contract is in Phase 1's Approved Recovery Amendment. Independent startup
-  review is pending. Existing three corrections remain consumed; the approved
+  review at `a07e290a` found one omitted local restart comparison route; the bounded
+  correction adds `_reconcile_retained_local_assignment` and an actual restart
+  mismatch/exact-replay oracle to R2. Targeted confirmation is pending.
+  Existing three corrections remain consumed; the approved
   recovery has one executor delivery and at most one qualified correction, not
   a reset of the original budget. No PR opens with known blockers.
 - Current source: checkpoint `6474206` reconciled to published develop `000f34f`
