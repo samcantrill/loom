@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open; corrected implementation, independent review and both full gates passed
+- Status: merged; independent review, both full gates and cleanup complete
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -249,8 +249,10 @@ gate/review/merge ownership follows the canonical phase workflow.
   finding is resolved by the existing reviewer's bounded confirmation at `77388fe`
 - Blocker corrections: approval on 2026-09-10 removes the correction-count limit
   for necessary in-scope fixes, not scope, review or physical-execution gates
-- PR and merge: #292 open, non-draft and mergeable; base develop and title verified;
-  ready for verified merge after final remote head/base inspection
+- PR and merge: #292 remotely squash-merged to develop as
+  `9837d0eec29862c5c495f8ca6c68fd04cf8c84a7` on 2026-09-09T19:36:54Z after final
+  head/base/title/mergeability and evidence checks. Control synchronized; exact
+  phase worktree and local/remote branch removed after verified evidence archive
 
 ## Completion Record
 
@@ -262,8 +264,8 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,099 passed / 2 skipped / 156 deselected (1,018.25s), config-extra 162 passed / 18 skipped / 3,104 deselected (159.42s), sdist and wheel builds |
 | Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 427, e2e 70, config-extra 162; total 3,263 passed, no failures/errors, 18 opt-in skips (1,481.11s). Generated 2026-09-09T19:28:12Z |
 | Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-atomic.log,test-summary-atomic.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
-| PR, review, merge | PR #292 open to develop with approved title; ready for verified merge. Full-diff review's sole atomicity finding resolved; existing reviewer confirmation PASS at `77388fe`. No remote merge claimed |
-| Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Preserve worktree and evidence until merge; Phase 2 and Stage 81 physical continuation excluded |
+| PR, review, merge | PR #292 merged to develop as `9837d0eec29862c5c495f8ca6c68fd04cf8c84a7`. Full-diff review's sole atomicity finding resolved; existing reviewer confirmation PASS at `77388fe` |
+| Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Current `build/`, `.loom/`, `dist/` evidence copied and compared at `stage-39-p1-atomic-evidence-VzGLFi` under the manifest worktree root; exact phase worktree and local/remote branch removed. Return to rphys Stage 81; Phase 2 and physical continuation excluded |
 
 ## Independent Implementation Review
 

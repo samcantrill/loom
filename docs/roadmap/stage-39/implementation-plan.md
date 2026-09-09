@@ -1,19 +1,17 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: pr_open; corrected implementation, independent review and both full gates passed
+Status: in_progress; Phase 1 merged, Phase 2 pending separate continuation
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1 — pipeline-resource-policy
-Blockers: no known product blocker. The existing independent reviewer confirmed
-the no-start atomicity correction PASS at `77388fe`; the manager verified its
-identity/replay implementation and causal crash oracles. Fresh `make validate-pr`
-and `make test-summary` pass at that source; PR #292 is ready for verified merge.
-Phase 1's Independent Implementation Review section owns the correction
-and evidence. Approval on 2026-09-10 permits necessary in-scope correctness
-corrections followed by return to rphys Stage 81. Prior source receipts do not
-substitute for the current gates.
+Current phase: Phase 1 complete; return to rphys Stage 81 as requested
+Blockers: none for Phase 1. PR #292 remotely squash-merged to develop as
+`9837d0eec29862c5c495f8ca6c68fd04cf8c84a7` on 2026-09-09T19:36:54Z after independent
+confirmation and both fresh full gates at source `77388fe`. Control checkout is
+synchronized; phase worktree and local/remote branch removed. Current evidence
+is preserved in `stage-39-p1-atomic-evidence-VzGLFi` under the recorded worktree
+root. Return to rphys Stage 81; do not implicitly execute Loom Phase 2.
 
 ## Summary
 
@@ -87,7 +85,7 @@ substitute for the current gates.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | pr_open | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | merged | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy (removed) | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -151,5 +149,5 @@ substitute for the current gates.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#292](https://github.com/samcantrill/loom/pull/292), open; ready for merge | Correction `77388fe`: targeted checks, independent confirmation, `make validate-pr` and `make test-summary` PASS (3,263 passed, no failures/errors) | No physical isolation or scientific proof | Preserve phase worktree until verified merge and evidence archive; preceding archive `stage-39-p1-evidence-iPO6xw` under the recorded worktree root |
+| 1 | [#292](https://github.com/samcantrill/loom/pull/292), merged `9837d0eec29862c5c495f8ca6c68fd04cf8c84a7` | Correction `77388fe`: targeted checks, independent confirmation, `make validate-pr` and `make test-summary` PASS (3,263 passed, no failures/errors) | No physical isolation or scientific proof | Complete: exact phase worktree and local/remote branch removed; verified current evidence archive `stage-39-p1-atomic-evidence-VzGLFi`; older archive preserved |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
