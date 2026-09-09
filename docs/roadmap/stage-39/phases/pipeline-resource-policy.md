@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; approved delayed-SLURM handoff amendment in validation
+- Status: in_progress; full validation passed, PR and independent review pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -13,9 +13,8 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: no known targeted runtime failure remains. The private delayed
-  resource handoff is implemented after startup PASS at `c5b23a7`; fresh full
-  validation, PR submission and independent full-diff review remain outstanding.
+- Blockers: none known. Full validation passed at `49799dc`; PR submission and
+  required independent full-diff review remain outstanding.
 
 ## Objective And Context
 
@@ -238,12 +237,12 @@ gate/review/merge ownership follows the canonical phase workflow.
 - Expanded planning: EDR-39-01 corrected and independently confirmed; packet review
   passed after the bounded `SlurmStageDelivery` replay correction; final plan approved
 - Additional phase planning: not needed; current contracts and upstream join are explicit
-- Implementation: initial executor delivery at `fce8016`; manager pre-submit found
-  unmet fixed contracts below, so completion is not accepted
+- Implementation: approved Phase 1 and recovery amendments implemented through
+  `49799dc`; current full validation passes, independent review remains required
 - Refiner: correction `1198c1a` and related repair `68a37ad` returned;
   manager verified the changes and added discriminating integration coverage
-- Pre-submit: targeted delayed-handoff and capture-boundary checks pass; fresh full
-  gates and independent full-diff review outstanding; no PR opened or pushed
+- Pre-submit: PASS on source `49799dc` against unchanged published develop
+  `998b07c`; both full gates pass, no known blocker or future-phase implementation
 - Independent implementation review: not started
 - Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
   its separately returned repair, and manager correction `6474206`. Do not reset
@@ -255,102 +254,14 @@ gate/review/merge ownership follows the canonical phase workflow.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Checkpoint `6474206` adds full-intent container validation, saved-selection-aware builders, selection-aware capability/preflight, truthful direct-container launch receipts, native unsupported-control rejection, and direct handoff finalization after container/runtime precedence. Refiner commits preserve sparse axes and worker policy/selection, gate provider bindings, and begin empty-claim lifecycle support. Recovery delivery `b8e33bb` canonically reuses unchanged unconsumed offers for no-claim work, makes later assignments use that canonical ID, compares retained runtime demand/policy/selection at local restart, ready-stage SLURM and dispatch, carries full schema-2 remote failures/start proof, and records definitive selected-control no-start results through local and remote terminal paths. This is not a complete Phase 1 implementation. |
-| Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
-| Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
-| Full gates | At `29292c8`, repository lint/Pyright pass and the complete default suite finishes with 3,088 passed, 1 failed, 2 skipped, 156 deselected (970.83 seconds). The failure is delayed SLURM's selected-resource worker materialization from display-safe metadata. Default-gate failure prevents the config-extra/build targets from running. The separate summary finishes with 3,250 passed, 3 failed, 18 skipped: the same delayed-SLURM case and two stale optional preflight assertions. Those two expectations are corrected to the accepted `resource.not_requested` code and both targeted tests pass. No fresh passing full gate is claimed; no validation command remains running. |
-| PR, review, and merge | Transport amendment startup passed at `93488a6`; implementation and targeted checks pass. Delayed-SLURM handoff amendment approval/review is now required. Full gates and full-diff independent implementation review remain incomplete. No PR, push or merge occurred. |
-| Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
-
-### Manager Pre-Submit Corrections
-
-These are missing approved Phase 1 contracts, not new design requirements.
-
-| Finding | Evidence and material consequence | Smallest required correction and oracle | Owner |
-| --- | --- | --- | --- |
-| M1 — sparse policy changes at serialization | On `fce8016`, a run with GPU-only accounting and stage `{enforce: []}` resolves GPU-only before `RunOptions.to_dict/from_dict`, but resolves `account_for: all` afterwards. `ResourcePolicy(enforce=[])` also eagerly fills the omitted axis, and `StageRuntimeOptions.to_dict` loses axis presence. | Preserve omission inside the one policy value until new-invocation composition; exact typed and mapping save/load/profile paths must retain independent inheritance. Reject non-list plain-data selectors and explicit null. | Refiner |
-| M2 — saved worker selection is optional and not authoritative | `StageWorkerRequest` checks optional `metadata.resource_selection` and returns early if absent; the approved location is required post-demand `resolved_runtime`. Managed replay checks only identity, not equality to saved placement. Worker execution reconstruction currently discards saved policy/demand. | Carry the saved full demand/policy/selection through the exact runtime mapping, validate at current worker/resident/SLURM codecs, compare retained local and SLURM requests to authoritative placement, and consume without fresh defaults. Add the required old-writer and mismatch integrations, not only version-constant edits. | Refiner |
-| M3 — managed/no-resource execution does not consume policy | `_managed_local._worker_environment` and remote launch unconditionally merge every provider binding; native serial ignores unsupported selected controls; the resident bundle rejects empty claims although accounted demand can now be empty. | Select actual job bindings from admitted selection, preserve claims/renewal/release and separate readiness probes, fail unsupported selected controls before application, and support account-none without a hidden resource claim while retaining assignment/lifecycle ownership. Cover actual local/remote environment, empty-accounting lifecycle and unchanged probe behavior. | Refiner |
-| M4 — direct control support/semantics still diverge | Public Docker capability validation rejects GPU demand even with `enforce: []`; Apptainer's public builder validates only selected CPU/RAM and ignores explicitly selected unsupported kinds/GPU applicability. Builders reselect rather than consume a prepared projection and omit policy/selection command evidence. | Use the composed policy and full effective demand at existing mapping owners, validate full canonical semantics independently of selected representability, honor saved selection, reject only selected unsupported controls, preserve driver access versus binding and all supported SLURM allocation/inner-control boundaries. Add public builder, capability/preflight and direct-route oracles. | Manager |
-| M5 — control receipts overstate application | Container helpers infer controls by scanning all argv, call any non-null outer process result applied, and label `--nv` as GPU control. Known creation failure and payload arguments can therefore fabricate application; current SLURM/managed evidence is missing. | Produce the approved common shape from actual mapping/launch facts, keep setup failure failed or uncertain requested, never treat driver access as binding/isolation, report absent demand and delegated/inner-none honestly, and preserve existing structured failure context. Add fake setup/application failure and metadata/inspection comparisons. | Manager; refiner supplies managed binding facts |
-
-The manager reproduced M1 and Docker's M4 through read-only public API calls and
-verified M2/M3/M5 against the current reachable preparation/launch owners. All
-18 summary skips were verified from JUnit as opt-in container acceptance. Both
-final gates must cover the corrected stable implementation; earlier green
-evidence remains an initial-delivery receipt only.
-
-### Refiner Correction Receipt
-
-The refiner correction preserves sparse policy axes through typed and mapping
-round trips, rejects non-list authored selectors, carries the exact post-demand
-policy, full demand and selection in `resolved_runtime`, and validates worker
-replay. Managed local and remote worker environments apply provider bindings
-only for selected enforcement kinds. Empty claim commands are now admitted by
-the existing assignment, reservation, activation and resident-bundle paths;
-their lifecycle evidence remains the same assignment/fence record rather than
-a synthetic reservation. Focused policy, worker, journal and resident slices
-returned 69 passing tests. Manager integration evidence and remaining blockers
-below supersede the refiner's partial completion claim.
-
-### Remaining Blockers And Proposed Targeted Amendment
-
-1. **No-claim offer freshness is still incorrect.** The new sequential local
-   test runs and releases `preprocess`, with retained `claims_json` exactly
-   `{"commands":[]}`, then leaves `train` READY and the admission WAITING.
-   The coordinator has one released assignment and a consumed current offer.
-   `SQLiteCoordinatorAssignments.publish_offer` rejects another offer with the
-   unchanged provider availability revision. Since no claim was acquired or
-   released, the provider correctly did not change that revision. This is not
-   unavailable hardware or an insufficient test timeout. Empty receipt guards
-   have been removed, and remote single-stage account-none now passes; extending
-   a timeout or inventing a CPU claim cannot fix sequential ownership.
-
-   Required remedy: explicitly separate assignment/run-concurrency ownership
-   from capacity-offer consumption for empty accounted demand. Reuse only current,
-   unchanged validated capacity evidence where no capacity was consumed; preserve
-   stale-offer rejection, fencing, unknown-work withholding, cancellation and
-   ordinary resource-consuming reservations. Do not fabricate a provider revision
-   or add a hidden resource claim. Lock the exact replay/CAS rule in the amendment
-   before another implementation pass, retaining the failing two-stage test.
-
-2. **Retained worker consistency is not yet authoritative.** New preparation
-   joins placement demand/policy/selection, and worker codecs check their internal
-   consistency. However, the retained-worker branches in local daemon `_execute`
-   and `_dispatch_slurm_ready` still compare identity only. A saved worker can be
-   self-consistent but disagree with authoritative placement. Compare saved full
-   demand, concrete policy and selection to that placement before launch/delivery;
-   preserve bytes and add actual retained-file mismatch tests for both routes.
-   This remains an original M2 obligation, not a new acceptance criterion.
-
-3. **Managed receipts and failure transport need an explicit carrier contract.**
-   `_RemoteExecutionReport` has a closed schema-1 field set without executor
-   metadata or a structured failure. `_ResidentAssignmentWorkspace.retain_outputs`
-   replaces the underlying failure message with `resident stage execution failed`.
-   Agent-local `resource_controls` alone cannot satisfy coordinator/client
-   inspection or actionable selected-control failures. The retained supervisor
-   launch also has a closed field set without a metadata slot. No speculative
-   changes to those formats were retained in this checkpoint.
-
-   Required amendment: name the existing structured-failure representation and
-   bounded control-record carrier through launch, report, coordinator storage and
-   inspection; explicitly review version/reader rules and old report digest/replay
-   preservation. Old evidence remains unreported, never silently upgraded. Keep
-   control records free of raw bindings/lease capabilities. Resolve how detailed
-   failure context crosses the report's current path-free trust boundary; do not
-   introduce an ad hoc resource-only exception-string escape hatch.
-
-4. **Unavailable managed controls need truthful no-start completion.** The
-   provider binding owner runs after activation/grant. It currently ignores a
-   selected kind with no claim or an empty provider contribution. Simply raising
-   there would leave ownership unsettled: ordinary resident result persistence
-   requires STARTED, while its existing no-start path accepts cancellation only.
-   Preserve the active-claim requirement of GPU binding; do not eagerly call
-   providers before activation. Extend existing definitive no-start failure proof
-   through local/remote terminal completion and release, preserving nested cause
-   and remediation. Never call an indeterminate launch a known failure or invent
-   a process-start event. This is the unresolved M3/M5 integration, not permission
-   for a new scheduler or lifecycle store.
+| Source | `49799dc5558c68520b1bd3285477989631ee14c9` against published develop `998b07c`; later lifecycle metadata edits do not invalidate this source receipt |
+| Implementation | Independent pipeline accounting/enforcement; exact managed/worker handoffs; no-claim offer reuse; portable native/reported failures and truthful control/no-start evidence; bounded authenticated transport; immutable private delayed-SLURM resource preparation; dependency-neutral capture |
+| Targeted evidence | Latest capture, executor, bounded report, delayed handoff, CLI and adjacent continuation selection: 115 passed (`capture-and-handoff-after.xml`) |
+| Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,096 passed / 2 skipped / 156 deselected (1,004.93s), config-extra 162 passed / 18 skipped / 3,101 deselected (155.99s), sdist and wheel builds |
+| Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 424, e2e 70, config-extra 162; total 3,260 passed, no failures/errors, 18 opt-in skips (1,464.45s). Generated 2026-09-09T13:08:09Z |
+| Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-complete.log,test-summary-complete.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
+| PR, review, merge | Manager pre-submit passed; PR and required independent entire-diff review pending. No remote merge claimed |
+| Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Preserve worktree and evidence until merge; Phase 2 and Stage 81 physical continuation excluded |
 
 ## Approved Recovery Amendment
 
@@ -639,76 +550,6 @@ retaining WARN and strict-exit checks; both pass (`optional-policy-expectations.
 failed-gate evidence. Source remains `29292c8`; only those test expectations and
 current phase status change afterward. The phase worktree and logs are retained;
 no PR, full-diff review, merge, physical execution or cleanup was attempted.
-
-Current full-gate evidence: repository-wide lint and Pyright passed after test-only
-type narrowing, but default tests failed/interrupted with 681 passed, 8 failed,
-2 skipped and 156 deselected. The runner stalled at guarded recovery's cycle-lock
-acquisition and was interrupted after its worker had finished. The isolated
-cancellation variant passed (1 passed, 2 deselected); that does not establish the
-cause or resolve the wider-run stall. Logs are retained in
-`build/resource-policy-checkpoint/validate-pr-current.log` and
-`recovery-lock-diagnostic.log`. The local-daemon production file completed with
-62 passed and one stale lost-worker metadata assertion; all three guarded-recovery
-cases passed. That assertion now checks the complete new control record, retaining
-the containment/no-output/no-retry checks. The isolated no-extra environment then
-reproduced the cancelled-recovery stall and exited 139 during its native thread
-dump. Its partial evidence is in `local-daemon-isolated.log`; the orphaned test
-supervisor was stopped through its authenticated shutdown operation, preserving
-files. The bounded Python-level diagnostic then reproduced the stall without a
-native crash: 38 cases passed before interruption, with snapshots showing operator
-recovery waiting for the cycle lock while failed retained-assignment replay
-repeatedly rescheduled itself (`local-daemon-python-diagnostic.log`).
-
-The same open manager correction addresses two existing Phase 1 integration
-owners found by that gate. Capability checking now resolves all configured stages
-together, avoiding false unknown-stage errors; selected-control/default metadata
-expectations match the accepted empty-enforcement behavior. The affected contract,
-capability, fake-Apptainer and CLI selection passed 21 tests. Delayed SLURM afterok
-worker preparation now records the selection from retained full demand and explicit
-resolved policy before first worker creation. Saved worker replay is unchanged;
-missing legacy policy fails with pinned-runtime/fresh-identity guidance, without
-rewriting saved runtime. The complete afterok integration file passed 5 tests
-(`continuation-correction.xml`), including default, selected and legacy cases.
-The adjacent prepared/stage-job unit, integration and CLI consumers passed 18
-tests (`continuation-consumers.xml`). These checks cover multi-stage composition,
-truthful default diagnostics and the real delayed worker-request writer; a failing
-adjacent producer or lifecycle test expands the selection. They are not a fresh
-full gate and cannot resolve the transport finding. Independent review, PR and
-merge remain unstarted.
-
-An actual-daemon R4 check established an additional wrapper gap: after the real
-assignment task persisted/released a no-start failure, `_execute` kept waiting for
-an impossible process-start notification while holding the scheduling cycle.
-The lower-level saga tests did not cover this waiter. Two new daemon cases (CPU
-accounting and no accounting) fail before the correction and pass after it; the
-observer bounds repeated waiting on an already completed real future without
-inventing a start event. `_execute` now propagates a completed future's exception
-or returns without a start, allowing the next cycle to project terminal truth.
-No lifecycle state, claim-release rule or process-start proof changes. Both cases,
-the lost-worker containment case and background-observer replay passed (4;
-`no-start-daemon-after.xml`), with the red receipt retained in
-`no-start-daemon-before.xml`. This is an R4 completion-path correction, not evidence
-that it caused or resolved the separate guarded-recovery stall.
-
-The recovery snapshots identify a separate failed-replay self-wake loop. Each failed
-reconciliation future immediately woke the next cycle, bypassing the configured
-poll wait and starving operator access to the cycle lock. The actual background
-replay test now observes that wake at its second injected query failure: it fails
-before the correction (`replay-wake-before.xml`). Failed replay now awaits the
-existing poll; successful replay still wakes immediately. No timer, lifecycle
-state, recovery policy or claim-release behavior changes. Replay, all three guarded
-recovery outcomes and both no-start cases pass (6; `replay-wake-after.xml`). The
-complete production-file rerun in the isolated no-extra environment passes all
-65 tests without skips (`local-daemon-isolated-after.xml`, 196.06 seconds); guarded
-recovery cases finish in approximately 3.3–3.6 seconds. This resolves the reproduced
-retry-wake starvation finding without claiming a fresh repository-wide gate.
-Changed-file Ruff, Pyright and diff checks pass. No diagnostic runner remains live.
-
-Continuation is approved through the targeted transport review and existing
-manager correction. Integration and lifecycle results are retained evidence, not
-a full-gate claim. After the transport checks, run fresh full gates, perform the
-required independent full Phase 1 review, then submit and merge only if all gates
-pass. Phase 2 and physical Stage 81 execution remain outside this recovery scope.
 
 ### R1 — Canonical Offer Reuse
 

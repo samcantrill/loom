@@ -1,21 +1,17 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; approved Phase 1 delayed-SLURM amendment in validation
+Status: in_progress; Phase 1 full validation passed, PR and independent review pending
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: no known targeted runtime failure remains. The previously failing
-delayed-SLURM route now reads an immutable private resource handoff rather than
-lossy display summaries. Its approved startup review passed at `c5b23a7`; targeted
-afterok/continuation and CLI preparation checks pass. Fresh full validation,
-independent full-diff review and PR submission remain incomplete. Earlier failed
-full-gate receipts remain historical evidence, not passing merge evidence.
-The capture projector now has a private serialization owner, preserving the
-diagnostic API/format while keeping execution imports below diagnostics. The
-combined capture/handoff/CLI/continuation selection passes 115 checks. Interrupted
-gates at `ecfeb46` are superseded only by fresh full gates after that correction.
+Blockers: none known. Source `49799dc` passes both required full gates against
+unchanged published develop `998b07c`: default 3,096 passed, config-extra 162 passed,
+repository Ruff/Pyright and builds; separate suite summary 3,260 passed, zero
+failures/errors, 18 opt-in skips. The phase Completion Record owns detailed evidence.
+Manager pre-submit passed. PR submission and independent entire-diff review remain
+required before merge; previous failed/interrupted receipts are superseded.
 
 ## Summary
 
@@ -145,5 +141,5 @@ gates at `ecfeb46` are superseded only by fresh full gates after that correction
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`; approved private delayed resource handoff implemented with targeted evidence. Fresh full gates, full-diff independent review and PR remain pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; full-diff independent review and PR pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
