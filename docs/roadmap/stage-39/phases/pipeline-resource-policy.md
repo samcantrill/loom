@@ -2,8 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; final local validation complete, with manager pre-submit
-  and independent review pending
+- Status: blocked; local implementation checkpoint saved, not PR-ready
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -14,7 +13,8 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: none
+- Blockers: no-claim offer freshness, authoritative retained-worker comparison,
+  and managed control/failure transport and known-no-start completion (see below)
 
 ## Objective And Context
 
@@ -236,24 +236,26 @@ gate/review/merge ownership follows the canonical phase workflow.
 - Additional phase planning: not needed; current contracts and upstream join are explicit
 - Implementation: initial executor delivery at `fce8016`; manager pre-submit found
   unmet fixed contracts below, so completion is not accepted
-- Refiner: one scoped correction of policy composition/retained handoff and managed
-  launch consumption is assigned; manager owns the separate direct-control/evidence correction
-- Pre-submit: blocked by the qualified findings below; no PR opened
+- Refiner: correction `1198c1a` and related repair `68a37ad` returned;
+  manager verified the changes and added discriminating integration coverage
+- Pre-submit: blocked by the remaining findings below; no PR opened or pushed
 - Independent implementation review: not started
-- Blocker corrections: 1/3 assigned (the one refiner pass); manager direct-control
-  correction will be the second pass, not an expansion of acceptance
+- Blocker corrections: conservatively counted as 3/3 consumed: refiner correction,
+  its separately returned repair, and manager correction `6474206`. Do not reset
+  the budget by relabelling further work. Resume through a reviewed targeted
+  amendment with explicit recovery scope, not another unbounded correction.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Initial policy/profile, placement, schema-version and container changes are committed; manager verification found that sparse round-trip, authoritative worker selection, managed binding selection, capability behavior and control evidence remain incomplete. See the required corrections below; the initial delivery is not accepted as Phase 1 complete. |
-| Tests added or updated | Initial focused tests and maintained suites pass, but the required old-writer SLURM integration, saved-selection mismatch, actual local/remote binding-none lease lifecycle and several public policy/control boundary oracles were not added. Existing green suites do not establish those contracts. |
-| Validated revision/tree state and evidence | Source/test tree `fce80162e49d60ae6f4f6cb093260f3d300d19df` passed the targeted policy, admission/handoff, container-command, capability, and preflight slices during implementation. Fresh `make validate-pr` passed Ruff, Pyright (0 errors), default (3,023 passed; 155 deselected), config-extra (161 passed; 18 expected skips; 3,026 deselected), and source/wheel builds. Fresh `make test-summary` passed package 123, unit 2,153, contract 300, integration 379, E2E 68, and config-extra 161 tests, with zero failures/errors and the same 18 expected skips. |
-| Validation-relevant changes after evidence | None. This completion record is documentation-only evidence metadata. |
-| PR, review, and merge | Pending manager pre-submit checks and required independent implementation review; no PR was prepared or pushed by the executor. |
-| Residual risk and cleanup | The seven `LOOM_RUN_*` physical container/GPU/SIF/live-SLURM acceptance switches were unset, so no physical execution was authorized; the 18 config-extra physical acceptance skips are expected. Fake-command coverage proves selection and evidence plumbing, not host isolation or a live scheduler. Phase 2 whole-run policy/provider work remains unchanged; phase worktree remains active. |
+| Implementation and changed paths | Checkpoint `6474206` adds full-intent container validation, saved-selection-aware builders, selection-aware capability/preflight, truthful direct-container launch receipts, native unsupported-control rejection, and direct handoff finalization after container/runtime precedence. Refiner commits preserve sparse axes and worker policy/selection, gate provider bindings, and begin empty-claim lifecycle support. This is not a complete Phase 1 implementation. |
+| Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Passing cases include selected versus unselected GPU binding with retained claims/release, and two remote no-claim jobs. The remaining failure is the sequential local no-claim pipeline below. Ruff, Pyright and diff checks pass. |
+| Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
+| Full gates | Initial full receipts at `fce8016` are stale after implementation changes. Neither `make validate-pr` nor `make test-summary` is claimed for `6474206`; both must run on the final corrected stable tree. |
+| PR, review, and merge | Blocked before submission. Required independent implementation review has not run. No PR, push or merge occurred. |
+| Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
 ### Manager Pre-Submit Corrections
 
@@ -283,5 +285,71 @@ only for selected enforcement kinds. Empty claim commands are now admitted by
 the existing assignment, reservation, activation and resident-bundle paths;
 their lifecycle evidence remains the same assignment/fence record rather than
 a synthetic reservation. Focused policy, worker, journal and resident slices
-were rerun after the correction; the required end-to-end account-none and
-old-writer SLURM delivery integrations remain required final-gate evidence.
+returned 69 passing tests. Manager integration evidence and remaining blockers
+below supersede the refiner's partial completion claim.
+
+### Remaining Blockers And Proposed Targeted Amendment
+
+1. **No-claim offer freshness is still incorrect.** The new sequential local
+   test runs and releases `preprocess`, with retained `claims_json` exactly
+   `{"commands":[]}`, then leaves `train` READY and the admission WAITING.
+   The coordinator has one released assignment and a consumed current offer.
+   `SQLiteCoordinatorAssignments.publish_offer` rejects another offer with the
+   unchanged provider availability revision. Since no claim was acquired or
+   released, the provider correctly did not change that revision. This is not
+   unavailable hardware or an insufficient test timeout. Empty receipt guards
+   have been removed, and remote single-stage account-none now passes; extending
+   a timeout or inventing a CPU claim cannot fix sequential ownership.
+
+   Required remedy: explicitly separate assignment/run-concurrency ownership
+   from capacity-offer consumption for empty accounted demand. Reuse only current,
+   unchanged validated capacity evidence where no capacity was consumed; preserve
+   stale-offer rejection, fencing, unknown-work withholding, cancellation and
+   ordinary resource-consuming reservations. Do not fabricate a provider revision
+   or add a hidden resource claim. Lock the exact replay/CAS rule in the amendment
+   before another implementation pass, retaining the failing two-stage test.
+
+2. **Retained worker consistency is not yet authoritative.** New preparation
+   joins placement demand/policy/selection, and worker codecs check their internal
+   consistency. However, the retained-worker branches in local daemon `_execute`
+   and `_dispatch_slurm_ready` still compare identity only. A saved worker can be
+   self-consistent but disagree with authoritative placement. Compare saved full
+   demand, concrete policy and selection to that placement before launch/delivery;
+   preserve bytes and add actual retained-file mismatch tests for both routes.
+   This remains an original M2 obligation, not a new acceptance criterion.
+
+3. **Managed receipts and failure transport need an explicit carrier contract.**
+   `_RemoteExecutionReport` has a closed schema-1 field set without executor
+   metadata or a structured failure. `_ResidentAssignmentWorkspace.retain_outputs`
+   replaces the underlying failure message with `resident stage execution failed`.
+   Agent-local `resource_controls` alone cannot satisfy coordinator/client
+   inspection or actionable selected-control failures. The retained supervisor
+   launch also has a closed field set without a metadata slot. No speculative
+   changes to those formats were retained in this checkpoint.
+
+   Required amendment: name the existing structured-failure representation and
+   bounded control-record carrier through launch, report, coordinator storage and
+   inspection; explicitly review version/reader rules and old report digest/replay
+   preservation. Old evidence remains unreported, never silently upgraded. Keep
+   control records free of raw bindings/lease capabilities. Resolve how detailed
+   failure context crosses the report's current path-free trust boundary; do not
+   introduce an ad hoc resource-only exception-string escape hatch.
+
+4. **Unavailable managed controls need truthful no-start completion.** The
+   provider binding owner runs after activation/grant. It currently ignores a
+   selected kind with no claim or an empty provider contribution. Simply raising
+   there would leave ownership unsettled: ordinary resident result persistence
+   requires STARTED, while its existing no-start path accepts cancellation only.
+   Preserve the active-claim requirement of GPU binding; do not eagerly call
+   providers before activation. Extend existing definitive no-start failure proof
+   through local/remote terminal completion and release, preserving nested cause
+   and remediation. Never call an indeterminate launch a known failure or invent
+   a process-start event. This is the unresolved M3/M5 integration, not permission
+   for a new scheduler or lifecycle store.
+
+The recommended recovery is one targeted amendment to this atomic Phase 1 packet,
+followed by independent startup review, explicitly bounded execution, fresh full
+gates and the already-required independent implementation review. The no-extra-
+enforcement default and two-phase ownership split are unchanged. No phase PR may
+open while these accepted obligations remain unmet. Maintainer direction on this
+recovery workflow is required before another correction pass.

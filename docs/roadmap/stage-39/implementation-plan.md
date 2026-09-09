@@ -1,12 +1,13 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: approved; Phase 1 in progress
+Status: blocked; approved Phase 1 has a local implementation checkpoint
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: none
+Blockers: no-claim offer freshness, retained-worker comparison, and managed
+control/failure transport and no-start completion; see Phase 1's remaining blockers
 
 ## Summary
 
@@ -76,7 +77,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -90,10 +91,17 @@ Blockers: none
 - Independent plan review: passed after one qualified cross-machine replay finding.
 - Plan correction: complete; Phase 1 now cuts the independently versioned
   `SlurmStageDelivery` and requires old-writer/current round-trip coverage.
-- Ready for implementation: yes; maintainer approved both phases and their
+- Original implementation approval: maintainer approved both phases and their
   concrete migration rules. Phase 1 starts on published develop `214f242c`;
   its preparation API addition preserves the same runtime owner and is included
-  in the phase's regression obligations. No contract reopening is required.
+  in the phase's regression obligations. That upstream addition did not require
+  contract reopening; the subsequently discovered boundaries below do.
+- Current gate: blocked at local checkpoint `6474206`. Three correction passes
+  are conservatively consumed (including the separately returned refiner repair).
+  A targeted amendment must resolve no-claim offer consumption and the closed
+  remote report/launch and no-start boundaries, retain the outstanding replay
+  comparison obligations, and pass independent startup review before more fixes.
+  No PR, remote merge or Phase 2 start is authorized by a partial checkpoint.
 - Accepted risks: no additional enforcement can expose more host resources than
   reservation bookkeeping suggests; excluded accounting permits oversubscription.
   No claim of isolation. Hard cuts require pinned old environments for old live work.
@@ -106,5 +114,5 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | not started | No physical enforcement proof; whole-run API unchanged until Phase 2 | not applicable |
+| 1 | pending | Local checkpoint `6474206`; targeted 214 unit/contract and 15 fake-SLURM integration tests pass; managed comparisons 5 pass/1 fails; Ruff/Pyright pass; full gates and review pending | No-claim sequential pipeline and remote replay/failure/control boundaries remain incomplete; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
