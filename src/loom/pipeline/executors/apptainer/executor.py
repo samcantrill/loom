@@ -493,7 +493,11 @@ def _prepare_apptainer_attempt(
         adapter_options,
         executor_name=executor_name,
     )
-    resources = cast(ResourceRequest, runtime.resources)
+    full_resources = cast(ResourceRequest, runtime.resources)
+    selected = runtime.resource_policy.select(full_resources.entries)["enforce"]
+    resources = ResourceRequest(
+        entries={key: full_resources.entries[key] for key in selected}
+    )
     apptainer_options = project_apptainer_gpu_options(apptainer_options, resources)
     gpu_visibility = validate_cuda_visibility(
         requested_gpu_count(resources), os.environ
@@ -550,7 +554,11 @@ def _with_runtime_resources(
     runtime: ResolvedStageRuntimeOptions,
     executor_name: str,
 ) -> ContainerOptions:
-    resources = cast(ResourceRequest, runtime.resources)
+    full_resources = cast(ResourceRequest, runtime.resources)
+    selected = runtime.resource_policy.select(full_resources.entries)["enforce"]
+    resources = ResourceRequest(
+        entries={key: full_resources.entries[key] for key in selected}
+    )
     container_resources = container.resources
     if resources.entries:
         descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve(executor_name)

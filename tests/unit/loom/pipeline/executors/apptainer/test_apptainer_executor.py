@@ -15,6 +15,7 @@ from loom.pipeline import (
     StageContext,
     StageFactorySpec,
     StageSpec,
+    ResourcePolicy,
 )
 from loom.pipeline.execution import (
     ExecutionFailure,
@@ -140,6 +141,7 @@ def _request(
         stage_id="build",
         executor=executor_name,
         resources=resources or ResourceRequest(),
+        resource_policy=ResourcePolicy(enforce="all"),
         adapter_options=(
             adapter_options
             if adapter_options is not None

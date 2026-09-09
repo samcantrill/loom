@@ -352,7 +352,11 @@ def _with_runtime_resources(
     container: ContainerOptions,
     runtime: ResolvedStageRuntimeOptions,
 ) -> ContainerOptions:
-    resources = cast(ResourceRequest, runtime.resources)
+    full_resources = cast(ResourceRequest, runtime.resources)
+    selected = runtime.resource_policy.select(full_resources.entries)["enforce"]
+    resources = ResourceRequest(
+        entries={key: full_resources.entries[key] for key in selected}
+    )
     container_resources = container.resources
     if resources.entries:
         descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
