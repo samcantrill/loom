@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -13,29 +15,59 @@ import time
 
 from loom.pipeline.stores import LocalRunStore
 from loom.queue import prepare_managed_local_run
+from loom.queue.deployment import load_coordinator_service_config
 
 
 HERE = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    root = _example_root()
-    config = _write_service_config(root)
-    endpoint = root / "deployment" / "coordinator" / "daemon.sock"
-    _run_cli("queue", "daemon-init", str(config))
-    receipt = prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--coordinator-config", type=Path)
+    parser.add_argument("--env-file", type=Path)
+    arguments = parser.parse_args()
+    if (arguments.coordinator_config is None) != (arguments.env_file is None):
+        parser.error("provide both --coordinator-config and --env-file")
+    if arguments.coordinator_config is None:
+        root = _example_root()
+        config, environment = _copy_role_inputs(root)
+    else:
+        config = arguments.coordinator_config.absolute()
+        environment = arguments.env_file.absolute()
+        root = config.parent
+    service = load_coordinator_service_config(config, env_file=environment)
+    endpoint = service.daemon.endpoint
+    _run_cli("queue", "daemon-check", str(config), "--env-file", str(environment))
+    _run_cli("queue", "daemon-init", str(config), "--env-file", str(environment))
+    receipt = prepare_managed_local_run(
+        config, HERE / "pipeline.yaml", "starter-run", env_file=environment
+    )
     if (
-        prepare_managed_local_run(config, HERE / "pipeline.yaml", "starter-run")
+        prepare_managed_local_run(
+            config, HERE / "pipeline.yaml", "starter-run", env_file=environment
+        )
         != receipt
     ):
         raise RuntimeError("matching preparation replay changed the run identity")
+    _require_passing_io_probe(
+        _run_cli(
+            "queue",
+            "daemon-check",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--probe-io",
+        )
+    )
 
     started_pids: set[int] = set()
-    first = _start_service(config, started_pids)
+    first = _start_service(config, environment, started_pids)
     try:
         started = _wait_for_status(endpoint)
         _observe_service_tree(first.pid, started_pids)
-        cancellation = _run_cancellation(config, endpoint, root / "runs")
+        cancellation = _run_cancellation(
+            config, environment, endpoint, service.daemon.run_store_root
+        )
         submitted = _run_cli(
             "queue",
             "daemon-submit",
@@ -62,12 +94,15 @@ def main() -> None:
             or inspected.get("run_uri") != receipt.run_uri
         ):
             raise RuntimeError("managed-local starter run did not complete and inspect")
-        if _report_text(receipt.run_uri, root / "runs") != "consumed {'value': 42}":
+        if (
+            _report_text(receipt.run_uri, service.daemon.run_store_root)
+            != "consumed {'value': 42}"
+        ):
             raise RuntimeError("managed-local starter artifact contents are unexpected")
     finally:
         _stop_service(first)
 
-    second = _start_service(config, started_pids)
+    second = _start_service(config, environment, started_pids)
     try:
         restarted = _wait_for_status(endpoint)
         _observe_service_tree(second.pid, started_pids)
@@ -99,6 +134,7 @@ def main() -> None:
                 "surfaces": [
                     "cli:inspect-run",
                     "cli:queue daemon-admission",
+                    "cli:queue daemon-check",
                     "cli:queue daemon-init",
                     "cli:queue daemon-serve",
                     "cli:queue daemon-status",
@@ -112,6 +148,7 @@ def main() -> None:
                 "cancellation": cancellation,
                 "capacity_reused": True,
                 "restarted": True,
+                "io_probe": "PASS",
                 "root": str(root),
             },
             sort_keys=True,
@@ -120,10 +157,10 @@ def main() -> None:
 
 
 def _run_cancellation(
-    config: Path, endpoint: Path, run_root: Path
+    config: Path, environment: Path, endpoint: Path, run_root: Path
 ) -> dict[str, object]:
     receipt = prepare_managed_local_run(
-        config, HERE / "pipeline-cancel.yaml", "cancelled-example"
+        config, HERE / "pipeline-cancel.yaml", "cancelled-example", env_file=environment
     )
     submitted = _run_cli(
         "queue",
@@ -185,64 +222,59 @@ def _example_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="managed-local-basic-", dir=output)).resolve()
 
 
-def _write_service_config(root: Path) -> Path:
-    config = root / "coordinator-service.yaml"
-    agent = root / "agent-service.yaml"
-    agent.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "kind": "loom.local-agent-service",
-                "agent_root": "deployment/agent",
-                "resident_profiles": [
-                    {
-                        "descriptor": {
-                            "profile_id": "starter-local",
-                            "revision": "v1",
-                        },
-                        "project_root": str(HERE),
-                        "python_executable": str(Path(sys.executable).absolute()),
-                        "cpu_capacity": 1,
-                        "memory_capacity_bytes": 0,
-                        "gpu_devices": [],
-                        "environment": {},
-                        "readiness": {
-                            "imports": ["loom", "stages"],
-                            "import_roots": {"stages": "."},
-                            "source_roots": ["stages.py"],
-                        },
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+def _copy_role_inputs(root: Path) -> tuple[Path, Path]:
+    """Copy maintained role templates and write this machine's protected values."""
+
+    for name in ("coordinator.yaml", "agent.yaml"):
+        source = HERE / f"{name}.example"
+        destination = root / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+
+    coordinator_environment = root / "coordinator.env"
+    _write_environment(
+        coordinator_environment,
+        {
+            "LOOM_DEPLOYMENT_ROOT": str(root / "deployment"),
+            "LOOM_RUN_STORE_ROOT": str(root / "runs"),
+            "LOOM_MACHINE_ID": "starter-machine",
+        },
     )
-    agent.chmod(0o600)
-    config.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "kind": "loom.coordinator-service",
-                "deployment_root": "deployment",
-                "run_store_root": "runs",
-                "machine_id": "starter-machine",
-                "poll_interval_seconds": 0.01,
-                "max_accepted_time_step_seconds": 60,
-                "local_agent": {"config": "agent-service.yaml", "env_file": None},
-                "remote_profiles": [],
-                "agent_policy": {
-                    "revision": "starter-1",
-                    "agents": [],
-                    "principals": [],
-                },
-                "agent_server": None,
-                "authority": {"kind": "embedded"},
-            }
-        ),
-        encoding="utf-8",
+    _write_environment(
+        root / "agent.env",
+        {
+            "LOOM_AGENT_ROOT": str(root / "deployment" / "agent"),
+            "LOOM_PROJECT_ROOT": str(HERE),
+            "LOOM_PYTHON": str(Path(sys.executable).absolute()),
+        },
     )
-    config.chmod(0o600)
-    return config
+    return root / "coordinator.yaml", coordinator_environment
+
+
+def _write_environment(path: Path, values: dict[str, str]) -> None:
+    lines = (HERE / f"{path.name}.example").read_text(encoding="utf-8").splitlines()
+    remaining = dict(values)
+    for index, line in enumerate(lines):
+        key, separator, _ = line.partition("=")
+        if separator and key in remaining:
+            lines[index] = f"{key}={json.dumps(remaining.pop(key))}"
+    if remaining:
+        raise RuntimeError("role environment template is missing a machine input")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _require_passing_io_probe(report: dict[str, object]) -> None:
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        raise RuntimeError("IO probe report has no checks")
+    io_checks = [
+        check
+        for check in checks
+        if isinstance(check, dict) and check.get("check_id") == "filesystem.io"
+    ]
+    if not io_checks or any(check.get("status") != "PASS" for check in io_checks):
+        raise RuntimeError("copied local role inputs did not pass the IO probe")
 
 
 def _run_cli(*args: str) -> dict[str, object]:
@@ -266,9 +298,20 @@ def _run_cli(*args: str) -> dict[str, object]:
     return payload
 
 
-def _start_service(config: Path, started_pids: set[int]) -> subprocess.Popen[str]:
+def _start_service(
+    config: Path, environment: Path, started_pids: set[int]
+) -> subprocess.Popen[str]:
     process = subprocess.Popen(
-        [_loom_cli(), "queue", "daemon-serve", str(config), "--format", "json"],
+        [
+            _loom_cli(),
+            "queue",
+            "daemon-serve",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--format",
+            "json",
+        ],
         cwd=HERE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

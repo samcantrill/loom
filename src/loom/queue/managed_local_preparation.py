@@ -50,14 +50,18 @@ def prepare_managed_local_run(
     coordinator_config: str | Path,
     pipeline_config: str | Path,
     run_name: str,
+    *,
+    env_file: str | Path | None = None,
 ) -> ManagedLocalPreparationReceipt:
     """Prepare one embedded-local run without starting or submitting work.
 
     A matching complete run is an immutable replay.  Any other existing path is
-    deliberately left untouched so an operator can inspect or remove it.
+    deliberately left untouched so an operator can inspect or remove it. Pass
+    the coordinator's explicit protected ``env_file`` when its role YAML uses
+    environment interpolation.
     """
 
-    service = load_coordinator_service_config(coordinator_config)
+    service = load_coordinator_service_config(coordinator_config, env_file=env_file)
     _validate_embedded_service(service)
     composed = _compose_pipeline_config(pipeline_config)
     resolved = _resolved_mapping(composed)
