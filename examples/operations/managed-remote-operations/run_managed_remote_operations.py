@@ -288,6 +288,7 @@ def _copy_role_inputs(
             "LOOM_DEPLOYMENT_ROOT": str(root / "deployment"),
             "LOOM_RUN_STORE_ROOT": str(root / "runs"),
             "LOOM_MACHINE_ID": "local-machine",
+            "LOOM_AGENT_HOST": "localhost",
             "LOOM_AGENT_PORT": str(port),
             "LOOM_SERVER_CERTIFICATE": str(credentials["server"].with_suffix(".crt")),
             "LOOM_SERVER_PRIVATE_KEY": str(credentials["server"].with_suffix(".key")),
@@ -339,7 +340,16 @@ def _record_observed_remote_profile(
 
 
 def _write_environment(path: Path, values: dict[str, str]) -> None:
-    write_protected(path, "".join(f"{key}={value}\n" for key, value in values.items()))
+    template = Path(__file__).parent / f"{path.name}.example"
+    lines = template.read_text(encoding="utf-8").splitlines()
+    remaining = dict(values)
+    for index, line in enumerate(lines):
+        key, separator, _ = line.partition("=")
+        if separator and key in remaining:
+            lines[index] = f"{key}={json.dumps(remaining.pop(key))}"
+    if remaining:
+        raise RuntimeError("role environment template is missing a machine input")
+    write_protected(path, "\n".join(lines) + "\n")
 
 
 def _prepare_remote_cpu_run(coordinator_config: Path, environment: Path):

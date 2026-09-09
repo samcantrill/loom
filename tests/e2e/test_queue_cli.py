@@ -71,24 +71,68 @@ def _run_operation_journey(
 
 def _run_copied_operation_journey(
     example: str, output_root: Path
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], ResidentProfileDescriptor]:
+    from dotenv import set_key
+    from loom.queue.deployment import load_coordinator_service_config
+
     source = REPO_ROOT / "examples" / "operations" / example
-    copied_root = Path(tempfile.mkdtemp(prefix=f"copied-{example}-", dir=output_root))
+    copied_root = Path(tempfile.mkdtemp(prefix="m-", dir=output_root))
     copied = copied_root / "project"
     shutil.copytree(source, copied)
+    for name in ("coordinator.yaml", "coordinator.env", "agent.yaml", "agent.env"):
+        shutil.copyfile(copied / f"{name}.example", copied_root / name)
+        (copied_root / name).chmod(0o600)
+    for role, values in {
+        "coordinator": {
+            "LOOM_DEPLOYMENT_ROOT": str(copied_root / "deployment"),
+            "LOOM_RUN_STORE_ROOT": str(copied_root / "runs"),
+            "LOOM_MACHINE_ID": copied_root.name,
+        },
+        "agent": {
+            "LOOM_AGENT_ROOT": str(copied_root / "deployment" / "agent"),
+            "LOOM_PROJECT_ROOT": str(copied),
+            "LOOM_PYTHON": sys.executable,
+        },
+    }.items():
+        for key, value in values.items():
+            set_key(copied_root / f"{role}.env", key, value)
+    inputs = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in copied_root.iterdir()
+        if path.is_file()
+    }
     script = copied / f"run_{example.replace('-', '_')}.py"
-    return subprocess.run(
-        [sys.executable, str(script)],
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--coordinator-config",
+            str(copied_root / "coordinator.yaml"),
+            "--env-file",
+            str(copied_root / "coordinator.env"),
+        ],
         cwd=copied,
         capture_output=True,
         text=True,
         check=False,
         env={
             **os.environ,
-            "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root),
+            "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root / "unused-demo-root"),
             "PYTHONPATH": str(REPO_ROOT / "src"),
         },
     )
+    assert not (output_root / "unused-demo-root").exists()
+    assert all(
+        (path.read_bytes(), path.stat().st_mtime_ns) == before
+        for path, before in inputs.items()
+    )
+    service = load_coordinator_service_config(
+        copied_root / "coordinator.yaml", env_file=copied_root / "coordinator.env"
+    )
+    assert service.local_agent is not None
+    assert service.local_agent.profile.project_root == copied
+    assert service.local_agent.profile.python_executable == Path(sys.executable)
+    return result, service.local_agent.profile.descriptor
 
 
 def _assert_manifest_claims_match_journey(
@@ -515,8 +559,12 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
     with tempfile.TemporaryDirectory(prefix="loom-local-e2e-") as output:
         output_root = Path(output)
         roots: set[Path] = set()
+        identities: set[ResidentProfileDescriptor] = set()
         for _ in range(2):
-            result = _run_copied_operation_journey("managed-local-basic", output_root)
+            result, descriptor = _run_copied_operation_journey(
+                "managed-local-basic", output_root
+            )
+            identities.add(descriptor)
             journey = _assert_manifest_claims_match_journey(
                 "managed-local-basic", result
             )
@@ -551,3 +599,4 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
                 assert (root / name).stat().st_mode & 0o777 == 0o600
             assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
         assert len(roots) == 2
+        assert len(identities) == 1

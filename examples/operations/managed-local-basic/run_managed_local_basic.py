@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -14,15 +15,28 @@ import time
 
 from loom.pipeline.stores import LocalRunStore
 from loom.queue import prepare_managed_local_run
+from loom.queue.deployment import load_coordinator_service_config
 
 
 HERE = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    root = _example_root()
-    config, environment = _copy_role_inputs(root)
-    endpoint = root / "deployment" / "coordinator" / "daemon.sock"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--coordinator-config", type=Path)
+    parser.add_argument("--env-file", type=Path)
+    arguments = parser.parse_args()
+    if (arguments.coordinator_config is None) != (arguments.env_file is None):
+        parser.error("provide both --coordinator-config and --env-file")
+    if arguments.coordinator_config is None:
+        root = _example_root()
+        config, environment = _copy_role_inputs(root)
+    else:
+        config = arguments.coordinator_config.absolute()
+        environment = arguments.env_file.absolute()
+        root = config.parent
+    service = load_coordinator_service_config(config, env_file=environment)
+    endpoint = service.daemon.endpoint
     _run_cli("queue", "daemon-check", str(config), "--env-file", str(environment))
     _run_cli("queue", "daemon-init", str(config), "--env-file", str(environment))
     receipt = prepare_managed_local_run(
@@ -77,7 +91,10 @@ def main() -> None:
             or inspected.get("run_uri") != receipt.run_uri
         ):
             raise RuntimeError("managed-local starter run did not complete and inspect")
-        if _report_text(receipt.run_uri, root / "runs") != "consumed {'value': 42}":
+        if (
+            _report_text(receipt.run_uri, service.daemon.run_store_root)
+            != "consumed {'value': 42}"
+        ):
             raise RuntimeError("managed-local starter artifact contents are unexpected")
     finally:
         _stop_service(first)
@@ -170,9 +187,15 @@ def _copy_role_inputs(root: Path) -> tuple[Path, Path]:
 
 
 def _write_environment(path: Path, values: dict[str, str]) -> None:
-    path.write_text(
-        "".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8"
-    )
+    lines = (HERE / f"{path.name}.example").read_text(encoding="utf-8").splitlines()
+    remaining = dict(values)
+    for index, line in enumerate(lines):
+        key, separator, _ = line.partition("=")
+        if separator and key in remaining:
+            lines[index] = f"{key}={json.dumps(remaining.pop(key))}"
+    if remaining:
+        raise RuntimeError("role environment template is missing a machine input")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     path.chmod(0o600)
 
 

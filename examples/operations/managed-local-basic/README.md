@@ -23,20 +23,30 @@ setting `LOOM_PYTHON`:
 ```sh
 # Choose one installation style; both install Loom into the selected environment.
 cd /work/loom
-uv venv .venv
-uv pip install -e .
-# Or: python3.12 -m venv .venv && .venv/bin/python -m pip install -e .
+uv sync --locked --no-dev --extra config
+. .venv/bin/activate
+# Alternatively, using pip from a Python 3.12 virtualenv:
+# python3.12 -m venv .venv
+# . .venv/bin/activate
+# python -m pip install 'weave @ git+https://github.com/samcantrill/weave.git@388377b61cffbb225057082365f03cb0738996fd'
+# python -m pip install -e '.[config]'
 ```
 
-Run the lifecycle runner from the copied directory:
+Return to the copied example directory with that environment activated. The
+`LOOM_PROJECT_ROOT` value in `agent.env` is this directory (containing `stages.py`),
+while `LOOM_PYTHON` is the environment's absolute `.venv/bin/python` path. The env
+files are inputs to Loom's loader; they are not shell scripts to source.
+
+Run the lifecycle runner using the role files you just edited:
 
 ```sh
-python run_managed_local_basic.py
+python run_managed_local_basic.py --coordinator-config coordinator.yaml --env-file coordinator.env
 ```
 
-The runner copies the maintained schema-v3 coordinator and referenced local-agent
-templates into a fresh output root, writes protected machine env files, checks
-the selected installation, and derives its software descriptor. It initializes
+The runner uses those files without rewriting them, checks the selected
+installation, and derives its software descriptor. For an automatic disposable
+demo, omit both flags: it copies all four templates and fills in a fresh root
+and the current Python for you. It initializes
 once with `loom queue daemon-init` and calls `prepare_managed_local_run` for
 `starter-run`. Preparation persists the normal
 run evidence and embedded authority, but never starts the daemon or submits
@@ -67,14 +77,17 @@ TLS, SLURM, content-relay, or process-manager installation example. For those
 advanced routes, see `managed-remote-operations` and
 `managed-ready-stage-slurm`.
 
-For an operator-run lifecycle, use the same explicit inputs for every command:
+To practice each operation separately, use fresh roots in your env files
+instead of roots already initialized by the runner. Stay in the copied project
+with the selected environment activated in every terminal. These commands use
+the same role files:
 
 ```sh
 loom queue daemon-check coordinator.yaml --env-file coordinator.env
 loom queue daemon-init coordinator.yaml --env-file coordinator.env
 # Use the LOOM_DEPLOYMENT_ROOT value in coordinator.env.
 LOOM_ENDPOINT=/secure/loom/managed-local/deployment/coordinator/daemon.sock
-"$LOOM_PYTHON" - <<'PY'
+python - <<'PY'
 from loom.queue import prepare_managed_local_run
 
 receipt = prepare_managed_local_run(
@@ -82,17 +95,37 @@ receipt = prepare_managed_local_run(
 )
 print(receipt.run_uri)
 PY
-# Set RUN_URI to the printed value, then serve in a separate terminal.
+# Set RUN_URI to the printed value.
 loom queue daemon-check coordinator.yaml --env-file coordinator.env --probe-io
+```
+
+In terminal A, leave the service running in the foreground:
+
+```sh
 loom queue daemon-serve coordinator.yaml --env-file coordinator.env
+```
+
+In terminal B, set `LOOM_ENDPOINT` and `RUN_URI` as above, then:
+
+```sh
 loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" starter-run "$RUN_URI"
 loom queue daemon-status --endpoint "$LOOM_ENDPOINT"
 loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" starter-run --timeout 15
 loom inspect-run "$RUN_URI" --endpoint "$LOOM_ENDPOINT"
-loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT" starter-run
 # Stop the service and repeat daemon-serve with the same protected inputs to restart.
 ```
 
+For cancellation practice, issue `loom queue daemon-cancel --endpoint
+"$LOOM_ENDPOINT" starter-run` after submitting and before waiting. This tiny job
+may finish first; an already terminal run stays terminal. A cancellation request
+is not proof that its worker stopped or that capacity is free. Wait and inspect
+the resulting state. Stop terminal A with Ctrl-C, then run the same serve command
+to practice restarting with retained state.
+
+The IO probe creates and removes a small file under the configured execution
+roots. A passing result qualifies that test directory's operation, not another
+filesystem. The CPU example declares one CPU and zero GPUs; readiness reports
+declared capacity separately from hardware observations.
 
 Optional GPU qualification is a maintenance operation. After initializing a GPU
 agent with a declared Torch runtime, and before starting its owning service, run

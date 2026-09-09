@@ -18,16 +18,24 @@ environment style is supported and Loom never creates or updates it while
 checking or running a stage:
 
 ```sh
-# From the selected project checkout, choose one installation style.
-uv venv .venv
-uv pip install -e .
-# Or: python3.12 -m venv .venv && .venv/bin/python -m pip install -e .
+# From the Loom checkout (not this example subdirectory), choose one style.
+uv sync --locked --no-dev --extra config
+. .venv/bin/activate
+# Alternatively, using pip from a Python 3.12 virtualenv:
+# python3.12 -m venv .venv
+# . .venv/bin/activate
+# python -m pip install 'weave @ git+https://github.com/samcantrill/weave.git@388377b61cffbb225057082365f03cb0738996fd'
+# python -m pip install -e '.[config]'
 ```
 
-Run the complete local demonstration from the repository root:
+The automatic demo below creates a fresh temporary deployment; it does not use
+previously edited machine files. It runs a CPU stage, verifies its report in the
+agent's assignment artifacts, exercises authenticated drain/resume, and shuts
+down both services. It needs OpenSSL for disposable localhost certificates.
+Run it from the repository root:
 
 ```sh
-uv run python examples/operations/managed-remote-operations/run_managed_remote_operations.py
+uv run --locked --extra config python examples/operations/managed-remote-operations/run_managed_remote_operations.py
 ```
 
 The script generates a one-use CA and server/agent certificates, copies
@@ -51,13 +59,39 @@ The generated credentials are for this localhost journey only. The example
 stops both services with their supported interrupt path and fails if either
 service or any supervised child remains alive.
 
-For a manually copied deployment, enroll observations before starting either
-service. `agent-check` reports the complete `execution.identity` descriptor;
+For the manual route, return to this example directory with the selected
+environment activated. Set `LOOM_PROJECT_ROOT` to the directory containing this
+example's `stages.py`; use the same source and compatible installation on the
+agent machine. The coordinator needs Loom's configuration extra for preparation,
+but no CPU/GPU execution capacity. Supply existing TLS certificates/keys for your
+hosts and protect their files. `LOOM_AGENT_HOST=localhost` listens only on the
+coordinator machine; set an appropriate bind address and matching trusted server
+URL/certificate for a separate host. No second physical host is qualified by the
+localhost demo.
+
+Enroll observations before starting either service. `agent-check` reports the complete `execution.identity` descriptor;
 copy that exact five-field object into the protected coordinator YAML's
 `remote_profiles` list. Put the SHA-256 fingerprint of the protected agent
 certificate in its `agent_server.credential_fingerprints` mapping with value
 `remote-agent-certificate`. These are observed compatibility and TLS identity
-facts, not placeholders to author into the shared templates.
+facts, not placeholders to author into the shared templates. To print the exact
+lowercase SHA-256 key for an existing PEM certificate:
+
+```sh
+python - /secure/loom/tls/agent.crt <<'PY'
+import hashlib
+from pathlib import Path
+import ssl
+import sys
+
+print(hashlib.sha256(ssl.PEM_cert_to_DER_cert(Path(sys.argv[1]).read_text())).hexdigest())
+PY
+```
+
+Use `agent-check agent.yaml --env-file agent.env --format json` for the full
+observed descriptor in the `execution.identity` check. Edit only the protected
+coordinator copy to enroll that descriptor and certificate; shared templates
+retain empty observation slots.
 
 The central discover-then-control flow is:
 
@@ -83,18 +117,27 @@ loom queue daemon-check coordinator.yaml --env-file coordinator.env
 loom queue daemon-init coordinator.yaml --env-file coordinator.env
 loom queue agent-init agent.yaml --env-file agent.env
 loom queue agent-check agent.yaml --env-file agent.env --probe-io
+```
+
+Run each foreground service in its own terminal (and on its own host for a
+network deployment), using that role's protected files:
+
+```sh
+# Coordinator terminal
 loom queue daemon-serve coordinator.yaml --env-file coordinator.env
+# Separate agent terminal
 loom queue agent-serve agent.yaml --env-file agent.env
 ```
 
-After the authenticated agent is available, prepare the CPU dummy through the
+In another coordinator terminal with the same environment activated, and after
+the authenticated agent is available, prepare the CPU dummy through the
 existing public preparation owner, then submit, inspect, wait, and cancel with
 the same explicit role inputs. Replace `RUN_URI` with the receipt's value:
 
 ```sh
 # Use the LOOM_DEPLOYMENT_ROOT value in coordinator.env.
 LOOM_ENDPOINT=/secure/loom/remote-coordinator/deployment/coordinator/daemon.sock
-"$LOOM_PYTHON" - <<'PY'
+python - <<'PY'
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.queue import prepare_managed_run
 from loom.queue.deployment import load_coordinator_service_config
@@ -120,9 +163,20 @@ loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" remote-cpu-run "$RUN_URI"
 loom queue daemon-status --endpoint "$LOOM_ENDPOINT"
 loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" remote-cpu-run --timeout 15
 loom inspect-run "$RUN_URI" --endpoint "$LOOM_ENDPOINT"
-loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT" remote-cpu-run
 # Stop the two services and use the same daemon-serve/agent-serve commands to restart.
 ```
+
+The CPU report is retained under the agent root at
+`assignments/<assignment-id>/artifacts/produce/report.txt`; coordinator status
+does not imply the agent's files are mounted on the coordinator host. This
+example inspects the local agent artifact directly during its loopback demo.
+For cancellation, issue `loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT"
+remote-cpu-run` before waiting. A fast job may already have finished; a request
+alone does not establish process termination or resource release. Use wait and
+inspection, then Ctrl-C each service and restart with the same roots.
+
+The optional IO probe qualifies only the selected temporary execution roots.
+Unrun GPU checks and deferred busy-device probes provide no compute evidence.
 
 ## Variants
 

@@ -25,7 +25,7 @@ agent_policy:
     agent_ids: [machine-B]
     pools: [default]
 agent_server:
-  host: localhost
+  host: ${oc.env:LOOM_AGENT_HOST}
   port: ${oc.env:LOOM_AGENT_PORT}
   certificate_path: ${oc.env:LOOM_SERVER_CERTIFICATE}
   private_key_path: ${oc.env:LOOM_SERVER_PRIVATE_KEY}
