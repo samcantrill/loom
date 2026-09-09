@@ -88,7 +88,7 @@ print(hashlib.sha256(ssl.PEM_cert_to_DER_cert(Path(sys.argv[1]).read_text())).he
 PY
 ```
 
-Use `agent-check agent.yaml --env-file agent.env --format json` for the full
+Use `loom queue agent-check agent.yaml --env-file agent.env --format json` for the full
 observed descriptor in the `execution.identity` check. Edit only the protected
 coordinator copy to enroll that descriptor and certificate; shared templates
 retain empty observation slots.
