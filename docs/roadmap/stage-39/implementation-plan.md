@@ -1,6 +1,6 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: blocked; Phase 1 independent review found a no-start persistence gap
+Status: in_progress; approved correction of the no-start persistence gap
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -11,8 +11,9 @@ START_FAILED proof can commit before its diagnostic result. Interruption in that
 window leaves local/remote replay unable to complete and release exact claims.
 The manager verified the source path and missing early-crash oracle. Phase 1's
 Independent Implementation Review section owns the finding and proposed bounded
-correction. The approved correction allowance is spent; further runtime work
-requires maintainer approval. PR #292 remains open to develop, not merge eligible.
+correction. On 2026-09-10 the maintainer approved the correction and as many
+further in-scope correctness corrections as necessary, followed by return to
+rphys Stage 81. PR #292 remains open to develop, not merge eligible until fixed.
 Source `49799dc` still passes both full gates: suite summary 3,260 passed, zero
 failures/errors, 18 opt-in skips. Those checks do not cover the newly found window.
 
@@ -88,7 +89,7 @@ failures/errors, 18 opt-in skips. Those checks do not cover the newly found wind
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -130,9 +131,10 @@ failures/errors, 18 opt-in skips. Those checks do not cover the newly found wind
 - Independent implementation review: BLOCK at `f96eb105`; one verified R4
   journal/result atomicity finding, no additional blockers reported across the
   entire Phase 1 diff. Both full gates passed, but the accepted interrupted
-  no-start completion contract remains unmet. Correction allowance exhausted;
-  request one targeted manager correction and bounded review confirmation, not
-  a reset of the executor/refiner or full-review budgets.
+  no-start completion contract remains unmet. Maintainer approval on 2026-09-10
+  removes the correction-count limit for necessary in-scope fixes and admits
+  manager-local correction, fresh gates and existing-reviewer confirmation.
+  It does not authorize speculative scope or reset the full-review budget.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full

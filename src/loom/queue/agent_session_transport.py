@@ -3834,10 +3834,14 @@ class LocalDaemonAgentHttpClient:
                             assignment.assignment_id,
                             execution_id,
                             start_supervisor_launch,
+                            start_failure=lambda error: _start_failed_worker_result(
+                                workspace.worker_request(), error
+                            ),
                         )
-                    except ManagedProcessStartError as exc:
-                        result = _start_failed_worker_result(
-                            workspace.worker_request(), exc
+                    except ManagedProcessStartError:
+                        result = cast(
+                            StageWorkerResult,
+                            execution_journal.read_result(assignment.assignment_id),
                         )
                         atomic_write_bytes(
                             result_path,
@@ -3961,7 +3965,11 @@ class LocalDaemonAgentHttpClient:
             launch_json = workspace.supervisor_launch_json()
             if launch_json is None:
                 retained_fence = execution_journal.read_grant_fence(assignment_id)
-                retained_result = workspace.worker_result()
+                retained_result = (
+                    execution_journal.read_result(assignment_id)
+                    if execution_journal.definitive_start_failed(assignment_id)
+                    else workspace.worker_result()
+                )
                 if retained_fence is None:
                     continue
                 if (
@@ -3981,6 +3989,12 @@ class LocalDaemonAgentHttpClient:
                     execution_journal.require_failed_before_start(
                         assignment_id, fence=retained_fence
                     )
+                    result_path = workspace.root / "worker-result.json"
+                    if not result_path.is_file():
+                        atomic_write_bytes(
+                            result_path,
+                            _canonical_json(retained_result.to_dict()).encode(),
+                        )
                     workspace.persist_failed_before_start(
                         retained_result, fence=retained_fence
                     )

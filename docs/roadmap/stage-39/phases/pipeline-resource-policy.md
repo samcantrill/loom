@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked; full validation passed, independent review found a no-start persistence gap
+- Status: in_progress; approved correction of the no-start persistence gap
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -15,8 +15,8 @@
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
 - Blockers: independent full-diff review at `f96eb105` found one verified R4
-  journal/result atomicity gap. The approved correction allowance is spent;
-  proposed follow-up below needs approval. PR #292 must not merge.
+  journal/result atomicity gap. Follow-up below is approved on 2026-09-10;
+  PR #292 must not merge until correction, fresh gates and review confirmation pass.
 
 ## Objective And Context
 
@@ -294,7 +294,7 @@ remain held. The existing remote binding-failure restart test interrupts
 `commit_result` only after workspace and journal result persistence, so it cannot
 detect this window.
 
-Recommended targeted correction, **not yet approved**:
+Approved targeted correction (2026-09-10):
 
 - At the existing execution-journal owner, commit exact no-start proof and the
   portable failed-result evidence together in one transaction. Reuse its current
@@ -309,14 +309,35 @@ Recommended targeted correction, **not yet approved**:
   supervisor launch, and assert preserved nested cause, terminal completion,
   idempotent replay and exact agent/coordinator claim release. Keep the supported
   control, cancellation and indeterminate-launch comparisons.
-- Allow one bounded manager-local correction, fresh required full gates and one
-  directly related confirmation by the existing full-diff reviewer. This is an
-  explicit requested exception to the spent correction allowance, not another
-  executor/refiner or full-review budget. Reopen broader design only if evidence
-  requires a materially different durable/public contract.
+- Perform manager-local correction, fresh required full gates and directly
+  related confirmation by the existing full-diff reviewer. The maintainer
+  explicitly approved as many necessary in-scope correctness corrections as
+  required, overriding the spent count allowance. No new executor/refiner or
+  full-review pass is needed for this finding. Reopen broader design only if
+  evidence requires a materially different durable/public contract.
 
 Do not merge, start Phase 2 or resume physical Stage 81 work while this finding
-remains. Current worktree and evidence are preserved pending direction.
+remains. After verified merge and cleanup, return to the approved rphys Stage 81
+workflow; do not implicitly execute Loom Phase 2. Current evidence is preserved.
+
+Correction evidence: the new local and TLS-remote post-no-start-commit crash
+oracles fail on the preceding source (2 failures in `no-start-atomic-before.xml`).
+The execution journal now requires the caller's failed-result projector, validates
+its assignment/process identity, and commits `result_json` with START_FAILED in
+one transaction. All current launch callers supply that projector. Local capture
+retains worker-local diagnostic paths while mapping the result to coordinator
+identity; replay maps it back only for workspace persistence. Remote replay uses
+the same authoritative journal payload. No schema or table was added.
+
+The affected journal/local saga and complete remote restart selection passes
+42 tests (`no-start-atomic-after.xml`). After strengthening typed assertions,
+three exact crash cases pass (`no-start-atomic-crash-after.xml`), including the
+local supervisor's definitive no-root error after its launch intent is retained.
+Those cases prove original nested details, no application launch on replay,
+exact result identity/bytes by value, terminal completion and exact claim release.
+Type checking passes (`no-start-atomic-pyright-final.log`); changed-file Ruff and
+diff checks pass. Required fresh full gates and existing-reviewer confirmation
+remain pending; the preceding full receipts do not validate this correction.
 
 ## Approved Recovery Amendment
 

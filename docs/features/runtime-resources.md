@@ -143,6 +143,13 @@ recovery establishes a safe outcome. Selecting an unsupported present control
 fails before launching, with guidance to correct the provider or remove the
 kind from `enforce`. Unselected and absent demands add no restriction.
 
+The agent journal saves a definitive no-start fact and its complete failure
+result in the same transaction. Local and remote restart use that result to
+repair interrupted workspace persistence, report the original nested cause and
+finish the existing fenced terminal/release sequence without launching again.
+An uncertain launch is still retained for containment/recovery; absence of a
+worker result alone never proves that no process was created.
+
 Control records contain only `resource`, `owner`, `mechanism`, and `disposition`.
 They are persisted with stage results and exposed by the admission run-result
 owner under `resource_controls`, grouped by stage and attempt. Missing legacy

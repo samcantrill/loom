@@ -1488,8 +1488,15 @@ class SQLiteAgentJournal:
         assignment_id: str,
         process_execution_id: str,
         launcher: Callable[[], str],
+        *,
+        start_failure: Callable[[ManagedProcessStartError], StageWorkerResult],
     ) -> str:
-        """Persist intent before exactly one launcher invocation."""
+        """Persist intent before one launch, and no-start proof with its result.
+
+        The caller projects a definitive start error into its assignment's result
+        identity. That portable result commits with the no-start fact, before
+        workspace or coordinator persistence can be interrupted.
+        """
         if not isinstance(process_execution_id, str) or not process_execution_id:
             raise ManagedLocalError("process_execution_id is required")
         with self._transaction() as conn:
@@ -1517,15 +1524,16 @@ class SQLiteAgentJournal:
             )
         try:
             process_id = launcher()
-        except ManagedProcessStartError:
-            self._set_start_failed(assignment_id)
+            if not isinstance(process_id, str) or not process_id:
+                raise ManagedProcessStartError("launcher proved no process identifier")
+        except ManagedProcessStartError as exc:
+            self._set_start_failed(
+                assignment_id, process_execution_id, start_failure(exc)
+            )
             raise
         except Exception:
             self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
             raise
-        if not isinstance(process_id, str) or not process_id:
-            self._set_start_failed(assignment_id)
-            raise ManagedProcessStartError("launcher proved no process identifier")
         if process_id != process_execution_id:
             self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
             raise ManagedLocalError("launcher returned an unexpected process identity")
@@ -2043,13 +2051,33 @@ class SQLiteAgentJournal:
             )
         return AssignmentState.DECLINED
 
-    def _set_start_failed(self, assignment_id: str) -> AssignmentState:
+    def _set_start_failed(
+        self,
+        assignment_id: str,
+        process_execution_id: str,
+        result: StageWorkerResult,
+    ) -> AssignmentState:
+        if result.status is not StageStatus.FAILED:
+            raise ManagedLocalError("definitive start failure requires a failed result")
+        encoded = _json(result.to_dict())
         with self._transaction() as conn:
-            self._assignment(conn, assignment_id)
+            row = self._assignment(conn, assignment_id)
+            identity = json.loads(cast(str, row["identity_json"]))
+            if (
+                row["state"] != AssignmentState.START_INTENT.value
+                or row["process_execution_id"] != process_execution_id
+                or row["grant_fence"] is None
+                or result.run_uri != identity["run_uri"]
+                or result.stage_name != identity["stage_name"]
+                or result.attempt != identity["attempt"]
+            ):
+                raise ManagedLocalError(
+                    "no-start result conflicts with launch identity"
+                )
             conn.execute(
-                "UPDATE assignments SET state = ?, start_failed = 1 "
+                "UPDATE assignments SET state = ?, start_failed = 1, result_json = ? "
                 "WHERE assignment_id = ?",
-                (AssignmentState.START_FAILED.value, assignment_id),
+                (AssignmentState.START_FAILED.value, encoded, assignment_id),
             )
         return AssignmentState.START_FAILED
 
@@ -3286,6 +3314,7 @@ def grant_and_start_managed_assignment(
     commands: Sequence[ClaimCommand],
     providers: Mapping[str, AgentResourceProvider],
     launcher: Callable[[], str],
+    start_failure: Callable[[ManagedProcessStartError], StageWorkerResult],
     process_execution_id: str | None = None,
 ) -> ExecutionFence:
     """Execute the bounded local admission-to-start saga for one reservation.
@@ -3323,7 +3352,9 @@ def grant_and_start_managed_assignment(
     if not _agent_at_or_after(activation, AssignmentState.ACTIVE):
         raise ManagedLocalError("managed assignment activation is indeterminate")
     process_id = process_execution_id or f"{assignment.assignment_id}:root"
-    journal.start_once(assignment.assignment_id, process_id, launcher)
+    journal.start_once(
+        assignment.assignment_id, process_id, launcher, start_failure=start_failure
+    )
     authority.confirm_execution_started(assignment.run_uri, fence=fence)
     return fence
 
@@ -3499,7 +3530,14 @@ def run_managed_local_assignment(
         journal.require_failed_before_start(
             assignment.assignment_id, fence=retained_fence
         )
-        child_result = workspace.worker_result()
+        retained_result = journal.read_result(assignment.assignment_id)
+        child_result = (
+            _map_resident_result_identity(
+                retained_result, worker_request=workspace.worker_request(), outputs={}
+            )
+            if retained_result is not None
+            else workspace.worker_result()
+        )
         if child_result is None:
             result_path = workspace.root / "worker-result.json"
             if not result_path.is_file():
@@ -3509,7 +3547,11 @@ def run_managed_local_assignment(
             child_result = StageWorkerResult.from_dict(
                 json.loads(result_path.read_text())
             )
-        workspace.persist_failed_before_start(child_result, fence=retained_fence)
+        if workspace.supervisor_launch_json() is None:
+            result_path = workspace.root / "worker-result.json"
+            if not result_path.is_file():
+                atomic_write_bytes(result_path, _json(child_result.to_dict()).encode())
+            workspace.persist_failed_before_start(child_result, fence=retained_fence)
         journal.record_result(
             assignment.assignment_id,
             _map_resident_result_identity(
@@ -3762,6 +3804,14 @@ def run_managed_local_assignment(
         return finalize_result(worker_result, coordinator_expected="granted")
 
     process_id = f"{assignment.assignment_id}:root"
+
+    def start_failure(error: ManagedProcessStartError) -> StageWorkerResult:
+        return _map_resident_result_identity(
+            _start_failed_worker_result(workspace.worker_request(), error),
+            worker_request=worker_request,
+            outputs={},
+        )
+
     try:
         environment = _worker_environment(
             resident_launch_profile,
@@ -3780,22 +3830,27 @@ def run_managed_local_assignment(
 
         try:
             journal.start_once(
-                assignment.assignment_id, process_id, fail_before_supervisor
+                assignment.assignment_id,
+                process_id,
+                fail_before_supervisor,
+                start_failure=start_failure,
             )
         except ManagedProcessStartError:
             pass
         journal.require_failed_before_start(
             assignment.assignment_id, fence=fence.fencing_token
         )
-        child_result = _start_failed_worker_result(workspace.worker_request(), exc)
+        worker_result = cast(
+            StageWorkerResult, journal.read_result(assignment.assignment_id)
+        )
+        child_result = _map_resident_result_identity(
+            worker_result, worker_request=workspace.worker_request(), outputs={}
+        )
         atomic_write_bytes(
             workspace.root / "worker-result.json",
             _json(child_result.to_dict()).encode("utf-8"),
         )
         workspace.persist_failed_before_start(child_result, fence=fence.fencing_token)
-        worker_result = _map_resident_result_identity(
-            child_result, worker_request=worker_request, outputs={}
-        )
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
         return finalize_result(worker_result, coordinator_expected="granted")
     expected_launch = ResidentWorkerLaunch(
@@ -3853,9 +3908,12 @@ def run_managed_local_assignment(
                 assignment.assignment_id,
                 process_id,
                 launch_exact_worker,
+                start_failure=start_failure,
             )
-        except ManagedProcessStartError as exc:
-            worker_result = _start_failed_worker_result(worker_request, exc)
+        except ManagedProcessStartError:
+            worker_result = cast(
+                StageWorkerResult, journal.read_result(assignment.assignment_id)
+            )
             journal.record_result(assignment.assignment_id, worker_result.to_dict())
             return finalize_result(worker_result, coordinator_expected="granted")
         except Exception:

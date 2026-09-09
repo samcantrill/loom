@@ -347,10 +347,22 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
         return "process-1"
 
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", launch) == "process-1"
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            launch,
+            start_failure=lambda _error: pytest.fail("successful launch must not fail"),
+        )
+        == "process-1"
     )
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", launch) == "process-1"
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            launch,
+            start_failure=lambda _error: pytest.fail("replay must not fail"),
+        )
+        == "process-1"
     )
     assert calls == 1
     assert (
@@ -944,16 +956,31 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
         raise TimeoutError("spawn response was lost")
 
     with pytest.raises(TimeoutError):
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
     assert journal.read_state(assignment.assignment_id) is AssignmentState.START_UNKNOWN
     with pytest.raises(ManagedLocalError, match="cannot be invoked again"):
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
     assert (
         journal.confirm_supervised_start(assignment.assignment_id, "process-1")
         is AssignmentState.PROCESS_STARTED
     )
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("confirmed replay must not fail"),
+        )
         == "process-1"
     )
     assert calls == 1

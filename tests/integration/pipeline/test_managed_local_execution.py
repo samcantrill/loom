@@ -28,6 +28,7 @@ from loom.queue._managed_local import (
     run_managed_local_assignment,
 )
 from loom.queue._agent_process_supervisor import (
+    AgentProcessSupervisorError,
     AgentProcessSupervisorClient,
     AgentProcessSupervisorService,
     ResidentWorkerLaunchProfile,
@@ -496,13 +497,15 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
 
 
 @pytest.mark.parametrize(
-    ("failure_mode", "interrupt_write"),
+    ("failure_mode", "restart_barrier"),
     [
-        ("application", False),
-        ("unsupported", False),
-        ("unsupported", True),
-        ("provider_error", False),
-        ("unknown", False),
+        ("application", None),
+        ("unsupported", None),
+        ("unsupported", "diagnostic_write"),
+        ("provider_error", None),
+        ("provider_error", "no_start_commit"),
+        ("supervisor_no_root", "no_start_commit"),
+        ("unknown", None),
     ],
 )
 def test_managed_local_failure_terminalizes_before_capacity_release(
@@ -510,7 +513,7 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
     failure_mode: str,
-    interrupt_write: bool,
+    restart_barrier: str | None,
 ) -> None:
     no_start = failure_mode in {"unsupported", "provider_error"}
     run_store = LocalRunStore(tmp_path / "runs")
@@ -636,6 +639,12 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             raise OSError("configured binding is unavailable at /worker/bindings")
 
         monkeypatch.setattr(provider, "worker_environment", failed_binding)
+    if failure_mode == "supervisor_no_root":
+
+        def no_process_root(_launch):
+            raise AgentProcessSupervisorError("resident root was not created")
+
+        monkeypatch.setattr(supervisor, "launch", no_process_root)
     if failure_mode == "unknown":
         original_launch = supervisor.launch
 
@@ -675,7 +684,45 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
         ).live_claim_ids
         assert run_store.read_stage_failure(run_uri, "build") is None
         return
-    if interrupt_write:
+    if restart_barrier == "no_start_commit":
+        original_commit = journal._set_start_failed
+
+        class ApplicationStopped(BaseException):
+            pass
+
+        def interrupted_no_start_commit(*args, **kwargs):
+            original_commit(*args, **kwargs)
+            raise ApplicationStopped("application stopped after no-start commit")
+
+        monkeypatch.setattr(journal, "_set_start_failed", interrupted_no_start_commit)
+        with pytest.raises(ApplicationStopped, match="after no-start commit"):
+            execute()
+        assert coordinator.state(assignment.assignment_id) == "granted"
+        assert (
+            journal.read_state(assignment.assignment_id) is AssignmentState.START_FAILED
+        )
+        retained = journal.read_result(assignment.assignment_id)
+        assert retained is not None
+        assert retained.run_uri == run_uri
+        assert isinstance(retained.failure, ExecutionFailure)
+        assert (
+            "resident root was not created"
+            if failure_mode == "supervisor_no_root"
+            else "configured binding is unavailable at /worker/bindings"
+        ) in str(retained.failure.details)
+        monkeypatch.setattr(
+            supervisor,
+            "launch",
+            lambda _launch: pytest.fail("no-start replay must not launch"),
+        )
+        assert not tuple(agent_root.rglob("worker-result.json"))
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "after-no-start-commit")
+        ).live_claim_ids
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+        coordinator = SQLiteCoordinatorAssignments(coordinator_path, (atom,))
+        assert execute().worker_result == retained
+    if restart_barrier == "diagnostic_write":
         original_write = run_store.write_stage_failure
 
         def interrupted_diagnostic_write(*_args, **_kwargs):
@@ -1137,6 +1184,9 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
                 left_assignment.assignment_id,
                 f"{left_assignment.assignment_id}:root",
                 forbidden_relaunch,
+                start_failure=lambda _error: pytest.fail(
+                    "confirmed replay must not fail"
+                ),
             )
             == f"{left_assignment.assignment_id}:root"
         )

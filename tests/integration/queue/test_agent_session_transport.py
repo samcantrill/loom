@@ -2572,6 +2572,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("after_supervisor_accept", True),
         ("failed_before_result_commit", False),
         ("binding_failure_before_result_commit", False),
+        ("binding_failure_after_no_start_commit", False),
         ("missing_claim_before_result_commit", False),
         ("native_failure_before_result_commit", False),
         ("reported_failure_before_result_commit", False),
@@ -2589,6 +2590,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     no_start = restart_barrier in {
         "failed_before_result_commit",
         "binding_failure_before_result_commit",
+        "binding_failure_after_no_start_commit",
         "missing_claim_before_result_commit",
     }
     native_failure = restart_barrier in {
@@ -2757,7 +2759,10 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
 
         if no_start:
             monkeypatch.setattr(supervisor, "launch", forbidden_launch)
-        if restart_barrier == "binding_failure_before_result_commit":
+        if restart_barrier in {
+            "binding_failure_before_result_commit",
+            "binding_failure_after_no_start_commit",
+        }:
             providers, _journal = agent._runtime_owners(session)
 
             def unavailable_binding(_command):
@@ -2779,6 +2784,17 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 raise RuntimeError("simulated agent application restart")
 
             monkeypatch.setattr(supervisor, "launch", interrupt_launch)
+        elif restart_barrier == "binding_failure_after_no_start_commit":
+            assert agent._execution_journal is not None
+            original_no_start_commit = agent._execution_journal._set_start_failed
+
+            def interrupt_no_start_commit(*args, **kwargs):
+                original_no_start_commit(*args, **kwargs)
+                raise RuntimeError("simulated agent application restart")
+
+            monkeypatch.setattr(
+                agent._execution_journal, "_set_start_failed", interrupt_no_start_commit
+            )
         elif restart_barrier == "diagnostic_write":
 
             def interrupt_diagnostic_write(*args, **kwargs):
@@ -2862,6 +2878,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             else:
                 with pytest.raises(RuntimeError, match="application restart"):
                     execution.result(timeout=20)
+        if restart_barrier == "binding_failure_after_no_start_commit":
+            assert agent._execution_journal is not None
+            retained_commands = agent._execution_journal.retained_claim_commands()
+            assert retained_commands
+            retained_assignment = retained_commands[0].assignment.assignment_id
+            retained = agent._execution_journal.read_result(retained_assignment)
+            assert retained is not None
+            assert isinstance(retained.failure, ExecutionFailure)
+            assert "binding unavailable at /worker/configured-binding" in str(
+                retained.failure.details
+            )
+            assert not tuple(
+                cast(Path, remote_config.agent_root).rglob("worker-result.json")
+            )
         if shared_inventory:
             assert agent._execution_journal is not None
             assert {
@@ -2880,6 +2910,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
+        assert replacement.resume_retained_work() == ()
         if restart_barrier == "diagnostic_write":
             with sqlite3.connect(config.control_database) as conn:
                 assert (
@@ -2921,7 +2952,10 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             assert "enforce" in str(failure["message"])
             if restart_barrier == "missing_claim_before_result_commit":
                 assert "no active claim" in str(failure["message"])
-            if restart_barrier == "binding_failure_before_result_commit":
+            if restart_barrier in {
+                "binding_failure_before_result_commit",
+                "binding_failure_after_no_start_commit",
+            }:
                 assert (
                     "binding unavailable at /worker/configured-binding"
                     in json.dumps(failure)
