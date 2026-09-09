@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open; full validation passed, independent review pending
+- Status: blocked; full validation passed, independent review found a no-start persistence gap
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -14,8 +14,9 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: none known. Full validation passed at `49799dc`; required independent
-  full-diff review remains outstanding before PR #292 can merge.
+- Blockers: independent full-diff review at `f96eb105` found one verified R4
+  journal/result atomicity gap. The approved correction allowance is spent;
+  proposed follow-up below needs approval. PR #292 must not merge.
 
 ## Objective And Context
 
@@ -262,8 +263,60 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Full gate | `make validate-pr` PASS: repository Ruff/Pyright, default 3,096 passed / 2 skipped / 156 deselected (1,004.93s), config-extra 162 passed / 18 skipped / 3,101 deselected (155.99s), sdist and wheel builds |
 | Suite summary | `make test-summary` PASS: package 124, unit 2,179, contract 301, integration 424, e2e 70, config-extra 162; total 3,260 passed, no failures/errors, 18 opt-in skips (1,464.45s). Generated 2026-09-09T13:08:09Z |
 | Evidence location | Ignored `build/resource-policy-checkpoint/{validate-pr-complete.log,test-summary-complete.log}`, `build/test-summary.md` and suite JUnit/coverage artifacts. Older failed/interrupted receipts are history, not current blockers or passing gates |
-| PR, review, merge | Manager pre-submit passed; PR #292 open to develop with approved title. Required independent entire-diff review pending. No remote merge claimed |
+| PR, review, merge | PR #292 open to develop with approved title. Independent entire-diff review BLOCK at `f96eb105`: verified early no-start persistence gap below; no other blockers reported. No remote merge claimed |
 | Residual risk / cleanup | No physical GPU/container/SIF execution, live SLURM or host changes. Eighteen opt-in skips cover container/build/resource/namespace acceptance; fake/CPU/loopback proof is not physical isolation or a scientific Stage 81 run. Preserve worktree and evidence until merge; Phase 2 and Stage 81 physical continuation excluded |
+
+## Independent Implementation Review
+
+Disposition: BLOCK at `f96eb105`, covering the entire Phase 1 diff against
+published develop `998b07c`. The manager verified the sole product finding in
+source and the existing restart oracle. No additional blockers were reported.
+The passing source `49799dc` receipts remain accurate but do not prove this
+earlier crash boundary. A private copy of `build/`, `.loom/` and `dist/` is retained
+at `stage-39-p1-evidence-iPO6xw` under the manifest's worktree root.
+
+R4 requires durable owner-proven no-start failure, complete nested explanation,
+idempotent interrupted completion and exact release. The supported selected
+resource-binding failure violates that requirement if the application stops
+between these operations:
+
+1. `SQLiteAgentJournal.start_once` catches `ManagedProcessStartError` and
+   `_set_start_failed` commits START_FAILED and `start_failed = 1` alone.
+2. The local dispatch or remote `execute_one` caller subsequently constructs the
+   portable failed result, writes workspace evidence, and calls `record_result`.
+
+The existing journal already has `result_json`, but the first transition does
+not populate it. Local dispatch replay then raises `failed launch has no durable
+diagnostic result`; remote `resume_retained_work` finds neither a supervisor launch
+nor a retained result and keeps the assignment unresolved. Exact no-start proof
+therefore exists while the nested failure is lost and agent/coordinator claims
+remain held. The existing remote binding-failure restart test interrupts
+`commit_result` only after workspace and journal result persistence, so it cannot
+detect this window.
+
+Recommended targeted correction, **not yet approved**:
+
+- At the existing execution-journal owner, commit exact no-start proof and the
+  portable failed-result evidence together in one transaction. Reuse its current
+  result payload/codec and preserve assignment, grant/fence and process identity;
+  no new store, public report schema or fabricated started event is needed.
+- Make local and remote replay consume that authoritative result to repair
+  workspace persistence and finish the existing terminal/acknowledgement/release
+  sequence. Preserve local/coordinator result identity mapping and exact replay.
+  Never synthesize a lost nested cause or relax unknown-launch containment.
+- Add local and remote crash oracles immediately after the atomic no-start commit
+  and before workspace-result persistence. Reopen the journal/application, forbid
+  supervisor launch, and assert preserved nested cause, terminal completion,
+  idempotent replay and exact agent/coordinator claim release. Keep the supported
+  control, cancellation and indeterminate-launch comparisons.
+- Allow one bounded manager-local correction, fresh required full gates and one
+  directly related confirmation by the existing full-diff reviewer. This is an
+  explicit requested exception to the spent correction allowance, not another
+  executor/refiner or full-review budget. Reopen broader design only if evidence
+  requires a materially different durable/public contract.
+
+Do not merge, start Phase 2 or resume physical Stage 81 work while this finding
+remains. Current worktree and evidence are preserved pending direction.
 
 ## Approved Recovery Amendment
 

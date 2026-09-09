@@ -1,18 +1,20 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: pr_open; Phase 1 full validation passed, independent review pending
+Status: blocked; Phase 1 independent review found a no-start persistence gap
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: none known. Source `49799dc` passes both required full gates against
-unchanged published develop `998b07c`: default 3,096 passed, config-extra 162 passed,
-repository Ruff/Pyright and builds; separate suite summary 3,260 passed, zero
-failures/errors, 18 opt-in skips. The phase Completion Record owns detailed evidence.
-Manager pre-submit passed. PR #292 targets develop with the approved title;
-independent entire-diff review remains required before merge. Previous
-failed/interrupted receipts are superseded.
+Blockers: independent entire-diff review at `f96eb105` found that definitive
+START_FAILED proof can commit before its diagnostic result. Interruption in that
+window leaves local/remote replay unable to complete and release exact claims.
+The manager verified the source path and missing early-crash oracle. Phase 1's
+Independent Implementation Review section owns the finding and proposed bounded
+correction. The approved correction allowance is spent; further runtime work
+requires maintainer approval. PR #292 remains open to develop, not merge eligible.
+Source `49799dc` still passes both full gates: suite summary 3,260 passed, zero
+failures/errors, 18 opt-in skips. Those checks do not cover the newly found window.
 
 ## Summary
 
@@ -86,7 +88,7 @@ failed/interrupted receipts are superseded.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | pr_open | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | [#292](https://github.com/samcantrill/loom/pull/292) | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -125,6 +127,12 @@ failed/interrupted receipts are superseded.
   creation. The phase card specifies producer, consumer, exact identity/replay,
   safe-display separation and legacy refusal. Independent targeted startup review
   PASS at `c5b23a7`; manager implementation admitted with no further executor/refiner pass.
+- Independent implementation review: BLOCK at `f96eb105`; one verified R4
+  journal/result atomicity finding, no additional blockers reported across the
+  entire Phase 1 diff. Both full gates passed, but the accepted interrupted
+  no-start completion contract remains unmet. Correction allowance exhausted;
+  request one targeted manager correction and bounded review confirmation, not
+  a reset of the executor/refiner or full-review budgets.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
@@ -142,5 +150,5 @@ failed/interrupted receipts are superseded.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#292](https://github.com/samcantrill/loom/pull/292), merge pending | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; full-diff independent review pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | [#292](https://github.com/samcantrill/loom/pull/292), blocked; not merged | Source `49799dc`: both full gates PASS, suite summary 3,260 passed / 18 opt-in skips; independent review BLOCK on R4 early persistence window | Interrupted definitive no-start may retain ownership indefinitely; no physical proof | Preserve phase worktree; private evidence archive `stage-39-p1-evidence-iPO6xw` under the recorded worktree root |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |
