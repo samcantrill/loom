@@ -1,0 +1,18 @@
+schema_version: 3
+kind: loom.coordinator-service
+deployment_root: ${oc.env:LOOM_DEPLOYMENT_ROOT}
+run_store_root: ${oc.env:LOOM_RUN_STORE_ROOT}
+machine_id: ${oc.env:LOOM_MACHINE_ID}
+poll_interval_seconds: 0.01
+max_accepted_time_step_seconds: 60
+local_agent:
+  config: agent.yaml
+  env_file: agent.env
+remote_profiles: []
+agent_policy:
+  revision: starter-1
+  agents: []
+  principals: []
+agent_server: null
+authority:
+  kind: embedded

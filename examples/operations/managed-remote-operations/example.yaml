@@ -18,6 +18,7 @@ surface_invocations:
   - cli:queue daemon-agent-resume
   - cli:queue daemon-agents
   - cli:queue daemon-admission
+  - cli:queue daemon-check
   - cli:queue daemon-init
   - cli:queue daemon-operation
   - cli:queue daemon-operation-wait
