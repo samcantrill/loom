@@ -139,9 +139,7 @@ class ResolvedStageRuntimeOptions:
         result: dict[str, PlainData] = {
             "stage_id": self.stage_id,
             "executor": self.executor,
-            # This crosses the exact worker handoff, not the display-only
-            # runtime summary: retain the complete normalized demand for replay.
-            "resources": resources.to_dict(),
+            "resources": _resource_request_metadata(resources),
             "execution": execution.to_safe_metadata(),
             "reliability": (
                 cast(ReliabilityPolicy, self.reliability).to_dict()
@@ -163,6 +161,14 @@ class ResolvedStageRuntimeOptions:
                 ).items()
             }
         return result
+
+    def _to_worker_metadata(self) -> dict[str, PlainData]:
+        """Retain full normalized demand at the private execution handoff."""
+
+        return {
+            **self.to_safe_metadata(),
+            "resources": cast(ResourceRequest, self.resources).to_dict(),
+        }
 
     def for_execution(self) -> "ResolvedStageRuntimeOptions":
         """Finalize direct demand before preparing a new execution handoff.

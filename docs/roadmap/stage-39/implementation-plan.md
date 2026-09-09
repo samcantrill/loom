@@ -14,6 +14,9 @@ environment. Fresh full gates, independent implementation review and PR submissi
 remain incomplete. The implemented transport amendment passes its 22 selected
 HTTP/replay/inspection checks, 61 serialization/report/diagnostic checks and two
 adjacent producer checks; these targeted results are not the full phase gate.
+The first complete default gate then found five remaining metadata/fixture/message
+failures among 3,083 passes. Their bounded correction passes 105 selected checks;
+fresh full gates are required before submission.
 
 ## Summary
 

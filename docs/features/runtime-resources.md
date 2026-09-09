@@ -128,6 +128,10 @@ selection must match the accepted placement before dispatch or restart; a
 conflict requires investigation or a fresh execution identity, not rewriting
 the saved request.
 
+Display-safe runtime summaries retain resource attribute counts, not their
+values. The private worker handoff separately retains the complete normalized
+attributes so preparation and replay can compare the actual execution intent.
+
 ### Managed Control And Failure Evidence
 
 The process owner retains requested controls with its immutable launch. A

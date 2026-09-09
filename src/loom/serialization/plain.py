@@ -43,6 +43,8 @@ def is_plain_data(value: Any) -> bool:
 def ensure_plain_data(value: Any, *, path: str = "$") -> PlainData:
     """Ensure a value is valid plain data and return a normalized copy."""
 
+    if not isinstance(value, (Mapping, list, tuple)) and not is_plain_data(value):
+        raise _value_error(path, value)
     return _copy_plain_data(value, path)
 
 
@@ -69,6 +71,8 @@ def to_plain_data(value: Any, *, path: str = "$") -> PlainData:
 def freeze_plain_data(value: Any, *, path: str = "$") -> Any:
     """Convert plain data into an immutable representation."""
 
+    if not isinstance(value, (Mapping, list, tuple)) and not is_plain_data(value):
+        raise _value_error(path, value)
     return _copy_plain_data(value, path, frozen=True)
 
 

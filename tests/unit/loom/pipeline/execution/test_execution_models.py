@@ -28,7 +28,7 @@ from loom.pipeline.planning import (
     ResumeOptions,
     build_stage_fingerprint,
 )
-from loom.pipeline.runtime import RunOptions
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions, RunOptions
 from loom.pipeline.status import StageStatus
 from loom.serialization import PlainData
 from loom.artifacts import ArtifactRef
@@ -78,7 +78,9 @@ def _worker_request() -> StageWorkerRequest:
         stderr_path="/tmp/run/stages/build/logs/stderr.log",
         traceback_path="/tmp/run/stages/build/logs/traceback.txt",
         result_path="/tmp/run/stages/build/worker_result.json",
-        resolved_runtime={"stage_id": "build", "executor": "local"},
+        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="build")
+        .for_execution()
+        ._to_worker_metadata(),
         executor_metadata={"command": ["python", "-m", "loom"]},
     )
 

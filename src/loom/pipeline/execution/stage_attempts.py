@@ -195,10 +195,10 @@ def _resolved_runtime_metadata(
         return (
             ResolvedStageRuntimeOptions(stage_id=stage_name)
             .for_execution()
-            .to_safe_metadata()
+            ._to_worker_metadata()
         )
     if isinstance(value, ResolvedStageRuntimeOptions):
-        return value.for_execution().to_safe_metadata()
+        return value.for_execution()._to_worker_metadata()
     if not isinstance(value, Mapping):
         raise PlanExecutionError("resolved_runtime must be resolved runtime metadata")
     return dict(value)

@@ -225,7 +225,7 @@ def _require_retained_resource_handoff_match(
         raise QueueConflictError(
             "retained worker resource handoff is incomplete; prepare a fresh identity"
         )
-    expected = expected_runtime.to_safe_metadata()
+    expected = expected_runtime._to_worker_metadata()
     retained = {field: retained_runtime[field] for field in fields}
     projected = {field: expected[field] for field in fields}
     try:
@@ -4509,7 +4509,7 @@ class LocalDaemonExecution:
                 fingerprint=fingerprint,
                 resolved_runtime=_worker_runtime(
                     intent, record.stage_name
-                ).to_safe_metadata(),
+                )._to_worker_metadata(),
                 worker_metadata={},
             )
             total_bytes = 0
