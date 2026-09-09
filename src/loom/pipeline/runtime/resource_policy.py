@@ -47,11 +47,17 @@ class ResourcePolicy:
             account_for, enforce = ALL_RESOURCES, ()
         object.__setattr__(
             self,
-            "account_for", None if account_for is _UNSET else _identifiers(account_for, path="ResourcePolicy.account_for"),
+            "account_for",
+            None
+            if account_for is _UNSET
+            else _identifiers(account_for, path="ResourcePolicy.account_for"),
         )
         object.__setattr__(
             self,
-            "enforce", None if enforce is _UNSET else _identifiers(enforce, path="ResourcePolicy.enforce"),
+            "enforce",
+            None
+            if enforce is _UNSET
+            else _identifiers(enforce, path="ResourcePolicy.enforce"),
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -79,18 +85,26 @@ class ResourcePolicy:
             object.__setattr__(
                 instance,
                 axis,
-                None if raw is None else _identifiers(raw, path=f"ResourcePolicy.{axis}"),
+                None
+                if raw is None
+                else _identifiers(raw, path=f"ResourcePolicy.{axis}"),
             )
         return instance
 
     def resolved(self, inherited: "ResourcePolicy | None" = None) -> "ResourcePolicy":
         """Resolve omitted axes at the composition boundary only."""
 
-        base = ResourcePolicy(account_for=ALL_RESOURCES, enforce=()) if inherited is None else inherited
+        base = (
+            ResourcePolicy(account_for=ALL_RESOURCES, enforce=())
+            if inherited is None
+            else inherited
+        )
         if base.account_for is None or base.enforce is None:
             base = base.resolved()
         return ResourcePolicy(
-            account_for=base.account_for if self.account_for is None else self.account_for,
+            account_for=base.account_for
+            if self.account_for is None
+            else self.account_for,
             enforce=base.enforce if self.enforce is None else self.enforce,
         )
 
@@ -118,12 +132,20 @@ class ResourcePolicy:
         accounted = (
             kinds
             if resolved.account_for == ALL_RESOURCES
-            else tuple(name for name in kinds if name in cast(tuple[str, ...], resolved.account_for))
+            else tuple(
+                name
+                for name in kinds
+                if name in cast(tuple[str, ...], resolved.account_for)
+            )
         )
         enforced = (
             kinds
             if resolved.enforce == ALL_RESOURCES
-            else tuple(name for name in kinds if name in cast(tuple[str, ...], resolved.enforce))
+            else tuple(
+                name
+                for name in kinds
+                if name in cast(tuple[str, ...], resolved.enforce)
+            )
         )
         return MappingProxyType({"account_for": accounted, "enforce": enforced})
 
@@ -175,9 +197,13 @@ def validate_resource_selection(
             raise RuntimeResourceError(f"{path}.{axis} must be a list")
         names = tuple(value)
         if any(not isinstance(name, str) or not name for name in names):
-            raise RuntimeResourceError(f"{path}.{axis} entries must be non-empty strings")
+            raise RuntimeResourceError(
+                f"{path}.{axis} entries must be non-empty strings"
+            )
         if tuple(sorted(names)) != names or len(set(names)) != len(names):
-            raise RuntimeResourceError(f"{path}.{axis} entries must be sorted and unique")
+            raise RuntimeResourceError(
+                f"{path}.{axis} entries must be sorted and unique"
+            )
         normalized[axis] = names
     expected = effective_policy.select(full_entries)
     if normalized != expected:

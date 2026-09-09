@@ -3747,7 +3747,10 @@ class LocalDaemonAgentHttpClient:
                     workspace.root,
                     commands,
                     providers,
-                    cast(Mapping[str, object], request.resolved_runtime.get("resource_selection")),
+                    cast(
+                        Mapping[str, object],
+                        request.resolved_runtime.get("resource_selection"),
+                    ),
                 )
                 nonlocal launch
                 launch = ResidentWorkerLaunch(

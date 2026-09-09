@@ -32,6 +32,43 @@ from loom.serialization import stable_json_dumps
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("enforce", [[], ["gpu"]])
+def test_docker_retains_gpu_intent_and_rejects_only_selected_control(
+    enforce: list[str],
+) -> None:
+    container = ContainerOptions(
+        image="test:latest",
+        resources=ContainerResourceIntent(
+            entries={"gpu": ResourceEntry(kind="gpu", amount=1)},
+            capabilities={"gpu": ResourceCapability(support_level="unsupported")},
+        ),
+    )
+    if enforce:
+        with pytest.raises(DockerOptionError, match="resource_policy.enforce"):
+            build_docker_run_command(
+                container_options=container,
+                worker_command=("true",),
+                resource_policy=ResourcePolicy(enforce=enforce),
+            )
+    else:
+        command = build_docker_run_command(
+            container_options=container,
+            worker_command=("true", "--cpus", "payload-only"),
+            resource_policy=ResourcePolicy(enforce=enforce),
+        )
+        assert "--gpus" not in command.argv
+        assert list(
+            cast(tuple[object, ...], command.metadata["resource_controls"])
+        ) == [
+            {
+                "resource": "gpu",
+                "owner": "docker",
+                "mechanism": None,
+                "disposition": "not_requested",
+            }
+        ]
+
+
 def test_build_docker_run_command_is_deterministic_and_redacted() -> None:
     container = _container_options()
 
@@ -152,7 +189,9 @@ def test_gpu_and_unknown_resources_fail_closed() -> None:
         },
     )
     custom_intent = ContainerResourceIntent(
-        entries={"custom.accelerator": ResourceEntry(kind="custom.accelerator", amount=1)},
+        entries={
+            "custom.accelerator": ResourceEntry(kind="custom.accelerator", amount=1)
+        },
         capabilities={
             "custom.accelerator": ResourceCapability(
                 support_level="supported",

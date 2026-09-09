@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-import os
 from pathlib import Path
 from typing import cast
 
@@ -17,7 +16,6 @@ from loom.pipeline.execution.models import (
     redact_executor_metadata,
 )
 from loom.pipeline.executors.containers import (
-    ContainerEnvironment,
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
@@ -31,19 +29,12 @@ from loom.pipeline.executors._reliability import (
     timeout_metadata,
     timeout_policy_from_request,
 )
-from loom.pipeline.executors.gpu_visibility import (
-    CUDA_VISIBLE_DEVICES,
-    GpuVisibilityEvidence,
-    project_apptainer_gpu_options,
-    requested_gpu_count,
-    validate_cuda_visibility,
-)
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime._resource_controls import with_resource_control_disposition
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
-from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
     AuthorityConfig,
@@ -351,6 +342,7 @@ class ApptainerExecutor:
                 metadata=metadata,
             )
 
+        metadata = with_resource_control_disposition(metadata, "applied")
         conflict = _process_conflict_failure(
             request=request,
             executor_name=self.name,
@@ -454,7 +446,7 @@ class _PreparedApptainerAttempt:
     path_parity: tuple[ContainerPathParitySummary, ...]
     worker_command: tuple[str, ...]
     command: ApptainerExecCommand
-    gpu_visibility: GpuVisibilityEvidence
+    gpu_visibility: Mapping[str, PlainData]
 
 
 def _prepare_apptainer_attempt(
@@ -494,18 +486,6 @@ def _prepare_apptainer_attempt(
         adapter_options,
         executor_name=executor_name,
     )
-    full_resources = cast(ResourceRequest, runtime.resources)
-    selected = cast(ResourcePolicy, runtime.resource_policy).select(
-        full_resources.entries
-    )["enforce"]
-    resources = ResourceRequest(
-        entries={key: full_resources.entries[key] for key in selected}
-    )
-    apptainer_options = project_apptainer_gpu_options(apptainer_options, resources)
-    gpu_visibility = validate_cuda_visibility(
-        requested_gpu_count(resources), os.environ
-    )
-    container = _with_cuda_visibility(container, gpu_visibility=gpu_visibility)
     worker_command = build_stage_worker_command(
         python_executable=python_executable,
         run_uri=request.run_uri,
@@ -519,13 +499,16 @@ def _prepare_apptainer_attempt(
         apptainer_options=apptainer_options,
         worker_command=worker_command,
         resource_policy=runtime.resource_policy,
+        resource_selection=getattr(runtime, "resource_selection", None),
     )
     return _PreparedApptainerAttempt(
         container=container,
         path_parity=path_parity,
         worker_command=worker_command,
         command=command,
-        gpu_visibility=gpu_visibility,
+        gpu_visibility=cast(
+            Mapping[str, PlainData], command.metadata["gpu_visibility"]
+        ),
     )
 
 
@@ -630,36 +613,6 @@ def _with_required_path_mounts(
         workdir=container.workdir,
         mounts=tuple(mounts),
         environment=container.environment,
-        resources=container.resources,
-    )
-
-
-def _with_cuda_visibility(
-    container: ContainerOptions,
-    *,
-    gpu_visibility: GpuVisibilityEvidence,
-) -> ContainerOptions:
-    if gpu_visibility.requested_gpu_count == 0:
-        return container
-    environment = cast(ContainerEnvironment, container.environment)
-    if (
-        CUDA_VISIBLE_DEVICES in environment.variables
-        or CUDA_VISIBLE_DEVICES in environment.required_host_variables
-    ):
-        raise _ApptainerSetupError(
-            "CUDA_VISIBLE_DEVICES is owned by Loom's GPU resource projection"
-        )
-    return ContainerOptions(
-        image=container.image,
-        workdir=container.workdir,
-        mounts=cast(tuple[ContainerMount, ...], container.mounts),
-        environment=ContainerEnvironment(
-            variables={
-                **dict(environment.variables),
-                CUDA_VISIBLE_DEVICES: ",".join(gpu_visibility.cuda_visible_devices),
-            },
-            required_host_variables=environment.required_host_variables,
-        ),
         resources=container.resources,
     )
 
@@ -974,7 +927,7 @@ def _process_metadata(
     worker_command: Sequence[str],
     container: ContainerOptions,
     path_parity: Sequence[ContainerPathParitySummary],
-    gpu_visibility: GpuVisibilityEvidence,
+    gpu_visibility: Mapping[str, PlainData],
     process: ApptainerCommandResult | None,
     started_at: str,
     finished_at: str,
@@ -986,18 +939,19 @@ def _process_metadata(
         "selected_command": command.argv[0],
         "apptainer_options": command.metadata["apptainer_options"],
         "worker_command": cast(list[PlainData], list(worker_command)),
-        "container": container.to_redacted_metadata(),
+        "container": command.metadata.get(
+            "container", container.to_redacted_metadata()
+        ),
         "path_parity": cast(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
-        "resource_controls": _resource_controls(
-            container, command, launched=process is not None
-        ),
-        "gpu_visibility": {
-            "requested_gpu_count": gpu_visibility.requested_gpu_count,
-            "visible_gpu_count": len(gpu_visibility.cuda_visible_devices),
+        **{
+            key: command.metadata[key]
+            for key in ("resource_policy", "resource_selection", "resource_controls")
+            if key in command.metadata
         },
+        "gpu_visibility": dict(gpu_visibility),
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -1021,42 +975,15 @@ def _process_metadata(
         )
     if launch_error is not None:
         metadata["launch_error"] = launch_error
+    if launch_error is not None or (
+        process is not None and (process.returncode != 0 or process.error is not None)
+    ):
+        metadata = with_resource_control_disposition(metadata, "failed")
     return redact_executor_metadata(metadata)
 
 
 def _redacted_argv(command: ApptainerExecCommand) -> Sequence[str]:
     return cast(Sequence[str], command.redacted_argv)
-
-
-def _resource_controls(
-    container: ContainerOptions, command: ApptainerExecCommand, *, launched: bool
-) -> list[PlainData]:
-    """Record command-level controls; successful process creation is application."""
-
-    intent = cast(ContainerResourceIntent | None, container.resources)
-    if intent is None:
-        return []
-    flags = {"cpu": "--cpus", "memory": "--memory", "gpu": "--nv"}
-    argv = set(command.argv)
-    controls: list[PlainData] = []
-    for resource in sorted(cast(Mapping[str, object], intent.entries)):
-        mechanism = flags.get(resource)
-        selected = mechanism is not None and mechanism in argv
-        controls.append(
-            {
-                "resource": resource,
-                "owner": "apptainer",
-                "mechanism": mechanism,
-                "disposition": (
-                    "applied"
-                    if selected and launched
-                    else "requested"
-                    if selected
-                    else "not_requested"
-                ),
-            }
-        )
-    return controls
 
 
 def _coerce_setup_error(exc: BaseException) -> _ApptainerSetupError:

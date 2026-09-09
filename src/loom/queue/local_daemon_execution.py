@@ -4488,7 +4488,7 @@ class LocalDaemonExecution:
     ) -> bool:
         selected = getattr(decision, "selected")
         claims = tuple(selected.claims)
-        if not claims or len({claim.resource_kind for claim in claims}) != len(claims):
+        if len({claim.resource_kind for claim in claims}) != len(claims):
             raise QueueServiceError(
                 "managed daemon requires one exact claim per resource kind"
             )

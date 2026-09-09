@@ -133,6 +133,20 @@ class SubprocessExecutor:
         )
         started_at = self.clock()
         try:
+            from loom.pipeline.runtime.metadata import ResolvedStageRuntimeOptions
+            from loom.pipeline.runtime.resource_policy import ResourcePolicy
+            from loom.pipeline.resources import ResourceRequest
+
+            runtime = request.resolved_runtime
+            if isinstance(runtime, ResolvedStageRuntimeOptions):
+                selected = cast(ResourcePolicy, runtime.resource_policy).select(
+                    cast(ResourceRequest, runtime.resources).entries
+                )["enforce"]
+                if selected:
+                    raise ExecutorError(
+                        f"native subprocess execution cannot enforce {', '.join(selected)}; "
+                        "omit these kinds from resource_policy.enforce or use a supporting execution owner"
+                    )
             process = self.process_runner(command, timeout_seconds=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
             finished_at = self.clock()
@@ -339,14 +353,18 @@ def build_stage_worker_command(
             raise ExecutorError(
                 "authority_config and authority_cli_args cannot both be supplied"
             )
-        if not all(isinstance(argument, str) and argument for argument in authority_cli_args):
+        if not all(
+            isinstance(argument, str) and argument for argument in authority_cli_args
+        ):
             raise ExecutorError("authority_cli_args must contain non-empty strings")
         command.extend(authority_cli_args)
     elif authority_config is not None:
         command.extend(authority_config_to_cli_args(authority_config))
     for selector in plugin_selectors:
         if not isinstance(selector, str) or not selector:
-            raise ExecutorError("plugin_selectors must contain non-empty GROUP:NAME strings")
+            raise ExecutorError(
+                "plugin_selectors must contain non-empty GROUP:NAME strings"
+            )
         command.extend(("--plugin", selector))
     command.extend(("--format", "json"))
     return tuple(command)
@@ -553,7 +571,9 @@ def _worker_failure(
         executor="subprocess",
         failure_type=failure_type,
         message=message,
-        exception_type=worker_failure.exception_type if worker_failure is not None else None,
+        exception_type=worker_failure.exception_type
+        if worker_failure is not None
+        else None,
         traceback_path=worker_result.traceback_path,
         stdout_path=worker_result.stdout_path,
         stderr_path=worker_result.stderr_path,

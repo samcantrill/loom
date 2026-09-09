@@ -1847,9 +1847,7 @@ class SQLiteAgentJournal:
                 json.loads(cast(str, row["identity_json"]))
             )
             commands = _claim_commands_from_row(row)
-            if any(
-                command.assignment != assignment for command in commands
-            ):
+            if any(command.assignment != assignment for command in commands):
                 raise ManagedLocalError(
                     "assignment provider release evidence is incomplete"
                 )
@@ -2007,7 +2005,9 @@ class SQLiteAgentJournal:
             self._assignment(conn, assignment_id)
             if detail in GPU_DECLINE_REASONS:
                 self._append_event(
-                    conn, assignment_id, f"{assignment_id}:definitive_decline",
+                    conn,
+                    assignment_id,
+                    f"{assignment_id}:definitive_decline",
                     _json({"kind": "definitive_decline", "reason_code": detail}),
                 )
             conn.execute(
@@ -3467,7 +3467,10 @@ def run_managed_local_assignment(
         reason_code = journal.read_decline_reason(assignment.assignment_id)
         if reason_code is not None:
             _emit_assignment_event(
-                journal, coordinator, assignment.assignment_id, "definitive_decline",
+                journal,
+                coordinator,
+                assignment.assignment_id,
+                "definitive_decline",
                 {"reason_code": reason_code},
             )
         _emit_assignment_event(
@@ -3698,7 +3701,9 @@ def run_managed_local_assignment(
         workspace.root,
         commands,
         providers,
-        cast(Mapping[str, object], delivered.resolved_runtime.get("resource_selection")),
+        cast(
+            Mapping[str, object], delivered.resolved_runtime.get("resource_selection")
+        ),
     )
     expected_launch = ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
@@ -4510,7 +4515,10 @@ def _worker_environment(
         raise ManagedLocalError("worker resource selection is invalid")
     enforced_kinds = None if enforce is None else frozenset(enforce)
     for command in commands:
-        if enforced_kinds is not None and command.claim.resource_kind not in enforced_kinds:
+        if (
+            enforced_kinds is not None
+            and command.claim.resource_kind not in enforced_kinds
+        ):
             continue
         contribution = dict(
             providers[command.claim.resource_kind].worker_environment(command)
@@ -4914,12 +4922,8 @@ def _validate_decision_receipt(
         )
     except Exception as exc:
         raise ManagedLocalError("decision component descriptors are invalid") from exc
-    if not parsed_components or len({item.kind for item in parsed_components}) != len(
-        parsed_components
-    ):
-        raise ManagedLocalError(
-            "decision component descriptors must be non-empty and unique"
-        )
+    if len({item.kind for item in parsed_components}) != len(parsed_components):
+        raise ManagedLocalError("decision component descriptors must be unique")
     if {item.kind for item in parsed_components} != {
         claim.resource_kind for claim in claims
     }:
@@ -4938,12 +4942,8 @@ def _validate_decision_receipt(
         )
     except Exception as exc:
         raise ManagedLocalError("decision provider descriptors are invalid") from exc
-    if not parsed_providers or len({item.kind for item in parsed_providers}) != len(
-        parsed_providers
-    ):
-        raise ManagedLocalError(
-            "decision provider descriptors must be non-empty and unique"
-        )
+    if len({item.kind for item in parsed_providers}) != len(parsed_providers):
+        raise ManagedLocalError("decision provider descriptors must be unique")
     if {item.kind for item in parsed_providers} != {
         claim.resource_kind for claim in claims
     }:

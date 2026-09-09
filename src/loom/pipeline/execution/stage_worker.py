@@ -796,7 +796,9 @@ def _resolved_runtime_for_execution(
     resource_policy = request.resolved_runtime.get("resource_policy", {})
     resource_selection = request.resolved_runtime.get("resource_selection")
     if resource_selection is None:
-        raise RunRequestError("worker request resolved runtime lacks resource_selection")
+        raise StageWorkerStateError(
+            "worker request resolved runtime lacks resource_selection"
+        )
     return ResolvedStageRuntimeOptions(
         stage_id=request.stage_name,
         executor=executor,

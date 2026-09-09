@@ -1004,6 +1004,8 @@ def _resource_capability_diagnostics(
     options: RunOptions,
     descriptor: ExecutorDescriptor,
 ) -> list[CapabilityDiagnostic]:
+    from loom.pipeline.runtime.metadata import resolve_run_runtime
+
     diagnostics: list[CapabilityDiagnostic] = []
     stage_options_by_id: dict[str | None, StageRuntimeOptions] = {
         stage_id: stage_options
@@ -1011,107 +1013,103 @@ def _resource_capability_diagnostics(
             Mapping[str, StageRuntimeOptions], options.stage_options
         ).items()
     }
-    direct_apptainer = descriptor.name in {"apptainer", "singularity"}
-    if direct_apptainer and not stage_options_by_id:
+    direct_container = descriptor.name in {"apptainer", "singularity", "docker"}
+    scheduler_owned = descriptor.name.startswith("slurm")
+    if direct_container and not stage_options_by_id:
         stage_options_by_id[None] = StageRuntimeOptions()
     for stage_id, stage_options in stage_options_by_id.items():
         resources = cast(ResourceRequest, stage_options.resources)
-        kinds = tuple(resources.entries)
+        entries: Mapping[str, object] = resources.entries
+        policy = (
+            cast(ResourcePolicy, options.resource_policy).resolved()
+            if stage_id is None
+            else cast(
+                ResourcePolicy,
+                resolve_run_runtime(options, stage_ids=[stage_id])[
+                    stage_id
+                ].resource_policy,
+            )
+        )
         stage_path = f"RunOptions.stage_options[{stage_id!r}]"
         resource_path = f"{stage_path}.resources"
-        if direct_apptainer and not kinds:
+        if direct_container and not entries:
             authored_at_stage = "container" in stage_options.adapter_options
             container = stage_options.adapter_options.get(
                 "container", options.adapter_options.get("container")
             )
-            kinds = _container_cpu_memory_kinds(container)
+            entries = _container_resource_entries(container)
             source = stage_path if authored_at_stage else "RunOptions"
             resource_path = f"{source}.adapter_options['container'].resources"
-        for kind in kinds:
+        selected = set(policy.select(entries)["enforce"])
+        authored = policy.enforce if isinstance(policy.enforce, tuple) else ()
+        for kind in sorted(set(entries) | set(authored)):
             capability = descriptor.capability_for(kind)
-            if _is_unenforced_apptainer_cpu_memory(
-                options, stage_options, descriptor, kind
-            ):
-                capability = ResourceCapability(
-                    support_level=cast(ResourceSupportLevel, capability.support_level),
-                    enforcement=ResourceEnforcementExpectation.NOT_ENFORCED,
-                    severity=CapabilitySeverity.WARNING,
-                    details={
-                        "reason": (
-                            "resource policy does not select this direct CPU/memory "
-                            "control; demand remains scheduling and accounting intent"
-                        ),
-                        "resource_policy": "enforce",
-                    },
+            entry = entries.get(kind)
+            amount = (
+                entry.get("amount")
+                if isinstance(entry, Mapping)
+                else getattr(entry, "amount", None)
+            )
+            absent = entry is None or amount == 0
+            severity = cast(CapabilitySeverity, capability.severity)
+            enforcement = cast(ResourceEnforcementExpectation, capability.enforcement)
+            code = _resource_diagnostic_code(
+                cast(ResourceSupportLevel, capability.support_level)
+            )
+            message = _resource_diagnostic_message(
+                executor=descriptor.name, kind=kind, capability=capability
+            )
+            if absent:
+                severity = CapabilitySeverity.INFO
+                enforcement = ResourceEnforcementExpectation.NOT_APPLICABLE
+                code = "resource.not_applicable"
+                message = (
+                    f"resource {kind!r} has no effective demand; no control is added"
+                )
+            elif not scheduler_owned and kind not in selected:
+                severity = CapabilitySeverity.WARNING
+                enforcement = ResourceEnforcementExpectation.NOT_ENFORCED
+                code = "resource.not_requested"
+                message = f"no additional {kind!r} control is requested; full demand is retained"
+            elif not scheduler_owned and capability.enforcement in {
+                ResourceEnforcementExpectation.NOT_ENFORCED,
+                ResourceEnforcementExpectation.NOT_APPLICABLE,
+            }:
+                severity = CapabilitySeverity.ERROR
+                code = "resource.unsupported"
+                message = (
+                    f"executor {descriptor.name!r} cannot enforce resource {kind!r}; "
+                    "omit it from resource_policy.enforce or use a supporting execution owner"
                 )
             diagnostics.append(
                 CapabilityDiagnostic(
                     path=f"{resource_path}.entries[{kind!r}]",
-                    severity=cast(CapabilitySeverity, capability.severity),
-                    code=_resource_diagnostic_code(
-                        cast(ResourceSupportLevel, capability.support_level)
-                    ),
-                    message=_resource_diagnostic_message(
-                        executor=descriptor.name,
-                        kind=kind,
-                        capability=capability,
-                    ),
+                    severity=severity,
+                    code=code,
+                    message=message,
                     executor=descriptor.name,
                     stage_id=stage_id,
                     resource_kind=kind,
                     support_level=cast(ResourceSupportLevel, capability.support_level),
-                    enforcement=cast(
-                        ResourceEnforcementExpectation, capability.enforcement
-                    ),
+                    enforcement=enforcement,
                     details=capability.details,
                 )
             )
     return diagnostics
 
 
-def _container_cpu_memory_kinds(container: object) -> tuple[str, ...]:
+def _container_resource_entries(container: object) -> Mapping[str, object]:
     """Inspect authored fallback kinds; the command mapper owns validity."""
 
     if not isinstance(container, Mapping):
-        return ()
+        return {}
     resources = container.get("resources")
     if not isinstance(resources, Mapping):
-        return ()
+        return {}
     entries = resources.get("entries")
     if not isinstance(entries, Mapping):
-        return ()
-    return tuple(kind for kind in ("cpu", "memory") if kind in entries)
-
-
-def _is_unenforced_apptainer_cpu_memory(
-    options: RunOptions,
-    stage_options: StageRuntimeOptions,
-    descriptor: ExecutorDescriptor,
-    kind: str,
-) -> bool:
-    """Resolve the composed resource-policy control projection for diagnostics."""
-
-    if descriptor.name not in {"apptainer", "singularity"} or kind not in {
-        "cpu",
-        "memory",
-    }:
-        return False
-    run_policy = cast("ResourcePolicy", options.resource_policy)
-    stage_policy = cast("ResourcePolicy | None", stage_options.resource_policy)
-    stage_axes = stage_options.resource_policy_axes
-    effective = ResourcePolicy(
-        account_for=(
-            stage_policy.account_for
-            if stage_policy is not None and "account_for" in stage_axes
-            else run_policy.account_for
-        ),
-        enforce=(
-            stage_policy.enforce
-            if stage_policy is not None and "enforce" in stage_axes
-            else run_policy.enforce
-        ),
-    )
-    return kind not in effective.select((kind,))["enforce"]
+        return {}
+    return cast(Mapping[str, object], entries)
 
 
 def _resource_diagnostic_code(support_level: ResourceSupportLevel) -> str:

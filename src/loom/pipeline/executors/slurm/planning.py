@@ -11,6 +11,8 @@ from loom.pipeline.executors.apptainer import ApptainerExecOptions
 from loom.pipeline.executors.containers import ContainerBuildResult, ContainerOptions
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime._resource_controls import resource_control_records
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.stores.run_store import (
     LegacyRunStore as RunStore,
@@ -210,7 +212,7 @@ def build_single_job_planned_submission(
         command,
         container_options=container_options,
         apptainer_options=apptainer_options,
-        resources=None,
+        resources=resources,
     )
     manifest_relative_path = slurm_manifest_relative_path(planning_id)
     job = _build_job(
@@ -384,6 +386,7 @@ def build_slurm_plan_metadata(
                 "stdout_relative_path": job.stdout_relative_path,
                 "stderr_relative_path": job.stderr_relative_path,
                 "dependency_job_keys": list(job.dependency_job_keys),
+                "resource_controls": _planned_resource_controls(job),
             }
             for job in cast(tuple[SlurmPlannedJob, ...], submission.jobs)
         ],
@@ -402,6 +405,36 @@ def build_slurm_plan_metadata(
             for item in container_build_results_metadata(container_build_results)
         ]
     return metadata
+
+
+def _planned_resource_controls(job: SlurmPlannedJob) -> list[PlainData]:
+    """Report allocation delegation and the separate inner-container choice."""
+
+    entries = {
+        kind: ResourceEntry.from_dict(value) for kind, value in job.resources.items()
+    }
+    allocation_policy = ResourcePolicy(enforce="all")
+    records = resource_control_records(
+        entries=entries,
+        policy=allocation_policy,
+        selection=allocation_policy.select(entries),
+        owner="slurm",
+        mechanisms={kind: "sbatch_allocation" for kind in entries},
+        selected_disposition="delegated",
+    )
+    container = cast(SlurmCommandArgv, job.command).metadata.get("container_command")
+    if isinstance(container, Mapping):
+        records.extend(
+            cast(Sequence[PlainData], container.get("resource_controls", ()))
+        )
+    return sorted(
+        records,
+        key=lambda item: (
+            cast(Mapping[str, str], item)["resource"],
+            cast(Mapping[str, str], item)["owner"],
+            cast(Mapping[str, str | None], item)["mechanism"] or "",
+        ),
+    )
 
 
 def _build_job(

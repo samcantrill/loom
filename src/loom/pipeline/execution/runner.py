@@ -1436,6 +1436,7 @@ class PipelineRunner:
         run_started_at: str,
     ) -> StageRunResult:
         if bool(getattr(self.executor, "requires_prepared_worker_request", False)):
+            resolved_runtime = resolved_runtime.for_execution()
             return self._run_prepared_worker_stage(
                 request=request,
                 run_uri=run_uri,

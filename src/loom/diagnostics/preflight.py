@@ -64,6 +64,7 @@ class _DockerPreflightRawTarget:
     stage_id: str | None
     adapter_options: Mapping[str, object]
     resources: object | None
+    resource_policy: object | None
 
 
 @dataclass(frozen=True)
@@ -2972,6 +2973,10 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                 continue
             if kind == "gpu":
                 continue
+            if not scheduler_owned and kind not in _selected_resource_controls(
+                target, resources
+            ):
+                continue
             diagnostics.append(
                 _apptainer_diagnostic(
                     target.stage_id,
@@ -3026,7 +3031,7 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
     diagnostics: list[PlainData] = []
     gpu_targets: list[PlainData] = []
     for target in targets:
-        resources = _resource_entries(target.resources)
+        resources = _apptainer_effective_resource_entries(target)
         gpu = resources.get("gpu")
         if _resource_amount(gpu) <= 0:
             continue
@@ -3046,6 +3051,9 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
             continue
         try:
             gpu_flag = _projected_apptainer_gpu_flag(apptainer_options, resources)
+            selected = "gpu" in _selected_resource_controls(target, resources)
+            if selected and not _is_slurm_executor_name(target.selected_executor):
+                _preflight_container_command(target, resources)
         except Exception as exc:  # noqa: BLE001
             diagnostics.append(
                 _apptainer_diagnostic(
@@ -3061,6 +3069,7 @@ def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
                 "amount": _resource_amount(gpu),
                 "unit": getattr(gpu, "unit", None),
                 "gpu_flag": gpu_flag,
+                "binding": "requested" if selected else "not_requested",
             }
         )
         if gpu_flag is None:
@@ -3121,11 +3130,27 @@ def _check_docker_cpu_memory_mapping(context: _Context) -> PreflightCheckResult:
     diagnostics: list[PlainData] = []
     mapped: list[PlainData] = []
     for target in targets:
-        resources = _resource_entries(target.resources)
+        try:
+            resources = _docker_effective_resource_entries(target)
+            command = _preflight_container_command(target, resources)
+            selected = _selected_resource_controls(target, resources)
+        except Exception as exc:  # noqa: BLE001 - production mapper owns validity.
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_resource_projection_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
         for kind, entry in sorted(resources.items()):
             capability = _docker_resource_capability(kind)
             support_level = cast(Any, capability).support_level.value
-            enforcement = cast(Any, capability).enforcement.value
+            enforcement = (
+                cast(Any, capability).enforcement.value
+                if kind in selected
+                else "not_enforced"
+            )
             if kind in {"cpu", "memory"}:
                 mapped.append(
                     {
@@ -3135,8 +3160,13 @@ def _check_docker_cpu_memory_mapping(context: _Context) -> PreflightCheckResult:
                         "unit": cast(Any, entry).unit,
                         "support_level": support_level,
                         "enforcement": enforcement,
+                        "resource_controls": cast(Any, command).metadata[
+                            "resource_controls"
+                        ],
                     }
                 )
+                continue
+            if kind not in selected:
                 continue
             diagnostics.append(
                 _docker_diagnostic(
@@ -3185,15 +3215,18 @@ def _check_docker_gpu_resource(context: _Context) -> PreflightCheckResult:
 
     diagnostics: list[PlainData] = []
     for target in targets:
-        resources = _resource_entries(target.resources)
-        if "gpu" not in resources:
+        resources = _docker_effective_resource_entries(target)
+        if "gpu" not in _selected_resource_controls(target, resources):
             continue
         capability = _docker_resource_capability("gpu")
         diagnostics.append(
             _docker_diagnostic(
                 target.stage_id,
                 code="docker_gpu_unsupported",
-                message="Docker GPU resource mapping is unsupported in Stage 17",
+                message=(
+                    "Docker GPU enforcement is unsupported; omit gpu from "
+                    "resource_policy.enforce or use a supporting executor"
+                ),
                 detail={
                     "resource_kind": "gpu",
                     "amount": cast(Any, resources["gpu"]).amount,
@@ -3211,7 +3244,7 @@ def _check_docker_gpu_resource(context: _Context) -> PreflightCheckResult:
         status,
         _severity_for_status(status),
         (
-            "Docker GPU resources are not requested"
+            "Docker GPU enforcement is not requested"
             if status is PreflightCheckStatus.PASS
             else "Docker GPU resource mapping is unsupported"
         ),
@@ -4427,6 +4460,7 @@ def _docker_raw_targets(context: _Context) -> tuple[_DockerPreflightRawTarget, .
                 stage_id=None,
                 adapter_options=cast(Mapping[str, object], options.adapter_options),
                 resources=None,
+                resource_policy=getattr(options, "resource_policy", None),
             ),
         )
     from loom.pipeline.runtime import resolve_run_runtime
@@ -4440,6 +4474,7 @@ def _docker_raw_targets(context: _Context) -> tuple[_DockerPreflightRawTarget, .
                 cast(Any, resolved[stage_id]).adapter_options,
             ),
             resources=cast(Any, resolved[stage_id]).resources,
+            resource_policy=cast(Any, resolved[stage_id]).resource_policy,
         )
         for stage_id in stage_ids
     )
@@ -4847,6 +4882,80 @@ def _apptainer_effective_resource_entries(
     )
     intent = getattr(container, "resources", None)
     return _resource_entries(intent)
+
+
+def _docker_effective_resource_entries(
+    target: _DockerPreflightRawTarget,
+) -> Mapping[str, object]:
+    runtime_entries = _resource_entries(target.resources)
+    if runtime_entries:
+        return runtime_entries
+    container = _docker_container_from_adapter(target.adapter_options)
+    return _resource_entries(getattr(container, "resources", None))
+
+
+def _selected_resource_controls(
+    target: _ApptainerPreflightRawTarget | _DockerPreflightRawTarget,
+    entries: Mapping[str, object],
+) -> tuple[str, ...]:
+    from loom.pipeline.runtime.resource_policy import (
+        ResourcePolicy,
+        coerce_resource_policy,
+    )
+
+    policy = (
+        ResourcePolicy()
+        if target.resource_policy is None
+        else coerce_resource_policy(target.resource_policy, path="resource_policy")
+    )
+    return policy.select(entries)["enforce"]
+
+
+def _preflight_container_command(
+    target: _ApptainerPreflightRawTarget | _DockerPreflightRawTarget,
+    entries: Mapping[str, object],
+) -> Any:
+    """Inspect the same full-intent mapping as launch without running a command."""
+
+    from dataclasses import replace
+    from loom.pipeline.executors.containers import ContainerResourceIntent
+    from loom.pipeline.executors.apptainer import build_apptainer_exec_command
+    from loom.pipeline.executors.docker import build_docker_run_command
+
+    apptainer = isinstance(target, _ApptainerPreflightRawTarget)
+    executor = target.executor_name if apptainer else "docker"
+    descriptor = _executor_descriptor(executor)
+    intent = ContainerResourceIntent(
+        entries=cast(Any, entries),
+        capabilities={kind: descriptor.capability_for(kind) for kind in entries},
+    )
+    container = (
+        _apptainer_container_from_adapter(
+            target.adapter_options, allow_target_resolution=False
+        )
+        if apptainer
+        else _docker_container_from_adapter(target.adapter_options)
+    )
+    container = replace(cast(Any, container), resources=intent)
+    if apptainer:
+        return build_apptainer_exec_command(
+            container_options=container,
+            apptainer_options=cast(
+                Any,
+                _apptainer_options_from_adapter(
+                    target.adapter_options,
+                    executor_name=executor,
+                ),
+            ),
+            worker_command=("loom-preflight",),
+            resource_policy=cast(Any, target.resource_policy),
+        )
+    return build_docker_run_command(
+        container_options=container,
+        docker_options=cast(Any, _docker_options_from_adapter(target.adapter_options)),
+        worker_command=("loom-preflight",),
+        resource_policy=cast(Any, target.resource_policy),
+    )
 
 
 def _apptainer_resource_capability(kind: str, *, executor_name: str) -> Any:

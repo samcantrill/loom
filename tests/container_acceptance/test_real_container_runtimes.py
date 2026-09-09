@@ -62,9 +62,7 @@ def test_real_docker_command_available() -> None:
 
 def test_real_apptainer_or_singularity_command_available() -> None:
     if os.environ.get("LOOM_RUN_APPTAINER_ACCEPTANCE") != "1":
-        pytest.skip(
-            "set LOOM_RUN_APPTAINER_ACCEPTANCE=1 to run real Apptainer smoke"
-        )
+        pytest.skip("set LOOM_RUN_APPTAINER_ACCEPTANCE=1 to run real Apptainer smoke")
     command = _apptainer_command()
 
     completed = subprocess.run(  # noqa: S603
@@ -194,9 +192,10 @@ def test_real_apptainer_scheduling_only_cpu_memory_smoke() -> None:
 
     assert "--cpus" not in generated.argv
     assert "--memory" not in generated.argv
-    assert generated.metadata["apptainer_options"] == ApptainerExecOptions(
-        command=command
-    ).to_dict()
+    assert (
+        generated.metadata["apptainer_options"]
+        == ApptainerExecOptions(command=command).to_dict()
+    )
     completed = subprocess.run(  # noqa: S603 - generated production argv.
         generated.argv,
         check=False,

@@ -73,6 +73,24 @@ class LocalExecutor:
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         try:
+            if not (
+                request.metadata.get("worker_request")
+                or request.metadata.get("resident_worker_request")
+            ):
+                from loom.pipeline.runtime.metadata import ResolvedStageRuntimeOptions
+                from loom.pipeline.runtime.resource_policy import ResourcePolicy
+                from loom.pipeline.resources import ResourceRequest
+
+                runtime = request.resolved_runtime
+                if isinstance(runtime, ResolvedStageRuntimeOptions):
+                    selected = cast(ResourcePolicy, runtime.resource_policy).select(
+                        cast(ResourceRequest, runtime.resources).entries
+                    )["enforce"]
+                    if selected:
+                        raise LocalExecutorError(
+                            f"native local execution cannot enforce {', '.join(selected)}; "
+                            "omit these kinds from resource_policy.enforce or use a supporting execution owner"
+                        )
             if self.capture_stdout_stderr:
                 with (
                     contextlib.redirect_stdout(stdout_buffer),

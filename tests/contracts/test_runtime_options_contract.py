@@ -42,7 +42,11 @@ def test_sparse_resource_policy_axes_survive_run_and_stage_round_trip() -> None:
 
     document = options.to_dict()
     assert document["resource_policy"] == {"account_for": ["gpu"]}
-    assert document["stage_options"]["train"]["resource_policy"] == {"enforce": []}
+    stages = document["stage_options"]
+    assert isinstance(stages, dict)
+    train = stages["train"]
+    assert isinstance(train, dict)
+    assert train["resource_policy"] == {"enforce": []}
     assert RunOptions.from_dict(document).to_dict() == document
 
 
@@ -66,7 +70,9 @@ def test_run_options_adapt_to_planning_owned_models() -> None:
     assert options.to_resume_options() == ResumeOptions(enabled=False)
 
 
-def test_execution_envelope_exposes_runtime_options_without_environment_values() -> None:
+def test_execution_envelope_exposes_runtime_options_without_environment_values() -> (
+    None
+):
     assert "options" in RunRequest.__dataclass_fields__
     assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__

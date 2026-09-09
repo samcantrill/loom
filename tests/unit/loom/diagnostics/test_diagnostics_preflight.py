@@ -216,7 +216,7 @@ def test_runtime_executor_and_resource_checks_map_capability_diagnostics(
         list[dict[str, Any]],
         by_id["resources.capabilities"].details["diagnostics"],
     )
-    assert resource_diagnostics[0]["code"] == "resource.ignored"
+    assert resource_diagnostics[0]["code"] == "resource.not_requested"
 
 
 def test_executor_preflight_reports_reliability_policy_diagnostics(
@@ -406,6 +406,7 @@ def test_selected_docker_executor_runs_cheap_checks_and_redacts_env(
             run_uri=run_uri,
             runtime_options={
                 "executor": "docker",
+                "resource_policy": {"enforce": ["cpu", "memory"]},
                 "adapter_options": {
                     "container": {
                         "image": {"reference": "python:3.11-slim"},
@@ -637,6 +638,7 @@ def test_selected_docker_resource_checks_fail_gpu_requests(
             groups=("resources",),
             runtime_options={
                 "executor": "docker",
+                "resource_policy": {"enforce": "all"},
                 "adapter_options": {
                     "container": {"image": {"reference": "python:3.11-slim"}}
                 },
@@ -684,6 +686,7 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
         lambda name: f"/usr/bin/{name}" if name == "apptainer" else None,
     )
     monkeypatch.setenv("HOST_TOKEN", "host-secret")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-allocated")
     config_path = tmp_path / "config.yaml"
     config_path.write_text("pipeline: {}\n", encoding="utf-8")
     image_path = tmp_path / "runtime.sif"
@@ -939,7 +942,7 @@ def test_scheduling_only_implicit_stage_fallback_warns_unless_mapping_fails(
         assert diagnostics[0]["code"] == "apptainer_cpu_memory_projection_invalid"
         assert "unrepresentable" in diagnostics[0]["message"]
     else:
-        assert checks["resources.capabilities"].status is PreflightCheckStatus.PASS
+        assert checks["resources.capabilities"].status is PreflightCheckStatus.WARN
         assert mapping.status is PreflightCheckStatus.WARN
         assert mapping.severity is PreflightSeverity.WARNING
         assert "not enforced" in mapping.message

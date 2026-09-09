@@ -27,6 +27,7 @@ from loom.pipeline.executors.errors import ExecutorError
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime._resource_controls import with_resource_control_disposition
 from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
@@ -223,6 +224,7 @@ class DockerExecutor:
                 metadata=metadata,
             )
 
+        metadata = with_resource_control_disposition(metadata, "applied")
         conflict = _process_conflict_failure(
             request=request,
             worker_result=worker_result,
@@ -339,6 +341,7 @@ def _prepare_docker_attempt(
         docker_options=docker_options,
         worker_command=worker_command,
         resource_policy=runtime.resource_policy,
+        resource_selection=getattr(runtime, "resource_selection", None),
     )
     return _PreparedDockerAttempt(
         container=container,
@@ -709,9 +712,11 @@ def _process_metadata(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
-        "resource_controls": _resource_controls(
-            container, command, launched=process is not None
-        ),
+        **{
+            key: command.metadata[key]
+            for key in ("resource_policy", "resource_selection", "resource_controls")
+            if key in command.metadata
+        },
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -734,42 +739,15 @@ def _process_metadata(
         )
     if launch_error is not None:
         metadata["launch_error"] = launch_error
+    if launch_error is not None or (
+        process is not None and (process.returncode != 0 or process.error is not None)
+    ):
+        metadata = with_resource_control_disposition(metadata, "failed")
     return redact_executor_metadata(metadata)
 
 
 def _redacted_argv(command: DockerRunCommand) -> Sequence[str]:
     return cast(Sequence[str], command.redacted_argv)
-
-
-def _resource_controls(
-    container: ContainerOptions, command: DockerRunCommand, *, launched: bool
-) -> list[PlainData]:
-    """Record requested Docker controls without exposing raw allocation bindings."""
-
-    intent = cast(ContainerResourceIntent | None, container.resources)
-    if intent is None:
-        return []
-    flags = {"cpu": "--cpus", "memory": "--memory"}
-    argv = set(command.argv)
-    controls: list[PlainData] = []
-    for resource in sorted(cast(Mapping[str, object], intent.entries)):
-        mechanism = flags.get(resource)
-        selected = mechanism is not None and mechanism in argv
-        controls.append(
-            {
-                "resource": resource,
-                "owner": "docker",
-                "mechanism": mechanism,
-                "disposition": (
-                    "applied"
-                    if selected and launched
-                    else "requested"
-                    if selected
-                    else "not_requested"
-                ),
-            }
-        )
-    return controls
 
 
 def _coerce_setup_error(exc: BaseException) -> _DockerSetupError:

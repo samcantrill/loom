@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -27,6 +27,7 @@ from loom.pipeline.executors.containers import (
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
+    ContainerResourceIntent,
     LocalContainerBuildService,
     container_build_output_identity,
     parse_container_build_options,
@@ -38,6 +39,8 @@ from loom.pipeline.executors.gpu_visibility import (
     requested_gpu_count,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime import ResourcePolicy
+from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
 from loom.pipeline.stores.run_store import LocalRunStorePaths
 from loom.serialization import PlainData
 
@@ -75,6 +78,18 @@ def wrap_slurm_command_with_apptainer(
         if isinstance(container_options, ContainerOptions)
         else parse_container_options(container_options)
     )
+    entries = resources.entries if isinstance(resources, ResourceRequest) else resources
+    if entries:
+        descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("apptainer")
+        container = replace(
+            container,
+            resources=ContainerResourceIntent(
+                entries=entries,
+                capabilities={
+                    kind: descriptor.capability_for(kind) for kind in entries
+                },
+            ),
+        )
     if requested_gpu_count(resources) > 0:
         environment = cast(ContainerEnvironment, container.environment)
         if (
@@ -88,6 +103,9 @@ def wrap_slurm_command_with_apptainer(
         container_options=container,
         apptainer_options=options,
         worker_command=command.argv,
+        # The outer allocation owns limits. Do not reapply its CPU/RAM cgroups
+        # or invent a second GPU allocation in the inner container.
+        resource_policy=ResourcePolicy(enforce=[]),
     )
     argv = tuple(apptainer_command.argv)
     return SlurmCommandArgv(

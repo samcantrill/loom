@@ -576,7 +576,9 @@ def _validate_worker_resource_selection(
 
     selection = runtime.get("resource_selection")
     if selection is None:
-        raise RunRequestError("StageWorkerRequest.resolved_runtime must include resource_selection")
+        raise RunRequestError(
+            "StageWorkerRequest.resolved_runtime must include resource_selection"
+        )
     resources = runtime.get("resources")
     policy = runtime.get("resource_policy")
     if not isinstance(resources, Mapping) or not isinstance(policy, Mapping):
@@ -585,8 +587,14 @@ def _validate_worker_resource_selection(
         )
     entries = resources.get("entries")
     if not isinstance(entries, Mapping):
-        raise RunRequestError("StageWorkerRequest resolved runtime resources are invalid")
-    from loom.pipeline.runtime.resource_policy import ResourcePolicy, validate_resource_selection
+        raise RunRequestError(
+            "StageWorkerRequest resolved runtime resources are invalid"
+        )
+    from loom.pipeline.runtime.resource_policy import (
+        ResourcePolicy,
+        validate_resource_selection,
+    )
+
     try:
         actual = validate_resource_selection(
             selection,
@@ -597,8 +605,12 @@ def _validate_worker_resource_selection(
     except RuntimeResourceError as exc:
         raise RunRequestError(str(exc)) from exc
     legacy = metadata.get("resource_selection")
-    if legacy is not None and legacy != {key: list(value) for key, value in actual.items()}:
-        raise RunRequestError("StageWorkerRequest metadata resource selection conflicts with resolved runtime")
+    if legacy is not None and legacy != {
+        key: list(value) for key, value in actual.items()
+    }:
+        raise RunRequestError(
+            "StageWorkerRequest metadata resource selection conflicts with resolved runtime"
+        )
 
 
 @dataclass(frozen=True, slots=True)

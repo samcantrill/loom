@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -56,7 +56,9 @@ class ResolvedStageRuntimeOptions:
     resource_policy: ResourcePolicy | Mapping[str, object] = field(
         default_factory=ResourcePolicy
     )
-    resource_selection: Mapping[str, tuple[str, ...]] | Mapping[str, object] | None = None
+    resource_selection: Mapping[str, tuple[str, ...]] | Mapping[str, object] | None = (
+        None
+    )
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
@@ -95,10 +97,12 @@ class ResolvedStageRuntimeOptions:
             coerce_resource_policy(
                 self.resource_policy,
                 path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_policy",
-            ),
+            ).resolved(),
         )
         if self.resource_selection is not None:
-            from loom.pipeline.runtime.resource_policy import validate_resource_selection
+            from loom.pipeline.runtime.resource_policy import (
+                validate_resource_selection,
+            )
 
             object.__setattr__(
                 self,
@@ -108,14 +112,6 @@ class ResolvedStageRuntimeOptions:
                     cast(ResourceRequest, self.resources).entries,
                     cast(ResourcePolicy, self.resource_policy),
                     path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_selection",
-                ),
-            )
-        else:
-            object.__setattr__(
-                self,
-                "resource_selection",
-                cast(ResourcePolicy, self.resource_policy).select(
-                    cast(ResourceRequest, self.resources).entries
                 ),
             )
         object.__setattr__(
@@ -140,7 +136,7 @@ class ResolvedStageRuntimeOptions:
         run_environment = cast(RunEnvironmentRequest, self.run_environment)
         stage_environment = cast(StageEnvironmentRequest, self.stage_environment)
         resource_policy = cast(ResourcePolicy, self.resource_policy)
-        return {
+        result: dict[str, PlainData] = {
             "stage_id": self.stage_id,
             "executor": self.executor,
             # This crosses the exact worker handoff, not the display-only
@@ -158,11 +154,43 @@ class ResolvedStageRuntimeOptions:
             },
             "adapter_options": _adapter_metadata(self.adapter_options),
             "resource_policy": resource_policy.to_dict(),
-            "resource_selection": {
-                key: list(value)
-                for key, value in cast(Mapping[str, tuple[str, ...]], self.resource_selection).items()
-            },
         }
+        if self.resource_selection is not None:
+            result["resource_selection"] = {
+                key: list(value)
+                for key, value in cast(
+                    Mapping[str, tuple[str, ...]], self.resource_selection
+                ).items()
+            }
+        return result
+
+    def for_execution(self) -> "ResolvedStageRuntimeOptions":
+        """Finalize direct demand before preparing a new execution handoff.
+
+        Managed callers already supply placement's selection. For direct
+        containers, nonempty runtime demand overrides the authored container
+        fallback; selection is not resolved before that precedence decision.
+        """
+
+        if self.resource_selection is not None:
+            return self
+        resources = cast(ResourceRequest, self.resources)
+        if (
+            self.executor in {"apptainer", "singularity", "docker"}
+            and not resources.entries
+        ):
+            container = self.adapter_options.get("container")
+            raw = container.get("resources") if isinstance(container, Mapping) else None
+            if isinstance(raw, Mapping):
+                resources = ResourceRequest.from_dict(
+                    {"entries": raw.get("entries", {})}
+                )
+        policy = cast(ResourcePolicy, self.resource_policy)
+        return replace(
+            self,
+            resources=resources,
+            resource_selection=policy.select(resources.entries),
+        )
 
 
 @dataclass(frozen=True, slots=True)

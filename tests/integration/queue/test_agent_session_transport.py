@@ -1562,6 +1562,7 @@ def _prepare_remote_producer_run(
     value: int,
     requirement: ExecutionRequirement | None = None,
     resource_entries: Mapping[str, object] | None = None,
+    account_for: str | list[str] = "all",
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1610,6 +1611,7 @@ def _prepare_remote_producer_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={"resource_policy": {"account_for": account_for}},
         execution_requirements={
             stage_name: (
                 requirement
@@ -2228,6 +2230,7 @@ def _prepare_gpu_environment_run(
     target: str | None = None,
     capture_requirement: ExecutionRequirement | None = None,
     delay_seconds: float = 0,
+    enforce_gpu: bool = True,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -2313,6 +2316,15 @@ def _prepare_gpu_environment_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={
+            "stage_options": {
+                "capture": {
+                    "resource_policy": {
+                        "enforce": ["gpu"] if enforce_gpu else [],
+                    }
+                }
+            }
+        },
         execution_requirements={
             **_execution_requirements(spec),
             "capture": capture_requirement
@@ -3078,7 +3090,11 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
         daemon.stop()
 
 
-def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("account_for", ["all", []])
+def test_two_remote_agents_execute_two_globally_selected_runs(
+    tmp_path: Path,
+    account_for: str | list[str],
+) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -3103,6 +3119,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     run_a, authority_a = _prepare_remote_producer_run(
         store,
         run_name="remote-a",
+        account_for=account_for,
         machine_id="agent-a",
         value=1,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -3110,6 +3127,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     run_b, authority_b = _prepare_remote_producer_run(
         store,
         run_name="remote-b",
+        account_for=account_for,
         machine_id="agent-b",
         value=2,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -3395,8 +3413,11 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
         daemon.stop()
 
 
+@pytest.mark.parametrize("enforce_gpu", [False, True])
 def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enforce_gpu: bool,
 ) -> None:
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     credentials = _credentials(tmp_path / "tls")
@@ -3430,6 +3451,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     remote_run, remote_authority = _prepare_gpu_environment_run(
         store,
         run_name="remote-model-preferred",
+        enforce_gpu=enforce_gpu,
         preferred_models=("large", "small"),
         include_cpu_preprocess=True,
         capture_requirement=ExecutionRequirement(
@@ -3439,6 +3461,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     local_run, local_authority = _prepare_gpu_environment_run(
         store,
         run_name="local-model-preferred",
+        enforce_gpu=enforce_gpu,
         preferred_models=("small", "large"),
     )
     config = LocalDaemonConfig(
@@ -3650,8 +3673,8 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                 local_snapshot.stages[0].artifact_facts[0].artifact
             ),
         )
-        assert remote_output["value"] == remote_binding
-        assert local_output["value"] == local_binding
+        assert remote_output["value"] == (remote_binding if enforce_gpu else None)
+        assert local_output["value"] == (local_binding if enforce_gpu else None)
         assert preprocess_output["value"] is None
         assert preprocess_output["pid"] != os.getpid()
         assert remote_output["pid"] != os.getpid()
@@ -5717,14 +5740,19 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
             assignment_id = str(declined["assignment_id"])
             # An exact lost-response replay retains the reason and revision.
             replayed = agent.decline_assignment(
-                session.session_id, assignment_id,
+                session.session_id,
+                assignment_id,
                 availability_revision=str(declined_session["availability_revision"]),
                 reason_code="external_process_detected",
             )
-            assert freeze_plain_data(replayed.value(), path="replayed decline") == declined_session
+            assert (
+                freeze_plain_data(replayed.value(), path="replayed decline")
+                == declined_session
+            )
             with pytest.raises(QueueConflictError, match="protocol conflict"):
                 agent.decline_assignment(
-                    session.session_id, assignment_id,
+                    session.session_id,
+                    assignment_id,
                     availability_revision=replayed.availability_revision,
                     reason_code="observation_unavailable",
                 )

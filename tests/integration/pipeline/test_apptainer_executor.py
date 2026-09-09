@@ -329,7 +329,12 @@ def test_scheduling_only_retains_effective_resources_without_direct_flags(
         "nv": False,
         "rocm": False,
     }
-    assert [dict(item) for item in cast(tuple[Mapping[str, object], ...], metadata["resource_controls"])] == [
+    assert [
+        dict(item)
+        for item in cast(
+            tuple[Mapping[str, object], ...], metadata["resource_controls"]
+        )
+    ] == [
         {
             "resource": "cpu",
             "owner": "apptainer",

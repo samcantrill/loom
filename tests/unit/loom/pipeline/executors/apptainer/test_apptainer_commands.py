@@ -30,6 +30,86 @@ from loom.serialization import stable_json_dumps
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("enforce", [[], ["gpu"]])
+def test_gpu_driver_access_is_separate_from_selected_binding(
+    enforce: list[str],
+) -> None:
+    intent = ContainerResourceIntent(
+        entries={"gpu": ResourceEntry(kind="gpu", amount=1)},
+        capabilities={"gpu": ResourceCapability(support_level="supported")},
+    )
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(image="test.sif", resources=intent),
+        worker_command=("python", "--cpus", "payload-only"),
+        resource_policy=ResourcePolicy(enforce=enforce),
+        host_environment={"CUDA_VISIBLE_DEVICES": "GPU-opaque"},
+    )
+    assert "--nv" in command.argv
+    assert ("CUDA_VISIBLE_DEVICES=GPU-opaque" in command.argv) == bool(enforce)
+    assert command.metadata["resource_controls"] == [
+        {
+            "resource": "gpu",
+            "owner": "apptainer",
+            "mechanism": "cuda_visibility_binding" if enforce else None,
+            "disposition": "requested" if enforce else "not_requested",
+        }
+    ]
+    assert "GPU-opaque" not in repr(command.metadata)
+
+
+@pytest.mark.parametrize("enforce", [[], ["cpu"]])
+def test_unselected_cpu_intent_still_receives_semantic_validation(
+    enforce: list[str],
+) -> None:
+    with pytest.raises(ApptainerOptionError, match="positive integer") as caught:
+        build_apptainer_exec_command(
+            container_options=ContainerOptions(
+                image="test.sif",
+                resources=ContainerResourceIntent(
+                    entries={"cpu": ResourceEntry(kind="cpu", amount=0)},
+                    capabilities={"cpu": ResourceCapability(support_level="supported")},
+                ),
+            ),
+            worker_command=("true",),
+            resource_policy=ResourcePolicy(enforce=enforce),
+        )
+    assert caught.value.__cause__ is not None
+
+
+def test_saved_container_selection_must_match_full_intent() -> None:
+    with pytest.raises(ApptainerOptionError, match="conflicts with resource policy"):
+        build_apptainer_exec_command(
+            container_options=ContainerOptions(
+                image="test.sif",
+                resources=ContainerResourceIntent(
+                    entries={"cpu": ResourceEntry(kind="cpu", amount=2)},
+                    capabilities={"cpu": ResourceCapability(support_level="supported")},
+                ),
+            ),
+            worker_command=("true",),
+            resource_policy=ResourcePolicy(account_for="all", enforce=[]),
+            resource_selection={"account_for": [], "enforce": []},
+        )
+
+
+def test_absent_explicit_control_is_not_applicable() -> None:
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(image="test.sif"),
+        worker_command=("true",),
+        resource_policy=ResourcePolicy(enforce=["gpu"]),
+        host_environment={},
+    )
+    assert "--nv" not in command.argv
+    assert command.metadata["resource_controls"] == [
+        {
+            "resource": "gpu",
+            "owner": "apptainer",
+            "mechanism": None,
+            "disposition": "not_applicable",
+        }
+    ]
+
+
 def test_build_apptainer_exec_command_is_deterministic_and_redacted() -> None:
     command = build_apptainer_exec_command(
         container_options=_container_options(),

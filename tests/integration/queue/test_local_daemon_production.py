@@ -286,8 +286,10 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
     ]
 
 
+@pytest.mark.parametrize("account_for", ["all", []])
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
     tmp_path: Path,
+    account_for: str | list[str],
 ) -> None:
     run_root = tmp_path / "runs"
     run_store = LocalRunStore(run_root)
@@ -364,6 +366,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={"resource_policy": {"account_for": account_for}},
         execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
@@ -481,11 +484,20 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "train",
         ]
         assert all(stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages)
-        assert provider.operations.count("prepare") == 2
-        assert provider.operations.count("activate") == 2
+        expected_claims = 2 if account_for == "all" else 0
+        assert provider.operations.count("prepare") == expected_claims
+        assert provider.operations.count("activate") == expected_claims
         # Default managed policy retains CPU admission but has no outer binding.
         assert provider.operations.count("environment") == 0
-        assert provider.operations.count("release") == 2
+        assert provider.operations.count("release") == expected_claims
+        if account_for == []:
+            with sqlite3.connect(config.agent_journal) as conn:
+                rows = tuple(conn.execute("SELECT state, claims_json FROM assignments"))
+            assert len(rows) == 2
+            assert all(
+                state == "released" and json.loads(claims) == {"commands": []}
+                for state, claims in rows
+            )
         preprocess_artifacts = run_store.local_stage_artifact_dir(run_uri, "preprocess")
         assert (preprocess_artifacts / "payload" / "value.txt").read_text(
             encoding="utf-8"

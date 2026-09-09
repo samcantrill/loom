@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 import base64
+import json
 import sqlite3
 import sys
 import time
@@ -54,7 +55,7 @@ from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolic
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
-from loom.serialization import json_dumps_pretty
+from loom.serialization import PlainData, json_dumps_pretty
 
 
 pytestmark = pytest.mark.integration
@@ -554,6 +555,31 @@ def _exercise_mixed_route_run(
             )
         assignment_id = cast(str, registration["assignment_id"])
         delivery = SlurmStageDelivery.from_dict(registration["delivery"])
+        assert (
+            delivery.to_dict()
+            == SlurmStageDelivery.from_dict(delivery.to_dict()).to_dict()
+        )
+        assert (
+            delivery.resolved_runtime["resource_selection"]
+            == (
+                SlurmStageDelivery.from_dict(delivery.to_dict()).resolved_runtime[
+                    "resource_selection"
+                ]
+            )
+        )
+        legacy = delivery.to_dict()
+        legacy["schema_version"] = 3
+        legacy_runtime = dict(cast(Mapping[str, PlainData], legacy["resolved_runtime"]))
+        legacy_runtime.pop("resource_selection", None)
+        legacy_runtime.pop("resource_policy", None)
+        legacy["resolved_runtime"] = legacy_runtime
+        legacy_bytes = json.dumps(legacy, sort_keys=True)
+        calls_before = tuple(runner.calls)
+        with pytest.raises(QueueServiceError, match="finish|cancel|prepare"):
+            SlurmStageDelivery.from_dict(legacy)
+        assert json.dumps(legacy, sort_keys=True) == legacy_bytes
+        assert tuple(runner.calls) == calls_before
+        assert not (tmp_path / "compute").exists()
         workspace = SlurmBootstrapWorkspace(tmp_path / "compute", assignment_id)
         workspace.persist_delivery(delivery)
         for item in delivery.inputs:

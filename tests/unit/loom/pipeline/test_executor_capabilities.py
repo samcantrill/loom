@@ -24,6 +24,7 @@ from loom.pipeline import (
     validate_executor_capabilities,
 )
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime import ResourcePolicy
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     RetryPolicy,
@@ -291,6 +292,7 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     result = validate_executor_capabilities(
         RunOptions(
             executor="docker",
+            resource_policy=ResourcePolicy(enforce="all"),
             adapter_options={
                 "container": {"image": {"reference": "python:3.12"}},
                 "container_build": {
@@ -525,9 +527,9 @@ def test_local_resource_requests_warn_without_failing_validation() -> None:
     result.raise_for_errors()
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
     assert [diagnostic["code"] for diagnostic in diagnostics] == [
-        "resource.ignored",
-        "resource.ignored",
-        "resource.ignored",
+        "resource.not_requested",
+        "resource.not_requested",
+        "resource.not_requested",
     ]
     assert [diagnostic["resource_kind"] for diagnostic in diagnostics] == [
         "cpu",
@@ -627,6 +629,7 @@ def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:
     )
     options = RunOptions(
         executor="batch",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -674,6 +677,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
     )
     options = RunOptions(
         executor="fake",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -701,7 +705,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
         (item["resource_kind"], item["code"], item["severity"]) for item in diagnostics
     ] == [
         ("cpu", "resource.supported", "info"),
-        ("gpu", "resource.ignored", "warning"),
+        ("gpu", "resource.unsupported", "error"),
         ("memory", "resource.advisory", "warning"),
         ("test.scratch", "resource.unsupported", "error"),
     ]

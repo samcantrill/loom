@@ -657,12 +657,44 @@ def test_apptainer_executor_resource_command_failure_has_runtime_remedy(
     ).execute(request)
 
     assert result.status == StageStatus.FAILED
+    controls = cast(
+        tuple[Mapping[str, object], ...], result.executor_metadata["resource_controls"]
+    )
+    assert [(item["resource"], item["disposition"]) for item in controls] == [
+        ("cpu", "failed")
+    ]
     failure = cast(ExecutionFailure, result.failure)
     assert "inspect the runtime stderr" in failure.message
     assert "unsupported --cpus/--memory options" in failure.message
     assert failure.details["resource_limit_remedy"] == (
         "inspect runtime diagnostics and use a compatible runtime/cgroup setup"
     )
+
+
+def test_application_failure_preserves_validated_control_delivery(
+    tmp_path: Path,
+) -> None:
+    resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
+    store, run_uri, request = _request(tmp_path, resources=resources)
+
+    def write_failure(_command: ApptainerExecCommand) -> None:
+        store.write_stage_worker_result(
+            run_uri, "build", _worker_failure(run_uri).to_dict(), attempt=1
+        )
+
+    result = ApptainerExecutor(
+        run_store=store,
+        apptainer_command_runner=RecordingApptainerRunner(
+            returncode=1, callback=write_failure
+        ),
+    ).execute(request)
+    assert result.status is StageStatus.FAILED
+    controls = cast(
+        tuple[Mapping[str, object], ...], result.executor_metadata["resource_controls"]
+    )
+    assert [(item["resource"], item["disposition"]) for item in controls] == [
+        ("cpu", "applied")
+    ]
 
 
 def test_empty_enforcement_missing_result_does_not_claim_resource_limit_failure(
