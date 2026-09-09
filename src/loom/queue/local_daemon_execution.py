@@ -192,6 +192,19 @@ class LocalDaemonExecutionOutcome:
     reason: str | None = None
 
 
+def _worker_runtime(
+    intent: ManagedLocalIntent, stage_name: str
+) -> ResolvedStageRuntimeOptions:
+    """Join the immutable post-demand placement to a worker's runtime handoff."""
+
+    placement = intent.placements[stage_name]
+    return replace(
+        intent.runtime[stage_name],
+        resources=placement.resource_request,
+        resource_policy=placement.resource_policy,
+    )
+
+
 def _validate_agent_provider_composition(
     providers: Sequence[AgentResourceProvider],
     planners: Mapping[str, ResourcePlanner],
@@ -3067,7 +3080,7 @@ class LocalDaemonExecution:
                     stage_plan=stage_plan,
                     produced_outputs=_produced_outputs(snapshot),
                     fingerprint_context=intent.plan.fingerprint_context,
-                    resolved_runtime=intent.runtime[record.stage_name],
+                    resolved_runtime=_worker_runtime(intent, record.stage_name),
                     metadata={
                         "resource_selection": {
                             key: list(value)
@@ -4447,7 +4460,9 @@ class LocalDaemonExecution:
         try:
             _validate_remote_semantic_data(
                 fingerprint=fingerprint,
-                resolved_runtime=intent.runtime[record.stage_name].to_safe_metadata(),
+                resolved_runtime=_worker_runtime(
+                    intent, record.stage_name
+                ).to_safe_metadata(),
                 worker_metadata={},
             )
             total_bytes = 0
@@ -4608,7 +4623,7 @@ class LocalDaemonExecution:
             if item.stage_name == record.stage_name
         )
         produced = _produced_outputs(snapshot)
-        runtime = intent.runtime[record.stage_name]
+        runtime = _worker_runtime(intent, record.stage_name)
         raw_worker_request = self.run_store.read_stage_worker_request(
             record.run_uri,
             record.stage_name,
