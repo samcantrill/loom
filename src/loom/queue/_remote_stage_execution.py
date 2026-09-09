@@ -53,7 +53,7 @@ from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 from .errors import QueueConflictError, QueueServiceError
 
 
-RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 3
+RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 4
 REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
@@ -941,6 +941,11 @@ class _ResidentAssignmentBundle:
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("resident assignment bundle is invalid")
+        if value.get("schema_version") != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+            raise QueueServiceError(
+                "resident assignment bundle schema is unsupported; finish or cancel "
+                "the saved work in its pinned environment and prepare a fresh identity"
+            )
         for field_name in (
             "inputs",
             "declared_outputs",
