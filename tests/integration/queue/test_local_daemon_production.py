@@ -1446,7 +1446,14 @@ def test_completed_background_failure_replays_the_same_local_assignment(
     original_query = execution.supervisor.query
     third_query_entered = Event()
     allow_recovery = Event()
+    failed_replay_wake = Event()
     query_calls = 0
+    original_wake = daemon._wake.set
+
+    def observe_replay_wake() -> None:
+        if query_calls == 2:
+            failed_replay_wake.set()
+        original_wake()
 
     def fail_two_observers_then_recover(launch: object):
         nonlocal query_calls
@@ -1459,6 +1466,7 @@ def test_completed_background_failure_replays_the_same_local_assignment(
         return original_query(launch)  # type: ignore[arg-type]
 
     monkeypatch.setattr(execution.supervisor, "query", fail_two_observers_then_recover)
+    monkeypatch.setattr(daemon._wake, "set", observe_replay_wake)
     client = daemon.client_view(
         LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
     )
@@ -1467,6 +1475,9 @@ def test_completed_background_failure_replays_the_same_local_assignment(
             LocalDaemonAdmissionRequest("background-replay-item", run_uri)
         )
         assert third_query_entered.wait(5)
+        assert not failed_replay_wake.is_set(), (
+            "a failed replay must await the normal poll, not wake its own retry loop"
+        )
         with sqlite3.connect(config.execution_database) as conn:
             assignment_rows = tuple(
                 conn.execute(

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; recovery startup review passed, bounded execution admitted
+- Status: blocked; recovery corrections validated locally, transport amendment approval required
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -257,7 +257,7 @@ gate/review/merge ownership follows the canonical phase workflow.
 | Implementation and changed paths | Checkpoint `6474206` adds full-intent container validation, saved-selection-aware builders, selection-aware capability/preflight, truthful direct-container launch receipts, native unsupported-control rejection, and direct handoff finalization after container/runtime precedence. Refiner commits preserve sparse axes and worker policy/selection, gate provider bindings, and begin empty-claim lifecycle support. Recovery delivery `b8e33bb` canonically reuses unchanged unconsumed offers for no-claim work, makes later assignments use that canonical ID, compares retained runtime demand/policy/selection at local restart, ready-stage SLURM and dispatch, carries full schema-2 remote failures/start proof, and records definitive selected-control no-start results through local and remote terminal paths. This is not a complete Phase 1 implementation. |
 | Targeted evidence | 214 policy/worker/container/capability/preflight unit and contract tests passed. Fake ready-stage SLURM integration passed 15 tests, including current delivery round trip and schema-3 writer-shaped delivery rejection before compute workspace/input acceptance. Managed local/remote comparisons: 5 passed, 1 failed. Recovery `b8e33bb`: 31 focused managed-local/remote-workspace unit tests, Ruff and Pyright pass; real local and loopback-remote account-none two-stage journeys each pass. The offer oracle covers canonical reuse with changed proposed ID, unchanged bytes, replay, conflict, run-limit loss, and consuming follow-up/loss. The remaining pre-recovery failure is superseded by the passing local account-none journey. |
 | Evidence location | Worktree-local ignored `build/resource-policy-checkpoint/` retains unit, managed integration, SLURM replay and type-check logs. The failed managed log is required evidence, not a successful smoke receipt. |
-| Full gates | The latest `make validate-pr` passed repository-wide lint and Pyright, then failed/interrupted in default tests: 681 passed, 8 failed, 2 skipped, 156 deselected. Current capability/default-expectation corrections pass 21 targeted tests; SLURM continuation corrections pass 5. The recovery stall remains under investigation. Earlier full receipts and `build/test-summary.md` are stale; both final gates must run on the corrected stable tree. |
+| Full gates | The latest `make validate-pr` passed repository-wide lint and Pyright, then failed/interrupted in default tests: 681 passed, 8 failed, 2 skipped, 156 deselected. Current capability/default-expectation corrections pass 21 targeted tests; SLURM continuation corrections pass 5 plus 18 adjacent consumers. Following the no-start waiter and failed-replay wake corrections, the complete local-daemon file passes 65 tests in the isolated no-extra environment. Earlier full receipts and `build/test-summary.md` remain stale; both final gates must run after the transport amendment is resolved. |
 | PR, review, and merge | Blocked before submission. Required independent implementation review has not run. No PR, push or merge occurred. |
 | Residual risk and cleanup | No physical GPU/container/SIF execution, live SLURM submission or host changes. CPU subprocesses, loopback transport and fake scheduler commands are not physical isolation proof. Preserve this phase worktree and evidence; Phase 2 and rphys Stage 81 physical continuation remain unstarted. |
 
@@ -464,8 +464,10 @@ the containment/no-output/no-retry checks. The isolated no-extra environment the
 reproduced the cancelled-recovery stall and exited 139 during its native thread
 dump. Its partial evidence is in `local-daemon-isolated.log`; the orphaned test
 supervisor was stopped through its authenticated shutdown operation, preserving
-files. A bounded Python-level thread diagnostic is in progress. The native dump
-crash and earlier stall are not claimed resolved.
+files. The bounded Python-level diagnostic then reproduced the stall without a
+native crash: 38 cases passed before interruption, with snapshots showing operator
+recovery waiting for the cycle lock while failed retained-assignment replay
+repeatedly rescheduled itself (`local-daemon-python-diagnostic.log`).
 
 The same open manager correction addresses two existing Phase 1 integration
 owners found by that gate. Capability checking now resolves all configured stages
@@ -496,8 +498,29 @@ No lifecycle state, claim-release rule or process-start proof changes. Both case
 the lost-worker containment case and background-observer replay passed (4;
 `no-start-daemon-after.xml`), with the red receipt retained in
 `no-start-daemon-before.xml`. This is an R4 completion-path correction, not evidence
-that it caused or resolved the separate guarded-recovery stall. Changed-file Ruff,
-Pyright and diff checks pass for these corrections; full validation is outstanding.
+that it caused or resolved the separate guarded-recovery stall.
+
+The recovery snapshots identify a separate failed-replay self-wake loop. Each failed
+reconciliation future immediately woke the next cycle, bypassing the configured
+poll wait and starving operator access to the cycle lock. The actual background
+replay test now observes that wake at its second injected query failure: it fails
+before the correction (`replay-wake-before.xml`). Failed replay now awaits the
+existing poll; successful replay still wakes immediately. No timer, lifecycle
+state, recovery policy or claim-release behavior changes. Replay, all three guarded
+recovery outcomes and both no-start cases pass (6; `replay-wake-after.xml`). The
+complete production-file rerun in the isolated no-extra environment passes all
+65 tests without skips (`local-daemon-isolated-after.xml`, 196.06 seconds); guarded
+recovery cases finish in approximately 3.3–3.6 seconds. This resolves the reproduced
+retry-wake starvation finding without claiming a fresh repository-wide gate.
+Changed-file Ruff, Pyright and diff checks pass. No diagnostic runner remains live.
+
+Continuation is now blocked on the unchanged, unapproved transport constraint
+amendment above. It has persisted across the prior implementation continuation,
+the maintainer's blocker-explanation request and the current correction. The
+already-approved integration and lifecycle corrections are recorded; no further
+executor/refiner pass, transport widening, full-gate claim, independent review or
+PR submission is authorized by these subset results. Approval of the targeted
+transport contract and its review is required before completing R3 and final gates.
 
 ### R1 — Canonical Offer Reuse
 

@@ -1,16 +1,17 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; Phase 1 recovery startup review passed, execution admitted
+Status: blocked; Phase 1 transport amendment approval required
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
 Blockers: Phase 1's Transport Boundary Finding requires a targeted amendment to
-reconcile portable failure data with the generic HTTP JSON limits. The latest
-full gate failed/interrupted; focused integration corrections pass, while the
-guarded-recovery stall remains under investigation. Full gates, independent
-implementation review and PR submission remain incomplete.
+reconcile portable failure data with the generic HTTP JSON limits. Integration,
+no-start waiter and failed-replay wake corrections pass their focused checks;
+the complete local-daemon file now passes 65 tests in the isolated no-extra
+environment. Fresh full gates, independent implementation review and PR submission
+remain incomplete and cannot establish R3 while its transport contract is unresolved.
 
 ## Summary
 
@@ -84,7 +85,7 @@ implementation review and PR submission remain incomplete.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pipeline-resource-policy | in_progress | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
+| 1 | pipeline-resource-policy | blocked | [Phase 1](phases/pipeline-resource-policy.md) | agent/stage-39-p1-pipeline-resource-policy | pending | Runtime composition, placement/admission, stage handoffs, executors, diagnostics and consumers | Configured pipeline accounting and additional controls are independent end to end |
 | 2 | queued-resource-policy | pending | [Phase 2](phases/queued-resource-policy.md) | agent/stage-39-p2-queued-resource-policy | pending | Whole-run contract, selection/controller, assignment bindings/providers and consumers | Opaque queued commands use the same policy semantics without losing replay or lifecycle safety |
 
 ## Quality Gate
@@ -129,5 +130,5 @@ implementation review and PR submission remain incomplete.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`, test typing checkpoint `cfca015`; R1–R4 focused receipts and current integration corrections are recorded in the phase card. Latest full gate failed/interrupted; full gates and independent review remain pending | Portable failure HTTP limits need approval; wider-run guarded-recovery stall remains unresolved; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Recovery `4a81fcf` plus upstream `998b07c`; subsequent integration/no-start corrections at `db1b7a6` and the failed-replay wake correction have focused evidence in the phase card, including 65 passing isolated local-daemon tests. Fresh full gates and independent review remain pending | Portable failure HTTP constraint amendment needs approval and review; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |

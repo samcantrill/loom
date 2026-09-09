@@ -1461,7 +1461,11 @@ class LocalDaemonExecution:
                 def wake_daemon(
                     _future: Future[None], target: LocalDaemon = daemon
                 ) -> None:
-                    target._wake.set()
+                    # Failed replay already has a pending owner. Retry on the
+                    # normal poll so self-wakes cannot starve operator access
+                    # to the cycle lock; successful progress is still immediate.
+                    if _future.exception() is None:
+                        target._wake.set()
 
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
