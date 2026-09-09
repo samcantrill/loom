@@ -13,6 +13,8 @@ import loom.queue._remote_stage_execution as remote_stage_execution
 import loom.queue.agent_sessions as agent_sessions
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution.models import (
+    EXECUTION_FAILURE_SCHEMA_VERSION,
+    ExecutionFailure,
     STAGE_WORKER_REQUEST_SCHEMA_VERSION,
     StageWorkerRequest,
     StageWorkerResult,
@@ -141,7 +143,13 @@ def _request(
         "/coordinator/stderr",
         "/coordinator/trace",
         "/coordinator/result",
-        {"stage_id": "build", "executor": "local"},
+        {
+            "stage_id": "build",
+            "executor": "local",
+            "resources": {"entries": {}},
+            "resource_policy": {"account_for": "all", "enforce": []},
+            "resource_selection": {"account_for": [], "enforce": []},
+        },
     )
     data = b"input"
     atom = CapacityAtom(
@@ -368,6 +376,8 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
     assert report.outputs[0].metadata == {"quality": "verified"}
     replayed = _RemoteExecutionReport.from_dict(report.to_dict())
     assert replayed.outputs[0].metadata == {"quality": "verified"}
+    assert replayed.schema_version == 2
+    assert replayed.process_created is True
     with sqlite3.connect(":memory:") as conn:
         conn.row_factory = sqlite3.Row
         conn.execute(
@@ -393,6 +403,116 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
         )
     assert coordinator_refs["result"].metadata == {"quality": "verified"}
     assert str(workspace.root) not in str(report.to_dict())
+
+
+def test_resident_no_start_failure_is_durable_without_process_identity(
+    tmp_path: Path,
+) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="executor_infrastructure",
+        message="selected 'cpu' control has no active claim",
+        details={"process_created": False},
+    )
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:00Z",
+        executor_name="local",
+        failure=failure,
+        exit_code=1,
+    )
+    workspace.persist_failed_before_start(result)
+    report = workspace.retain_outputs()
+    assert report.process_created is False
+    assert report.failure == failure
+    assert (
+        _RemoteExecutionReport.from_dict(report.to_dict()).to_dict() == report.to_dict()
+    )
+
+
+def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
+    tmp_path: Path,
+) -> None:
+    message = "nested worker failure " + "x" * 2048
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri="loom-agent:assignment-1",
+        stage_name="build",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="executor_infrastructure",
+        message=message,
+        details={"diagnostic_failure": {"message": "nested cause"}},
+    )
+    report = _RemoteExecutionReport(
+        assignment_id="assignment-1",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+        executor_name="local",
+        failure_type=failure.failure_type,
+        message=message,
+        exception_type=failure.exception_type,
+        failure=failure,
+        process_created=None,
+        schema_version=2,
+    )
+    assert _RemoteExecutionReport.from_dict(report.to_dict()).failure == failure
+    with pytest.raises(QueueConflictError, match="summary conflicts"):
+        _RemoteExecutionReport(
+            assignment_id="assignment-1",
+            stage_name="wrong-stage",
+            attempt=1,
+            status=StageStatus.FAILED,
+            started_at="2020-01-01T00:00:00Z",
+            finished_at="2020-01-01T00:00:01Z",
+            executor_name="local",
+            failure_type=failure.failure_type,
+            message=message,
+            exception_type=failure.exception_type,
+            failure=failure,
+            schema_version=2,
+        )
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    cancelled = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.CANCELLED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:00Z",
+        executor_name="local",
+        exit_code=1,
+    )
+    workspace.persist_cancelled_before_start(cancelled)
+    assert workspace.retain_outputs().process_created is False
 
 
 def test_input_publish_before_commit_replay_adopts_only_exact_target(

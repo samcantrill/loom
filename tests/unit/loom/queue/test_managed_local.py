@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import json
+import sqlite3
 from threading import Barrier
 
 import pytest
@@ -234,7 +236,9 @@ def test_same_kind_provider_group_preserves_withdrawn_resource_statuses() -> Non
     )
 
     assert observed.atoms == (atoms[1],)
-    assert [(item.local_capacity_key, item.reason_code) for item in observed.resource_status] == [
+    assert [
+        (item.local_capacity_key, item.reason_code) for item in observed.resource_status
+    ] == [
         ("gpu-a", "external_process_detected"),
         ("gpu-b", "available"),
     ]
@@ -683,6 +687,114 @@ def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> Non
         )
         == "reserved"
     )
+
+
+def test_empty_claims_reuse_current_offer_without_consuming_capacity(tmp_path) -> None:
+    _provider_value, command = _provider()
+    first = command.assignment
+    second = replace(
+        first,
+        assignment_id="assignment-empty-2",
+        stage_work_id=stage_work_identity(
+            "admission-1", "evaluate", "evaluate-1", "ready-1"
+        ),
+        stage_name="evaluate",
+        attempt_id="evaluate-1",
+        offer_id="offer-empty-proposed",
+        claim_id="claim-empty-2",
+    )
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, first)
+    _seed_stage_work(path, second)
+    coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    original = _offer(first, command.claim.atoms)
+    assert coordinator.publish_offer(original) == first.offer_id
+    reused = replace(
+        _offer(second, command.claim.atoms),
+        availability_revision=original.availability_revision,
+    )
+    assert coordinator.publish_offer(reused) == first.offer_id
+    with sqlite3.connect(path) as conn:
+        retained = conn.execute(
+            "SELECT snapshot_json FROM coordinator_offers WHERE offer_revision = ?",
+            (first.offer_id,),
+        ).fetchone()
+    assert retained is not None
+    assert json.loads(str(retained[0])) == original.to_dict()
+    with pytest.raises(ManagedLocalError, match="matching availability"):
+        coordinator.publish_offer(
+            replace(
+                reused,
+                offer_revision="offer-empty-conflict",
+                atoms=(replace(command.claim.atoms[0], amount=ExactQuantity(1)),),
+            )
+        )
+    second = replace(second, offer_id=first.offer_id)
+    receipt = _decision_receipt(second, command.claim)
+    receipt["component_descriptors"] = []
+    receipt["provider_descriptors"] = []
+    receipt["claim_contract_descriptors"] = []
+    assert (
+        coordinator.reserve(second, (), max_parallel_stages=3, decision_receipt=receipt)
+        == "reserved"
+    )
+    assert (
+        coordinator.reserve(second, (), max_parallel_stages=3, decision_receipt=receipt)
+        == "reserved"
+    )
+    third = replace(
+        second,
+        assignment_id="assignment-empty-3",
+        stage_work_id=stage_work_identity("admission-1", "score", "score-1", "ready-1"),
+        stage_name="score",
+        attempt_id="score-1",
+        claim_id="claim-empty-3",
+    )
+    _seed_stage_work(path, third)
+    third_receipt = dict(receipt)
+    third_receipt["stage_work_id"] = third.stage_work_id
+    with pytest.raises(ManagedLocalError, match="limit"):
+        coordinator.reserve(
+            third, (), max_parallel_stages=1, decision_receipt=third_receipt
+        )
+    consuming = replace(
+        second,
+        assignment_id="assignment-consuming",
+        stage_work_id=stage_work_identity(
+            "admission-1", "consume", "consume-1", "ready-1"
+        ),
+        stage_name="consume",
+        attempt_id="consume-1",
+        claim_id="claim-consuming",
+    )
+    _seed_stage_work(path, consuming)
+    assert (
+        coordinator.reserve(
+            consuming,
+            (command.claim,),
+            max_parallel_stages=3,
+            decision_receipt=_decision_receipt(consuming, command.claim),
+        )
+        == "reserved"
+    )
+    consuming_loser = replace(
+        consuming,
+        assignment_id="assignment-consuming-loser",
+        stage_work_id=stage_work_identity(
+            "admission-1", "consume-loser", "consume-loser-1", "ready-1"
+        ),
+        stage_name="consume-loser",
+        attempt_id="consume-loser-1",
+        claim_id="claim-consuming-loser",
+    )
+    _seed_stage_work(path, consuming_loser)
+    with pytest.raises(ManagedLocalError, match="availability revision"):
+        coordinator.reserve(
+            consuming_loser,
+            (command.claim,),
+            max_parallel_stages=4,
+            decision_receipt=_decision_receipt(consuming_loser, command.claim),
+        )
 
 
 def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(

@@ -126,6 +126,7 @@ from loom.serialization import (
     ensure_plain_data,
     freeze_plain_data,
     json_loads,
+    thaw_plain_data,
 )
 from loom.timestamps import utc_timestamp
 
@@ -204,6 +205,40 @@ def _worker_runtime(
         resource_policy=placement.resource_policy,
         resource_selection=placement.resource_selection,
     )
+
+
+def _require_retained_resource_handoff_match(
+    retained_runtime: Mapping[str, object],
+    expected_runtime: ResolvedStageRuntimeOptions,
+) -> None:
+    """Reject a retained worker whose resource meaning differs from placement.
+
+    This deliberately compares the persisted plain-data handoff rather than
+    object identity: durable decoders can yield tuples or immutable maps, while
+    placement remains the authority for demand, policy, and concrete selection.
+    """
+
+    fields = ("resources", "resource_policy", "resource_selection")
+    if any(field not in retained_runtime for field in fields):
+        raise QueueConflictError(
+            "retained worker resource handoff is incomplete; prepare a fresh identity"
+        )
+    expected = expected_runtime.to_safe_metadata()
+    retained = {field: retained_runtime[field] for field in fields}
+    projected = {field: expected[field] for field in fields}
+    try:
+        retained_plain = thaw_plain_data(
+            freeze_plain_data(retained, path="retained worker resource handoff"),
+            path="retained worker resource handoff",
+        )
+    except Exception as exc:
+        raise QueueConflictError(
+            "retained worker resource handoff is invalid; prepare a fresh identity"
+        ) from exc
+    if retained_plain != projected:
+        raise QueueConflictError(
+            "retained worker resource handoff differs from placement; investigate retained input or prepare a fresh identity"
+        )
 
 
 def _validate_agent_provider_composition(
@@ -1516,6 +1551,14 @@ class LocalDaemonExecution:
             assignment.run_uri,
             slurm_profiles=self._scheduling.available_slurm_profiles(),
         )
+        expected_runtime = _worker_runtime(intent, assignment.stage_name)
+        _require_retained_resource_handoff_match(
+            request.resolved_runtime, expected_runtime
+        )
+        retained_worker_request = StageWorkerRequest.from_dict(raw_worker_request)
+        _require_retained_resource_handoff_match(
+            retained_worker_request.resolved_runtime, expected_runtime
+        )
         scoped_authority = _ScopedCoordinatorAuthority(
             authority_store,
             run_uri=assignment.run_uri,
@@ -1528,7 +1571,7 @@ class LocalDaemonExecution:
                 authority=scoped_authority,
                 journal=self.journal,
                 assignment=assignment,
-                worker_request=StageWorkerRequest.from_dict(raw_worker_request),
+                worker_request=retained_worker_request,
                 claims=request.claims,
                 providers=self.providers,
                 run_store=self.run_store,
@@ -3092,6 +3135,10 @@ class LocalDaemonExecution:
                 or worker_request.executor_name != profile.executor_name
             ):
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
+            _require_retained_resource_handoff_match(
+                worker_request.resolved_runtime,
+                _worker_runtime(intent, record.stage_name),
+            )
             assignment = SlurmStageAssignment(
                 assignment_id=assignment_id,
                 operation_id=operation_id,
@@ -4609,7 +4656,31 @@ class LocalDaemonExecution:
                 atoms=remote_target.availability_atoms,
                 reflected_claim_ids=remote_target.reflected_claim_ids,
             )
-        self.coordinator.publish_offer(offer_snapshot)
+        canonical_offer_id = self.coordinator.publish_offer(offer_snapshot)
+        if canonical_offer_id != offer_id:
+            # Reusing unchanged capacity evidence must also reuse its durable
+            # identity.  Nothing has been persisted under the proposed ID yet.
+            offer_id = canonical_offer_id
+            assignment_id = (
+                "assignment-"
+                + hashlib.sha256(
+                    (
+                        admission.admission_id
+                        + "\0"
+                        + record.stage_work_id
+                        + "\0"
+                        + offer_id
+                        + "\0"
+                        + str(record.projection_revision)
+                    ).encode("utf-8")
+                ).hexdigest()
+            )
+            assignment = replace(
+                assignment,
+                assignment_id=assignment_id,
+                offer_id=offer_id,
+                claim_id=f"claim-{assignment_id}",
+            )
         stage = intent.pipeline.get_stage(record.stage_name)
         stage_plan = next(
             item
@@ -4645,6 +4716,9 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "managed worker preparation identity differs from authority attempt"
             )
+        _require_retained_resource_handoff_match(
+            worker_request.resolved_runtime, runtime
+        )
         snapshot_revision = (
             remote_target.scheduling_availability_revision
             if remote_target is not None
@@ -5020,6 +5094,13 @@ class LocalDaemonExecution:
                     },
                 ),
             )
+            if report.status is StageStatus.FAILED and report.failure is not None:
+                self.run_store.write_stage_failure(
+                    str(record["run_uri"]),
+                    str(record["stage_name"]),
+                    replace(report.failure, run_uri=str(record["run_uri"])).to_dict(),
+                    attempt=cast(int, record["attempt"]),
+                )
             if report.status is StageStatus.CANCELLED and not record["start_permitted"]:
                 self.coordinator.record_event(
                     assignment_id,
@@ -5345,6 +5426,15 @@ class LocalDaemonExecution:
                     },
                 ),
             )
+            if report.status is StageStatus.FAILED and report.failure is not None:
+                self.run_store.write_stage_failure(
+                    record.assignment.run_uri,
+                    record.assignment.stage_name,
+                    replace(
+                        report.failure, run_uri=record.assignment.run_uri
+                    ).to_dict(),
+                    attempt=record.assignment.attempt,
+                )
         self.slurm_assignments.mark_terminal(assignment_id)
 
     def slurm_release(

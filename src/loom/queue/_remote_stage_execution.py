@@ -1106,10 +1106,13 @@ class _RemoteExecutionReport:
     message: str | None = None
     exception_type: str | None = None
     exit_code: int | None = None
+    failure: ExecutionFailure | None = None
+    resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
+    process_created: bool | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if self.schema_version not in {1, 2}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1151,7 +1154,8 @@ class _RemoteExecutionReport:
             if value is not None:
                 _identifier(value, name)
         if self.message is not None and (
-            not isinstance(self.message, str) or len(self.message) > 1024
+            not isinstance(self.message, str)
+            or (self.schema_version == 1 and len(self.message) > 1024)
         ):
             raise QueueServiceError("remote failure message is invalid")
         if self.status is StageStatus.SUCCEEDED and any(
@@ -1184,9 +1188,74 @@ class _RemoteExecutionReport:
             isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int)
         ):
             raise QueueServiceError("remote result exit code is invalid")
+        if self.schema_version == 1:
+            if any(
+                value is not None
+                for value in (
+                    self.failure,
+                    self.resource_controls,
+                    self.process_created,
+                )
+            ):
+                raise QueueServiceError("legacy remote result carries current evidence")
+            return
+        failure = self.failure
+        if failure is not None and not isinstance(failure, ExecutionFailure):
+            raise QueueServiceError("remote result failure is invalid")
+        if self.status is StageStatus.FAILED:
+            if failure is None:
+                raise QueueServiceError("failed remote result lacks full failure data")
+            if (
+                failure.failure_type != self.failure_type
+                or failure.message != self.message
+                or failure.exception_type != self.exception_type
+                or failure.stage_name != self.stage_name
+                or failure.attempt != self.attempt
+            ):
+                raise QueueConflictError("remote result failure summary conflicts")
+        elif failure is not None:
+            raise QueueServiceError("nonfailed remote result carries failure data")
+        if self.process_created is not None and not isinstance(
+            self.process_created, bool
+        ):
+            raise QueueServiceError("remote result process proof is invalid")
+        controls = self.resource_controls
+        if controls is not None:
+            controls = tuple(controls)
+            valid_dispositions = {
+                "not_requested",
+                "not_applicable",
+                "requested",
+                "applied",
+                "delegated",
+                "unavailable",
+                "failed",
+            }
+            previous: tuple[str, str, str] | None = None
+            for record in controls:
+                if set(record) != {"resource", "owner", "mechanism", "disposition"}:
+                    raise QueueServiceError("remote resource control record is invalid")
+                resource = record["resource"]
+                owner = record["owner"]
+                mechanism = record["mechanism"]
+                disposition = record["disposition"]
+                if (
+                    not isinstance(resource, str)
+                    or not isinstance(owner, str)
+                    or (mechanism is not None and not isinstance(mechanism, str))
+                    or disposition not in valid_dispositions
+                ):
+                    raise QueueServiceError("remote resource control record is invalid")
+                key = (resource, owner, "" if mechanism is None else mechanism)
+                if previous is not None and key < previous:
+                    raise QueueServiceError(
+                        "remote resource control records are unsorted"
+                    )
+                previous = key
+            object.__setattr__(self, "resource_controls", controls)
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        result: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "assignment_id": self.assignment_id,
             "stage_name": self.stage_name,
@@ -1201,10 +1270,23 @@ class _RemoteExecutionReport:
             "exception_type": self.exception_type,
             "exit_code": self.exit_code,
         }
+        if self.schema_version == 2:
+            result.update(
+                {
+                    "failure": None if self.failure is None else self.failure.to_dict(),
+                    "resource_controls": (
+                        None
+                        if self.resource_controls is None
+                        else [dict(item) for item in self.resource_controls]
+                    ),
+                    "process_created": self.process_created,
+                }
+            )
+        return result
 
     @classmethod
     def from_dict(cls, value: object) -> "_RemoteExecutionReport":
-        expected = {
+        legacy = {
             "schema_version",
             "assignment_id",
             "stage_name",
@@ -1219,8 +1301,16 @@ class _RemoteExecutionReport:
             "exception_type",
             "exit_code",
         }
-        if not isinstance(value, Mapping) or set(value) != expected:
+        current = legacy | {"failure", "resource_controls", "process_created"}
+        if not isinstance(value, Mapping) or (
+            set(value) != legacy and set(value) != current
+        ):
             raise QueueServiceError("remote execution report is invalid")
+        schema_version = value.get("schema_version")
+        if schema_version == 1 and set(value) != legacy:
+            raise QueueServiceError("legacy remote execution report shape is invalid")
+        if schema_version == 2 and set(value) != current:
+            raise QueueServiceError("remote execution report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
             raise QueueServiceError("remote execution report is invalid")
@@ -1237,7 +1327,20 @@ class _RemoteExecutionReport:
             message=cast(str | None, value["message"]),
             exception_type=cast(str | None, value["exception_type"]),
             exit_code=cast(int | None, value["exit_code"]),
-            schema_version=cast(int, value["schema_version"]),
+            failure=(
+                None
+                if value.get("failure") is None
+                else ExecutionFailure.from_dict(value["failure"])
+            ),
+            resource_controls=(
+                None
+                if value.get("resource_controls") is None
+                else tuple(
+                    cast(Sequence[Mapping[str, PlainData]], value["resource_controls"])
+                )
+            ),
+            process_created=cast(bool | None, value.get("process_created")),
+            schema_version=cast(int, schema_version),
         )
 
 
@@ -1625,6 +1728,37 @@ class _ResidentAssignmentWorkspace:
                 (encoded,),
             )
 
+    def persist_failed_before_start(self, result: StageWorkerResult) -> None:
+        """Persist a proved pre-supervisor setup failure for terminal replay."""
+
+        request = self.request()
+        if (
+            result.status is not StageStatus.FAILED
+            or result.run_uri != f"loom-agent:{request.assignment_id}"
+            or result.stage_name != request.stage_name
+            or result.attempt != request.attempt
+        ):
+            raise QueueConflictError("resident no-start result identity conflicts")
+        encoded = _canonical_json(result.to_dict())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state, process_execution_id, result_json FROM request "
+                "WHERE singleton = 1"
+            ).fetchone()
+            if row is None or str(row["state"]) not in {"GRANTED", "RESULT"}:
+                raise QueueConflictError(
+                    "resident no-start result requires a durable grant"
+                )
+            if row["process_execution_id"] is not None:
+                raise QueueConflictError("resident no-start proof conflicts with start")
+            if row["result_json"] is not None and str(row["result_json"]) != encoded:
+                raise QueueConflictError("resident no-start result replay conflicts")
+            conn.execute(
+                "UPDATE request SET state = 'RESULT', result_json = ? "
+                "WHERE singleton = 1",
+                (encoded,),
+            )
+
     def worker_result(self) -> StageWorkerResult | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1712,6 +1846,22 @@ class _ResidentAssignmentWorkspace:
                         ),
                     )
         failure = cast(ExecutionFailure | None, result.failure)
+        with self._connect() as conn:
+            process_row = conn.execute(
+                "SELECT process_execution_id, supervisor_launch_json FROM request "
+                "WHERE singleton = 1"
+            ).fetchone()
+        if process_row is None:
+            raise QueueConflictError("resident result has no durable request facts")
+        process_created: bool | None
+        if process_row["process_execution_id"] is not None:
+            process_created = True
+        elif process_row["supervisor_launch_json"] is None:
+            process_created = False
+        else:
+            # A retained supervisor request without a process receipt is not a
+            # proof either way; do not manufacture a no-start conclusion.
+            process_created = None
         return _RemoteExecutionReport(
             assignment_id=request.assignment_id,
             stage_name=request.stage_name,
@@ -1722,9 +1872,18 @@ class _ResidentAssignmentWorkspace:
             executor_name=result.executor_name,
             outputs=tuple(outputs),
             failure_type=None if failure is None else failure.failure_type,
-            message=(None if failure is None else "resident stage execution failed"),
+            message=None if failure is None else failure.message,
             exception_type=None if failure is None else failure.exception_type,
             exit_code=result.exit_code,
+            failure=failure,
+            resource_controls=cast(
+                tuple[Mapping[str, PlainData], ...] | None,
+                result.executor_metadata.get("resource_controls")
+                if isinstance(result.executor_metadata, Mapping)
+                else None,
+            ),
+            process_created=process_created,
+            schema_version=2,
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:

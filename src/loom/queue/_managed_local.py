@@ -2145,7 +2145,8 @@ class SQLiteCoordinatorAssignments:
                     raise ManagedLocalError("managed offer replay conflicts")
                 return snapshot.offer_revision
             reused_availability = conn.execute(
-                "SELECT offer_revision FROM coordinator_offers "
+                "SELECT offer_revision, snapshot_json, consumed, is_current "
+                "FROM coordinator_offers "
                 "WHERE agent_id = ? AND session_id = ? "
                 "AND availability_revision = ?",
                 (
@@ -2155,8 +2156,30 @@ class SQLiteCoordinatorAssignments:
                 ),
             ).fetchone()
             if reused_availability is not None:
+                try:
+                    retained = cast(
+                        dict[str, object],
+                        json.loads(str(reused_availability["snapshot_json"])),
+                    )
+                    proposed = snapshot.to_dict()
+                    retained.pop("offer_revision")
+                    proposed.pop("offer_revision")
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ManagedLocalError(
+                        "managed offer snapshot is invalid"
+                    ) from exc
+                if (
+                    bool(reused_availability["is_current"])
+                    and not bool(reused_availability["consumed"])
+                    and _json(cast(Mapping[str, PlainData], retained))
+                    == _json(proposed)
+                ):
+                    # A no-claim assignment does not change capacity evidence.
+                    # Keep the original offer bytes and let its canonical identity
+                    # flow into the assignment rather than fabricating a revision.
+                    return cast(str, reused_availability["offer_revision"])
                 raise ManagedLocalError(
-                    "managed offer requires a fresh availability revision"
+                    "managed offer requires a fresh availability revision or current unconsumed matching availability"
                 )
             conn.execute(
                 "UPDATE coordinator_offers SET is_current = 0 "
@@ -2299,7 +2322,7 @@ class SQLiteCoordinatorAssignments:
             ).fetchone()
             if offer_row is None or not bool(offer_row["is_current"]):
                 raise ManagedLocalError("assignment offer is missing or stale")
-            if bool(offer_row["consumed"]):
+            if claims and bool(offer_row["consumed"]):
                 raise ManagedLocalError(
                     "availability revision already has an unresolved admission"
                 )
@@ -2475,11 +2498,12 @@ class SQLiteCoordinatorAssignments:
                 "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
                 (_json(decided.to_dict()), assignment.stage_work_id),
             )
-            conn.execute(
-                "UPDATE coordinator_offers SET consumed = 1 "
-                "WHERE agent_id = ? AND session_id = ? AND offer_revision = ?",
-                (assignment.agent_id, assignment.session_id, assignment.offer_id),
-            )
+            if claims:
+                conn.execute(
+                    "UPDATE coordinator_offers SET consumed = 1 "
+                    "WHERE agent_id = ? AND session_id = ? AND offer_revision = ?",
+                    (assignment.agent_id, assignment.session_id, assignment.offer_id),
+                )
             return "reserved"
 
     def advance(self, assignment_id: str, *, expected: str, next_state: str) -> str:
@@ -3696,15 +3720,31 @@ def run_managed_local_assignment(
         return finalize_result(worker_result, coordinator_expected="granted")
 
     process_id = f"{assignment.assignment_id}:root"
-    environment = _worker_environment(
-        resident_launch_profile,
-        workspace.root,
-        commands,
-        providers,
-        cast(
-            Mapping[str, object], delivered.resolved_runtime.get("resource_selection")
-        ),
-    )
+    try:
+        environment = _worker_environment(
+            resident_launch_profile,
+            workspace.root,
+            commands,
+            providers,
+            cast(
+                Mapping[str, object],
+                delivered.resolved_runtime.get("resource_selection"),
+            ),
+        )
+    except ManagedProcessStartError as exc:
+
+        def fail_before_supervisor(error: ManagedProcessStartError = exc) -> str:
+            raise error
+
+        try:
+            journal.start_once(
+                assignment.assignment_id, process_id, fail_before_supervisor
+            )
+        except ManagedProcessStartError:
+            pass
+        worker_result = _start_failed_worker_result(worker_request, exc)
+        journal.record_result(assignment.assignment_id, worker_result.to_dict())
+        return finalize_result(worker_result, coordinator_expected="granted")
     expected_launch = ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
         continuity_epoch=supervisor.continuity_epoch,
@@ -4514,6 +4554,17 @@ def _worker_environment(
     ):
         raise ManagedLocalError("worker resource selection is invalid")
     enforced_kinds = None if enforce is None else frozenset(enforce)
+    commands_by_kind = {command.claim.resource_kind: command for command in commands}
+    if enforced_kinds is not None:
+        for kind in sorted(enforced_kinds):
+            if kind not in commands_by_kind:
+                raise ManagedProcessStartError(
+                    f"selected {kind!r} control has no active claim; remove it from enforce, use enforce: [], or select a supporting execution owner"
+                )
+            if kind not in providers:
+                raise ManagedProcessStartError(
+                    f"selected {kind!r} control has no supporting provider; remove it from enforce, use enforce: [], or select a supporting execution owner"
+                )
     for command in commands:
         if (
             enforced_kinds is not None
@@ -4523,6 +4574,10 @@ def _worker_environment(
         contribution = dict(
             providers[command.claim.resource_kind].worker_environment(command)
         )
+        if enforced_kinds is not None and not contribution:
+            raise ManagedProcessStartError(
+                f"selected {command.claim.resource_kind!r} control has no provider binding; remove it from enforce, use enforce: [], or select a supporting execution owner"
+            )
         if any(
             not isinstance(key, str) or not key or not isinstance(value, str)
             for key, value in contribution.items()

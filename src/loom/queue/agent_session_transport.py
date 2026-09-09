@@ -39,6 +39,7 @@ from loom.queue._managed_local import (
     ClaimOutcome,
     ManagedAssignment,
     ManagedLocalError,
+    ManagedProcessStartError,
     ObserveRequest,
     ProviderReleaseEvidence,
     SQLiteAgentJournal,
@@ -48,6 +49,7 @@ from loom.queue._managed_local import (
     _compose_agent_resource_providers,
     _configured_provider_descriptor,
     _managed_root_failed_worker_result,
+    _start_failed_worker_result,
     _worker_environment,
 )
 from loom.pipeline.execution.models import StageWorkerResult
@@ -3817,23 +3819,44 @@ class LocalDaemonAgentHttpClient:
                     )
                     cancelled_before_start = True
                 else:
-                    execution_journal.start_once(
-                        assignment.assignment_id, execution_id, start_supervisor_launch
-                    )
-                    workspace.append_event(
-                        f"{request.assignment_id}:agent-process-started",
-                        {"kind": "process_started"},
-                    )
-                    self._assignment_call(
-                        session_id,
-                        request.assignment_id,
-                        lambda: self.confirm_started(
+                    try:
+                        execution_journal.start_once(
+                            assignment.assignment_id,
+                            execution_id,
+                            start_supervisor_launch,
+                        )
+                    except ManagedProcessStartError as exc:
+                        result = _start_failed_worker_result(
+                            workspace.worker_request(), exc
+                        )
+                        atomic_write_bytes(
+                            result_path,
+                            json.dumps(
+                                result.to_dict(),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            ).encode(),
+                        )
+                        workspace.persist_failed_before_start(result)
+                        execution_journal.record_result(
+                            assignment.assignment_id, result.to_dict()
+                        )
+                    else:
+                        workspace.append_event(
+                            f"{request.assignment_id}:agent-process-started",
+                            {"kind": "process_started"},
+                        )
+                        self._assignment_call(
                             session_id,
                             request.assignment_id,
-                            fence=fence,
-                            process_execution_id=execution_id,
-                        ),
-                    )
+                            lambda: self.confirm_started(
+                                session_id,
+                                request.assignment_id,
+                                fence=fence,
+                                process_execution_id=execution_id,
+                            ),
+                        )
         if not cancelled_before_start:
             self._flush_workspace_events(session_id, workspace)
         if launch is None:
