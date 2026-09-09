@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: blocked; local implementation checkpoint saved, not PR-ready
+- Status: blocked; recovery approved, independent startup review pending
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
 - Worktree: `stage-39-p1-pipeline-resource-policy` under the manifest's root
-- Base revision: published develop `214f242c10bc32e4c06156da1f1c9b3a183adb45`;
-  approved planning packet imported without conflicts from `6c1a0edc`
+- Base revision: published develop `000f34f`, merged without conflicts in
+  `b94b89d`; original approved planning packet imported from `6c1a0edc`
 - PR target: develop
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
@@ -127,8 +127,10 @@ binding. Excluding accounting cannot create a secret reservation for enforcement
   its existing codec. Preserve the delivery's enclosing store schema. Reject old
   explicit versions before input acceptance, resource/worker reconstruction or
   launch, preserve saved bytes and nested causes, and give guidance to finish/cancel
-  in the pinned old environment and prepare a fresh identity. Ordinary result
-  inspection schemas are unchanged. Reconcile version constants with actual
+  in the pinned old environment and prepare a fresh identity. Existing
+  `ExecutionFailure`/`StageWorkerResult` envelopes remain unchanged; the recovery
+  below versions the closed remote report and retained supervisor launch while
+  preserving legacy inspection/replay. Reconcile version constants with actual
   published owners at startup; material overlapping changes need review.
 - Retire `cpu_memory_enforcement=runtime/scheduling_only` atomically with all its
   current pipeline consumers. Reject the removed key with replacement guidance;
@@ -213,7 +215,8 @@ claimed by this planning-only packet.
   refiner and three total scoped blocker corrections; no speculative hardening.
 - Stop for an unsupported required mechanism, inability to preserve lifecycle or
   retained meaning, overlapping durable upstream changes, exhausted correction
-  budget, or any proposed physical run. Ask about material changes, not mechanics.
+  budget outside the approved recovery below, or any proposed physical run.
+  Ask about material changes, not mechanics.
 - Accepted risk: no binding is not isolation; accounting only reserves capacity.
   Host enforcement proof remains separate opt-in work on a compatible approved host.
 
@@ -347,9 +350,165 @@ below supersede the refiner's partial completion claim.
    a process-start event. This is the unresolved M3/M5 integration, not permission
    for a new scheduler or lifecycle store.
 
-The recommended recovery is one targeted amendment to this atomic Phase 1 packet,
-followed by independent startup review, explicitly bounded execution, fresh full
-gates and the already-required independent implementation review. The no-extra-
-enforcement default and two-phase ownership split are unchanged. No phase PR may
-open while these accepted obligations remain unmet. Maintainer direction on this
-recovery workflow is required before another correction pass.
+## Approved Recovery Amendment
+
+The maintainer's 2026-09-09 implementation request approves the four remedies
+above, this amendment, independent startup review, bounded implementation, fresh
+full gates and independent implementation review before merge. This section owns
+the concrete recovery contract. The original three correction passes remain
+consumed, not reset. Recovery permits one scoped executor delivery and at most
+one qualified correction. Stop with a concrete blocker if that allowance is
+spent. No recovery implementation starts before a passing independent startup
+receipt is recorded. Private helpers and slice order remain executor discretion.
+
+Evidence: clean tree `b94b89d` joins checkpoint `6474206` to develop `000f34f`
+(PR #290). That upstream delta adds managed-lifecycle examples/tests but changes
+none of these scheduling/report/runtime owners. Preserve those journeys in final
+validation and leave the original dirty checkout untouched.
+
+### R1 — Canonical Offer Reuse
+
+Keep the SQLite tables and unique `(agent_id, session_id, availability_revision)`
+key. `publish_offer` returns the canonical offer ID. A different proposed ID may
+reuse an existing availability revision only if its row is current, unconsumed,
+and the entire normalized snapshot equals the proposed snapshot apart from
+`offer_revision`. This includes session, inventory/snapshot revisions, provider
+and planner descriptors, atoms and reflected claims. Reuse changes no stored
+bytes, revision or consumption bit. Reject stale, consumed or conflicting evidence;
+never revive a historical offer. The daemon uses the returned ID consistently in
+assignment, decision receipt and delivery while retaining deterministic per-work/
+attempt/projection identity; never rewrite a retained assignment to adopt an offer.
+
+The existing reserve transaction still validates current offer, READY work,
+receipt, single active assignment and run-wide parallel limit. Empty claims create
+the same fenced assignment but do not consume the offer. Provider lifecycle receives
+no synthetic command. Later resource-consuming work may consume that current offer
+once; concurrent losers revalidate at the existing transaction. No new scheduler,
+store or fabricated provider revision.
+
+Proof: local and remote sequential account-none pipelines complete with real CPU
+workers/loopback transport. Unit cases cover two no-claim assignments under a run
+limit, a limit loser, exact replay, conflicting/stale snapshots and a consuming
+claim after empty work followed by a consuming loser. Existing unknown-work
+withholding, cancellation and release checks remain required.
+
+### R2 — Authoritative Retained Worker Comparison
+
+At local `_execute` and `_dispatch_slurm_ready`, compare decoded retained full
+normalized demand, concrete policy axes and saved selection with
+`_worker_runtime(intent, stage_name)` before input delivery or launch. Use canonical
+plain data so tuple/list or immutable-map differences are not false conflicts.
+Keep identity and internal codec checks. This is Loom handoff validation, never
+downstream factory/dataset/model instantiation. Name the disagreement and advise
+investigating retained input or preparing a fresh identity; do not overwrite it.
+
+Proof uses actual retained files on both routes: an internally consistent resource
+handoff mismatch is rejected before delivery/start without changing bytes or
+timestamps, while exact replay succeeds. Codec-only mismatch tests are insufficient.
+
+### R3 — Portable Failure And Control Evidence
+
+Reuse `ExecutionFailure` and the `loom.diagnostic.v1` projector/renderer. Execution
+exception capture stores native causes, implicit context and exception-group
+children in `ExecutionFailure.details.diagnostic_failure`; where a traceback is
+captured, retain formatted text including notes (without locals) in
+`details.traceback`. Preserve other details and downstream nested context. Existing
+cycle/node limits retain explicit truncation evidence. A worker-local filename is
+provenance, not a dependency for another machine to inspect the cause. Cover common
+local/subprocess/container worker capture/wrapping and managed no-start producers;
+carry existing structured failures intact rather than recapturing their summaries.
+Do not introduce a repository-wide exception base-class migration.
+
+`_RemoteExecutionReport` schema 2 retains existing identity/status/output and scalar
+summary fields and adds the following closed fields:
+
+- `failure`: complete existing `ExecutionFailure` plain-data envelope for FAILED,
+  otherwise null. Its worker-local run URI is source provenance until the
+  coordinator rebinds identity to its authoritative run/attempt.
+- `resource_controls`: ordered four-field records from the actual owner, or null
+  for unreported evidence. Empty is distinct from unreported.
+- `process_created`: true for confirmed launch, false only for owner-proven
+  no-start, null for evidence that cannot establish it. Application-authored
+  failure details are not proof of no-start.
+
+New writers emit schema 2; readers accept exact schema-1 and schema-2 field sets.
+Legacy decode/re-encode returns the original shape/canonical digest without new
+fields, inferred controls or start proof. Current scalar summary and identity
+must agree with nested failure. Remote-agent and SLURM report/store/commit paths
+share this contract; enclosing database versions stay unchanged. Existing transport
+bounds apply, with actionable failure rather than silent truncation on overflow.
+
+The existing retained `ResidentWorkerLaunch` document gains explicit schema 2 and
+`resource_controls`. Unversioned legacy documents preserve their old shape and
+digest on decode/re-encode, with evidence unreported; new fields participate in
+new launch identity/digest. Keep supervisor SQLite schema and continuity/fence
+checks. Producer-built records, not arbitrary argv/environment scanning, establish
+evidence. Preparation is requested; only confirmed launch makes controls applied.
+Merge actual launch evidence into worker results at completion. No-start is
+unavailable/failed, never applied; application failure retains applied controls.
+
+At fenced local/remote/SLURM completion, persist the identity-rebound full failure
+and control metadata at existing run-store result/attempt owners before terminal
+admission is visible. Interrupted diagnostic persistence must be repairable through
+commit replay without changing accepted report identity/bytes. Do not complete
+commit/release while required persistence is absent. Existing admission run-result
+views and CLI text/JSON expose the chain without reading worker-local files.
+Successful control evidence must also be inspectable through existing result/
+metadata owners. No new report store or API endpoint.
+
+This intentionally relaxes the remote report's path-free diagnostic rule: useful
+messages and diagnostic paths cross the existing authorized transport. Do not copy
+ambient environments, locals, raw GPU bindings, credentials or lease capabilities
+into control records/diagnostics, or serialize arbitrary exception attributes.
+
+Proof: a real worker's nested failure reaches a coordinator with a different
+run-store root and the text/JSON client, preserving original messages/details
+without worker filesystem access. Cover serializer cause/context/group behavior,
+current reports, writer-shaped legacy report/launch digest round trips, conflicting
+replay, requested/applied/no-start/unreported controls and interrupted diagnostic
+write retry. The fake-SLURM result route must consume the portable report too.
+
+### R4 — Definitive No-Start Failure
+
+The managed binding owner accounts for every selected present demand, including
+kinds absent from claims. Use existing providers' actual contribution and exact
+claim; no new capability registry. A missing claim or empty/unsupported contribution
+cannot silently satisfy enforcement. Raise a typed actionable setup failure naming
+kind, limitation/prerequisite and correction: remove the kind from `enforce`, use
+`enforce: []`, or select a supporting existing execution owner. Absent/zero demand
+remains not applicable; no hidden claim is created to enforce a resource.
+
+GPU binding retains its exact ACTIVE-claim requirement after grant/activation.
+Failure before any supervisor/process invocation is a proven no-start with nested
+cause and unavailable/failed controls. Extend existing journal START_FAILED and
+resident no-start persistence to FAILED alongside CANCELLED. The proof joins the
+exact assignment/fence/grant and absence of supervisor/process start; do not trust
+a worker's assertion. Persist proof so restart completes without another launch.
+
+Local/remote outbox, coordinator terminal and release use existing owners. Accept
+a proven no-start terminal event without inventing a confirmed-start event; then
+record/acknowledge the result and release exact claims through existing proof.
+Interrupted completion is idempotent. A potentially created process remains
+START_UNKNOWN with claims withheld until existing containment/recovery resolves
+it. Preserve cancellation, timeout and application suspension.
+
+Proof: local/remote unsupported-selected CPU and missing selected binding fail
+before application, expose the complete explanation, and release both agent and
+coordinator ownership. Restart a durable no-start failure without launching.
+An indeterminate launcher retains unknown ownership without releasing. Existing
+enforce-none/supported GPU comparisons still pass with fake tokens only.
+
+### Recovery Execution And Gates
+
+One executor owns R1–R4 source, affected tests and feature/example documentation
+within Phase 1; the manager owns planning artifacts, full gates and GitHub. Read
+the original fixed contracts and this amendment; preserve others' work, do not
+delegate, and return coherent commits with targeted evidence or concrete blockers.
+Phase 2, rphys source, Stage 85 implementation and physical runs remain excluded.
+
+The manager inspects test oracles and runs fresh `make validate-pr` and
+`make test-summary` on the integrated stable tree. Independent implementation
+review covers the entire Phase 1 diff against current develop, not only recovery.
+No PR opens with known blockers. Merge after gates, record evidence and perform
+exact workflow cleanup. This recovery request stops at Phase 1 completion rather
+than implicitly starting Phase 2 or a physical Stage 81 experiment.

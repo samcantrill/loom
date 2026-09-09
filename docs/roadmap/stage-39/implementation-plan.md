@@ -1,13 +1,13 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: blocked; approved Phase 1 has a local implementation checkpoint
+Status: blocked; Phase 1 recovery approved, independent startup review pending
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: no-claim offer freshness, retained-worker comparison, and managed
-control/failure transport and no-start completion; see Phase 1's remaining blockers
+Blockers: independent startup review of the approved Phase 1 recovery amendment;
+the four implementation findings remain open until executable evidence passes
 
 ## Summary
 
@@ -62,6 +62,10 @@ control/failure transport and no-start completion; see Phase 1's remaining block
   uncertain inner launch cannot be called applied. SLURM delegation and no extra
   inner control can coexist. Ordinary application failure retains launch evidence.
   Missing old metadata means unreported. No new store or raw binding/lease dump.
+  Phase 1's Approved Recovery Amendment owns the closed remote-report and retained
+  supervisor-launch version cuts, portable failure capture and legacy digest rules.
+  Useful diagnostic paths may cross the authorized report boundary; no ambient
+  environment, locals or lease-capability serialization is added.
 - Final approval covers the phase-specific executable cuts and narrow legacy
   inspection rule. Never upgrade old executable intent through new defaults,
   edit version fields, overwrite retained identities or automatically adopt live work.
@@ -96,12 +100,16 @@ control/failure transport and no-start completion; see Phase 1's remaining block
   its preparation API addition preserves the same runtime owner and is included
   in the phase's regression obligations. That upstream addition did not require
   contract reopening; the subsequently discovered boundaries below do.
-- Current gate: blocked at local checkpoint `6474206`. Three correction passes
-  are conservatively consumed (including the separately returned refiner repair).
-  A targeted amendment must resolve no-claim offer consumption and the closed
-  remote report/launch and no-start boundaries, retain the outstanding replay
-  comparison obligations, and pass independent startup review before more fixes.
-  No PR, remote merge or Phase 2 start is authorized by a partial checkpoint.
+- Current gate: recovery requested by the maintainer on 2026-09-09; the concrete
+  R1–R4 contract is in Phase 1's Approved Recovery Amendment. Independent startup
+  review is pending. Existing three corrections remain consumed; the approved
+  recovery has one executor delivery and at most one qualified correction, not
+  a reset of the original budget. No PR opens with known blockers.
+- Current source: checkpoint `6474206` reconciled to published develop `000f34f`
+  through merge `b94b89d`; preserve PR #290's new managed-lifecycle journeys.
+  Startup review then bounded implementation, fresh full gates, independent full
+  Phase 1 implementation review and verified merge/cleanup are required. This
+  recovery request excludes Phase 2 execution and physical Stage 81 continuation.
 - Accepted risks: no additional enforcement can expose more host resources than
   reservation bookkeeping suggests; excluded accounting permits oversubscription.
   No claim of isolation. Hard cuts require pinned old environments for old live work.

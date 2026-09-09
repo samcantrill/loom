@@ -1,14 +1,14 @@
 # Roadmap Stage 39 Planning: Independent Resource Accounting And Enforcement
 
-Status: complete plan approved; implementation tracked by the manifest and phase cards
+Status: original plan approved; recovery amendment approved, startup review pending
 Roadmap stage: 39
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-39-resource-policy-plan`
 at published source `719e016c6fe5e1ec3e70994bca6b3716964fc200`, branch
 `agent/stage-39-resource-policy-plan`; relevant dirty paths before drafting: none.
 Planning route: expanded, because this changes runtime options, persisted
 placement/recovery meaning and cross-backend resource controls.
-Current gate: functionality/default and complete migration/phase packet approved after independent review
-Blockers: none at planning exit
+Current gate: independent startup review of the Phase 1 recovery amendment
+Blockers: four implementation findings; concrete recovery contracts at their Phase 1 owner
 
 ## Current State
 
@@ -25,7 +25,7 @@ an explicit published prerequisite; that proof grants no physical authority.
 | Functionality | Independent accounting/enforcement; explicit none; truthful delegation; preserve lifecycle ownership | Approved; no unanswered default |
 | Minimum design | Existing demand/claims/timeout/mappers; typed queue extension, exact compatibility boundaries and bounded receipts; EDR-39-01/02 confirmed | Approved |
 | Validation / phase shaping | Causal admission/command/replay comparisons; two vertical phase cards; plan review passed after bounded SLURM delivery correction | Approved |
-| Quality / implementation | Design and plan review passed; concrete plan approved | Normal Loom phase workflow; current state in manifest |
+| Quality / implementation | Original design/plan approved; maintainer approved targeted recovery on 2026-09-09 | Independent startup review of Phase 1 R1–R4, then bounded execution and full gates; current state in manifest |
 
 ## Evidence And Scope
 
@@ -697,8 +697,15 @@ Loom limits. Existing claim/lease facts remain the only reservation evidence;
 do not copy raw lease capabilities, device tokens or environment values into
 this list. Existing diagnostic failures preserve the actionable underlying reason.
 
-No new store, endpoint, report file or global schema is required. These values
-extend existing metadata mappings and use their current plain-data boundary.
+No new store, endpoint, report file or global schema is required. Existing open
+metadata mappings retain their current plain-data boundary. The implementation
+review found that remote reports and retained supervisor launches instead have
+closed field sets: the approved Phase 1 recovery explicitly versions those two
+documents while preserving old decode/re-encode digests. Its
+[Approved Recovery Amendment](phases/pipeline-resource-policy.md#approved-recovery-amendment)
+owns R1 canonical no-claim offer reuse, R2 authoritative retained comparison,
+R3 portable causal failure/control evidence and R4 definitive no-start completion.
+These are required integrations for FR-39-03/04/06/07, not new resource mechanisms.
 Older inspection records missing these keys remain readable as unreported;
 absence must not be presented as verified no enforcement. Control constructors,
 serialization and the renderer share the same definition rather than validating
@@ -871,8 +878,9 @@ and targeted confirmation. Independent packet review found one missing retained
 SLURM delivery cut; its bounded correction adds the existing delivery codec's
 3→4 boundary, pre-input/pre-worker rejection and exact old/current integration
 oracles. Manager verification confirms the source path and corrected card.
-No other qualified plan findings remain. Documentation diff, links and targeted
-test paths pass mechanical checks; no runtime tests or resource guarantees are
-claimed. The maintainer approved the concrete migration and two-phase packet;
-implementation can proceed through the linked manifest and canonical workflow.
-This approval does not authorize physical/GPU runs or host configuration changes.
+That original approval remains the behavior baseline. Subsequent implementation
+evidence exposed the four boundaries now specified by Phase 1's Approved Recovery
+Amendment; the maintainer requested their implementation on 2026-09-09. Independent
+startup review must pass before its bounded execution. The manifest owns current
+validation and progress; a partial checkpoint is not completion. This recovery
+does not authorize physical/GPU runs, host changes or Phase 2 execution.
