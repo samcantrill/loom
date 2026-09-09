@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; approved delayed-SLURM handoff amendment in startup review
+- Status: in_progress; approved delayed-SLURM handoff amendment in validation
 - Roadmap stage and phase: Stage 39, Phase 1
 - Manifest: `docs/roadmap/stage-39/implementation-plan.md`
 - Branch: `agent/stage-39-p1-pipeline-resource-policy`
@@ -13,11 +13,9 @@
 - PR title: `feat(runtime): separate pipeline resource accounting and enforcement`
 - Dependencies: reviewed Stage 39 plan and concrete migration approval — satisfied
 - Workflow path: expanded; public options, executable schemas and cross-machine ownership
-- Blockers: see Delayed Submission Handoff Finding below. The approved transport
-  amendment passes its targeted checks, but complete default validation at
-  `29292c8` has one delayed-SLURM failure. A private durable handoff amendment
-  is approved and requires targeted startup review before runtime edits. No PR
-  submission or independent full-diff review yet.
+- Blockers: no known targeted runtime failure remains. The private delayed
+  resource handoff is implemented after startup PASS at `c5b23a7`; fresh full
+  validation, PR submission and independent full-diff review remain outstanding.
 
 ## Objective And Context
 
@@ -596,6 +594,27 @@ not environment, adapter payloads, credentials, or new lifecycle state.
 Private helpers and module layout are implementation discretion. Reuse existing
 local generated-artifact path and atomic-write utilities; no new public store
 method, registry, generic snapshot API, public manifest schema, or implicit upgrade.
+
+Independent targeted startup review PASS at clean `c5b23a7a72e05babb812a8cc7035500db8013605`.
+No qualified finding or plan correction; manager-local implementation admitted.
+
+Implementation receipt: one private execution helper owns version/identity,
+semantic reading and atomic create-if-absent publication at the existing generated
+artifact path. Afterok planning supplies exact RUN-stage runtime; both CLI branches
+pass resolved invocation options. Delayed continuation reads the validated registry
+reference before materialization and preserves original causes on refusal. Saved
+workers bypass new preparation entirely. No display schema or other store changed.
+Targeted afterok, dry-run, stage-job/prepared-run continuation and CLI selection:
+37 passing checks in `delayed-handoff-after.xml`; its remaining CLI fixture setup
+failure was corrected and that exact check passes separately (1 passed, 1.15s).
+The CLI test uses an in-process authority with admission/readiness bypassed and
+fake sbatch; it proves preparation/override wiring, not multi-host authority support.
+Type checking passes (`delayed-handoff-pyright.log`). New evidence includes full GPU
+attributes with CPU-only accounting, distinct outer CPU allocation, interrupted
+first preparation followed by byte-identical worker replay with handoff rereads
+forbidden, safe summaries, invalid version/identity/selection, missing legacy,
+no retrofit, exact private bytes/timestamp, incomplete coverage and conflict refusal.
+The earlier failed full receipts are superseded only when fresh full gates pass.
 
 Required proof for that amendment: actual delayed start with nonempty resource
 attributes and runtime overrides preserves exact resources/policy/selection;

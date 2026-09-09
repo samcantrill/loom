@@ -33,6 +33,45 @@ attempts, partial submission facts, and safe scheduler metadata. Missing
 is a preflight warning, while the operation that needs the command fails clearly
 at use time.
 
+### Delayed afterok resource intent
+
+The CLI's afterok preparation retains inner execution resource settings separately
+from display summaries and the outer SBATCH allocation. The private
+`slurm/submissions/<planning_id>/execution-resources.json` document contains the
+full normalized resources (including attributes), resolved resource policy, and
+exact selected identifiers for each RUN stage. Its version-1 identity includes
+the run URI and the submission manifest path. It contains no environment or raw
+adapter payloads and is not included in public planning/runtime summaries.
+
+Python callers preparing executable delayed work pass the actual resolved runtime:
+
+```python
+from loom.pipeline.runtime import resolve_run_runtime
+from loom.pipeline.executors.slurm import plan_afterok_slurm_dry_run
+
+planning = plan_afterok_slurm_dry_run(
+    run_store=store,
+    run_uri=run_uri,
+    stage_runtime=resolve_run_runtime(options, stage_ids=spec.stage_names),
+    stage_resources=allocation_resources,  # Separate outer SLURM allocation.
+)
+```
+
+`stage_runtime` must cover every RUN stage. Omitting it still permits planning and
+inspection, but does not provide the state required to create a delayed worker.
+At compute start, Loom reads the saved private settings; it never reconstructs
+them from attribute counts, current defaults, or the outer allocation. This is
+validation of Loom's execution record, not eager construction of project factories.
+
+The handoff is published before submission artifacts, with owner-only file access.
+Identical preparation retains its exact bytes; different settings for the same
+identity are rejected. Missing/incompatible records fail before worker creation
+with guidance to use the pinned original runtime or prepare a fresh identity.
+Existing preparations are not retrofitted. Already-created worker requests retain
+their existing replay owner and are not regenerated. Public summary formats and
+the existing whole-run continuation limitation are unchanged. The shared-filesystem
+afterok route still requires compute access to the existing run directory.
+
 V11 queue delegated SLURM dispatch is a queue-service adapter path rather than a
 replacement for live submitted-operation manifests. A delegated queue item
 stores the queue-owned `run_uri`, the external SLURM job id returned by

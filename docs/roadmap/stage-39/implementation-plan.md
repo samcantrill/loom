@@ -1,23 +1,17 @@
 # Roadmap Stage 39 Implementation Plan
 
-Status: in_progress; approved Phase 1 delayed-SLURM amendment in startup review
+Status: in_progress; approved Phase 1 delayed-SLURM amendment in validation
 Roadmap stage: 39
 Planning document: docs/roadmap/stage-39/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: 1 — pipeline-resource-policy
-Blockers: the complete default gate at `29292c8` has one delayed-SLURM continuation
-failure among 3,088 passes. That route reconstructs execution resources from safe
-summaries containing attribute counts rather than values; distinct full requests
-can have identical summaries. See the phase card's Approved Delayed Submission
-Handoff Amendment. The maintainer approved the private durable handoff amendment;
-its targeted startup review is required before implementation, not removal of display safety
-or reconstruction from current defaults/outer allocation. The approved transport
-amendment is implemented and its targeted checks pass. Full gates, independent
-full-diff review and PR submission remain incomplete.
-The completed summary at `29292c8` has 3,250 passes, three failures and 18 opt-in
-skips. Two stale optional preflight assertions are corrected and pass their two
-targeted checks; the delayed-SLURM durable handoff remains the technical blocker.
+Blockers: no known targeted runtime failure remains. The previously failing
+delayed-SLURM route now reads an immutable private resource handoff rather than
+lossy display summaries. Its approved startup review passed at `c5b23a7`; targeted
+afterok/continuation and CLI preparation checks pass. Fresh full validation,
+independent full-diff review and PR submission remain incomplete. Earlier failed
+full-gate receipts remain historical evidence, not passing merge evidence.
 
 ## Summary
 
@@ -129,7 +123,7 @@ targeted checks; the delayed-SLURM durable handoff remains the technical blocker
   retains a private version-1 execution-resource document for delayed worker
   creation. The phase card specifies producer, consumer, exact identity/replay,
   safe-display separation and legacy refusal. Independent targeted startup review
-  precedes manager implementation; no further executor/refiner pass is admitted.
+  PASS at `c5b23a7`; manager implementation admitted with no further executor/refiner pass.
 - Current source: recovery checkpoint `4a81fcf` reconciled to published develop
   `998b07c` through merge `2e4d0c9`; preserve upstream #290/#291 managed journeys.
   Bounded implementation, fresh full gates, independent full
@@ -147,5 +141,5 @@ targeted checks; the delayed-SLURM durable handoff remains the technical blocker
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`. Targeted checks pass, but the complete default gate has one delayed-SLURM failure among 3,088 passes. Approved amendment in startup review; full-diff independent review and PR remain pending | Private delayed-execution handoff not implemented; bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
+| 1 | pending | Transport fix `cba8d4d`; safe/private metadata correction `29292c8`; approved private delayed resource handoff implemented with targeted evidence. Fresh full gates, full-diff independent review and PR remain pending | Bounded diagnostics are not unlimited transport; no physical proof | Preserve phase worktree and ignored checkpoint logs |
 | 2 | pending | not started | No live upgrade or automatic old-provider attribution | not applicable |

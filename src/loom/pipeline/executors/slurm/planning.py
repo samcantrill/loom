@@ -7,11 +7,13 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from loom.pipeline.execution import PreparedRunRecord
+from loom.pipeline.execution._resource_handoff import write_resource_handoff
 from loom.pipeline.executors.apptainer import ApptainerExecOptions
 from loom.pipeline.executors.containers import ContainerBuildResult, ContainerOptions
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.runtime._resource_controls import resource_control_records
+from loom.pipeline.runtime.metadata import ResolvedStageRuntimeOptions
 from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.stores.run_store import (
@@ -124,6 +126,7 @@ def plan_afterok_slurm_dry_run(
     options: SlurmOptions | None = None,
     stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
+    stage_runtime: Mapping[str, ResolvedStageRuntimeOptions] | None = None,
     container_options: SlurmContainerInput | None = None,
     stage_container_options: SlurmStageContainerInputs | None = None,
     apptainer_options: SlurmApptainerOptionInput | None = None,
@@ -133,7 +136,14 @@ def plan_afterok_slurm_dry_run(
     created_at: str | None = None,
     plugin_selectors: Sequence[str] = (),
 ) -> SlurmDryRunPlanningResult:
-    """Read persisted state and write afterok SLURM dry-run artifacts."""
+    """Read persisted state and write afterok SLURM dry-run artifacts.
+
+    Supply ``stage_runtime`` from the resolved invocation to retain exact inner
+    resource intent for delayed worker creation. It must cover every RUN stage;
+    ``stage_resources`` independently describes the outer SLURM allocation.
+    Omitting runtime permits planning/inspection, but cannot reconstruct a new
+    delayed worker. Retained preparation identities cannot change resource intent.
+    """
 
     plan, prepared_run = _read_persisted_state(run_store=run_store, run_uri=run_uri)
     _validate_local_store_paths(run_store)
@@ -162,6 +172,18 @@ def plan_afterok_slurm_dry_run(
         stage_apptainer_options=stage_apptainer_options,
         plugin_selectors=plugin_selectors,
     )
+    if stage_runtime is not None:
+        write_resource_handoff(
+            store_paths=cast(LocalRunStorePaths, run_store),
+            run_uri=run_uri,
+            manifest_relative_path=cast(str, planned_submission.manifest_relative_path),
+            stage_names=tuple(
+                stage.stage_name
+                for stage in plan.ordered_stage_plans
+                if stage.action == PlanAction.RUN
+            ),
+            stage_runtime=stage_runtime,
+        )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
         job.logical_key: render_slurm_script(
