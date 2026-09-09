@@ -27,6 +27,7 @@ from loom.pipeline.runtime.options import (
     StageRuntimeOptions,
     parse_run_options,
 )
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     TimeoutPolicy,
@@ -1028,7 +1029,7 @@ def _resource_capability_diagnostics(
             resource_path = f"{source}.adapter_options['container'].resources"
         for kind in kinds:
             capability = descriptor.capability_for(kind)
-            if _is_scheduling_only_apptainer_cpu_memory(
+            if _is_unenforced_apptainer_cpu_memory(
                 options, stage_options, descriptor, kind
             ):
                 capability = ResourceCapability(
@@ -1037,10 +1038,10 @@ def _resource_capability_diagnostics(
                     severity=CapabilitySeverity.WARNING,
                     details={
                         "reason": (
-                            "direct CPU/memory runtime flags are disabled; requests "
-                            "remain scheduling and accounting intent"
+                            "resource policy does not select this direct CPU/memory "
+                            "control; demand remains scheduling and accounting intent"
                         ),
-                        "cpu_memory_enforcement": "scheduling_only",
+                        "resource_policy": "enforce",
                     },
                 )
             diagnostics.append(
@@ -1082,31 +1083,35 @@ def _container_cpu_memory_kinds(container: object) -> tuple[str, ...]:
     return tuple(kind for kind in ("cpu", "memory") if kind in entries)
 
 
-def _is_scheduling_only_apptainer_cpu_memory(
+def _is_unenforced_apptainer_cpu_memory(
     options: RunOptions,
     stage_options: StageRuntimeOptions,
     descriptor: ExecutorDescriptor,
     kind: str,
 ) -> bool:
-    """Resolve the direct adapter policy for CPU/RAM diagnostics only."""
+    """Resolve the composed resource-policy control projection for diagnostics."""
 
     if descriptor.name not in {"apptainer", "singularity"} or kind not in {
         "cpu",
         "memory",
     }:
         return False
-    adapter_options = dict(cast(Mapping[str, object], options.adapter_options))
-    adapter_options.update(cast(Mapping[str, object], stage_options.adapter_options))
-    raw = (
-        adapter_options.get("singularity", adapter_options.get("apptainer"))
-        if descriptor.name == "singularity"
-        else adapter_options.get("apptainer")
+    run_policy = cast("ResourcePolicy", options.resource_policy)
+    stage_policy = cast("ResourcePolicy | None", stage_options.resource_policy)
+    stage_axes = stage_options.resource_policy_axes
+    effective = ResourcePolicy(
+        account_for=(
+            stage_policy.account_for
+            if stage_policy is not None and "account_for" in stage_axes
+            else run_policy.account_for
+        ),
+        enforce=(
+            stage_policy.enforce
+            if stage_policy is not None and "enforce" in stage_axes
+            else run_policy.enforce
+        ),
     )
-    from loom.pipeline.executors.apptainer import ApptainerExecOptions
-
-    return (
-        ApptainerExecOptions.from_dict(raw).cpu_memory_enforcement == "scheduling_only"
-    )
+    return kind not in effective.select((kind,))["enforce"]
 
 
 def _resource_diagnostic_code(support_level: ResourceSupportLevel) -> str:

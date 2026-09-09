@@ -699,6 +699,7 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
             run_uri=run_uri,
             runtime_options={
                 "executor": "apptainer",
+                "resource_policy": {"enforce": "all"},
                 "adapter_options": {
                     "container": {
                         "image": {"reference": str(image_path)},
@@ -788,6 +789,7 @@ def test_apptainer_preflight_uses_authored_container_resource_intent_fallback(
             groups=("resources",),
             runtime_options={
                 "executor": "apptainer",
+                "resource_policy": {"enforce": "all"},
                 "adapter_options": {
                     "container": {
                         "image": {"reference": "analysis.sif"},
@@ -837,9 +839,9 @@ def test_apptainer_preflight_reports_scheduling_only_cpu_memory_as_not_enforced(
             groups=("resources",),
             runtime_options={
                 "executor": "apptainer",
+                "resource_policy": {"enforce": []},
                 "adapter_options": {
                     "container": {"image": {"reference": "analysis.sif"}},
-                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
                 },
                 "stage_options": {
                     "train": {
@@ -890,9 +892,7 @@ def test_scheduling_only_implicit_stage_fallback_warns_unless_mapping_fails(
     train_options: dict[str, Any] = {"resources": {"entries": train_entries}}
     if unrepresentable_cpu:
         train_entries["cpu"] = {"kind": "cpu", "amount": 1 << 63}
-        train_options["adapter_options"] = {
-            "apptainer": {"cpu_memory_enforcement": "runtime"}
-        }
+        train_options["resource_policy"] = {"enforce": ["cpu"]}
     result = run_preflight(
         PreflightRequest(
             config_path="config.yaml",
@@ -900,7 +900,6 @@ def test_scheduling_only_implicit_stage_fallback_warns_unless_mapping_fails(
             runtime_options={
                 "executor": "apptainer",
                 "adapter_options": {
-                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
                     "container": {
                         "image": {"reference": "analysis.sif"},
                         "resources": {
@@ -947,15 +946,11 @@ def test_scheduling_only_implicit_stage_fallback_warns_unless_mapping_fails(
         assert result.status is PreflightStatus.WARN
 
 
-@pytest.mark.parametrize("policy", ("runtime", "scheduling_only"))
 def test_apptainer_preflight_without_cpu_memory_intent_has_no_mapping_warning(
-    monkeypatch: pytest.MonkeyPatch, policy: str
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_runtime_preflight_dependencies(monkeypatch)
     options = _apptainer_runtime_options()
-    cast(dict[str, Any], options["adapter_options"])["apptainer"] = {
-        "cpu_memory_enforcement": policy
-    }
     result = run_preflight(
         PreflightRequest(
             config_path="config.yaml", groups=("resources",), runtime_options=options
@@ -970,18 +965,17 @@ def test_apptainer_preflight_without_cpu_memory_intent_has_no_mapping_warning(
 
 
 @pytest.mark.parametrize(
-    ("executor", "apptainer_policy", "singularity_policy", "enforcement", "argument"),
+    ("executor", "enforce", "enforcement", "argument"),
     (
-        ("apptainer", "runtime", "scheduling_only", "best_effort", "2"),
-        ("apptainer", "scheduling_only", "runtime", "not_enforced", None),
-        ("singularity", "runtime", "scheduling_only", "not_enforced", None),
+        ("apptainer", "all", "best_effort", "2"),
+        ("apptainer", [], "not_enforced", None),
+        ("singularity", [], "not_enforced", None),
     ),
 )
 def test_direct_preflight_policy_matches_selected_executor_with_both_namespaces(
     monkeypatch: pytest.MonkeyPatch,
     executor: str,
-    apptainer_policy: str,
-    singularity_policy: str,
+    enforce: object,
     enforcement: str,
     argument: str | None,
 ) -> None:
@@ -992,10 +986,9 @@ def test_direct_preflight_policy_matches_selected_executor_with_both_namespaces(
             groups=("resources",),
             runtime_options={
                 "executor": executor,
+                "resource_policy": {"enforce": enforce},
                 "adapter_options": {
                     "container": {"image": {"reference": "analysis.sif"}},
-                    "apptainer": {"cpu_memory_enforcement": apptainer_policy},
-                    "singularity": {"cpu_memory_enforcement": singularity_policy},
                 },
                 "stage_options": {
                     "train": {
@@ -1029,7 +1022,6 @@ def test_scheduling_only_authored_fallback_has_visible_preflight_warning(
             runtime_options={
                 "executor": "apptainer",
                 "adapter_options": {
-                    "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
                     "container": {
                         "image": {"reference": "analysis.sif"},
                         "resources": {

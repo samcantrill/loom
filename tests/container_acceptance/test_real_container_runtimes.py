@@ -21,6 +21,7 @@ from loom.pipeline.executors.apptainer import (
 from loom.pipeline.executors.containers import ContainerOptions, ContainerResourceIntent
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.runtime.capabilities import ResourceCapability
+from loom.pipeline.runtime import ResourcePolicy
 
 
 pytestmark = [pytest.mark.slow, pytest.mark.optional_dependency]
@@ -186,16 +187,15 @@ def test_real_apptainer_scheduling_only_cpu_memory_smoke() -> None:
     )
     generated = build_apptainer_exec_command(
         container_options=ContainerOptions(image=str(image_path), resources=resources),
-        apptainer_options=ApptainerExecOptions(
-            command=command, cpu_memory_enforcement="scheduling_only"
-        ),
+        apptainer_options=ApptainerExecOptions(command=command),
         worker_command=("sh", "-c", "printf 'scheduling-only\\n'"),
+        resource_policy=ResourcePolicy(enforce=[]),
     )
 
     assert "--cpus" not in generated.argv
     assert "--memory" not in generated.argv
     assert generated.metadata["apptainer_options"] == ApptainerExecOptions(
-        command=command, cpu_memory_enforcement="scheduling_only"
+        command=command
     ).to_dict()
     completed = subprocess.run(  # noqa: S603 - generated production argv.
         generated.argv,

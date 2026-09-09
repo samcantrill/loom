@@ -288,7 +288,7 @@ def test_runtime_profile_container_build_shorthand_preserves_namespace_contract(
     }
 
 
-def test_scheduling_only_profile_and_exact_stage_override_preserve_resources() -> None:
+def test_profile_resource_policy_stage_override_preserves_resources() -> None:
     options = merge_run_options(
         base={
             "profile": "scheduling-only",
@@ -297,9 +297,7 @@ def test_scheduling_only_profile_and_exact_stage_override_preserve_resources() -
         profiles={
             "scheduling-only": {
                 "executor": "singularity",
-                "adapter_options": {
-                    "singularity": {"cpu_memory_enforcement": "scheduling_only"}
-                },
+                "resource_policy": {"enforce": []},
                 "stage_options": {
                     "train": {
                         "resources": {
@@ -318,20 +316,16 @@ def test_scheduling_only_profile_and_exact_stage_override_preserve_resources() -
         },
         explicit={
             "stage_options": {
-                "train": {
-                    "adapter_options": {
-                        "singularity": {"cpu_memory_enforcement": "runtime"}
-                    }
-                }
+                "train": {"resource_policy": {"enforce": ["cpu", "memory"]}}
             }
         },
         known_stage_ids={"train"},
     )
 
     resolved = resolve_run_runtime(options, stage_ids={"train"})["train"]
-    assert resolved.adapter_options["singularity"] == {
-        "cpu_memory_enforcement": "runtime"
-    }
+    assert resolved.resource_policy == ResourcePolicy(
+        account_for="all", enforce=["cpu", "memory"]
+    )
     assert cast(ResourceRequest, resolved.resources).entries == {
         "cpu": ResourceEntry(kind="cpu", amount=2),
         "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),

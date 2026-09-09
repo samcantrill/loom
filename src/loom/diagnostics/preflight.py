@@ -79,6 +79,7 @@ class _ApptainerPreflightRawTarget:
     stage_id: str | None
     adapter_options: Mapping[str, object]
     resources: object | None
+    resource_policy: object | None
     executor_name: str
     selected_executor: str
 
@@ -2933,6 +2934,7 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                     entries=resources,
                     executor_name=target.executor_name,
                     apptainer_options=apptainer_options,
+                    resource_policy=target.resource_policy,
                 )
         except Exception as exc:  # noqa: BLE001 - command mapping owns conversion.
             diagnostics.append(
@@ -2958,14 +2960,9 @@ def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResu
                         "slurm_enforced"
                         if scheduler_owned
                         else (
-                            "not_enforced"
-                            if getattr(
-                                apptainer_options,
-                                "cpu_memory_enforcement",
-                                "runtime",
-                            )
-                            == "scheduling_only"
-                            else cast(Any, capability).enforcement.value
+                            cast(Any, capability).enforcement.value
+                            if kind in projected
+                            else "not_enforced"
                         )
                     ),
                 }
@@ -4505,6 +4502,7 @@ def _apptainer_raw_targets(
                 stage_id=None,
                 adapter_options=adapter_options,
                 resources=None,
+                resource_policy=getattr(options, "resource_policy", None),
                 executor_name=_apptainer_executor_name_for_adapter(
                     adapter_options,
                     fallback=selected_executor,
@@ -4523,6 +4521,7 @@ def _apptainer_raw_targets(
                 cast(Any, resolved[stage_id]).adapter_options,
             ),
             resources=cast(Any, resolved[stage_id]).resources,
+            resource_policy=cast(Any, resolved[stage_id]).resource_policy,
             executor_name=_apptainer_executor_name_for_adapter(
                 cast(
                     Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options
@@ -4795,6 +4794,7 @@ def _projected_apptainer_cpu_memory_arguments(
     entries: Mapping[str, object],
     executor_name: str,
     apptainer_options: object | None = None,
+    resource_policy: object | None = None,
 ) -> Mapping[str, str]:
     """Use the production command builder to inspect direct limit conversion."""
 
@@ -4823,6 +4823,7 @@ def _projected_apptainer_cpu_memory_arguments(
         container_options=ContainerOptions(image="preflight.sif", resources=intent),
         apptainer_options=cast(Any, apptainer_options),
         worker_command=("loom-preflight",),
+        resource_policy=cast(Any, resource_policy),
     )
     argv = command.argv
     projected: dict[str, str] = {}

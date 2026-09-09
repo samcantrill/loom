@@ -343,13 +343,12 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
 
 
-def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
+def test_empty_enforcement_apptainer_resources_report_not_enforced() -> None:
     result = validate_executor_capabilities(
         RunOptions(
             executor="apptainer",
             adapter_options={
                 "container": {"image": {"reference": "analysis.sif"}},
-                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
             },
             stage_options={
                 "train": StageRuntimeOptions(
@@ -377,7 +376,7 @@ def test_scheduling_only_apptainer_resources_report_not_enforced() -> None:
 
 
 @pytest.mark.parametrize("scope", ("global", "inherited", "stage"))
-def test_scheduling_only_capabilities_include_authored_container_fallback(
+def test_empty_enforcement_capabilities_include_authored_container_fallback(
     scope: str,
 ) -> None:
     container = {
@@ -387,10 +386,7 @@ def test_scheduling_only_capabilities_include_authored_container_fallback(
             "capabilities": {"memory": {"support_level": "supported"}},
         },
     }
-    adapters: dict[str, Any] = {
-        "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
-        "container": container,
-    }
+    adapters: dict[str, Any] = {"container": container}
     stages: dict[str, Any] = {} if scope == "global" else {"train": {}}
     if scope == "stage":
         adapters.pop("container")
@@ -418,7 +414,6 @@ def test_nonempty_runtime_resources_replace_container_fallback_in_capabilities()
         {
             "executor": "apptainer",
             "adapter_options": {
-                "apptainer": {"cpu_memory_enforcement": "scheduling_only"},
                 "container": {
                     "image": {"reference": "analysis.sif"},
                     "resources": {

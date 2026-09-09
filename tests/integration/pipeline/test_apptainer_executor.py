@@ -99,8 +99,7 @@ def _request(
     executor: str = "apptainer",
     gpu: bool = False,
     cpu_memory: bool = False,
-    cpu_memory_enforcement: str = "runtime",
-    singularity_policy: str | None = None,
+    enforce: object = "all",
 ) -> RunRequest:
     entries: dict[str, object] = {}
     if gpu:
@@ -117,20 +116,13 @@ def _request(
         pipeline=_spec(),
         options={
             "executor": executor,
+            "resource_policy": {"enforce": enforce},
             "adapter_options": {
                 "container": {
                     "image": {"reference": "analysis.sif"},
                     "environment": {"variables": {"TOKEN": "secret"}},
                 },
-                "apptainer": {
-                    "cleanenv": True,
-                    "cpu_memory_enforcement": cpu_memory_enforcement,
-                },
-                **(
-                    {"singularity": {"cpu_memory_enforcement": singularity_policy}}
-                    if singularity_policy is not None
-                    else {}
-                ),
+                "apptainer": {"cleanenv": True},
             },
             "stage_options": stage_options,
         },
@@ -286,14 +278,13 @@ def test_direct_execution_retains_selected_policy_with_both_namespaces(
             _request(
                 executor=executor,
                 cpu_memory=True,
-                cpu_memory_enforcement="runtime",
-                singularity_policy="scheduling_only",
+                enforce="all",
             )
         )
     assert result.status is RunStatus.SUCCEEDED
     command = runner.calls[0]
-    assert ("--cpus" in command.argv) is (executor == "apptainer")
-    assert ("--memory" in command.argv) is (executor == "apptainer")
+    assert "--cpus" in command.argv
+    assert "--memory" in command.argv
 
 
 @pytest.mark.parametrize("executor", ("apptainer", "singularity"))
@@ -318,7 +309,7 @@ def test_scheduling_only_retains_effective_resources_without_direct_flags(
             _request(
                 executor=executor,
                 cpu_memory=True,
-                cpu_memory_enforcement="scheduling_only",
+                enforce=[],
             )
         )
 
@@ -333,7 +324,6 @@ def test_scheduling_only_retains_effective_resources_without_direct_flags(
     assert metadata["apptainer_options"] == {
         "cleanenv": True,
         "command": executor,
-        "cpu_memory_enforcement": "scheduling_only",
         "fakeroot": False,
         "no_home": False,
         "nv": False,

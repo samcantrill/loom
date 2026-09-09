@@ -60,27 +60,26 @@ preserves redacted command/runtime diagnostics and directs the operator to check
 them for unsupported flags and to use a compatible runtime/cgroup setup. That
 diagnostic does not attribute every container startup failure to resource limits.
 
-Set `adapter_options.apptainer.cpu_memory_enforcement` (or the matching
-`singularity` namespace) to `scheduling_only` when a site must retain CPU/memory
-requests for planning and provenance but cannot apply direct cgroup flags. This
-explicit policy validates the canonical requests and preserves them in metadata,
-but omits only `--cpus` and `--memory`; it reports CPU/RAM as not enforced.
-`runtime` remains the default and never retries a failed limited launch without
-its requested flags.
+Set `resource_policy.enforce: []` when a site must retain CPU/memory requests
+for planning and provenance but cannot apply direct cgroup flags. This preserves
+the full canonical intent in metadata but omits `--cpus` and `--memory`; it
+reports CPU/RAM as not enforced. Select CPU/RAM explicitly in `enforce` to
+request those flags; a failed limited launch is never retried without them.
 
 Direct `apptainer` execution reads the `apptainer` namespace even when both
 namespaces are present. Direct `singularity` prefers `singularity`, falling back
 to `apptainer` only when the former is absent; preflight uses the same choice.
 Nonempty stage resource requests replace authored `container.resources` intent.
 When that authored fallback applies, capability/preflight warnings also identify
-its CPU/RAM as not enforced in scheduling-only mode, including pipeline stages
-without an explicit `stage_options` entry. Mapping errors remain failures even
-when other stages only warn. These warnings are advisory by default; explicitly
-running preflight with `--strict` still treats warnings as a failed preflight.
+its CPU/RAM as not enforced when policy excludes those controls, including
+pipeline stages without an explicit `stage_options` entry. Mapping errors remain
+failures when a control is selected. These warnings are advisory by default;
+explicitly running preflight with `--strict` still treats warnings as a failed
+preflight.
 Observing this intent does not create a managed resource reservation.
 
 Loom does not invent CPU/RAM limits for absent requests or for requests left
-unmapped by `scheduling_only`. This does not remove inherited host/container
+unmapped by `resource_policy.enforce`. This does not remove inherited host/container
 controls or change managed admission, GPU behavior, or SLURM-owned allocations.
 Invalid resource declarations still fail validation.
 
@@ -91,17 +90,15 @@ options:
 
 ```yaml
 runtime_profiles:
-  scheduling-only-container:
+  unconstrained-container:
     executor: singularity
-    adapter_options:
-      singularity:
-        cpu_memory_enforcement: scheduling_only
+    resource_policy:
+      enforce: []
 ```
 
 Select the profile at launch with `loom run pipeline.yaml --profile
-scheduling-only-container`. An exact stage adapter override can restore
-`runtime` for that stage; it does not remove CPU or memory demand from the
-resolved runtime metadata.
+unconstrained-container`. An exact stage policy override can select CPU/RAM for
+that stage; it does not remove demand from resolved runtime metadata.
 
 SLURM remains the CPU and memory enforcement owner for its container route, so
 its wrapped Apptainer command does not add direct `--cpus` or `--memory` flags.

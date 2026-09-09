@@ -336,27 +336,30 @@ class ResolvedStagePlacement:
             _required(mapping, "search_limits", "ResolvedStagePlacement"),
             "ResolvedStagePlacement.search_limits",
         )
-        requests = {
-            kind: ResolvedResourceRequest(kind, scheduling_entry_view(entry))
-            for kind, entry in resource_request.entries.items()
-        }
         selection_data = _mapping(
             _required(mapping, "resource_selection", "ResolvedStagePlacement"),
             "ResolvedStagePlacement.resource_selection",
         )
+        selection = {
+            key: tuple(
+                cast(str, item)
+                for item in _sequence(
+                    value, f"ResolvedStagePlacement.resource_selection.{key}"
+                )
+            )
+            for key, value in selection_data.items()
+        }
+        requests = {
+            kind: ResolvedResourceRequest(
+                kind, scheduling_entry_view(resource_request.entries[kind])
+            )
+            for kind in selection.get("account_for", ())
+        }
         return cls(
             schema_version=cast(int, schema_version),
             resource_request=resource_request,
             resource_policy=resource_policy,
-            resource_selection={
-                key: tuple(
-                    cast(str, item)
-                    for item in _sequence(
-                        value, f"ResolvedStagePlacement.resource_selection.{key}"
-                    )
-                )
-                for key, value in selection_data.items()
-            },
+            resource_selection=selection,
             scheduling_requests=requests,
             validator_ids=validator_ids,
             planner_descriptors=descriptors,

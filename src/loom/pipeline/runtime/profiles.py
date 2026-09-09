@@ -591,7 +591,7 @@ def _merge_run_source(target: dict[str, object], source: Mapping[str, object]) -
                 path="reliability",
             )
         elif key == "resource_policy":
-            target[key] = value
+            _merge_mapping_field(target, key, cast(Mapping[str, object], value))
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
 
@@ -614,7 +614,7 @@ def _merge_stage_runtime_source(
                 path="reliability",
             )
         elif key == "resource_policy":
-            target[key] = value
+            _merge_mapping_field(target, key, cast(Mapping[str, object], value))
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
 
