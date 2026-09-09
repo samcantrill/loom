@@ -3,7 +3,7 @@ title: Managed Local Basic
 summary: Prepare and run one copied embedded managed-local project through the persistent daemon.
 capability: operations
 level: advanced
-introduced_in: v85
+introduced_in: v29
 status: runnable
 validation: full
 surface: python_api

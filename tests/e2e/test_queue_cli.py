@@ -147,7 +147,9 @@ def test_managed_remote_operations_manifest_claims_match_journey() -> None:
         root = Path(journey["root"])
         assert journey["authenticated"] is True
         assert journey["agent_id"] == "machine-B"
+        assert journey["cpu_artifact"] == "remote CPU artifact"
         assert journey["final_operation"] == "example-remote-resume"
+        assert journey["io_probe"] == "PASS"
         assert (root / "tls" / "ca.crt").is_file()
         assert (root / "tls" / "server.crt").is_file()
         assert (root / "tls" / "agent.crt").is_file()
@@ -520,6 +522,7 @@ def test_managed_local_basic_manifest_claims_match_journey() -> None:
             )
             assert journey["status"] == "SUCCEEDED"
             assert journey["restarted"] is True
+            assert journey["io_probe"] == "PASS"
             root = Path(journey["root"])
             roots.add(root)
             assert (root / "deployment" / "coordinator" / "control.sqlite").is_file()

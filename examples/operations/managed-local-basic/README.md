@@ -17,6 +17,17 @@ Loom and this copied project. Loom does not create an environment, run `uv sync`
 install packages, or pull source. Preserve `.venv/bin/python` when that is the
 selected interpreter; resolving it can select the wrong environment.
 
+For a project checkout at `/work/loom`, create that selected environment before
+setting `LOOM_PYTHON`:
+
+```sh
+# Choose one installation style; both install Loom into the selected environment.
+cd /work/loom
+uv venv .venv
+uv pip install -e .
+# Or: python3.12 -m venv .venv && .venv/bin/python -m pip install -e .
+```
+
 Run the lifecycle runner from the copied directory:
 
 ```sh
@@ -61,11 +72,25 @@ For an operator-run lifecycle, use the same explicit inputs for every command:
 ```sh
 loom queue daemon-check coordinator.yaml --env-file coordinator.env
 loom queue daemon-init coordinator.yaml --env-file coordinator.env
+# Use the LOOM_DEPLOYMENT_ROOT value in coordinator.env.
+LOOM_ENDPOINT=/secure/loom/managed-local/deployment/coordinator/daemon.sock
+"$LOOM_PYTHON" - <<'PY'
+from loom.queue import prepare_managed_local_run
+
+receipt = prepare_managed_local_run(
+    "coordinator.yaml", "pipeline.yaml", "starter-run", env_file="coordinator.env"
+)
+print(receipt.run_uri)
+PY
+# Set RUN_URI to the printed value, then serve in a separate terminal.
+loom queue daemon-check coordinator.yaml --env-file coordinator.env --probe-io
 loom queue daemon-serve coordinator.yaml --env-file coordinator.env
-# In another terminal: prepare, daemon-submit, daemon-status, daemon-wait.
-# Use daemon-cancel for a submitted run; a cancellation request is not proof
-# that a worker stopped or that capacity is free.
-# Stop the service, then daemon-serve with the same files to restart it.
+loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" starter-run "$RUN_URI"
+loom queue daemon-status --endpoint "$LOOM_ENDPOINT"
+loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" starter-run --timeout 15
+loom inspect-run "$RUN_URI" --endpoint "$LOOM_ENDPOINT"
+loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT" starter-run
+# Stop the service and repeat daemon-serve with the same protected inputs to restart.
 ```
 
 

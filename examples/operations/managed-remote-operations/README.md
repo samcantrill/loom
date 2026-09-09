@@ -13,6 +13,17 @@ cp agent.env.example agent.env
 chmod 600 coordinator.yaml coordinator.env agent.yaml agent.env
 ```
 
+Install Loom and the copied project before setting `LOOM_PYTHON`; either
+environment style is supported and Loom never creates or updates it while
+checking or running a stage:
+
+```sh
+# From the selected project checkout, choose one installation style.
+uv venv .venv
+uv pip install -e .
+# Or: python3.12 -m venv .venv && .venv/bin/python -m pip install -e .
+```
+
 Run the complete local demonstration from the repository root:
 
 ```sh
@@ -40,6 +51,14 @@ The generated credentials are for this localhost journey only. The example
 stops both services with their supported interrupt path and fails if either
 service or any supervised child remains alive.
 
+For a manually copied deployment, enroll observations before starting either
+service. `agent-check` reports the complete `execution.identity` descriptor;
+copy that exact five-field object into the protected coordinator YAML's
+`remote_profiles` list. Put the SHA-256 fingerprint of the protected agent
+certificate in its `agent_server.credential_fingerprints` mapping with value
+`remote-agent-certificate`. These are observed compatibility and TLS identity
+facts, not placeholders to author into the shared templates.
+
 The central discover-then-control flow is:
 
 ```sh
@@ -63,8 +82,46 @@ loom queue agent-check agent.yaml --env-file agent.env
 loom queue daemon-check coordinator.yaml --env-file coordinator.env
 loom queue daemon-init coordinator.yaml --env-file coordinator.env
 loom queue agent-init agent.yaml --env-file agent.env
+loom queue agent-check agent.yaml --env-file agent.env --probe-io
 loom queue daemon-serve coordinator.yaml --env-file coordinator.env
 loom queue agent-serve agent.yaml --env-file agent.env
+```
+
+After the authenticated agent is available, prepare the CPU dummy through the
+existing public preparation owner, then submit, inspect, wait, and cancel with
+the same explicit role inputs. Replace `RUN_URI` with the receipt's value:
+
+```sh
+# Use the LOOM_DEPLOYMENT_ROOT value in coordinator.env.
+LOOM_ENDPOINT=/secure/loom/remote-coordinator/deployment/coordinator/daemon.sock
+"$LOOM_PYTHON" - <<'PY'
+from loom.pipeline.orchestration import ExecutionRequirement
+from loom.queue import prepare_managed_run
+from loom.queue.deployment import load_coordinator_service_config
+from weave import compose_config
+
+service = load_coordinator_service_config("coordinator.yaml", env_file="coordinator.env")
+profile = service.daemon.remote_profiles[0]
+receipt = prepare_managed_run(
+    service,
+    compose_config("pipeline.yaml"),
+    "remote-cpu-run",
+    execution_requirements={
+        "produce": ExecutionRequirement(
+            profile.project_fingerprint,
+            profile.environment_fingerprint,
+            profile.executor_fingerprint,
+        )
+    },
+)
+print(receipt.run_uri)
+PY
+loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" remote-cpu-run "$RUN_URI"
+loom queue daemon-status --endpoint "$LOOM_ENDPOINT"
+loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" remote-cpu-run --timeout 15
+loom inspect-run "$RUN_URI" --endpoint "$LOOM_ENDPOINT"
+loom queue daemon-cancel --endpoint "$LOOM_ENDPOINT" remote-cpu-run
+# Stop the two services and use the same daemon-serve/agent-serve commands to restart.
 ```
 
 ## Variants
@@ -75,7 +132,7 @@ explicit ready-stage route.
 
 Optional GPU qualification is a maintenance operation. After initializing a GPU
 agent with a declared Torch runtime, and before starting its owning service, run
-`loom queue agent-check agent.yaml --probe-gpu`.
+`loom queue agent-check agent.yaml --env-file agent.env --probe-gpu`.
 Use the role files produced or copied for your deployment. A running or retained
 agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
 cleanup. The existing agent journal retains any uncertain claim across restart.

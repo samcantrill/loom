@@ -31,6 +31,8 @@ def test_e2e_managed_role_templates_keep_machine_inputs_out_of_shared_yaml() -> 
         assert (example / "agent.env.example").is_file()
         assert "unqualified" not in coordinator
         assert "unqualified" not in agent
+        manifest = (example / "example.yaml").read_text(encoding="utf-8")
+        assert "introduced_in: v29" in manifest
 
 
 def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:

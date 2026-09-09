@@ -35,6 +35,16 @@ def main() -> None:
         != receipt
     ):
         raise RuntimeError("matching preparation replay changed the run identity")
+    _require_passing_io_probe(
+        _run_cli(
+            "queue",
+            "daemon-check",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--probe-io",
+        )
+    )
 
     started_pids: set[int] = set()
     first = _start_service(config, environment, started_pids)
@@ -116,6 +126,7 @@ def main() -> None:
                 "coordinator_id": started["coordinator_id"],
                 "status": "SUCCEEDED",
                 "restarted": True,
+                "io_probe": "PASS",
                 "root": str(root),
             },
             sort_keys=True,
@@ -163,6 +174,19 @@ def _write_environment(path: Path, values: dict[str, str]) -> None:
         "".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8"
     )
     path.chmod(0o600)
+
+
+def _require_passing_io_probe(report: dict[str, object]) -> None:
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        raise RuntimeError("IO probe report has no checks")
+    io_checks = [
+        check
+        for check in checks
+        if isinstance(check, dict) and check.get("check_id") == "filesystem.io"
+    ]
+    if not io_checks or any(check.get("status") != "PASS" for check in io_checks):
+        raise RuntimeError("copied local role inputs did not pass the IO probe")
 
 
 def _run_cli(*args: str) -> dict[str, object]:

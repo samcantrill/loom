@@ -17,7 +17,10 @@ resident_profiles:
     gpu_devices: []
     environment: {}
     readiness:
-      source_roots: [src/loom]
+      imports: [loom, stages]
+      import_roots:
+        stages: .
+      source_roots: [stages.py]
 registration:
   config_revision: remote-config-v1
   inventory_revision: remote-inventory-v1

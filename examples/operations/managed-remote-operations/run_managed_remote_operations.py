@@ -9,6 +9,9 @@ import subprocess
 import sys
 from typing import Any, cast
 
+from loom.queue import ExecutionRequirement, prepare_managed_run
+from loom.queue.deployment import load_coordinator_service_config
+from weave import compose_config
 
 OPERATIONS_ROOT = Path(__file__).resolve().parents[1]
 if str(OPERATIONS_ROOT) not in sys.path:
@@ -32,9 +35,8 @@ def main() -> None:
     root = example_root("managed-remote-operations")
     credentials = generate_mutual_tls(root / "tls")
     port = available_port()
-    checkout = Path(__file__).resolve().parents[3]
     coordinator_config, coordinator_environment, agent_config, agent_environment = (
-        _copy_role_inputs(root, credentials, checkout, port)
+        _copy_role_inputs(root, credentials, port)
     )
     readiness = recorder.cli(
         "queue", "agent-check", str(agent_config), "--env-file", str(agent_environment)
@@ -65,6 +67,20 @@ def main() -> None:
     )
     recorder.cli(
         "queue", "agent-init", str(agent_config), "--env-file", str(agent_environment)
+    )
+    _require_passing_io_probe(
+        recorder.cli(
+            "queue",
+            "agent-check",
+            str(agent_config),
+            "--env-file",
+            str(agent_environment),
+            "--probe-io",
+        )
+    )
+    receipt = recorder.python(
+        "prepare_managed_run",
+        lambda: _prepare_remote_cpu_run(coordinator_config, coordinator_environment),
     )
 
     endpoint = root / "deployment" / "coordinator" / "daemon.sock"
@@ -98,6 +114,41 @@ def main() -> None:
             raise RuntimeError(
                 "agent detail did not preserve the discovered session fence"
             )
+        submitted = recorder.cli(
+            "queue",
+            "daemon-submit",
+            "--endpoint",
+            str(endpoint),
+            "remote-cpu-run",
+            receipt.run_uri,
+        )
+        completed = recorder.cli(
+            "queue",
+            "daemon-wait",
+            "--endpoint",
+            str(endpoint),
+            "remote-cpu-run",
+            "--timeout",
+            "15",
+        )
+        if completed.get("state") != "SUCCEEDED":
+            raise RuntimeError("authenticated remote CPU run did not complete")
+        inspected = recorder.cli(
+            "inspect-run", receipt.run_uri, "--endpoint", str(endpoint)
+        )
+        if inspected.get("summary") != "SUCCEEDED" or inspected.get("stages") != [
+            {
+                "stage_name": "produce",
+                "state": "SUCCEEDED",
+                "attempt": None,
+                "code": None,
+            }
+        ]:
+            raise RuntimeError("remote CPU run is not inspectably complete")
+        if _report_text(root / "outbound-agent") != "remote CPU artifact":
+            raise RuntimeError("authenticated remote CPU artifact is unexpected")
+        if not isinstance(submitted.get("admission_id"), str):
+            raise RuntimeError("authenticated remote submission has no admission ID")
 
         drain = recorder.cli(
             "queue",
@@ -183,7 +234,9 @@ def main() -> None:
         authenticated=True,
         coordinator_id=status["coordinator_id"],
         agent_id="machine-B",
+        cpu_artifact="remote CPU artifact",
         final_operation="example-remote-resume",
+        io_probe="PASS",
         root=str(root),
     )
 
@@ -218,7 +271,7 @@ def _available_agent(
 
 
 def _copy_role_inputs(
-    root: Path, credentials: dict[str, Path], checkout: Path, port: int
+    root: Path, credentials: dict[str, Path], port: int
 ) -> tuple[Path, Path, Path, Path]:
     """Copy templates, then provide protected role-local machine values."""
 
@@ -250,7 +303,7 @@ def _copy_role_inputs(
             "LOOM_SERVER_CA": str(credentials["ca"].with_suffix(".crt")),
             "LOOM_AGENT_CERTIFICATE": str(credentials["agent"].with_suffix(".crt")),
             "LOOM_AGENT_PRIVATE_KEY": str(credentials["agent"].with_suffix(".key")),
-            "LOOM_PROJECT_ROOT": str(checkout),
+            "LOOM_PROJECT_ROOT": str(Path(__file__).resolve().parent),
             "LOOM_PYTHON": str(Path(sys.executable).absolute()),
         },
     )
@@ -287,6 +340,44 @@ def _record_observed_remote_profile(
 
 def _write_environment(path: Path, values: dict[str, str]) -> None:
     write_protected(path, "".join(f"{key}={value}\n" for key, value in values.items()))
+
+
+def _prepare_remote_cpu_run(coordinator_config: Path, environment: Path):
+    service = load_coordinator_service_config(coordinator_config, env_file=environment)
+    if len(service.daemon.remote_profiles) != 1:
+        raise RuntimeError("remote coordinator has no observed execution profile")
+    descriptor = service.daemon.remote_profiles[0]
+    requirement = ExecutionRequirement(
+        descriptor.project_fingerprint,
+        descriptor.environment_fingerprint,
+        descriptor.executor_fingerprint,
+    )
+    return prepare_managed_run(
+        service,
+        compose_config(Path(__file__).resolve().parent / "pipeline.yaml"),
+        "remote-cpu-run",
+        execution_requirements={"produce": requirement},
+    )
+
+
+def _report_text(agent_root: Path) -> str:
+    reports = tuple(agent_root.glob("assignments/*/artifacts/produce/report.txt"))
+    if len(reports) != 1:
+        raise RuntimeError("remote CPU artifact was not retained exactly once")
+    return reports[0].read_text(encoding="utf-8")
+
+
+def _require_passing_io_probe(report: dict[str, object]) -> None:
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        raise RuntimeError("IO probe report has no checks")
+    io_checks = [
+        check
+        for check in checks
+        if isinstance(check, dict) and check.get("check_id") == "filesystem.io"
+    ]
+    if not io_checks or any(check.get("status") != "PASS" for check in io_checks):
+        raise RuntimeError("copied remote role inputs did not pass the IO probe")
 
 
 if __name__ == "__main__":

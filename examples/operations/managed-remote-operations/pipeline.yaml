@@ -1,0 +1,12 @@
+pipeline:
+  name: managed-remote-operations
+  stages:
+    - name: produce
+      factory:
+        _target_: stages.RemoteCpuStage
+      outputs:
+        report:
+          artifact_type: text
+          codec_key: text.v1
+runtime:
+  executor: local
