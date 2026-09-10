@@ -16,6 +16,7 @@ from loom.queue._managed_local import (
 )
 from loom.queue.gpu.occupancy import (
     GpuOccupancyMonitor,
+    GpuOccupancyPolicy,
     GpuProcessObservation,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
@@ -175,6 +176,145 @@ def test_eight_selected_gpus_yield_disjoint_claims_and_the_ninth_waits() -> None
 
     for command in commands:
         assert provider.release(command).outcome is ClaimOutcome.RELEASED
+
+
+def test_gpu_occupancy_policy_keeps_legacy_block_payloads_canonical() -> None:
+    legacy = {
+        "poll_interval_seconds": 5.0,
+        "max_observation_age_seconds": 15.0,
+        "query_timeout_seconds": 2.0,
+    }
+
+    assert GpuOccupancyPolicy().to_dict() == legacy
+    assert GpuOccupancyPolicy.from_dict(legacy) == GpuOccupancyPolicy()
+    assert GpuOccupancyPolicy(external_process_policy="block").to_dict() == legacy
+
+    allowed = GpuOccupancyPolicy(external_process_policy="allow")
+    assert allowed.to_dict() == {**legacy, "external_process_policy": "allow"}
+    assert GpuOccupancyPolicy.from_dict(allowed.to_dict()) == allowed
+
+    with pytest.raises(ValueError, match="external_process_policy"):
+        GpuOccupancyPolicy(external_process_policy="share")
+    with pytest.raises(ValueError, match="external_process_policy"):
+        GpuOccupancyPolicy.from_dict({**legacy, "external_process_policy": "share"})
+
+
+@pytest.mark.parametrize(
+    ("external_process_policy", "expected_available"),
+    (("block", False), ("allow", True)),
+)
+def test_gpu_provider_applies_external_process_policy_at_offer_and_prepare(
+    external_process_policy: str, expected_available: bool
+) -> None:
+    planner = GpuResourcePlanner()
+    atom = CapacityAtom("gpu", "safe-a", ExactQuantity(1), "count", ExactQuantity(1))
+    observer = _FakeOccupancyObserver(
+        ("GPU-a",),
+        (GpuProcessObservation("GPU-a", True, True, "external_process_detected"),),
+    )
+    monitor = GpuOccupancyMonitor(
+        ("GPU-a",),
+        policy=GpuOccupancyPolicy(external_process_policy=external_process_policy),
+        observer=observer,  # type: ignore[arg-type]
+    )
+    provider = GpuResourceProvider(
+        planner.claim_contracts,
+        (atom,),
+        bindings={"safe-a": "GPU-a"},
+        occupancy_monitor=monitor,
+    )
+    request = ObserveRequest("agent", "session", "offer")
+    provider.refresh_occupancy()
+
+    offered = provider.observe(request)
+    assert [item.local_capacity_key for item in offered.atoms] == (
+        ["safe-a"] if expected_available else []
+    )
+    assert offered.resource_status == (
+        ResourceAvailabilityStatus(
+            "gpu",
+            "safe-a",
+            expected_available,
+            "external_process_detected",
+            offered.resource_status[0].observed_at,
+        ),
+    )
+
+    command = _claim_command(provider, planner, atom)
+    prepared = provider.prepare(command)
+    assert observer.calls == 2  # Preparation always obtains a fresh observation.
+    if not expected_available:
+        assert prepared.outcome is ClaimOutcome.DECLINED
+        assert prepared.detail == "external_process_detected"
+        return
+
+    assert prepared.outcome is ClaimOutcome.PREPARED
+    prepared_status = provider.observe(request)
+    assert prepared_status.atoms == ()
+    assert prepared_status.resource_status[0].reason_code == "loom_claimed"
+    assert not prepared_status.resource_status[0].available
+    assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
+    assert provider.worker_environment(command) == {"CUDA_VISIBLE_DEVICES": "GPU-a"}
+    active_status = provider.observe(request)
+    assert active_status.atoms == ()
+    assert active_status.resource_status[0].reason_code == "loom_claimed"
+    assert not active_status.resource_status[0].available
+    assert provider.release(command).outcome is ClaimOutcome.RELEASED
+    released = provider.observe(request)
+    assert released.resource_status[0].available
+    assert released.resource_status[0].reason_code == "external_process_detected"
+
+
+def test_gpu_provider_allow_policy_fails_closed_for_untrusted_observations() -> None:
+    planner = GpuResourcePlanner()
+    atom = CapacityAtom("gpu", "safe-a", ExactQuantity(1), "count", ExactQuantity(1))
+    clock = [0.0]
+    observer = _FakeOccupancyObserver(
+        ("GPU-a",),
+        (GpuProcessObservation("GPU-a", True, False, "available"),),
+    )
+    monitor = GpuOccupancyMonitor(
+        ("GPU-a",),
+        policy=GpuOccupancyPolicy(external_process_policy="allow"),
+        observer=observer,  # type: ignore[arg-type]
+        monotonic_clock=lambda: clock[0],
+        utc_clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    provider = GpuResourceProvider(
+        planner.claim_contracts,
+        (atom,),
+        bindings={"safe-a": "GPU-a"},
+        occupancy_monitor=monitor,
+    )
+    request = ObserveRequest("agent", "session", "offer")
+    provider.refresh_occupancy()
+    assert provider.observe(request).atoms == (atom,)
+
+    observer.observations = (
+        GpuProcessObservation("GPU-a", False, False, "query_failed"),
+    )
+    declined = provider.prepare(_claim_command(provider, planner, atom))
+    assert observer.calls == 2  # Preparation must not reuse the free observation.
+    assert declined.outcome is ClaimOutcome.DECLINED
+    assert declined.detail == "observation_unavailable"
+    failed = provider.observe(request)
+    assert failed.atoms == ()
+    assert failed.resource_status[0].reason_code == "observation_unavailable"
+
+    observer.observations = ()
+    provider.refresh_occupancy(force=True)
+    missing = provider.observe(request)
+    assert missing.atoms == ()
+    assert missing.resource_status[0].reason_code == "device_missing"
+
+    observer.observations = (
+        GpuProcessObservation("GPU-a", True, False, "available"),
+    )
+    provider.refresh_occupancy(force=True)
+    clock[0] = 16.0
+    stale = provider.observe(request)
+    assert stale.atoms == ()
+    assert stale.resource_status[0].reason_code == "observation_stale"
 
 
 def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(tmp_path) -> None:

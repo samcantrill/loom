@@ -1265,6 +1265,7 @@ def _gpu_probe_configuration(
     failed_compute=False,
     declared_torch=True,
     occupancy_observer=None,
+    external_process_policy=None,
 ):
     """Real role setup with a controlled CUDA interface; no physical GPU claim."""
     observed = LocalGpuInventory(
@@ -1320,6 +1321,10 @@ def _gpu_probe_configuration(
         "PROBE_MARKER": str(tmp_path / "gpu-calls"),
         "PROBE_FAIL": "1" if failed_compute else "0",
     }
+    if external_process_policy is not None:
+        payload["resources"]["gpu"]["occupancy"][
+            "external_process_policy"
+        ] = external_process_policy
     _write_protected(agent_path, payload)
     if role == "coordinator":
         config = load_coordinator_service_config(source)
@@ -1380,6 +1385,49 @@ def test_gpu_probe_runs_fixed_script_with_owned_binding_and_releases(
     assert journal.retained_claim_commands() == ()
     with sqlite3.connect(journal.path) as connection:
         assert connection.execute("SELECT count(*) FROM assignments").fetchone()[0] == 0
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",),
+            ("released",),
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_allows_external_processes_only_when_configured(
+    tmp_path, monkeypatch, role
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    def observe(observer):
+        return {
+            uuid: GpuProcessObservation(
+                uuid, True, True, "external_process_detected"
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path,
+        monkeypatch,
+        role,
+        occupancy_observer=observe,
+        external_process_policy="allow",
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 2 and all(check.status == "PASS" for check in checks), (
+        report.to_dict()
+    )
+    assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-a", "GPU-b"]
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+    with sqlite3.connect(root / "journal.sqlite") as connection:
         assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
             ("released",),
             ("released",),
@@ -1985,6 +2033,14 @@ def test_nvidia_occupancy_defaults_normalize_and_custom_composition_rejects(
         explicit.active_configuration_fingerprint
         == first.active_configuration_fingerprint
     )
+    gpu["occupancy"] = {"external_process_policy": "block"}
+    assert load().active_configuration_fingerprint == first.active_configuration_fingerprint
+    gpu["occupancy"] = {"external_process_policy": "allow"}
+    allowed = load()
+    assert allowed.gpu_occupancy_policy == GpuOccupancyPolicy(
+        external_process_policy="allow"
+    )
+    assert allowed.active_configuration_fingerprint != first.active_configuration_fingerprint
     gpu["occupancy"] = {"poll_interval_seconds": 3}
     assert (
         load().active_configuration_fingerprint
@@ -1993,6 +2049,11 @@ def test_nvidia_occupancy_defaults_normalize_and_custom_composition_rejects(
     gpu["occupancy"] = {"query_timeout_seconds": 20}
     with pytest.raises(QueueConfigError, match="occupancy"):
         load()
+    gpu["occupancy"] = {"external_process_policy": "share"}
+    with pytest.raises(QueueConfigError, match="occupancy") as invalid:
+        load()
+    assert isinstance(invalid.value.__cause__, ValueError)
+    assert "external_process_policy" in str(invalid.value.__cause__)
     gpu.pop("occupancy")
     payload["providers" if embedded else "provider_factory"] = (
         [] if embedded else {"_target_": "builtins.dict"}

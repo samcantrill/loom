@@ -807,17 +807,43 @@ def _gpu_occupancy_policy(value: object) -> GpuOccupancyPolicy | None:
         "poll_interval_seconds",
         "max_observation_age_seconds",
         "query_timeout_seconds",
+        "external_process_policy",
     }
     _required_allowed(authored, set(), fields, "GPU occupancy")
-    defaults = GpuOccupancyPolicy().to_dict()
-    normalized = {
-        name: _positive_number({name: authored.get(name, defaults[name])}, name)
-        for name in fields
-    }
+    defaults = GpuOccupancyPolicy()
     try:
-        policy = GpuOccupancyPolicy(**normalized)
+        policy = GpuOccupancyPolicy(
+            poll_interval_seconds=_positive_number(
+                {
+                    "poll_interval_seconds": authored.get(
+                        "poll_interval_seconds", defaults.poll_interval_seconds
+                    )
+                },
+                "poll_interval_seconds",
+            ),
+            max_observation_age_seconds=_positive_number(
+                {
+                    "max_observation_age_seconds": authored.get(
+                        "max_observation_age_seconds",
+                        defaults.max_observation_age_seconds,
+                    )
+                },
+                "max_observation_age_seconds",
+            ),
+            query_timeout_seconds=_positive_number(
+                {
+                    "query_timeout_seconds": authored.get(
+                        "query_timeout_seconds", defaults.query_timeout_seconds
+                    )
+                },
+                "query_timeout_seconds",
+            ),
+            external_process_policy=cast(
+                str, authored.get("external_process_policy", "block")
+            ),
+        )
     except (ValueError, TypeError) as exc:
-        raise QueueConfigError("GPU occupancy timing policy is invalid") from exc
+        raise QueueConfigError("GPU occupancy policy is invalid") from exc
     return None if gpu.get("devices") == "none" else policy
 
 

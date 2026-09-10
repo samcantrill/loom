@@ -185,6 +185,15 @@ reversed, mixed index/UUID, and unknown selections are rejected. `none` is
 CPU-only and does not run NVIDIA discovery. NVIDIA selections resolve host
 indices to UUIDs with model and physical VRAM observations; a changed index
 resolution changes the active resource identity and requires explicit reload.
+NVIDIA selections may additionally set `gpu.occupancy.external_process_policy`
+to `allow`. The default, and explicit `block`, keep an externally occupied GPU
+unavailable. `allow` admits a GPU only after a fresh successful process query,
+while its availability status still reports `external_process_detected`; failed,
+missing, or stale observations and Loom's own prepared or active claim remain
+unavailable. This reserves one whole configured device in Loom's accounting but
+does not provide physical isolation, a VRAM limit, or a compute cap for external
+processes. The opt-in changes the protected role's active configuration identity
+and therefore takes effect through explicit reload.
 Profiles sharing an agent use this one provider domain, so they cannot advertise
 or claim the same physical card twice. Resource checks bound CPU capacity by
 process affinity and readable cgroup-v2 quotas, and memory by address-space,
