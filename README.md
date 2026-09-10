@@ -195,6 +195,7 @@ requirements.
 - [docs/features/testing.md](docs/features/testing.md)
 - [docs/structure.md](docs/structure.md)
 - [docs/roadmap.md](docs/roadmap.md)
+- [Coordinator access, MCP, and Loom skills](docs/briefs/mcp-implementation-plan.md) — detailed behavior and code examples; [Stage 40 implementation plan](docs/roadmap/stage-40/implementation-plan.md)
 
 ## Development
 
