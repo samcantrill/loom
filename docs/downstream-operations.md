@@ -131,6 +131,13 @@ or agent work (Stage 29). The [roadmap](roadmap.md) is the cross-stage index.
 
 ## Protected Coordinator And Agent Roles
 
+Submitting and observing clients connect directly to the coordinator using
+[`CoordinatorClient`](features/coordinator-client.md), either through its local
+Unix socket or a protected HTTPS client connection file. A client host does not
+need an agent service. On a fleet worker host the client connection is independent
+of the worker's outbound service. Native `daemon-*` client commands accept the
+same connection choices; administration retains the role interfaces below.
+
 Persistent managed execution has explicit check, initialization, and foreground
 role commands:
 

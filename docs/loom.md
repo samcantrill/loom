@@ -482,6 +482,20 @@ from loom.pipeline import (
 
 The public API should stay small until repeated usage shows that more helpers are worth carrying.
 
+Existing managed coordinators are controlled through the shared native client:
+
+```python
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
+from loom.queue import LocalDaemonAdmissionRequest
+```
+
+Choose the coordinator's Unix socket or a protected HTTPS connection file.
+Submission, observation and cancellation use the same native models on both
+transports, and closing the client leaves admitted work running. The
+[coordinator client guide](features/coordinator-client.md) owns method signatures,
+connection settings, identity guards, bounded waits and error/recovery behavior.
+The existing queue service and legacy socket interfaces remain available.
+
 Migration and rename notes for the v0 hardening closeout are in
 [v0 public API migration notes](briefs/v0_public_api_migration_notes.md).
 
