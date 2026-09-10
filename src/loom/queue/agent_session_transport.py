@@ -4895,6 +4895,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
+        payload: dict[str, object] = {}
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -4937,7 +4938,7 @@ class _Handler(BaseHTTPRequestHandler):
             if role_name != mapped_role:
                 raise QueueServiceError("agent TLS credential is not authorized")
             raw = self.rfile.read(int(length))
-            payload = (
+            payload = dict(
                 _decode(raw, failure_report=True)
                 if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
                 else _decode(raw)
@@ -5411,7 +5412,7 @@ def _dispatch_application(
         if role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
             return daemon.slurm_bootstrap_view(principal).handshake()
         daemon._require_view_role(principal, LocalDaemonRole(role))
-        capabilities = ["authenticated-application-v1"]
+        capabilities: list[PlainData] = ["authenticated-application-v1"]
         if role == LocalDaemonRole.CLIENT.value and daemon_control:
             capabilities.append("daemon-control-v1")
         if role == LocalDaemonRole.QUERY.value and inspect_run is not None:

@@ -90,7 +90,16 @@ class CoordinatorConnectionDescription:
             if not isinstance(item, list) or any(not isinstance(entry, str) for entry in item):
                 raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="handshake")
             sequences.append(tuple(item))
-        return cls(*(cast(str, value[key]) for key in strings), *sequences)
+        return cls(
+            cast(str, value["protocol_version"]),
+            cast(str, value["transport"]),
+            cast(str, value["coordinator_id"]),
+            cast(str, value["coordinator_epoch"]),
+            sequences[0],
+            sequences[1],
+            sequences[2],
+            sequences[3],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,7 +345,16 @@ def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionF
         values = {key: transport[key] for key in ("url", "server_ca_path", "certificate_path", "private_key_path")}
         if not all(isinstance(value, str) and value for value in values.values()):
             raise ValueError
-        result = CoordinatorConnectionFile(cast(str, values["url"]), *(base / cast(str, values[key]) if not Path(cast(str, values[key])).is_absolute() else Path(cast(str, values[key])) for key in ("server_ca_path", "certificate_path", "private_key_path")), cast(str | None, expected))
+        server_ca_path = Path(cast(str, values["server_ca_path"]))
+        certificate_path = Path(cast(str, values["certificate_path"]))
+        private_key_path = Path(cast(str, values["private_key_path"]))
+        result = CoordinatorConnectionFile(
+            cast(str, values["url"]),
+            server_ca_path if server_ca_path.is_absolute() else base / server_ca_path,
+            certificate_path if certificate_path.is_absolute() else base / certificate_path,
+            private_key_path if private_key_path.is_absolute() else base / private_key_path,
+            cast(str | None, expected),
+        )
         parsed = urlsplit(result.url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/") or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError

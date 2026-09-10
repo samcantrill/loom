@@ -158,9 +158,11 @@ class LocalDaemonSocketServer:
     ) -> None:
         long_poll = False
         long_poll_acquired = False
+        payload: dict[str, object] = {}
+        daemon_control: object = None
         try:
             uid = _peer_uid(connection)
-            payload = _read_message(connection)
+            payload = dict(_read_message(connection))
             long_poll = payload.get("operation") in {
                 "wait_admission",
                 "wait_operation",
