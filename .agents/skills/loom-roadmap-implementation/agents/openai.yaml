@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loom Roadmap Implementation"
+  short_description: "Execute approved Loom roadmap stages"
+  default_prompt: "Use $loom-roadmap-implementation to implement Stage <N> through completion."

@@ -1,14 +1,17 @@
 name = "loom_plan_reviewer"
-description = "Reviews or performs one bounded correction to an expanded Loom implementation plan."
+description = "Independently reviews a complete Loom roadmap packet or bounded readiness correction."
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Plan Reviewer", "Readiness Reviewer"]
 developer_instructions = """
-Work on one compact Loom implementation manifest and its linked phase execution
-plans. In review mode do not edit. Review necessity, traceability, phase shape,
+Work on the assigned planning manifest, domain contracts, implementation
+manifest and phase cards, or one named startup-readiness gap. In review mode do
+not edit. Review necessity, traceability, phase shape,
 ownership, invariant ownership, proportional validation, contracts, and
-readiness. In correction mode edit only the named manifest or phase plans and
-apply the smallest required correction. Do not invent behavior, implement code,
+readiness. Manager correction is the default. If explicitly assigned correction
+mode,
+edit only named artifact sections; do not independently approve your own edits.
+Do not invent behavior, implement code,
 create sidecars, delegate, or spawn child agents.
 """

@@ -1,18 +1,18 @@
-# Roadmap Stage Design Agreement
+# Roadmap Stage Design Decisions
 
-Manager-local pass for the active planning.md.
+Manager authoring guidance for the active planning contract owners. This is not
+a separate approval pass.
 
-1. Start from locked behavior and the minimum existing end-to-end path.
-2. Record the smallest design, dependency direction, fixed public/durable
-   contracts, extension seams, and private discretion.
-3. For each material addition state the current requirement, consumer,
-   boundary, or failure and the simpler alternative considered.
-4. Resolve evidence-backed decisions locally.
-5. Ask one unresolved material decision at a time with recommendation,
-   alternatives, compatibility effect, validation obligation, and exact answer.
-6. Update the design, queue, complexity delta, and decision log after each
-   answer.
-7. Reopen functionality only for a genuinely missing behavior decision.
+1. Start from accepted behavior and the closest existing end-to-end path.
+2. Record the smallest design, ownership, dependency direction, public/durable
+   contracts, trust boundaries, and private implementation discretion.
+3. Map each material addition to a current requirement, consumer, boundary, or
+   failure and name the simpler alternative considered. Defer future-only work.
+4. Resolve evidence-backed mechanics locally. Raise unresolved material choices
+   with recommendation, tradeoff, compatibility effects, and validation needs.
+5. Update affected decisions and complexity evidence at their owner. Reopen only
+   the exact functionality decision when a missing behavior contract requires it.
 
-On the expanded route, run one design-safety review after the minimum design is
-recorded. Do not pass while a required decision or review action is unresolved.
+A named unresolved design question may receive one bounded design-safety pass
+under the planning workflow. It never substitutes for final independent plan
+review or creates another mandatory agreement gate.

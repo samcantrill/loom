@@ -2,6 +2,8 @@
 
 Status: approved; ready for implementation
 Roadmap stage: 40
+Stage descriptor: Coordinator Client, Agent Preparation, And MCP
+Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
@@ -139,6 +141,11 @@ schema-only phase or incomplete durable lifecycle is released. The additional
 phase changes delivery granularity, not the accepted final behavior.
 
 ## Quality Gate
+
+This is the grandfathered authoritative readiness receipt. Reuse the recorded
+approval/review below under the current workflow; no new product-plan review is
+claimed by the skill/title metadata update. Phase scope/order, fixed contracts,
+and all approved validation commands remain binding.
 
 - Planning gate: user direction agreed; expanded removal-first design review
   passed. Its three material clarifications are integrated into Phase 2.

@@ -10,15 +10,18 @@
 - Coordination branch: from manifest execution context
 - Base revision:
 - PR target: develop
-- PR title:
+- PR title: Stage <N> <manifest Stage descriptor> - Phase <P>: <phase heading title>
 - Dependencies:
-- Workflow path: fast / expanded with trigger
+- Named refinement uncertainty: none / exact question and affected contract
 - Blockers:
 
 ## Objective And Context
 
 - Vertical outcome:
 - Earlier dependency:
+- Cohesion (why these edits ship together):
+- Supported state after this merge if later phases never run:
+- Contract supplied to later phases:
 - Later work explicitly out of scope:
 
 ## Current Source And Harness
@@ -64,7 +67,7 @@ Assumptions:
 
 ## Implementation Slices
 
-Use three to six reviewable slices.
+Use reviewable slices appropriate to the outcome; no count target applies.
 
 1.
 
@@ -82,10 +85,21 @@ Targeted commands:
 
     <commands>
 
-Final commands:
+Selection rationale and expansion triggers:
 
-    make validate-pr
-    make test-summary
+- Affected contracts and consumers:
+- Why these checks cover the change:
+- New evidence that would expand selection:
+- Required dependency environments and unavailable physical qualification:
+
+Final gate commands and rationale:
+
+    <selected tests and applicable static checks, affected suites, or make validate-pr>
+
+Use `$loom-targeted-validation`. Full validation covers broad/unbounded impact
+and explicitly approved gates. Summary targets run tests again; include
+make test-summary only when required or its report is needed. Keep existing
+approved obligations until deliberately revised at their owner.
 
 ## Risks, Review, And Stops
 
@@ -104,13 +118,14 @@ Final commands:
 ## Workflow State
 
 - Manager preparation:
-- Expanded planning: not needed / result
+- Named uncertainty refinement: not needed / result
 - Implementation:
 - Refiner: not needed / result
 - Pre-submit gate:
 - Independent review: required; reviewed head and result
 - Blocker corrections: 0/3
 - PR and merge:
+- Improvement log entries: none / relevant IDs
 
 ## Completion Record
 

@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 2 merges; reconcile its actual input and state owners.
 - PR target: develop
-- PR title: Support staged preparation inputs through the native artifact relay
+- PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 3: Preparation With Transferred Inputs
 - Dependencies: Phase 2 remotely merged with its complete shared preparation lifecycle
 - Workflow path: expanded for archive extraction, transfer/recovery boundaries and retained-state compatibility
 - Blockers: predecessor pending; no unresolved planning blockers

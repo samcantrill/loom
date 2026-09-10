@@ -102,19 +102,32 @@ LOOM_COORDINATION is agent/stage-<N>. Supply actual values, not placeholders.
    develop. A blocked predecessor does not authorize continuation. There is no
    local-continuation exception while a remote merge remains unverified.
 
+## Phase Identity
+
+The manifest's approved Stage descriptor and the phase-card heading own PR
+identity. Use `Stage <N> <Stage-Descriptor> - Phase <P>: <Phase-Descriptor>`.
+Record that exact title in the card and use it for PR creation, review, and the
+delivery gate. For a resumed manifest missing the descriptor, derive it from
+the accepted roadmap heading and record it during stage startup; ask only when
+no unambiguous accepted descriptor exists. Do not rename branches to match titles.
+
 ## Startup And Per-Phase Procedure
 
-1. Reuse a current approved readiness receipt. Compare relevant source/contracts
-   with its evidence revision. Missing review or material drift gets one bounded
-   loom_plan_reviewer pass/correction, not a new full planning loop.
+1. Verify the exact approved packet paths are published on the selected base.
+   Reuse the manifest's Implementation Plan Review receipt (Quality Gate for
+   grandfathered packets). Compare relevant source/contracts with its evidence
+   revision; unrelated changes or layout metadata do not invalidate it. Missing
+   review or material drift gets one bounded loom_plan_reviewer pass/correction,
+   not a new full planning loop. Do not fabricate missing historical review SHAs.
 2. Prepare the existing phase card using phase-execution-plan-draft.md. Record
    execution facts and current references without reopening fixed contracts.
 3. Implement manager-locally using implementation-phase-execution.md. Delegate to
    one loom_phase_executor only when size/context isolation justifies it.
    Named uncertainty may use one loom_phase_planner; a qualified blocker may
    use one loom_phase_refiner. Use pointer-only handoffs and no child delegation.
-4. Run targeted checks during development, then the recorded final gates when
-   stable. Reuse fresh evidence. Record changed paths, selectors, validated tree,
+4. Use `$loom-targeted-validation` for selected checks and expansion triggers,
+   then run the recorded final gates when stable. Preserve approved obligations.
+   Reuse fresh evidence. Record changed paths, selectors, validated tree,
    skipped/unavailable cases and residual risks in the existing phase card.
 5. Prepare the PR manager-locally with pr-body-draft.md. Resolve blockers within
    budget before submission. Push/open with explicit repository, head, develop
@@ -174,3 +187,8 @@ exact branch/worktree ownership. Remove the clean stage worktree from outside
 it and delete only verified published refs. Do not edit local develop to record
 cleanup. Report actual cleanup in the handoff; unknown/unmerged work blocks
 completion. No wildcard/prefix cleanup or new lifecycle sidecars.
+
+Disposition relevant reusable improvement entries with `$loom-process-improvement`
+in the existing phase/manifest state; technical blockers stay at their owner.
+Optional terminal compaction follows the planning workflow, using verified facts
+and the same stage publication/synchronization gate when selected before cleanup.

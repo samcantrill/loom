@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loom Roadmap Planning"
+  short_description: "Plan and review one Loom roadmap stage"
+  default_prompt: "Use $loom-roadmap-planning to plan Stage <N>."

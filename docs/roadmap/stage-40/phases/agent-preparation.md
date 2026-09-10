@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 1 merges; recheck the root schema predecessor then.
 - PR target: develop
-- PR title: Prepare managed runs through durable shared-storage worker operations
+- PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 2: Durable Preparation On Shared Storage
 - Dependencies: Phase 1 remotely merged; stage plan approved on 2026-09-10
 - Workflow path: expanded for durable operations, filesystem/process handoffs, migration and cancellation
 - Blockers: predecessor pending; no unresolved planning blockers

@@ -1,20 +1,29 @@
 # Loom Workflow Modernization
 
-Status: refined stage isolation and delivery implemented; validation and delivery
-facts are recorded in [the refinement plan](refined-stage-implementation.md).
-
 ## Current Shape
 
-- Lean planning remains manager-local with bounded expanded reviews.
-- Each implementation stage uses one persistent worktree and a coordination
-  branch, with separate phase branches/PRs.
-- Manager implementation is the default; execution delegation is optional.
-- One independent review is required for every phase PR.
-- The manager prompt owns sequencing; tools/phase_workflow.py owns mandatory
-  repository, cwd/branch, merge and synchronization checks.
-- Metadata is authored on coordination and published before continuation;
-  local develop only fast-forwards. There is no local continuation fallback.
-- Existing Loom validation gates, compact manifests, phase cards, pointer-only
-  handoffs and no-sidecar rules remain authoritative.
-- Other unfinished legacy stages are audited only when resumed. Completed
-  history and unrelated code-intelligence work remain outside this change.
+- Repository skills in .agents/skills route planning, implementation, targeted
+  validation, and reusable process improvement. Workflow procedures retain one
+  canonical owner; normal invocation names a skill and a stage.
+- Planning produces one complete manager-authored packet, one independent final
+  review, and maintainer approval/landing. New planning manifests index coherent
+  domain cards. Existing single-file approved packets remain valid.
+- Implementation manifests own readiness, traceability, phase identity/order,
+  and execution context. Each phase is an independently acceptable merge; there
+  is no numerical word, phase, or slice target.
+- Each implementation stage retains one worktree and coordination branch with
+  separate phase branches/PRs. The manager prompt and tools/phase_workflow.py own
+  the existing isolation, reviewed delivery, publication, and synchronization gate.
+- Manager implementation is the default; every phase PR has independent review.
+  Named uncertainty, qualified repair, and executor delegation remain bounded.
+- Validation is selected by affected behavior and consumers. Broad/unbounded
+  impact or explicit approved obligations require full gates. Summary targets
+  execute tests and are not an automatic formatting step. Approved Stage 40/41
+  checks, product contracts, phase order, and review evidence remain binding.
+- Planning owns optional terminal compaction after verified implementation facts.
+  docs/improvement-log.md tracks reusable lessons without owning product blockers.
+
+The Git implementation and its delivery evidence are recorded in
+[the refinement plan](refined-stage-implementation.md). Current workflows own
+policy; completed plan receipts are historical evidence. Agent models, runtime
+code, the Git helper, and test harness behavior are unchanged by skill alignment.

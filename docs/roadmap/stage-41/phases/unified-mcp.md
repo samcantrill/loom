@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 7 merges; record exact SHA at execution preparation
 - PR target: develop
-- PR title: Expose unified run lifecycle through Loom MCP and skills
+- PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 8: Unified MCP And Skills
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts

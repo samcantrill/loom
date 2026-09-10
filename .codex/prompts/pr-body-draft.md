@@ -7,13 +7,15 @@ Read the manifest summary, selected phase plan, current diff, current validation
 evidence, and .github/PULL_REQUEST_TEMPLATE.md.
 
 1. Confirm branch, scope, tests, fixed contracts, and no future-phase work.
-2. Reuse current make validate-pr and make test-summary evidence; rerun only
-   stale or missing evidence.
+2. Reuse current evidence for selected checks and the approved final gates under
+   `$loom-targeted-validation`; rerun only stale or missing evidence. Do not run
+   a summary target merely to format existing results.
 3. Perform the pre-submit blocker gate against plan, diff, body, tests, risks,
    domain neutrality, import boundaries, and unnecessary complexity.
 4. Resolve qualified blockers within budget before submission.
 5. Prepare a concise body directly for GitHub. Do not commit a PR-body file.
-6. Push and open with explicit repository, base develop, head, and phase title.
+6. Push and open with explicit repository, base develop, head, and the canonical title from
+   phase-loop-management.md.
 7. Verify base, head, title, state, and URL.
 8. Record concise PR facts in the phase completion record.
 
