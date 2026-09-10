@@ -1,6 +1,6 @@
 # Refined Loom Stage Implementation Workflow
 
-Status: approved on 2026-09-10; implemented, validation and independent review in progress
+Status: approved on 2026-09-10; implemented, local validation passed and independent review clear
 Scope: repository workflow and Git tooling; no Loom runtime changes
 Delivery: one maintenance PR to develop, with three bounded implementation units
 
@@ -270,7 +270,20 @@ has started or completed as part of this workflow migration.
 - Implementation: six-command Loom Git helper and integration coverage added;
   active instructions and all thirteen pending Stage 40/41 phase cards use the
   shared stage-worktree contract. Product contracts and phase order preserved.
-- Targeted evidence: 53 integration tests passed in the initial implementation
-  run. Required final gates and independent review are pending.
-- Delivery: pending maintenance PR and merge; no Stage 40/41 runtime work started.
-- Control/adoption: clean control checkout establishment follows publication.
+- Validation: make validate-pr passed (Ruff, Pyright, default lane: 3,159 passed,
+  2 skipped; config-extra: 162 passed, 18 skipped; source/wheel builds). The
+  make test-summary report passed all six suites: 3,323 passed, no failures or
+  errors, 18 skipped. The 53 new integration tests passed both targeted and full
+  runs. Documentation checks preserve all thirteen phase contracts and both
+  canonical planning documents; phase mappings, links and shell examples pass.
+- Evidence: build/test-summary.md and its existing suite artifacts; validation
+  source/test/build content is unchanged from reviewed commit
+  `34073cbf6cbc1c33893cca932138c5a38276e571`. Subsequent edits only record these
+  completion facts and do not invalidate test evidence.
+- Independent review: no findings on the implementation. The final reviewed head
+  and evidence confirmation are recorded in [PR #296](https://github.com/samcantrill/loom/pull/296),
+  which owns the live merge state. No Stage 40/41 runtime work started.
+- Control/adoption: establish and verify the manifest's clean control checkout
+  after publication; report that result and exact maintenance cleanup in the
+  final handoff. First product-stage startup remains part of its separately
+  authorized execution. Local fixtures do not claim live container/HPC acceptance.
