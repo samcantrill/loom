@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.agent_session_transport as agent_session_transport
 import loom.queue.deployment as queue_deployment
 import loom.queue.local_daemon_execution as local_daemon_execution
@@ -5503,6 +5504,32 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         assert remote_status["waiting_admissions"] == 0
         assert direct_status["active_admissions"] == 0
         assert direct_status["waiting_admissions"] == 0
+        connection_path = tmp_path / "coordinator-client.yaml"
+        connection_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "loom.coordinator-client",
+                    "transport": {
+                        "kind": "https",
+                        "url": f"https://localhost:{server.port}",
+                        "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                        "certificate_path": str(credentials["other"].with_suffix(".crt")),
+                        "private_key_path": str(credentials["other"].with_suffix(".key")),
+                    },
+                    "expected_coordinator_id": daemon._coordinator_id,
+                }
+            ),
+            encoding="utf-8",
+        )
+        connection_path.chmod(0o600)
+        facade = CoordinatorClient.from_connection_file(connection_path)
+        assert facade.describe_connection().transport == "https"
+        assert facade.status().coordinator_id == daemon._coordinator_id
+        with pytest.raises(CoordinatorClientError, match="conflict"):
+            CoordinatorClient.from_connection_file(
+                connection_path, expected_coordinator_id="different-coordinator"
+            )
         daemon.replace_agent_policy(
             AgentPolicyConfig(revision="policy-2", agents=policy.agents)
         )

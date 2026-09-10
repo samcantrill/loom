@@ -171,13 +171,37 @@ class LocalDaemonSocketServer:
             if uid != os.getuid():
                 raise QueueServiceError("local daemon peer is not authorized")
             operation = payload.get("operation")
+            expected_coordinator_id = payload.get("expected_coordinator_id")
+            if expected_coordinator_id is not None:
+                if not isinstance(expected_coordinator_id, str) or not expected_coordinator_id:
+                    raise QueueValidationError("expected coordinator ID is invalid")
+                observed_coordinator_id = self._daemon._require_started()
+                if expected_coordinator_id != observed_coordinator_id:
+                    payload["_observed_coordinator_id"] = observed_coordinator_id
+                    raise QueueConflictError(
+                        "expected coordinator identity does not match this endpoint"
+                    )
             client = self._daemon.client_view(
                 LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.CLIENT)
             )
             operator = self._daemon.operator_view(
                 LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR)
             )
-            if operation == "submit":
+            if operation == "handshake":
+                if set(payload) - {"operation", "expected_coordinator_id"}:
+                    raise QueueValidationError("client handshake is invalid")
+                status = client.status()
+                result = {
+                    "protocol_version": "1",
+                    "transport": "unix",
+                    "coordinator_id": status.coordinator_id,
+                    "coordinator_epoch": status.coordinator_epoch,
+                    "capabilities": ["daemon-control-v1"],
+                    "source_modes": [],
+                    "preparation_profiles": [],
+                    "source_roots": [],
+                }
+            elif operation == "submit":
                 request = payload.get("request")
                 if not isinstance(request, Mapping):
                     raise QueueServiceError("submit request must be a mapping")
@@ -322,6 +346,13 @@ class LocalDaemonSocketServer:
                 "error": diagnostic,
                 "message": diagnostic,
             }
+            if "payload" in locals() and (
+                payload.get("expected_coordinator_id") is not None
+                or payload.get("operation") == "handshake"
+            ):
+                response["error_detail"] = _error_detail(
+                    exc, str(payload.get("operation", "unknown")), payload
+                )
         try:
             _write_message(connection, cast(Mapping[str, PlainData], response))
         finally:
@@ -334,8 +365,11 @@ class LocalDaemonSocketServer:
 class LocalDaemonSocketClient:
     """Typed client using the same application operations as direct composition."""
 
-    def __init__(self, endpoint: str | Path) -> None:
+    def __init__(
+        self, endpoint: str | Path, *, expected_coordinator_id: str | None = None
+    ) -> None:
         self.endpoint = Path(endpoint)
+        self._expected_coordinator_id = expected_coordinator_id
 
     def submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
         result = self._call({"operation": "submit", "request": request.to_dict()})
@@ -558,6 +592,11 @@ class LocalDaemonSocketClient:
         )
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
+        if self._expected_coordinator_id is not None:
+            request = {
+                **request,
+                "expected_coordinator_id": self._expected_coordinator_id,
+            }
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             connection.connect(str(self.endpoint))
@@ -581,6 +620,10 @@ class LocalDaemonSocketClient:
             raise QueueServiceError("local daemon returned an invalid result")
         return result
 
+    def handshake(self) -> Mapping[str, object]:
+        """Return the additive coordinator-control handshake for new clients."""
+        return self._call({"operation": "handshake"})
+
 
 def _safe_error_code(exc: Exception) -> str:
     if isinstance(exc, AdmissionNotFoundError):
@@ -596,6 +639,48 @@ def _safe_error_code(exc: Exception) -> str:
     if isinstance(exc, (QueueStorageError, QueueError)):
         return "local_daemon_storage_unavailable"
     return "local_daemon_internal_error"
+
+
+def _error_detail(
+    exc: Exception, operation: str, request: Mapping[str, object]
+) -> dict[str, PlainData]:
+    """Encode the additive stable error detail for the coordinator facade."""
+
+    if isinstance(exc, QueueConflictError):
+        code = "conflict"
+    elif isinstance(exc, AdmissionNotFoundError):
+        code = "not_found"
+    elif isinstance(exc, QueueValidationError):
+        code = "invalid_request"
+    elif isinstance(exc, _WaitCapacityError):
+        code = "capacity_exhausted"
+    elif isinstance(exc, (QueueStorageError, QueueError)):
+        code = "unavailable"
+    else:
+        code = "internal_error"
+    mutation = operation in {"submit", "cancel"}
+    ids: dict[str, PlainData] = {}
+    for key in ("admission_id", "queue_item_id", "operation_id", "run_uri"):
+        value = request.get(key)
+        if isinstance(value, str):
+            ids[key] = value
+    expected = request.get("expected_coordinator_id")
+    if isinstance(expected, str):
+        ids["expected_coordinator_id"] = expected
+    observed = request.get("_observed_coordinator_id")
+    if code == "conflict" and isinstance(observed, str):
+        # The coordinator identity is stable only once started; this check ran
+        # immediately before any lookup or mutation.
+        ids["observed_coordinator_id"] = observed
+    return {
+        "schema_version": 1,
+        "code": code,
+        "boundary": "coordinator",
+        "operation": operation,
+        "ids": ids,
+        "evidence_refs": [],
+        "mutation_outcome": "not_applied" if mutation else None,
+    }
 
 
 def _peer_uid(connection: socket.socket) -> int:

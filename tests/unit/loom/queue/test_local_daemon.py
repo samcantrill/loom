@@ -19,6 +19,7 @@ from typing import Any, cast
 
 import pytest
 
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.local_daemon_execution as local_daemon_execution
 import loom.queue.local_daemon as local_daemon_module
 from loom.queue import (
@@ -261,6 +262,46 @@ def test_admission_wait_observes_revision_without_status_history(
         daemon.wait_admission(
             "admission-1", expected_revision=changed.revision + 1, timeout=0
         )
+
+
+def test_coordinator_client_unix_handshake_and_identity_guard(tmp_path: Path) -> None:
+    """The new facade negotiates before control and guards every request."""
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    assert config.agent_root is not None
+    with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+        daemon._agent_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    daemon._coordinator_lock = object()
+    daemon._agent_lock = object()
+    daemon._epoch = "test-epoch"
+    daemon._scheduling_epoch = "test-scheduling-epoch"
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
+        description = client.describe_connection()
+        assert description.transport == "unix"
+        assert description.coordinator_id == daemon._coordinator_id
+        assert description.capabilities == ("daemon-control-v1",)
+        assert client.status().coordinator_id == daemon._coordinator_id
+        with pytest.raises(CoordinatorClientError) as raised:
+            CoordinatorClient.from_unix_socket(
+                config.endpoint, expected_coordinator_id="different-coordinator"
+            ).status()
+    finally:
+        server.stop()
+    assert raised.value.code == "conflict"
+    assert raised.value.boundary == "coordinator"
+    assert raised.value.ids["expected_coordinator_id"] == "different-coordinator"
+    assert raised.value.ids["observed_coordinator_id"] == daemon._coordinator_id
 
 
 def test_nonterminal_admission_waits_are_passive(
