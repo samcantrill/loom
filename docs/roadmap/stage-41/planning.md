@@ -286,8 +286,8 @@ are distinct; no runtime evidence is claimed during planning.
 
 ## Phase Shaping
 
-The maintainer approved nine phases on 2026-09-10. This exception to the preferred
-one-to-three shape separates substantial publication, operation, service,
+The maintainer approved nine phases on 2026-09-10. Their boundaries separate
+substantial publication, operation, service,
 execution, scheduler and transport boundaries plus independently owned consumers.
 Each phase includes code, tests, current docs and removal of replaced code.
 

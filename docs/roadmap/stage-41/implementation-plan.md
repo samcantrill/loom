@@ -2,6 +2,8 @@
 
 Status: approved; nine-phase implementation baseline
 Roadmap stage: 41
+Stage descriptor: Unified Run Lifecycle And Agent Execution
+Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
@@ -81,8 +83,8 @@ Maintainer approval: agreed behavior and nine-phase structure approved on 2026-0
 
 ## Phase Boundaries And Ordering
 
-Nine phases are a deliberate exception to the workflow's preferred one-to-three
-shape, approved by the maintainer. Publication, durable admission, service
+The maintainer approved nine independently acceptable phases. Publication,
+durable admission, service
 lifetime, process execution, scheduler ownership, result transport and separate
 consumers have distinct implementation/review boundaries. Each card delivers a
 working outcome with code, tests, documentation and local removal.
@@ -144,6 +146,11 @@ changed import/public boundary. Reuse successful evidence until relevant changes
 invalidate it; local fixtures never substitute for live qualification.
 
 ## Quality Gate
+
+This is the grandfathered authoritative readiness receipt. Reuse the recorded
+approval/review below under the current workflow; no new product-plan review is
+claimed by the skill/title metadata update. Phase scope/order, fixed contracts,
+and all approved validation commands remain binding.
 
 - Functionality/design: agreed contracts retained; original independent design
   pass resolved service ownership, sole submitter and one finalizer.

@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 8 merges; record exact SHA at execution preparation
 - PR target: develop
-- PR title: Finish shared execution removal and verify unified deployments
+- PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 9: Complete Execution Cutover
 - Dependencies: Phase 8 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts

@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 3 merges
 - PR target: develop
-- PR title: Add coordinator MCP tools and portable Loom operational skills
+- PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 4: MCP Tools And Portable Loom Skills
 - Dependencies: Phase 3 remotely merged; shared and staged native contracts validated
 - Workflow path: expanded for assistant mutation/error semantics and dependency isolation
 - Blockers: predecessor pending; no unresolved planning blockers

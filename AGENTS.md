@@ -42,23 +42,32 @@ diagnostics, failure behavior, dependency direction, and public imports.
 
 ## Local Checks
 
-Use:
+Use `$loom-targeted-validation` for behavior changes and coverage planning.
+Select checks by affected contracts and consumers. Bounded changes need selected
+tests and applicable static checks; wider changes need affected suites. Use
+`make validate-pr` for broad/unbounded impact or explicitly required gates.
+Ordinary prose changes normally need diff and affected documentation checks.
 
-    make validate-pr
-    make test-summary
+Preserve approved phase obligations until deliberately revised with rationale
+at their owner. This includes both `make validate-pr` and `make test-summary`
+where existing cards require them. Summary targets execute tests again; use them
+when explicitly required or when their report is needed, not as an automatic
+second run. tests/README.md owns commands and environments.
 
-make validate-pr is the implementation gate. make test-summary writes
-build/test-summary.md for PR evidence. Reuse a successful receipt only while no
-source, test, dependency, build, or validation configuration change has made it
-stale.
+Record selections, validated revision/tree, results, skipped/unavailable cases,
+and subsequent relevant changes. Reuse fresh evidence across handoffs. Repeat
+or expand only for relevant changes, failures, missing evidence, or unresolved
+risk. Never present a subset or skipped physical acceptance as full coverage.
 
 ## Workflow Layers
 
+- .agents/skills owns intent routing and reusable selection guidance.
 - .codex/workflows owns entry conditions, sequencing, gates, and manager choices.
 - .codex/prompts owns bounded task procedures.
 - .codex/agents owns model, sandbox, and stable role authority.
 - .codex/templates owns durable artifact shape.
 - .codex/plans owns reusable project-scoped workflow plans.
+- docs/improvement-log.md owns reusable pattern evidence and promotion state.
 
 Do not duplicate full procedures across these layers.
 
@@ -66,10 +75,11 @@ Do not duplicate full procedures across these layers.
 
 Manager-local work is the default.
 
-A normal planning workflow uses no subagent. A normal implementation phase uses
+A normal planning workflow uses manager authorship and one independent
+loom_plan_reviewer of the complete packet. A normal implementation phase uses
 manager implementation and one independent loom_phase_reviewer. Delegate execution
 to loom_phase_executor only when size or context isolation justifies it. Other
-roles require the workflow's named expanded-path risk or qualified blocker.
+roles require a named unresolved question or qualified blocker.
 
 - Use fork_turns=none for every workflow subagent.
 - Hand off paths and exact headings, not conversation history, prompt bodies,
@@ -90,54 +100,28 @@ history, and fallback mechanics only when an anomaly affects the gate.
 
 ## Roadmap Planning
 
-Start with .codex/workflows/roadmap-stage-planning.md.
+Use `$loom-roadmap-planning`, which routes to
+.codex/workflows/roadmap-stage-planning.md. The workflow owns complete drafting,
+independent final review, maintainer approval, and landing before implementation.
+Functionality and design prompts are authoring guidance, not intermediate
+approval gates. Ask about material product choices; resolve repository-backed
+mechanics locally and reuse existing approval when it applies.
 
-Durable artifacts:
+Planning manifests route to coherent domain cards; implementation manifests own
+phase order and readiness; execution cards own phase scope and evidence. Keep
+one authoritative owner for each contract and ID. No word, phase-count, or slice
+quota applies. Prefer independently mergeable outcomes with supported boundaries.
+Keep producer, consumer, docs, and tests together when they establish one invariant.
 
-- docs/roadmap/stage-<N>/planning.md
-- docs/roadmap/stage-<N>/implementation-plan.md
-- docs/roadmap/stage-<N>/phases/<phase-slug>.md
-
-planning.md is current authoritative state, not a transcript. Update sections in
-place and use Git history for superseded wording. Target 1,500-3,500 words unless
-irreducible contract detail requires more.
-
-Use the lean route unless current evidence shows a novel or unresolved public,
-durable, trust-boundary, cross-owner, irreversible migration, or causally
-interacting validation decision with material consequences.
-
-Lean planning is manager-local:
-
-1. Evidence, minimum useful outcome, requirements, and functionality agreement.
-2. Minimum design, complexity delta, design agreement, validation, and phase
-   shaping.
-3. Compact implementation manifest and phase execution plans.
-4. Manager quality gate and maintainer approval.
-
-On the expanded route, use at most:
-
-- one loom_design_safety_reviewer pass for removal-first design implications;
-- one loom_plan_reviewer pass when the manifest or linked phase plans need
-  independent quality review; and
-- one bounded correction for concrete findings.
-
-Ask the maintainer only about ambiguous product, public-contract, durable,
-compatibility, or material future-refactor choices. Ask one question at a time,
-state the recommendation and tradeoff, record the answer, and continue. Resolve
-repository-backed workflow mechanics locally.
-
-Use the artifact layout marker manifest-and-phase-plans-v1. The implementation
-plan is a compact manifest. Phase-specific detail belongs in one linked phase
-execution plan. Prefer one to three vertical phases, with a recorded reason for
-larger stage shapes.
-
-Do not rewrite completed historical plans solely to use the current layout.
-Audit a legacy plan with pending, pr_open, approved, or blocked phases before
-resuming it.
+Grandfather existing approved layouts and review receipts. Audit pending legacy
+work when resumed without rewriting completed history. Planning does not execute
+product phases. Optional terminal compaction belongs to planning and consumes
+verified implementation facts; it is not a product-completion requirement.
 
 ## Phase Implementation
 
-Start with .codex/workflows/roadmap-stage-implementation.md and follow
+Use `$loom-roadmap-implementation`, which routes to
+.codex/workflows/roadmap-stage-implementation.md, and follow
 .codex/prompts/phase-loop-management.md.
 
 Every stage uses one persistent worktree, including startup review, code/tests,
@@ -173,10 +157,11 @@ execution plan and send the PR body directly to GitHub.
 
 ## Budgets And Findings
 
-- Plan review: zero spawned passes on the lean path; one review and one bounded
-  correction on the expanded path.
-- Phase planning: zero spawned passes on the fast path; one refinement on the
-  expanded path.
+- Plan review: one required independent final pass; manager correction and at
+  most one targeted confirmation for substantive changes (one runtime replacement
+  if unavailable). Optional named design help does not replace this review.
+- Phase planning: manager preparation; at most one refinement for a named
+  unresolved question.
 - Implementation: manager-local; at most one executor when justified.
 - Implementation refinement: at most one refiner for a qualified blocker.
 - Phase PR review: one required independent reviewer; affected corrections
@@ -232,12 +217,21 @@ Use only these phase statuses:
 
 ## Definition Of Done
 
-Planning is ready when behavior and design agreements, proportionality,
-validation, phase shaping, manifest/phase consistency, risks, and maintainer
-approval are current with no unresolved blocker.
+Planning is ready when accepted contracts, proportionality, validation, phase
+boundaries, traceability, and independent readiness review have no blocker, the
+maintainer has approved the concrete packet, and the exact artifacts are landed
+and available on the selected implementation base.
 
 A phase is done when its implementation and tests match the phase plan,
 validation and review gates pass, its PR is remotely merged into develop,
 metadata is published, and the synchronization gate passes. A stage is done
 only after final closeout is published and exact stage cleanup is verified;
 unresolved dirty, unknown or unmerged work blocks completion.
+
+## Process Improvement
+
+Use `$loom-process-improvement` for recurring or demonstrated shared workflow,
+design, contract, skill, or tooling weaknesses. The improvement log records the
+reusable lesson, one promotion owner, action, and verification. Technical defects
+and phase acceptance stay with their immediate owner. Logging adds no phase
+scope or delivery gate.

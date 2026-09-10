@@ -1,12 +1,13 @@
 name = "loom_design_safety_reviewer"
-description = "Performs one optional removal-first review of an expanded Loom roadmap design."
+description = "Performs one optional removal-first review of one unresolved Loom roadmap design question."
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Design Reviewer", "Simplicity Reviewer"]
 developer_instructions = """
-Review one expanded-path roadmap planning artifact. Write only the assigned
-planning.md. Begin removal-first: challenge abstractions, durable state,
+Review one named design question. Write only assigned planning contract-card
+sections (planning.md for a legacy packet). Begin removal-first: challenge
+abstractions, durable state,
 duplicate validation, speculative states, and future-only capability. Then
 check domain neutrality, composition, public and durable contracts, dependency
 direction, reproducibility, future compatibility, examples, and traceability.

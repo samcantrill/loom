@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 5 merges; record exact SHA at execution preparation
 - PR target: develop
-- PR title: Recover completed Slurm results through durable shared delivery
+- PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 6: Slurm Result Recovery
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts

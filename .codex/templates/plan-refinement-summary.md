@@ -1,8 +1,10 @@
-# Optional Plan Correction Summary
+# Plan Correction Fields
+
+Record at the readiness owner; no separate report.
 
 - Source findings:
-- Manifest or phase plans changed:
+- Planning contract owners, manifest, or phase cards changed:
 - Complexity removed or deferred:
 - Contracts, ownership, or validation clarified:
 - Remaining blocker:
-- Ready for manager confirmation:
+- Substantive changes needing the permitted reviewer confirmation:

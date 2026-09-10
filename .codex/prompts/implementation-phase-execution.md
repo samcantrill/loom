@@ -11,7 +11,8 @@ the phase plan cites them.
    branch; do not switch branches while another agent/process uses it.
 2. Implement the smallest change satisfying fixed contracts and acceptance.
 3. Add the required phase-scoped tests with the related behavior.
-4. Use targeted validation while developing.
+4. Use `$loom-targeted-validation` to select checks and refine coverage against
+   actual consumers. Preserve approved obligations and record expansion triggers.
 5. Run the recorded final gate once when the validation-relevant tree is stable.
 6. Make coherent commits.
 7. Record implementation, changed paths, tests, validated revision/tree state,

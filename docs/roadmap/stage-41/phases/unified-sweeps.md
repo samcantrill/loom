@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 6 merges; record exact SHA at execution preparation
 - PR target: develop
-- PR title: Dispatch sweep trials through native run operations
+- PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 7: Unified Sweeps
 - Dependencies: Phase 6 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts

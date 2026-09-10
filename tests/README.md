@@ -52,6 +52,51 @@ Empty future suite directories are reported as `not present` by suite-specific
 targets. Once a suite contains tests, target failures should be treated as phase
 blockers unless the phase plan or PR body explicitly justifies the limitation.
 
+## Targeted validation
+
+Use `$loom-targeted-validation` to select by changed behavior, affected contracts,
+and consumers. Record the rationale, exact selectors, required environments, and
+expansion triggers in existing task notes or the phase card. Keep explicitly
+approved checks binding; broader workflow defaults do not remove them.
+
+Use Python 3.12 and locked dependency environments. Direct pytest selections
+are supported; the suite harness does not accept arbitrary file/node selectors.
+For example, the Git helper's isolated integration contract is:
+
+```sh
+uv run --python 3.12 --isolated --locked --group dev pytest \
+  tests/integration/tools/test_phase_workflow.py \
+  -m 'not slow and not slurm and not network and not optional_dependency'
+```
+
+Replace the test path with affected files or node IDs. For selected config-backed
+checks, use a separate environment with `--extra config` and the appropriate
+markers. Do not exclude `optional_dependency` when that behavior is the selected
+obligation. Tests may have build, runtime, or installation prerequisites; inspect
+the selected fixtures and assertions. Default/no-extra evidence must come from
+the isolated baseline environment, not an environment retaining optional extras.
+
+Use existing `make test-<suite>` targets for affected suites. Broad/unbounded
+impact and explicitly approved final gates use `make validate-pr`, which runs
+Ruff, Pyright, baseline and config-extra tests, and distribution builds. Do not
+repeat its included checks without new evidence. Run `git diff --check` for the
+affected diff. Documentation/skill edits normally need only affected link,
+metadata, routing, and diff checks.
+
+Summary targets execute tests with reporting enabled; they do not merely render
+existing results. Reuse fresh output in phase/PR evidence when a new report is
+unnecessary. If a card explicitly requires `make test-summary`, that remains a
+separate obligation until deliberately revised with replacement coverage and
+rationale. Stages 40 and 41 retain both approved full commands.
+
+Finish relevant edits before final runs and record the validated revision/tree,
+selectors, results, skips/unavailable cases, and subsequent relevant changes.
+Subset results never establish full-suite coverage. A required unavailable case
+remains a gap requiring correction or explicit risk acceptance. Physical runtime
+qualification follows the opt-in hooks below and cannot be inferred from fixtures.
+Reuse evidence across handoffs; broaden or repeat only for a concrete failure,
+affected consumer, missing assertion, or change invalidating the previous result.
+
 ## Opt-in runtime acceptance hooks
 
 Real container and cluster smoke tests are skipped by default. Use them only in

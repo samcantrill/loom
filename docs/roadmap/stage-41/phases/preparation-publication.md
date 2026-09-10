@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop containing Stage 40; record exact SHA at execution preparation
 - PR target: develop
-- PR title: Preserve managed preparation controls and publish truthful run state
+- PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 1: Preparation And Publication
 - Dependencies: Published Stage 40; Stage 41 plan and nine-phase split approved on 2026-09-10
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts

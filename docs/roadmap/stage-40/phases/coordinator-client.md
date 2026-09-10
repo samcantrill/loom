@@ -10,7 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: current published develop at startup; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
 - PR target: develop
-- PR title: Unify native coordinator control across Unix and HTTPS
+- PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 1: Direct Coordinator Control
 - Dependencies: stage plan approved on 2026-09-10; no earlier phase
 - Workflow path: expanded for public API, authentication, failure and concurrency boundaries
 - Blockers: none; implementation not started
