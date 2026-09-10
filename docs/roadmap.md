@@ -162,6 +162,7 @@ written.
 | v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
 | v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
 | v29 | Durable dependency-aware stage scheduler and multi-machine agent pools | One managed system that admits runs, schedules each dependency-ready stage attempt across authenticated agent resources, moves artifacts safely, and preserves fenced lifecycle truth through restart, disconnection, cancellation, and recovery. |
+| v41 | Unified run lifecycle and agent execution | One configured run across cold/persistent local services, fleets and connected Slurm, with agent-owned execution, durable restart/result reconciliation and removal of parallel execution pathways. |
 
 ## v0 - Local Runtime Kernel
 
@@ -3005,6 +3006,45 @@ changes or protected physical execution.
 
 - [Current planning and design tasks](roadmap/stage-39/planning.md)
 - [Implementation manifest](roadmap/stage-39/implementation-plan.md)
+
+## v41 - Unified Run Lifecycle And Agent Execution
+
+Status: approved on 2026-09-10 with nine bounded implementation phases. The
+reviewed behavior/correction is retained; the manager checked the approved phase
+decomposition and documentation. Execution awaits published Stage 40; no runtime
+work has started.
+
+Build on Stage 40's native client and assigned preparation. One public run
+connects to or starts configured coordinator/agent services, prepares and admits
+work, observes the same managed lifecycle across native/container and connected
+Slurm execution, and stops only run-owned services after all work settles.
+Persistent services and retained state survive client exit. The agent service
+spans attempts; a stage worker executes one attempt.
+
+Move Slurm submission and monitoring behind agent execution while preserving
+exact submission identity, grant/start fencing and authority-owned output
+commits. Retain typed results on qualified shared storage so restarted services
+can publish work completed during coordinator downtime. New stage starts still
+require the coordinator; allocation acquisition, offline starts, HA and
+multi-node allocation integration are deferred.
+
+The user selected a hard cutover without compatibility adapters: remove direct,
+offline and independent whole-run Slurm execution, convert sweeps/MCP/examples,
+and retain only shared primitives with current consumers. Stage 40's preserved
+legacy surfaces and preparation limits describe its own delivery boundary;
+Stage 41 deliberately replaces/extends them after that prerequisite lands.
+Existing outputs are not deleted, and old-version work must settle before an
+operator replaces incompatible services.
+
+Nine phases deliver preparation/publication, durable run operations, service
+startup/lifetime, native/container workers, Slurm job ownership, durable Slurm
+results, sweeps, MCP/skills and the final shared cutover. Each phase owns its tests,
+docs and replaced-code removal; the last phase completes shared removals and
+integration rather than accumulating all cleanup.
+
+- [Plain-language lifecycle and deployment overview](briefs/unified-execution-lifecycle.md)
+- [Behavior, design and validation](roadmap/stage-41/planning.md)
+- [Implementation manifest and phase plans](roadmap/stage-41/implementation-plan.md)
 
 ## Deferred Integration Candidates
 
