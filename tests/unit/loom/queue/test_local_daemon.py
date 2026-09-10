@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import os
 import json
 from pathlib import Path
@@ -53,6 +54,7 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.pipeline.orchestration import (
+    CoordinatorStoreError,
     ExecutionRequirement,
     SchedulingProjectionState,
     StageWorkRecord,
@@ -1920,6 +1922,56 @@ def test_start_rejects_missing_expected_owner_store_without_retaining_locks(
     with pytest.raises(QueueServiceError, match="owner state is unavailable"):
         LocalDaemon(config).start()
     assert not store_path.exists()
+
+
+def test_shutdown_logs_owner_failure_chain_without_discarding_retention_or_locks(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    status = daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    supervisor = execution.supervisor
+    assert supervisor is not None
+    original_pid = supervisor.service_process_id
+    store = config.execution_database
+    backup = store.with_suffix(".unavailable")
+    store.rename(backup)
+    try:
+        assert not local_daemon_execution.local_daemon_owner_stores_available(
+            config, coordinator_id=status.coordinator_id, agent_id=execution.agent_id
+        )
+        daemon.stop()
+        refusal = next(
+            record
+            for record in caplog.records
+            if record.name == "loom.queue.local_daemon"
+            and "retained its supervisor during shutdown" in record.getMessage()
+        )
+        assert refusal.exc_info is not None
+        failure = refusal.exc_info[1]
+        assert isinstance(failure, QueueServiceError)
+        causes: list[BaseException] = []
+        while failure is not None:
+            causes.append(failure)
+            failure = failure.__cause__
+        assert any(isinstance(cause, CoordinatorStoreError) for cause in causes)
+        assert "retained daemon owner state is unavailable" in caplog.text
+        assert "coordinator store is missing" in caplog.text
+        assert "preserve the deployment and inspect the shutdown refusal" in caplog.text
+        assert not store.exists()
+        assert supervisor.status()["service_process_id"] == original_pid
+        assert config.agent_root is not None
+        for root in (config.coordinator_root, config.agent_root):
+            with (root / "owner.lock").open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    finally:
+        backup.replace(store)
+        daemon.stop()
+        supervisor.shutdown_clean()
 
 
 @pytest.mark.parametrize(
