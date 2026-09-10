@@ -6425,7 +6425,7 @@ def test_agent_policy_reload_rebuilds_the_shared_gpu_monitor(
         (profile,),
         gpu_occupancy_policy=GpuOccupancyPolicy(),
     )
-    changed_policy = GpuOccupancyPolicy(3, 15, 2)
+    changed_policy = GpuOccupancyPolicy(external_process_policy="allow")
     replacement = replace(base, gpu_occupancy_policy=changed_policy)
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
     client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)

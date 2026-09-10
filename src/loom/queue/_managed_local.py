@@ -4570,7 +4570,11 @@ class GpuResourceProvider(AtomResourceProvider):
                 elif not observed.query_succeeded:
                     available, reason = False, "observation_unavailable"
                 elif observed.has_gpu_process:
-                    available, reason = False, "external_process_detected"
+                    available, reason = (
+                        self._occupancy_monitor.policy.external_process_policy
+                        == "allow",
+                        "external_process_detected",
+                    )
                 else:
                     available, reason = True, "available"
             statuses.append(

@@ -14,13 +14,14 @@ import math
 import subprocess
 from threading import Lock
 from time import monotonic
-from typing import Final
+from typing import Final, cast
 from xml.etree import ElementTree
 
 from loom.timestamps import utc_now, utc_timestamp
 
 
 _PROCESS_TYPES: Final = frozenset({"C", "G", "C+G"})
+_EXTERNAL_PROCESS_POLICIES: Final = frozenset({"block", "allow"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class GpuOccupancyPolicy:
     poll_interval_seconds: float = 5
     max_observation_age_seconds: float = 15
     query_timeout_seconds: float = 2
+    external_process_policy: str = "block"
 
     def __post_init__(self) -> None:
         for name in (
@@ -50,26 +52,40 @@ class GpuOccupancyPolicy:
             raise ValueError(
                 "max_observation_age_seconds must exceed polling interval plus query timeout"
             )
+        if (
+            not isinstance(self.external_process_policy, str)
+            or self.external_process_policy not in _EXTERNAL_PROCESS_POLICIES
+        ):
+            raise ValueError("external_process_policy must be 'block' or 'allow'")
 
-    def to_dict(self) -> dict[str, float]:
-        return {
+    def to_dict(self) -> dict[str, float | str]:
+        result: dict[str, float | str] = {
             "poll_interval_seconds": self.poll_interval_seconds,
             "max_observation_age_seconds": self.max_observation_age_seconds,
             "query_timeout_seconds": self.query_timeout_seconds,
         }
+        if self.external_process_policy == "allow":
+            result["external_process_policy"] = self.external_process_policy
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "GpuOccupancyPolicy":
-        if set(value) != {
+        required = {
             "poll_interval_seconds",
             "max_observation_age_seconds",
             "query_timeout_seconds",
-        }:
+        }
+        if not required <= set(value) or set(value) - (
+            required | {"external_process_policy"}
+        ):
             raise ValueError("GPU occupancy policy fields are invalid")
         return cls(
             poll_interval_seconds=value["poll_interval_seconds"],  # type: ignore[arg-type]
             max_observation_age_seconds=value["max_observation_age_seconds"],  # type: ignore[arg-type]
             query_timeout_seconds=value["query_timeout_seconds"],  # type: ignore[arg-type]
+            external_process_policy=cast(
+                str, value.get("external_process_policy", "block")
+            ),
         )
 
 
