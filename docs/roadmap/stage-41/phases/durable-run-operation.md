@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p2-durable-run-operation
-- Worktree: manifest root, suffix `stage-41-p2-durable-run-operation`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 1 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Carry accepted run requests through admission with serialized cancellation

@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p1-preparation-publication
-- Worktree: manifest root, suffix `stage-41-p1-preparation-publication`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop containing Stage 40; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Preserve managed preparation controls and publish truthful run state

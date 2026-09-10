@@ -62,10 +62,22 @@ Maintainer approval: agreed behavior and nine-phase structure approved on 2026-0
 - Hard cutover has no public alias/migration requirement. Reject incompatible
   roots before mutation; old-version work must settle under that version before
   service replacement. Never reset roots or delete old outputs to implement this.
-- Execution worktree root: `/nas/home/can134/work/loom-worktrees`. Use one dedicated
-  phase worktree/branch and PR per card, based on published develop after its
-  predecessor. The planning evidence tree is recorded in planning.md; preserve
-  unrelated documentation and the original dirty Loom checkout.
+- Execution paths and coordination are recorded in Execution Context below.
+  Every card keeps its phase branch/PR in the same persistent stage worktree.
+  Start the successor only after remote predecessor merge, published metadata
+  and synchronization. Preserve unrelated work and the original dirty checkout.
+
+## Execution Context
+
+- Execution worktree root: `/nas/home/can134/work/loom-worktrees`.
+- Clean control checkout: `control` under that root; verify or create a clean
+  linked checkout on develop without repurposing unrelated work.
+- Persistent stage worktree: `stage-41` under that root; bootstrap before
+  startup review or writes and retain through final synchronized closeout.
+- Coordination branch: `agent/stage-41` for metadata and closeout.
+- Shared Git gate: `.codex/prompts/phase-loop-management.md`.
+- Execution-mechanics amendment: refined workflow adopted on 2026-09-10;
+  phase scope/order, approvals, fixed contracts and validation remain unchanged.
 
 ## Phase Boundaries And Ordering
 
@@ -75,9 +87,9 @@ lifetime, process execution, scheduler ownership, result transport and separate
 consumers have distinct implementation/review boundaries. Each card delivers a
 working outcome with code, tests, documentation and local removal.
 
-Implement in order 1 through 9, one phase worktree/PR at a time on published
-develop; Phase 1 follows published Stage 40. This is integration order, not a
-requirement to invent runtime dependencies between independent consumers.
+Implement in order 1 through 9, one phase branch/PR at a time in the stage
+worktree on published develop; Phase 1 follows published Stage 40. This is
+integration order, not a requirement to invent runtime dependencies between independent consumers.
 Phases 2/3/5/6 keep these indivisible contracts together respectively:
 acceptance/continuation/cancellation; startup/handoff/quiescence;
 submission/uncertainty/cancellation/recovery; and result ingestion/finalizer

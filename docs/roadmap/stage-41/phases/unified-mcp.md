@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 8
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p8-unified-mcp
-- Worktree: manifest root, suffix `stage-41-p8-unified-mcp`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 7 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Expose unified run lifecycle through Loom MCP and skills

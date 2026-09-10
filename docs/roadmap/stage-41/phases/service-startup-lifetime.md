@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p3-service-startup-lifetime
-- Worktree: manifest root, suffix `stage-41-p3-service-startup-lifetime`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 2 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Start or reuse configured services with durable lifetime ownership

@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 40 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p3-staged-preparation-inputs
-- Worktree root: recorded once in the manifest; path suffix `stage-40-p3-staged-preparation-inputs`.
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 2 merges; reconcile its actual input and state owners.
 - PR target: develop
 - PR title: Support staged preparation inputs through the native artifact relay
@@ -402,4 +403,4 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | No phase worktree created; no roots or environments changed |
+| Residual risk and cleanup | Stage worktree not yet created; no roots or environments changed |

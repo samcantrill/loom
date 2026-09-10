@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 5
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p5-agent-slurm-jobs
-- Worktree: manifest root, suffix `stage-41-p5-agent-slurm-jobs`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 4 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Move the complete Slurm job lifecycle to its assigned agent

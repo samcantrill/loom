@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 9
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p9-execution-cutover
-- Worktree: manifest root, suffix `stage-41-p9-execution-cutover`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 8 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Finish shared execution removal and verify unified deployments
