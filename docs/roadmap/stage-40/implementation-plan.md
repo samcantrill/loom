@@ -186,6 +186,6 @@ and all approved validation commands remain binding.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | Pending | Startup verified; runtime work in progress | Pending implementation | Persistent stage worktree created and retained |
-| 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | Stage worktree not yet created |
-| 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Stage worktree not yet created |
-| 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Stage worktree not yet created |
+| 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | Reuses the retained Stage 40 worktree after predecessor synchronization |
+| 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Reuses the retained Stage 40 worktree after predecessor synchronization |
+| 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Reuses the retained Stage 40 worktree through final closeout |

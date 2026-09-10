@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 import json
+import math
 import signal
 import sys
 import time
@@ -31,6 +32,7 @@ from loom.serialization import PlainData
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from loom.coordinator import CoordinatorClient
     from loom.pipeline.stores import AuthorityConfig
     from loom.queue import QueueDrainResult, QueueForegroundDriveResult, QueueService
     from loom.queue.controller import (
@@ -764,26 +766,17 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
-def _daemon_client(namespace: argparse.Namespace):  # type: ignore[no-untyped-def]
-    """Select the new facade where a remote connection or identity guard is used."""
+def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
+    """Select the unified native client for every coordinator client command."""
+    from loom.coordinator import CoordinatorClient
 
-    connection = namespace.connection
-    expected = namespace.expected_coordinator_id
-    if connection is not None:
-        from loom.coordinator import CoordinatorClient
-
+    if namespace.connection is not None:
         return CoordinatorClient.from_connection_file(
-            connection, expected_coordinator_id=expected
+            namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id,
         )
-    if expected is not None:
-        from loom.coordinator import CoordinatorClient
-
-        return CoordinatorClient.from_unix_socket(
-            namespace.endpoint, expected_coordinator_id=expected
-        )
-    from loom.queue import LocalDaemonSocketClient
-
-    return LocalDaemonSocketClient(namespace.endpoint)
+    return CoordinatorClient.from_unix_socket(
+        namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id,
+    )
 
 
 def handle_daemon_status(namespace: argparse.Namespace) -> int:
@@ -844,9 +837,15 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).wait_operation(
-            namespace.operation_id, timeout_seconds=namespace.timeout
-        )
+        if namespace.timeout is not None and (not math.isfinite(namespace.timeout) or namespace.timeout < 0):
+            raise QueueServiceError("operation wait timeout is invalid")
+        client = _daemon_client(namespace)
+        deadline = None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        while True:
+            duration = 25.0 if deadline is None else max(0.0, min(25.0, deadline - time.monotonic()))
+            result = client.wait_operation(namespace.operation_id, timeout_seconds=duration)
+            if result.kind.value != "TIMEOUT" or (deadline is not None and time.monotonic() >= deadline):
+                break
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())

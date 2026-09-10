@@ -32,11 +32,11 @@ they do not change native client, authentication, inspection or wait contracts.
 Current client and transport definitions still match the owner map below.
 No refinement or new product-plan review is needed.
 
-The optional phase executor is justified by the four implementation steps across
-native dispatch, two transports, compatibility adapters, CLI and concurrency
-tests. It owns this phase's implementation, tests, product documentation and
-completion evidence; the manager owns stage metadata and subsequent delivery.
-Neither execution delegation nor startup changes accepted scope or gates.
+An optional executor authored the initial draft because the four implementation
+steps span native dispatch, two transports, compatibility adapters, CLI and
+concurrency tests. That handoff is complete. The manager now owns source, tests,
+product documentation, acceptance correction and delivery. The delegation did
+not change accepted scope or gates.
 
 Validation selection starts with the owner map in Test And Validation Plan and
 adds source-mirrored facade/config tests, real Unix/mTLS parity and fault/progress
@@ -448,45 +448,47 @@ The manager reconciles new published upstream changes before branch creation.
 
 ## Manager Acceptance Correction
 
-The manager checked committed tree
-`49295a67c2ea0d5eaef728e82dee2d918624f2b2` against the fixed contracts. The
-native facade, CLI options, handshake/guard and transport extensions are present,
-but the draft is not merge-ready. Complete these existing obligations in one
-native control boundary correction; no product contract or phase scope changes:
+One scoped correction completes the native control boundaries missing from the
+initial draft at `49295a67c2ea0d5eaef728e82dee2d918624f2b2`. The manager owns
+this correction; accepted behavior and phase scope remain unchanged.
 
-- Share control dispatch, validation and decoding below the facade. The current
-  Unix/HTTPS branches and facade/legacy decoders still duplicate those owners.
-- Enforce cumulative I/O and bounded client/server wait capacity. The current
-  socket read loop does not consume one remaining deadline, and HTTP waits do
-  not have the required reserved capacity. Slow replies or saturated waits can
-  violate the finite-call and ordinary/worker-progress contracts.
-- Classify errors at their actual boundary and retain mutation uncertainty and
-  original IDs. In particular, Unix `_error_detail` currently labels all
-  mutation exceptions `not_applied`; an exception after an accepted mutation
-  cannot establish that outcome. HTTP queue errors also need their native
-  not-found/authorization/storage meanings rather than one invalid-request code.
-- Restrict new Unix client inspection to managed admissions while retaining the
-  old local inspection adapter's behavior. Current HTTPS and Unix paths differ.
-- Add the approved causal coverage for local/mTLS control parity, server-side
-  guards before lookup/mutation, lost/invalid responses, deadlines, saturated
-  waits with ordinary/worker progress, nested failures and legacy adapters.
-  Added handshake/status/option-exclusivity assertions do not prove those cases.
+The implementation now shares request validation, dispatch, native result
+codecs and client observation behavior below the public facade. Unix and HTTPS
+use that dispatcher; the legacy socket adapter delegates to the same client
+owner with its original defaults, timeout conventions and inspection scope.
+The public facade keeps diagnostic decoding above queue. Deployment owns the
+protected connection loader; the worker and native clients share the compatible
+HTTPS connection factory. CLI client commands always select the unified client.
 
-The implementation executor has returned source/test ownership to the manager.
-Its existing full validation process is being allowed to finish before further
-runtime edits. Its result is evidence for the earlier committed source only;
-it cannot close the missing-contract acceptance gate. Final checks and review
-will use the completed implementation. The native client product guide already
-documents the accepted behavior and must remain aligned with the completed code.
+Finite I/O uses cumulative budgets and bounded concurrent exchanges, including
+capacity admission and stalled connection setup. HTTP waits reserve ordinary
+capacity independently of worker requests. Client request decoding accepts native
+fractional wait durations without widening worker-message decoding. HTTP response
+reading preserves structured errors when the completed response closes its
+connection. Capability negotiation rejects an older application service before
+any dependent mutation. Server identity checks precede lookup and mutation on
+each request. Error outcomes preserve original IDs and distinguish known refusal
+from an unknown outcome after possible commitment.
+
+Causal coverage includes real Unix/HTTPS lost-reply recovery with same-ID replay,
+per-request guards bypassing negotiation, new-versus-legacy inspection scope,
+revocation and wrong CA/role, post-commit receipt failure, slow Unix replies and
+HTTP headers/bodies, independent HTTP observers with ordinary/worker progress,
+stalled setup capacity, native nested failure evidence and response size limits,
+portable imports, and native/legacy page and CLI timeout compatibility. The CLI
+submit/status/lookup/cancel/wait journey runs over both connection options.
+
+Final full validation and independent PR review remain required. Targeted passes
+are evidence for the selected contracts only, not a substitute for those gates.
 
 ## Workflow State
 
 - Manager preparation: startup verified on 2026-09-11; approved contracts and current source reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: source draft committed; manager completing accepted native control boundaries
+- Implementation: shared native boundaries implemented; manager validating the completed correction
 - Refiner: not needed
-- Pre-submit gate: not passed at `49295a6`; scoped manager correction above
-- Independent review: required before implementation merge
+- Pre-submit gate: pending final validation and manager acceptance
+- Independent review: required on the actual PR head before implementation merge
 - Blocker corrections: 1/3 in progress; native control boundary completion
 - PR and merge: not created
 
@@ -494,9 +496,10 @@ documents the accepted behavior and must remain aligned with the completed code.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Draft through `49295a6`: `coordinator.py`, Unix/HTTPS transports, queue CLI and native client product docs; accepted boundary completion remains |
-| Tests added or updated | Local handshake/identity, loopback HTTPS status and CLI connection-exclusivity assertions; required causal coverage remains |
-| Validated revision/tree state and evidence | At `49295a6`, `/tmp/loom-stage40-final-validate.log` records Ruff and Pyright passes; `make validate-pr` remains in progress and has no exit receipt yet. `make test-summary` has not run. Product-doc links/example syntax checked separately; no runtime examples executed |
-| Validation-relevant changes after evidence | No runtime edits since validation started; this acceptance metadata update is documentation only. Required upcoming runtime changes will need fresh affected checks and final gates |
+| Implementation and changed paths | Public coordinator facade; private queue control/client/transport owners; Unix/HTTPS adapters; deployment connection loader; queue CLI; native client product docs |
+| Tests added or updated | Native client unit tests, import boundary, CLI compatibility, real Unix/mTLS control recovery/guards, native error and size bounds, and HTTP deadline/capacity/authentication fixtures |
+| Validated revision/tree state and evidence | The manager's working-tree focused run passed 37 tests with 165 deselected using the native/coordinator/CLI selectors over the transport, import, client and CLI owners. Changed-file Ruff passed. Earlier static typing passed; one new test required a mapping cast, now corrected. The source-mirrored, legacy socket, CLI, inspection-contract and import pass completed with 164 passed and 1 deselected. The required fresh full gates have not started |
+| Prior full evidence | The earlier draft at `49295a6` completed `make validate-pr` with exit 0: 3161 baseline tests passed, 2 skipped, 156 deselected; 162 config-extra tests passed, 18 skipped, 3166 deselected; static checks and distributions passed. `/tmp/loom-stage40-final-validate.log` and its `.exit` receipt record that result. This is not evidence for the current runtime refactor. `make test-summary` has not run |
+| Validation-relevant changes after evidence | Shared runtime/transport extraction supersedes the earlier full-run evidence. The final checkpoint requires fresh full validation and test summary. Product documentation link/example checks remain valid where unchanged |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Missing boundaries and coverage listed above prevent merge. Persistent stage worktree retained; no PR or root migration |
+| Residual risk and cleanup | Full regression and required independent review remain before merge. Persistent stage worktree retained; no PR or root migration |

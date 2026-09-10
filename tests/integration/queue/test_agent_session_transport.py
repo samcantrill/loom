@@ -5426,6 +5426,477 @@ def test_loopback_operator_scope_denial_matches_direct_before_persistence(
         daemon.stop()
 
 
+@pytest.mark.parametrize("transport", ["unix", "https"])
+def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str,
+) -> None:
+    """A committed admission survives a dropped reply on either real transport."""
+    import loom.queue.local_daemon_transport as unix_transport
+    from loom.queue import LocalDaemonSocketClient, LocalDaemonSocketServer
+
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, _authority = _prepare_remote_producer_run(
+        store, run_name="native-control", machine_id="agent-a", value=7,
+    )
+    policy = AgentPolicyConfig(agents=_policy().agents, principals=(
+        TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+    ))
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, store.root, None, cpu_capacity=0, agent_policy=policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    projection_calls: list[str] = []
+
+    def inspect_run(uri: str) -> Mapping[str, PlainData]:
+        projection_calls.append(uri)
+        return {"schema_version": 1, "code": "unavailable"}
+
+    dropped = Event()
+    if transport == "unix":
+        server = LocalDaemonSocketServer(daemon, config.endpoint, inspect_run=inspect_run)
+        server.start()
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
+        write = unix_transport._write_message
+
+        def drop_unix(connection: socket.socket, value: Mapping[str, PlainData]) -> None:
+            result = value.get("result")
+            if isinstance(result, Mapping) and result.get("queue_item_id") == "original-item" and not dropped.is_set():
+                dropped.set()
+                connection.shutdown(socket.SHUT_RDWR)
+                return
+            write(connection, value)
+
+        monkeypatch.setattr(unix_transport, "_write_message", drop_unix)
+    else:
+        credentials = _credentials(tmp_path / "tls")
+        server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig(
+            "localhost", 0, credentials["server"].with_suffix(".crt"), credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {_fingerprint(credentials["other"].with_suffix(".crt")): "client-credential"},
+        ), inspect_run=inspect_run)
+        server.start()
+        connection_path = tmp_path / "client.yaml"
+        connection_path.write_text(json.dumps({
+            "schema_version": 1, "kind": "loom.coordinator-client",
+            "transport": {"kind": "https", "url": f"https://localhost:{server.port}",
+                "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                "certificate_path": str(credentials["other"].with_suffix(".crt")),
+                "private_key_path": str(credentials["other"].with_suffix(".key"))},
+        }))
+        connection_path.chmod(0o600)
+        client = CoordinatorClient.from_connection_file(connection_path)
+        reply = agent_session_transport._Handler._reply
+
+        def drop_http(handler: agent_session_transport._Handler, status: int, value: Mapping[str, object]) -> None:
+            result = value.get("result")
+            if isinstance(result, Mapping) and result.get("queue_item_id") == "original-item" and not dropped.is_set():
+                dropped.set()
+                handler.close_connection = True
+                handler.connection.shutdown(socket.SHUT_RDWR)
+                return
+            reply(handler, status, value)
+
+        monkeypatch.setattr(agent_session_transport._Handler, "_reply", drop_http)
+    try:
+        description = client.describe_connection()
+        assert description.transport == transport
+        assert description.source_modes == ()
+        assert description.preparation_profiles == ()
+        assert client.status().coordinator_id == daemon._coordinator_id
+        assert client.agents().agents == ()
+        request = LocalDaemonAdmissionRequest("original-item", run_uri)
+        for operation, payload in (
+            ("inspect_run", {"run_uri": run_uri}),
+            ("admission", {"admission_id": "absent"}),
+            ("submit", {"request": request.to_dict()}),
+        ):
+            with pytest.raises(CoordinatorClientError) as caught:
+                # Bypass negotiation so this proves the actual request guard,
+                # independently of the already successful handshake.
+                client._native_call(operation, payload, "wrong-coordinator", negotiate=False)
+            assert caught.value.code == "conflict"
+            assert caught.value.ids["observed_coordinator_id"] == description.coordinator_id
+            assert caught.value.mutation_outcome == ("not_applied" if operation == "submit" else None)
+        assert daemon.admissions().admissions == ()
+        assert projection_calls == []
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.inspect_run(run_uri)
+        assert caught.value.code == "not_found"
+        assert projection_calls == []
+        if transport == "unix":
+            assert LocalDaemonSocketClient(config.endpoint).inspect_run(run_uri)["code"] == "unavailable"
+            assert projection_calls == [run_uri]
+        with pytest.raises(CoordinatorClientError) as lost:
+            client.submit(request)
+        assert dropped.is_set(), (lost.value.code, str(lost.value))
+        assert lost.value.mutation_outcome == "unknown"
+        assert lost.value.ids["queue_item_id"] == "original-item"
+        assert lost.value.ids["run_uri"] == run_uri
+        admitted = client.admission_for_queue_item("original-item")
+        replay = client.submit(request)
+        assert replay.admission_id == admitted.admission_id
+        assert replay.intent_digest == admitted.intent_digest
+        assert len(client.admissions().admissions) == 1
+        detail = client.admission(admitted.admission_id).admission
+        assert detail.admission_id == replay.admission_id
+        assert detail.intent_digest == replay.intent_digest
+        assert detail.revision >= replay.revision
+        assert client.inspect_run(run_uri).to_dict() == {"schema_version": 1, "code": "unavailable"}
+        changed = client.wait_admission(admitted.admission_id, expected_revision=0, timeout_seconds=0)
+        assert changed.kind.value in {"CHANGED", "TERMINAL"}
+        for method, identity in ((client.agent, "missing-agent"), (client.operation, "missing-operation")):
+            with pytest.raises(CoordinatorClientError) as caught:
+                method(identity)
+            assert caught.value.code == "not_found"
+            assert caught.value.mutation_outcome is None
+        cancelled = client.cancel("original-item")
+        assert cancelled.cancellation_operation_id is not None
+        # Client disconnect does not delete the accepted admission or its intent.
+        client.close()
+        assert daemon.admission_for_queue_item("original-item").admission_id == admitted.admission_id
+    finally:
+        client.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_native_https_wait_saturation_keeps_client_and_worker_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from threading import Lock
+
+    credentials = _credentials(tmp_path / "tls")
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, _authority = _prepare_remote_producer_run(
+        store, run_name="wait-capacity", machine_id="agent-a", value=1,
+    )
+    policy = AgentPolicyConfig(agents=_policy().agents, principals=(
+        TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+    ))
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, store.root, None, cpu_capacity=0, agent_policy=policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig(
+        "localhost", 0, credentials["server"].with_suffix(".crt"), credentials["server"].with_suffix(".key"),
+        credentials["ca"].with_suffix(".crt"), {
+            _fingerprint(credentials["other"].with_suffix(".crt")): "client-credential",
+            _fingerprint(credentials["agent"].with_suffix(".crt")): "agent-credential",
+        },
+    ))
+    server.start()
+    connection_path = tmp_path / "client.yaml"
+    connection_path.write_text(json.dumps({
+        "schema_version": 1, "kind": "loom.coordinator-client",
+        "transport": {"kind": "https", "url": f"https://localhost:{server.port}",
+            "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+            "certificate_path": str(credentials["other"].with_suffix(".crt")),
+            "private_key_path": str(credentials["other"].with_suffix(".key"))},
+    }))
+    connection_path.chmod(0o600)
+    client = CoordinatorClient.from_connection_file(connection_path)
+    worker = LocalDaemonAgentHttpClient(AgentTlsClientConfig(
+        f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"),
+    ))
+    admitted = client.submit(LocalDaemonAdmissionRequest("waiting-item", run_uri))
+    original = daemon.wait_admission
+    entered = Event()
+    release = Event()
+    lock = Lock()
+    active = maximum = 0
+
+    def paused(admission_id: str, *, expected_revision: int, timeout: float | None):  # type: ignore[no-untyped-def]
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+            if active == 6:
+                entered.set()
+        try:
+            assert release.wait(10), "ordinary control failed to release the observation fixture"
+            return original(admission_id, expected_revision=expected_revision, timeout=0)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(daemon, "wait_admission", paused)
+    observers = [CoordinatorClient.from_connection_file(connection_path) for _ in range(8)]
+    try:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(observer.wait_admission, admitted.admission_id, admitted.revision, 0.5) for observer in observers]
+            try:
+                assert entered.wait(8), [repr(future.exception()) for future in futures if future.done()]
+                assert client.status().coordinator_id == daemon._coordinator_id
+                assert worker.handshake()["coordinator_id"] == daemon._coordinator_id
+                cancelled = client.cancel("waiting-item")
+                assert cancelled.cancellation_operation_id is not None
+                assert maximum == 6
+            finally:
+                release.set()
+            for future in futures:
+                assert future.result(timeout=10).admission.queue_item_id == "waiting-item"
+    finally:
+        release.set()
+        for observer in observers:
+            observer.close()
+        client.close()
+        worker.close()
+        server.stop()
+        daemon.stop()
+
+
+@pytest.fixture
+def native_control_endpoint(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """A coordinator-only TLS service; the native client has no agent root."""
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(agents=_policy().agents, principals=(
+        TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+    ))
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, tmp_path / "runs", None, cpu_capacity=0, agent_policy=policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig(
+        "localhost", 0, credentials["server"].with_suffix(".crt"), credentials["server"].with_suffix(".key"),
+        credentials["ca"].with_suffix(".crt"), {
+            _fingerprint(credentials["other"].with_suffix(".crt")): "client-credential",
+            _fingerprint(credentials["agent"].with_suffix(".crt")): "agent-credential",
+        },
+    ))
+    server.start()
+    connection_path = tmp_path / "client.yaml"
+    connection_path.write_text(json.dumps({
+        "schema_version": 1, "kind": "loom.coordinator-client",
+        "transport": {"kind": "https", "url": f"https://localhost:{server.port}",
+            "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+            "certificate_path": str(credentials["other"].with_suffix(".crt")),
+            "private_key_path": str(credentials["other"].with_suffix(".key"))},
+    }))
+    connection_path.chmod(0o600)
+    try:
+        yield daemon, server, connection_path, credentials
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("location", ["headers", "body"])
+def test_native_https_trickle_consumes_one_http_call_budget(
+    native_control_endpoint, monkeypatch: pytest.MonkeyPatch, location: str,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue import _coordinator_transport as control_io
+
+    _daemon, _server, connection_path, _credentials = native_control_endpoint
+    monkeypatch.setattr(control_io, "HTTP_CALL_SECONDS", 0.5)
+    monkeypatch.setattr(control_io, "REQUEST_BUDGET_SECONDS", 3.0)
+    original = agent_session_transport._Handler._reply
+    finished = Event()
+    stop = Event()
+
+    def trickle(handler: agent_session_transport._Handler, status: int, payload: Mapping[str, object]) -> None:
+        if status != 200 or handler.path != "/v1/client/status":
+            original(handler, status, payload)
+            return
+        handler.close_connection = True
+        try:
+            if location == "headers":
+                handler.wfile.write(b"HTTP/1.1 200 OK\r\nX-Trickle: ")
+            else:
+                handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            for _ in range(100):
+                handler.wfile.write(b"x")
+                if stop.wait(0.04):
+                    break
+        except OSError:
+            pass  # The client closes its socket when the cumulative budget expires.
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(agent_session_transport._Handler, "_reply", trickle)
+    started = monotonic()
+    try:
+        with CoordinatorClient.from_connection_file(connection_path) as client:
+            with pytest.raises(CoordinatorClientError) as caught:
+                client.status()
+        assert caught.value.code == "deadline_exceeded"
+        assert caught.value.mutation_outcome is None
+        assert monotonic() - started < 1.5  # Separate HTTP cap, below the 3-second overall budget.
+    finally:
+        stop.set()
+        assert finished.wait(2)
+
+
+@pytest.mark.parametrize("connection_kind", ["unix", "https"])
+def test_coordinator_cli_submit_inspect_cancel_and_wait_with_either_connection(
+    native_control_endpoint, connection_kind: str,  # type: ignore[no-untyped-def]
+) -> None:
+    import io
+
+    from loom.cli.main import main
+    from loom.queue import LocalDaemonSocketServer
+
+    daemon, _http_server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root), run_name="cli-workflow", machine_id="agent-a", value=3,
+    )
+    socket_server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    socket_server.start()
+    options = (["--endpoint", str(daemon.config.endpoint)] if connection_kind == "unix"
+               else ["--connection", str(connection_path)])
+
+    def cli(command: str, *arguments: str) -> Mapping[str, Any]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(["queue", command, *options, "--expected-coordinator-id", daemon._coordinator_id,
+                     *arguments, "--format", "json"], stdout=stdout, stderr=stderr)
+        assert code == 0, stderr.getvalue()
+        return json.loads(stdout.getvalue())["result"]
+
+    try:
+        admission = cli("daemon-submit", "cli-item", run_uri)
+        assert cli("daemon-status")["coordinator_id"] == daemon._coordinator_id
+        assert cli("daemon-admissions")["admissions"][0]["queue_item_id"] == "cli-item"
+        assert cli("daemon-admission", admission["admission_id"])["admission"]["run_uri"] == run_uri
+        assert cli("daemon-agents")["agents"] == []
+        cancellation = cli("daemon-cancel", "cli-item")
+        assert cancellation["cancellation_operation_id"] is not None
+        terminal = cli("daemon-wait", "cli-item", "--timeout", "5")
+        assert terminal["admission_id"] == admission["admission_id"]
+        assert terminal["state"] in {"CANCELLED", "BLOCKED"}
+    finally:
+        socket_server.stop()
+
+
+def test_native_client_bounds_stalled_setup_and_does_not_dispatch_after_expiry(
+    native_control_endpoint, monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from threading import Lock
+    from loom.queue import _coordinator_transport as control_io
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    client = CoordinatorClient.from_connection_file(connection_path)
+    # Smaller private counts make the causal capacity test fast. Stalled work
+    # must retain a slot even after its original caller has timed out.
+    client._transport._capacity = control_io.ControlCapacity(total=2, waits=1)
+    monkeypatch.setattr(control_io, "REQUEST_BUDGET_SECONDS", 0.5)
+    original = control_io.https_connection
+    entered = Event()
+    release = Event()
+    lock = Lock()
+    started = 0
+
+    def delayed(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(control_io, "https_connection", delayed)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(client.cancel, f"original-{index}") for index in range(2)]
+            assert entered.wait(2)
+            for index, future in enumerate(futures):
+                with pytest.raises(CoordinatorClientError) as caught:
+                    future.result(timeout=2)
+                assert caught.value.code == "deadline_exceeded"
+                assert caught.value.mutation_outcome == "not_applied"
+                assert caught.value.ids["queue_item_id"] == f"original-{index}"
+            with pytest.raises(CoordinatorClientError) as saturated:
+                client.status()
+            assert saturated.value.code == "capacity_exhausted"
+            assert started == 2
+            pending = tuple(client._transport._active)
+            release.set()
+            assert all(exchange.completed.wait(2) for exchange in pending)
+        assert daemon.admissions().admissions == ()
+    finally:
+        release.set()
+        client.close()
+
+
+def test_native_submit_error_after_commit_does_not_claim_refusal(
+    native_control_endpoint, monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue.errors import QueueStorageError
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root), run_name="post-commit-read-fault", machine_id="agent-a", value=9,
+    )
+    submit = daemon._submit
+
+    def failed_receipt(request: LocalDaemonAdmissionRequest):  # type: ignore[no-untyped-def]
+        submit(request)
+        raise QueueStorageError("post-commit admission receipt read failed")
+
+    monkeypatch.setattr(daemon, "_submit", failed_receipt)
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.submit(LocalDaemonAdmissionRequest("same-item", run_uri))
+        assert caught.value.code == "unavailable"
+        assert caught.value.mutation_outcome == "unknown"
+        assert caught.value.ids["queue_item_id"] == "same-item"
+        assert client.admission_for_queue_item("same-item").run_uri == run_uri
+        assert len(daemon.admissions().admissions) == 1
+
+
+def test_native_admission_preserves_nested_failures_and_refuses_oversized_projection(
+    native_control_endpoint, monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue._coordinator_control import MAX_RESPONSE_BYTES
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root), run_name="failure-projection", machine_id="agent-a", value=2,
+    )
+    failure = _failure_report({"worker_detail": _nested_report_detail(50)}).failure
+    assert failure is not None
+    owner: dict[str, PlainData] = {"availability": "available", "failures": [failure.to_dict()]}
+    inspect_admission = daemon.admission
+
+    def projection(admission_id: str):  # type: ignore[no-untyped-def]
+        observed = inspect_admission(admission_id)
+        return replace(observed, owners={**observed.owners, "run_result": owner})
+
+    monkeypatch.setattr(daemon, "admission", projection)
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        admitted = client.submit(LocalDaemonAdmissionRequest("failure-item", run_uri))
+        decoded = client.admission(admitted.admission_id)
+        assert cast(Mapping[str, object], decoded.to_dict()["owners"])["run_result"] == owner
+        owner["extra_evidence"] = "x" * MAX_RESPONSE_BYTES
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.admission(admitted.admission_id)
+        assert caught.value.code == "result_too_large"
+        assert caught.value.mutation_outcome is None
+        assert caught.value.ids["admission_id"] == admitted.admission_id
+
+
+@pytest.mark.parametrize("rejection", ["wrong_ca", "worker_role"])
+def test_native_https_authentication_rejects_before_mutation(
+    native_control_endpoint, rejection: str,  # type: ignore[no-untyped-def]
+) -> None:
+    daemon, _server, connection_path, credentials = native_control_endpoint
+    settings = json.loads(connection_path.read_text())
+    if rejection == "wrong_ca":
+        settings["transport"]["server_ca_path"] = str(credentials["agent"].with_suffix(".crt"))
+    else:
+        settings["transport"]["certificate_path"] = str(credentials["agent"].with_suffix(".crt"))
+        settings["transport"]["private_key_path"] = str(credentials["agent"].with_suffix(".key"))
+    connection_path.write_text(json.dumps(settings))
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.cancel("original-item")
+    assert caught.value.code == "unauthorized"
+    assert caught.value.boundary == "authentication"
+    assert caught.value.mutation_outcome == "not_applied"
+    assert caught.value.ids["queue_item_id"] == "original-item"
+    assert daemon.admissions().admissions == ()
+
+
 def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     tmp_path: Path,
 ) -> None:
@@ -5485,8 +5956,8 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1",),
-            ["authenticated-application-v1"],
+            ("authenticated-application-v1", "daemon-control-v1"),
+            ["authenticated-application-v1", "daemon-control-v1"],
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (
@@ -5533,6 +6004,11 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         daemon.replace_agent_policy(
             AgentPolicyConfig(revision="policy-2", agents=policy.agents)
         )
+        with pytest.raises(CoordinatorClientError) as revoked:
+            facade.status()
+        assert revoked.value.code == "unauthorized", repr(revoked.value.__cause__)
+        assert revoked.value.boundary == "authentication"
+        assert revoked.value.mutation_outcome is None
         with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
             client.handshake(role="client")
         daemon.replace_agent_policy(
@@ -5548,6 +6024,10 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         )
         operator_handshake = client.handshake(role="operator")
         assert operator_handshake["role"] == "operator"
+        with pytest.raises(CoordinatorClientError) as wrong_role:
+            facade.cancel("never-admitted")
+        assert wrong_role.value.code == "unauthorized"
+        assert wrong_role.value.mutation_outcome == "not_applied"
         remote_operator = client.call_application("operator", "status", {})
         direct_operator = (
             daemon.operator_view(

@@ -1,461 +1,93 @@
-"""Direct, bounded control of one Loom coordinator.
+"""Direct native control of one Loom coordinator over Unix or authenticated HTTPS.
 
-The facade deliberately owns only connection selection, native request envelopes
-and result decoding.  Admission and scheduling truth remain in ``loom.queue``;
-diagnostic projection remains in ``loom.diagnostics``.
+Queue owns control requests and durable admission state. This integration facade
+adds connection selection and the diagnostic result union above that boundary.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-import http.client
-import json
 from pathlib import Path
-import ssl
-import time
-from typing import cast
-from urllib.parse import urlsplit
 
-from loom.diagnostics.run_inspection import RunInspectionResponse, decode_run_inspection_response
-from loom.queue.errors import QueueConfigError, QueueServiceError
-from loom.queue.local_daemon import (
-    AdmissionPage,
-    AdmissionWaitResult,
-    AgentPage,
-    AgentProjection,
-    DaemonStatus,
-    LocalDaemonAdmission,
-    LocalDaemonAdmissionDetail,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonOperation,
-    OperationWaitResult,
+from loom.diagnostics.run_inspection import (
+    RunInspectionResponse,
+    decode_run_inspection_response,
 )
-from loom.serialization import PlainData
+from loom.queue._coordinator_client import NativeCoordinatorClient
+from loom.queue._coordinator_control import (
+    CoordinatorClientError,
+    CoordinatorConnectionDescription,
+    control_error,
+    optional_id,
+)
+from loom.queue._coordinator_transport import (
+    HttpsControlTransport,
+    UnixControlTransport,
+)
+from loom.queue.errors import QueueError
 
 
-_MAX_MESSAGE_BYTES = 1_048_576
-_REQUEST_BUDGET_SECONDS = 30.0
-_MAX_OBSERVATION_SECONDS = 25.0
-
-
-class CoordinatorClientError(QueueServiceError):
-    """A classified failure at a direct coordinator-client boundary."""
-
-    def __init__(
-        self,
-        code: str,
-        *,
-        boundary: str,
-        operation: str,
-        ids: Mapping[str, PlainData] | None = None,
-        evidence_refs: tuple[str, ...] = (),
-        mutation_outcome: str | None = None,
-        message: str | None = None,
-    ) -> None:
-        super().__init__(message or f"coordinator {operation} failed: {code}")
-        self.code = code
-        self.boundary = boundary
-        self.operation = operation
-        self.ids = dict(ids or {})
-        self.evidence_refs = evidence_refs
-        self.mutation_outcome = mutation_outcome
-
-
-@dataclass(frozen=True, slots=True)
-class CoordinatorConnectionDescription:
-    protocol_version: str
-    transport: str
-    coordinator_id: str
-    coordinator_epoch: str
-    capabilities: tuple[str, ...]
-    source_modes: tuple[str, ...]
-    preparation_profiles: tuple[str, ...]
-    source_roots: tuple[str, ...]
+class CoordinatorClient(NativeCoordinatorClient):
+    """Lazy coordinator client; close releases I/O without cancelling submitted work."""
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> "CoordinatorConnectionDescription":
-        required = {
-            "protocol_version", "transport", "coordinator_id", "coordinator_epoch",
-            "capabilities", "source_modes", "preparation_profiles", "source_roots",
-        }
-        if set(value) != required:
-            raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="handshake")
-        strings = ("protocol_version", "transport", "coordinator_id", "coordinator_epoch")
-        if any(not isinstance(value[key], str) or not value[key] for key in strings):
-            raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="handshake")
-        sequences: list[tuple[str, ...]] = []
-        for key in ("capabilities", "source_modes", "preparation_profiles", "source_roots"):
-            item = value[key]
-            if not isinstance(item, list) or any(not isinstance(entry, str) for entry in item):
-                raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="handshake")
-            sequences.append(tuple(item))
+    def from_unix_socket(
+        cls, path: str | Path, *, expected_coordinator_id: str | None = None
+    ) -> CoordinatorClient:
+        """Select an owner-only local socket without starting or contacting a service."""
         return cls(
-            cast(str, value["protocol_version"]),
-            cast(str, value["transport"]),
-            cast(str, value["coordinator_id"]),
-            cast(str, value["coordinator_epoch"]),
-            sequences[0],
-            sequences[1],
-            sequences[2],
-            sequences[3],
+            UnixControlTransport(path), expected_coordinator_id=expected_coordinator_id
         )
 
-
-@dataclass(frozen=True, slots=True)
-class CoordinatorConnectionFile:
-    url: str
-    server_ca_path: Path
-    certificate_path: Path
-    private_key_path: Path
-    expected_coordinator_id: str | None
-
-
-class _Transport:
-    def call(self, operation: str, payload: Mapping[str, PlainData], deadline: float) -> Mapping[str, object]:
-        raise NotImplementedError
-
-    def close(self) -> None:
-        return
-
-
-class _UnixTransport(_Transport):
-    def __init__(self, endpoint: str | Path) -> None:
-        from loom.queue.local_daemon_transport import LocalDaemonSocketClient
-
-        self._client = LocalDaemonSocketClient(endpoint)
-
-    def call(self, operation: str, payload: Mapping[str, PlainData], deadline: float) -> Mapping[str, object]:
-        try:
-            response = self._client.control_call(operation, payload, deadline=deadline)
-        except QueueServiceError as exc:
-            raise CoordinatorClientError("unavailable", boundary="connection", operation=operation, mutation_outcome="unknown" if operation in {"submit", "cancel"} else None) from exc
-        return _result_or_error(response, operation, payload)
-
-
-class _HttpsTransport(_Transport):
-    def __init__(self, config: CoordinatorConnectionFile) -> None:
-        self._config = config
-        parsed = urlsplit(config.url)
-        self._host = cast(str, parsed.hostname)
-        self._port = parsed.port or 443
-
-    def call(self, operation: str, payload: Mapping[str, PlainData], deadline: float) -> Mapping[str, object]:
-        context = ssl.create_default_context(cafile=self._config.server_ca_path)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(self._config.certificate_path, self._config.private_key_path)
-        body = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-        connection = http.client.HTTPSConnection(self._host, self._port, context=context, timeout=min(10.0, _remaining(deadline, operation)))
-        try:
-            connection.request("POST", f"/v1/client/{operation}", body=body, headers={"Content-Type": "application/json", "X-Loom-Client": "daemon-control-v1"})
-            response = connection.getresponse()
-            chunks: list[bytes] = []
-            received = 0
-            while True:
-                if connection.sock is None:
-                    raise CoordinatorClientError("unavailable", boundary="connection", operation=operation)
-                connection.sock.settimeout(min(10.0, _remaining(deadline, operation)))
-                chunk = response.read1(min(65_536, _MAX_MESSAGE_BYTES + 1 - received))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                received += len(chunk)
-                if received > _MAX_MESSAGE_BYTES:
-                    raise CoordinatorClientError("result_too_large", boundary="client_protocol", operation=operation, ids=_request_ids(payload), mutation_outcome="unknown" if operation in {"submit", "cancel"} else None)
-            raw = b"".join(chunks)
-        except (OSError, ssl.SSLError, http.client.HTTPException, TimeoutError) as exc:
-            raise CoordinatorClientError("unavailable", boundary="connection", operation=operation, mutation_outcome="unknown" if operation in {"submit", "cancel"} else None) from exc
-        finally:
-            connection.close()
-        try:
-            value = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation=operation) from exc
-        return _result_or_error(value, operation, payload)
-
-
-class CoordinatorClient:
-    """Unified local or mTLS client for coordinator-owned control operations."""
-
-    def __init__(self, transport: _Transport, *, expected_coordinator_id: str | None = None) -> None:
-        self._transport = transport
-        self._expected_coordinator_id = _optional_id(expected_coordinator_id)
-        self._description: CoordinatorConnectionDescription | None = None
-
     @classmethod
-    def from_unix_socket(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> "CoordinatorClient":
-        return cls(_UnixTransport(path), expected_coordinator_id=expected_coordinator_id)
+    def from_connection_file(
+        cls, path: str | Path, *, expected_coordinator_id: str | None = None
+    ) -> CoordinatorClient:
+        """Load protected HTTPS settings; certificate use and negotiation are lazy."""
+        from loom.queue.deployment import load_coordinator_connection_file
 
-    @classmethod
-    def from_connection_file(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> "CoordinatorClient":
         config = load_coordinator_connection_file(path)
-        guard = _merge_guard(config.expected_coordinator_id, expected_coordinator_id)
-        return cls(_HttpsTransport(config), expected_coordinator_id=guard)
-
-    def __enter__(self) -> "CoordinatorClient":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()
-
-    def close(self) -> None:
-        self._transport.close()
-
-    def describe_connection(self, *, expected_coordinator_id: str | None = None) -> CoordinatorConnectionDescription:
-        expected = _merge_guard(self._expected_coordinator_id, expected_coordinator_id)
-        return self._describe(expected, time.monotonic() + _REQUEST_BUDGET_SECONDS)
-
-    def status(self, *, expected_coordinator_id: str | None = None) -> DaemonStatus:
-        return DaemonStatus.from_dict(self._call("status", {}, expected_coordinator_id=expected_coordinator_id))
-
-    def admissions(self, limit: int = 20, cursor: str | None = None, *, expected_coordinator_id: str | None = None) -> AdmissionPage:
-        _limit(limit)
-        result = self._call("admissions", {"limit": limit, "cursor": cursor}, expected_coordinator_id=expected_coordinator_id)
-        return _admission_page(result)
-
-    def admission(self, admission_id: str, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmissionDetail:
-        return LocalDaemonAdmissionDetail.from_dict(self._call("admission", {"admission_id": admission_id}, expected_coordinator_id=expected_coordinator_id))
-
-    def admission_for_queue_item(self, queue_item_id: str, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
-        return LocalDaemonAdmission.from_dict(self._call("admission_for_queue_item", {"queue_item_id": queue_item_id}, expected_coordinator_id=expected_coordinator_id))
-
-    def agents(self, limit: int = 20, cursor: str | None = None, *, expected_coordinator_id: str | None = None) -> AgentPage:
-        _limit(limit)
-        return AgentPage.from_dict(self._call("agents", {"limit": limit, "cursor": cursor}, expected_coordinator_id=expected_coordinator_id))
-
-    def agent(self, agent_id: str, *, expected_coordinator_id: str | None = None) -> AgentProjection:
-        return AgentProjection.from_dict(self._call("agent", {"agent_id": agent_id}, expected_coordinator_id=expected_coordinator_id))
-
-    def inspect_run(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunInspectionResponse:
-        return decode_run_inspection_response(self._call("inspect_run", {"run_uri": run_uri}, expected_coordinator_id=expected_coordinator_id))
-
-    def operation(self, operation_id: str, *, expected_coordinator_id: str | None = None) -> LocalDaemonOperation:
-        return LocalDaemonOperation.from_dict(self._call("operation", {"operation_id": operation_id}, expected_coordinator_id=expected_coordinator_id))
-
-    def wait_operation(self, operation_id: str, timeout_seconds: float = 25, *, expected_coordinator_id: str | None = None) -> OperationWaitResult:
-        timeout = _observation_timeout(timeout_seconds)
-        deadline = time.monotonic() + _REQUEST_BUDGET_SECONDS
-        observation_deadline = min(deadline, time.monotonic() + timeout)
-        while True:
-            remaining = max(0.0, observation_deadline - time.monotonic())
-            result = OperationWaitResult.from_dict(
-                self._call(
-                    "wait_operation",
-                    {"operation_id": operation_id, "timeout": remaining},
-                    expected_coordinator_id=expected_coordinator_id,
-                    deadline=deadline,
-                )
+        try:
+            selected = optional_id(expected_coordinator_id)
+        except ValueError as exc:
+            raise control_error("invalid_request", "connection", {}) from exc
+        configured = config.expected_coordinator_id
+        if configured is not None and selected is not None and configured != selected:
+            raise control_error(
+                "conflict",
+                "connection",
+                {},
+                ids={
+                    "configured_expected_coordinator_id": configured,
+                    "expected_coordinator_id": selected,
+                },
             )
-            if result.kind.value != "TIMEOUT" or time.monotonic() >= observation_deadline:
-                return result
-
-    def submit(self, request: LocalDaemonAdmissionRequest, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
-        if not isinstance(request, LocalDaemonAdmissionRequest):
-            raise CoordinatorClientError("invalid_request", boundary="client_protocol", operation="submit")
-        return LocalDaemonAdmission.from_dict(self._call("submit", {"request": request.to_dict()}, expected_coordinator_id=expected_coordinator_id))
-
-    def wait_admission(self, admission_id: str, expected_revision: int, timeout_seconds: float = 25, *, expected_coordinator_id: str | None = None) -> AdmissionWaitResult:
-        timeout = _observation_timeout(timeout_seconds)
-        deadline = time.monotonic() + _REQUEST_BUDGET_SECONDS
-        observation_deadline = min(deadline, time.monotonic() + timeout)
-        while True:
-            remaining = max(0.0, observation_deadline - time.monotonic())
-            result = _admission_wait_result(
-                self._call(
-                    "wait_admission",
-                    {"admission_id": admission_id, "expected_revision": expected_revision, "timeout": remaining},
-                    expected_coordinator_id=expected_coordinator_id,
-                    deadline=deadline,
-                )
-            )
-            if result.kind.value != "TIMEOUT" or time.monotonic() >= observation_deadline:
-                return result
-
-    def cancel(self, queue_item_id: str, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
-        return LocalDaemonAdmission.from_dict(self._call("cancel", {"queue_item_id": queue_item_id}, expected_coordinator_id=expected_coordinator_id))
-
-    def wait(self, queue_item_id: str, timeout_seconds: float | None = None, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
-        if timeout_seconds is not None and (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or timeout_seconds < 0):
-            raise CoordinatorClientError("invalid_request", boundary="client_protocol", operation="wait")
-        deadline = None if timeout_seconds is None else time.monotonic() + float(timeout_seconds)
-        admission = self.admission_for_queue_item(queue_item_id, expected_coordinator_id=expected_coordinator_id)
-        while True:
-            remaining = _MAX_OBSERVATION_SECONDS if deadline is None else max(0.0, min(_MAX_OBSERVATION_SECONDS, deadline - time.monotonic()))
-            observed = self.wait_admission(admission.admission_id, admission.revision, remaining, expected_coordinator_id=expected_coordinator_id)
-            admission = observed.admission
-            if observed.kind.value == "TERMINAL":
-                return admission
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("managed local admission did not reach terminal state")
-
-    def _call(
-        self,
-        operation: str,
-        payload: Mapping[str, PlainData],
-        *,
-        expected_coordinator_id: str | None,
-        deadline: float | None = None,
-    ) -> Mapping[str, object]:
-        expected = _merge_guard(self._expected_coordinator_id, expected_coordinator_id)
-        request_deadline = time.monotonic() + _REQUEST_BUDGET_SECONDS if deadline is None else deadline
-        if operation != "handshake" and self._description is None:
-            # The facade is deliberately unavailable on an old service before a
-            # caller can make a dependent read or mutation.
-            self._describe(expected, request_deadline)
-        envelope: dict[str, PlainData] = dict(payload)
-        if expected is not None:
-            envelope["expected_coordinator_id"] = expected
-        result = self._transport.call(
-            operation,
-            envelope,
-            request_deadline,
+        return cls(
+            HttpsControlTransport(
+                config.url,
+                config.server_ca_path,
+                config.certificate_path,
+                config.private_key_path,
+            ),
+            expected_coordinator_id=configured if configured is not None else selected,
         )
-        return result
 
-    def _describe(
-        self, expected: str | None, deadline: float
-    ) -> CoordinatorConnectionDescription:
-        envelope: dict[str, PlainData] = {}
-        if expected is not None:
-            envelope["expected_coordinator_id"] = expected
-        result = self._transport.call("handshake", envelope, deadline)
-        description = CoordinatorConnectionDescription.from_dict(result)
-        if "daemon-control-v1" not in description.capabilities:
-            raise CoordinatorClientError("unsupported", boundary="client_protocol", operation="handshake")
-        self._description = description
-        return description
-
-
-def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionFile:
-    """Load the strict protected ``loom.coordinator-client`` v1 file."""
-    from loom.queue.deployment import _load_protected_config
-
-    source, _environment, payload, _fingerprint = _load_protected_config(path)
-    allowed = {"schema_version", "kind", "transport", "expected_coordinator_id"}
-    if not {"schema_version", "kind", "transport"}.issubset(payload) or not set(payload).issubset(allowed) or payload.get("schema_version") != 1 or payload.get("kind") != "loom.coordinator-client":
-        raise QueueConfigError("coordinator client config is invalid")
-    expected = payload.get("expected_coordinator_id")
-    if expected is not None and (not isinstance(expected, str) or not expected):
-        raise QueueConfigError("coordinator client expected coordinator ID is invalid")
-    transport = payload["transport"]
-    if not isinstance(transport, Mapping) or set(transport) != {"kind", "url", "server_ca_path", "certificate_path", "private_key_path"} or transport.get("kind") != "https":
-        raise QueueConfigError("coordinator client transport is invalid")
-    base = source.parent
-    try:
-        values = {key: transport[key] for key in ("url", "server_ca_path", "certificate_path", "private_key_path")}
-        if not all(isinstance(value, str) and value for value in values.values()):
-            raise ValueError
-        server_ca_path = Path(cast(str, values["server_ca_path"]))
-        certificate_path = Path(cast(str, values["certificate_path"]))
-        private_key_path = Path(cast(str, values["private_key_path"]))
-        result = CoordinatorConnectionFile(
-            cast(str, values["url"]),
-            server_ca_path if server_ca_path.is_absolute() else base / server_ca_path,
-            certificate_path if certificate_path.is_absolute() else base / certificate_path,
-            private_key_path if private_key_path.is_absolute() else base / private_key_path,
-            cast(str | None, expected),
+    def inspect_run(
+        self, run_uri: str, *, expected_coordinator_id: str | None = None
+    ) -> RunInspectionResponse:
+        """Read a managed run's native inspection success or diagnostic failure union."""
+        value = self._native_call(
+            "inspect_run", {"run_uri": run_uri}, expected_coordinator_id
         )
-        parsed = urlsplit(result.url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/") or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError
-        return result
-    except (TypeError, ValueError):
-        raise QueueConfigError("coordinator client transport is invalid") from None
+        try:
+            return decode_run_inspection_response(value)
+        except (QueueError, ValueError, TypeError, KeyError, RecursionError) as exc:
+            raise control_error(
+                "invalid_response", "inspect_run", {"run_uri": run_uri}, dispatched=True
+            ) from exc
 
 
-def _result_or_error(
-    value: object, operation: str, request: Mapping[str, PlainData]
-) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation=operation, ids=_request_ids(request), mutation_outcome="unknown" if operation in {"submit", "cancel"} else None)
-    if value.get("ok") is True and isinstance(value.get("result"), Mapping):
-        return cast(Mapping[str, object], value["result"])
-    detail = value.get("error_detail")
-    if isinstance(detail, Mapping):
-        return _raise_detail(detail, operation, request)
-    code = value.get("error")
-    raise CoordinatorClientError(str(code) if isinstance(code, str) else "invalid_response", boundary="client_protocol", operation=operation, ids=_request_ids(request), mutation_outcome="unknown" if operation in {"submit", "cancel"} else None)
-
-
-def _raise_detail(
-    detail: Mapping[str, object], fallback_operation: str, request: Mapping[str, PlainData]
-) -> Mapping[str, object]:
-    required = {"schema_version", "code", "boundary", "operation", "ids", "evidence_refs", "mutation_outcome"}
-    if set(detail) != required or detail.get("schema_version") != 1:
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation=fallback_operation, ids=_request_ids(request), mutation_outcome="unknown" if fallback_operation in {"submit", "cancel"} else None)
-    code, boundary, operation = detail.get("code"), detail.get("boundary"), detail.get("operation")
-    ids, refs, outcome = detail.get("ids"), detail.get("evidence_refs"), detail.get("mutation_outcome")
-    if not all(isinstance(item, str) and item for item in (code, boundary, operation)) or not isinstance(ids, Mapping) or not isinstance(refs, list) or any(not isinstance(item, str) for item in refs) or outcome not in (None, "not_applied", "applied", "unknown"):
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation=fallback_operation, ids=_request_ids(request), mutation_outcome="unknown" if fallback_operation in {"submit", "cancel"} else None)
-    merged_ids = {**_request_ids(request), **cast(Mapping[str, PlainData], ids)}
-    raise CoordinatorClientError(cast(str, code), boundary=cast(str, boundary), operation=cast(str, operation), ids=merged_ids, evidence_refs=tuple(refs), mutation_outcome=cast(str | None, outcome))
-
-
-def _remaining(deadline: float, operation: str) -> float:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise CoordinatorClientError("deadline_exceeded", boundary="connection", operation=operation)
-    return remaining
-
-
-def _request_ids(request: Mapping[str, PlainData]) -> dict[str, PlainData]:
-    ids: dict[str, PlainData] = {}
-    for key in ("admission_id", "queue_item_id", "operation_id", "run_uri", "expected_coordinator_id"):
-        value = request.get(key)
-        if isinstance(value, str):
-            ids[key] = value
-    nested = request.get("request")
-    if isinstance(nested, Mapping):
-        for key in ("queue_item_id", "run_uri"):
-            value = nested.get(key)
-            if isinstance(value, str):
-                ids[key] = value
-    return ids
-
-
-def _optional_id(value: str | None) -> str | None:
-    if value is not None and (not isinstance(value, str) or not value):
-        raise CoordinatorClientError("invalid_request", boundary="client_protocol", operation="connection")
-    return value
-
-
-def _merge_guard(configured: str | None, call: str | None) -> str | None:
-    call = _optional_id(call)
-    if configured is not None and call is not None and configured != call:
-        raise CoordinatorClientError("conflict", boundary="client_protocol", operation="connection", ids={"configured_expected_coordinator_id": configured, "expected_coordinator_id": call})
-    return configured if configured is not None else call
-
-
-def _limit(value: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
-        raise CoordinatorClientError("invalid_request", boundary="client_protocol", operation="page")
-
-
-def _observation_timeout(value: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= _MAX_OBSERVATION_SECONDS or value != value or value in (float("inf"), float("-inf")):
-        raise CoordinatorClientError("invalid_request", boundary="client_protocol", operation="observation")
-    return float(value)
-
-
-def _admission_page(value: Mapping[str, object]) -> AdmissionPage:
-    records, cursor = value.get("admissions"), value.get("next_cursor")
-    if not isinstance(records, list) or not all(isinstance(item, Mapping) for item in records) or (cursor is not None and not isinstance(cursor, str)):
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="admissions")
-    return AdmissionPage(tuple(LocalDaemonAdmission.from_dict(item) for item in records), cursor)
-
-
-def _admission_wait_result(value: Mapping[str, object]) -> AdmissionWaitResult:
-    kind, admission, revision = value.get("kind"), value.get("admission"), value.get("revision")
-    if not isinstance(kind, str) or not isinstance(admission, Mapping) or isinstance(revision, bool) or not isinstance(revision, int):
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission")
-    from loom.queue.local_daemon import AdmissionWaitKind
-
-    try:
-        return AdmissionWaitResult(
-            AdmissionWaitKind(kind), LocalDaemonAdmission.from_dict(admission), revision
-        )
-    except ValueError as exc:
-        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission") from exc
-
-
-__all__ = ["CoordinatorClient", "CoordinatorClientError", "CoordinatorConnectionDescription", "CoordinatorConnectionFile", "load_coordinator_connection_file"]
+__all__ = [
+    "CoordinatorClient",
+    "CoordinatorClientError",
+    "CoordinatorConnectionDescription",
+]

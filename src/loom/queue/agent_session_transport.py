@@ -25,7 +25,7 @@ import shutil
 import sqlite3
 import ssl
 import stat
-from threading import RLock, Thread
+from threading import BoundedSemaphore, RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
 from typing import Any, cast
@@ -110,11 +110,15 @@ from ._agent_process_supervisor import (
     _launch_value,
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
+from ._coordinator_control import (
+    CONTROL_CAPABILITY, WAIT_OPERATIONS, CoordinatorClientError,
+    control_error, decode_wire, dispatch_control, error_envelope,
+)
+from ._coordinator_transport import https_connection
 from .local_daemon import (
     AdmissionNotFoundError,
     CoordinatorSchedulingReload,
     LocalDaemon,
-    LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
     RecoverUnknownAssignment,
@@ -4757,19 +4761,11 @@ class LocalDaemonAgentHttpClient:
     def _call(
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Mapping[str, PlainData]:
-        parsed = urlsplit(self._config.url)
-        assert parsed.hostname is not None
-        context = ssl.create_default_context(cafile=self._config.server_ca_path)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(
-            self._config.certificate_path, self._config.private_key_path
-        )
         connection = self._connection
         if connection is None:
-            connection = http.client.HTTPSConnection(
-                parsed.hostname,
-                parsed.port or 443,
-                context=context,
+            connection = https_connection(
+                self._config.url, self._config.server_ca_path,
+                self._config.certificate_path, self._config.private_key_path,
                 timeout=_HTTP_TIMEOUT_SECONDS,
             )
             self._connection = connection
@@ -4852,11 +4848,14 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.daemon_owner = daemon
         self.credential_fingerprints = credential_fingerprints
         self.inspect_run = inspect_run
+        self.client_slots = BoundedSemaphore(8)
+        self.client_wait_slots = BoundedSemaphore(6)
         super().__init__(address, _Handler)
 
     def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
         connection, address = super().get_request()
         try:
+            connection.settimeout(_HTTP_TIMEOUT_SECONDS)
             return self._context.wrap_socket(connection, server_side=True), address
         except Exception:
             connection.close()
@@ -4896,6 +4895,10 @@ class _Handler(BaseHTTPRequestHandler):
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
         payload: dict[str, object] = {}
+        new_client = self.path.startswith("/v1/client/") and self.headers.get("X-Loom-Client") == CONTROL_CAPABILITY
+        operation = self.path.rsplit("/", 1)[-1] or "unknown"
+        authenticated = dispatched = False
+        client_acquired = wait_acquired = False
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -4920,6 +4923,21 @@ class _Handler(BaseHTTPRequestHandler):
                 principal_id = slurm_profile.bootstrap_principal_id
                 mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
             query_credential = mapped_role == LocalDaemonRole.QUERY.value
+            segments = self.path.split("/")
+            if len(segments) != 4 or segments[0] or segments[1] != "v1":
+                raise QueueServiceError("agent protocol operation is unsupported")
+            role_name, operation = segments[2:]
+            if role_name != mapped_role:
+                raise QueueServiceError("agent TLS credential is not authorized")
+            authenticated = True
+            if role_name == "client":
+                if operation in WAIT_OPERATIONS:
+                    wait_acquired = self._daemon_server.client_wait_slots.acquire(blocking=False)
+                    if not wait_acquired:
+                        raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
+                client_acquired = self._daemon_server.client_slots.acquire(blocking=False)
+                if not client_acquired:
+                    raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
             if self.headers.get("Content-Type") != "application/json":
                 raise QueueServiceError("agent protocol content type is invalid")
             lengths = self.headers.get_all("Content-Length", [])
@@ -4931,34 +4949,18 @@ class _Handler(BaseHTTPRequestHandler):
                 or int(length) > _MAX_BODY_BYTES
             ):
                 raise QueueServiceError("agent protocol body is invalid")
-            segments = self.path.split("/")
-            if len(segments) != 4 or segments[0] or segments[1] != "v1":
-                raise QueueServiceError("agent protocol operation is unsupported")
-            role_name, operation = segments[2:]
-            if role_name != mapped_role:
-                raise QueueServiceError("agent TLS credential is not authorized")
             raw = self.rfile.read(int(length))
-            payload = dict(
-                _decode(raw, failure_report=True)
-                if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
-                else _decode(raw)
-            )
-            new_client = (
-                role_name == "client"
-                and self.headers.get("X-Loom-Client") == "daemon-control-v1"
-            )
             if role_name == "client":
-                expected = payload.pop("expected_coordinator_id", None)
-                if expected is not None:
-                    if not isinstance(expected, str) or not expected:
-                        raise QueueServiceError("expected coordinator identity is invalid")
-                    observed = self._daemon_server.daemon_owner._require_started()
-                    if expected != observed:
-                        error_ids = {
-                            "expected_coordinator_id": expected,
-                            "observed_coordinator_id": observed,
-                        }
-                        raise QueueConflictError("expected coordinator identity differs")
+                try:
+                    payload = dict(decode_wire(raw))
+                except (ValueError, TypeError, RecursionError) as exc:
+                    raise control_error("invalid_request", operation, {}, boundary="client_protocol") from exc
+            else:
+                payload = dict(
+                    _decode(raw, failure_report=True)
+                    if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
+                    else _decode(raw)
+                )
             principal = LocalDaemonPrincipal(
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
@@ -4994,6 +4996,7 @@ class _Handler(BaseHTTPRequestHandler):
                     payload,
                 )
             else:
+                dispatched = True
                 result = _dispatch_application(
                     self._daemon_server.daemon_owner,
                     principal,
@@ -5020,47 +5023,40 @@ class _Handler(BaseHTTPRequestHandler):
                 409,
                 {"ok": False, "error": "agent_transfer_authorization_stale"},
             )
-        except QueueConflictError:
-            if locals().get("new_client", False):
-                self._reply(409, _client_error_payload(
-                    "conflict", str(locals().get("operation", "unknown")),
-                    _client_request_ids(
-                        cast(Mapping[str, object], locals().get("payload", {})),
-                        cast(Mapping[str, PlainData], locals().get("error_ids", {})),
-                    ),
-                    mutation_outcome=("not_applied" if locals().get("operation") in {"submit", "cancel"} else None),
-                ))
+        except CoordinatorClientError as exc:
+            if new_client:
+                status = {"unauthorized": 403, "conflict": 409, "capacity_exhausted": 429,
+                          "not_found": 404, "unavailable": 503, "internal_error": 500}.get(exc.code, 400)
+                self._reply(status, error_envelope(exc))
             else:
-                self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
+                self._reply(409 if exc.code == "conflict" else 403, {"ok": False, "error": "agent_protocol_rejected"})
+        except QueueConflictError:
+            self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError:
-            if locals().get("new_client", False):
-                self._reply(400, _client_error_payload(
-                    "invalid_request", str(locals().get("operation", "unknown")),
-                    _client_request_ids(
-                        cast(Mapping[str, object], locals().get("payload", {}))
-                    ),
-                    mutation_outcome=("not_applied" if locals().get("operation") in {"submit", "cancel"} else None),
-                ))
-                return
-            if query_path or query_credential:
+            if new_client:
+                code = "invalid_request" if authenticated else "unauthorized"
+                error = control_error(code, operation, payload,
+                    boundary="client_protocol" if authenticated else "authentication", dispatched=dispatched)
+                self._reply(400 if authenticated else 403, error_envelope(error))
+            elif query_path or query_credential:
                 code = "invalid_request" if query_credential else "unauthorized"
                 self._reply_query_failure(code, 400 if query_credential else 403)
             else:
                 self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
         except Exception:
-            if locals().get("new_client", False):
-                self._reply(500, _client_error_payload(
-                    "internal_error", str(locals().get("operation", "unknown")),
-                    _client_request_ids(
-                        cast(Mapping[str, object], locals().get("payload", {}))
-                    ),
-                    mutation_outcome=("unknown" if locals().get("operation") in {"submit", "cancel"} else None),
-                ))
-                return
-            if query_path:
+            if new_client:
+                self._reply(500, error_envelope(control_error(
+                    "internal_error", operation, payload, boundary="coordinator", dispatched=dispatched,
+                )))
+            elif query_path:
                 self._reply_query_failure("unavailable", 503)
             else:
                 self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
+        finally:
+            if client_acquired:
+                self._daemon_server.client_slots.release()
+            if wait_acquired:
+                self._daemon_server.client_wait_slots.release()
 
     def _reply_query_result(self, result: Mapping[str, PlainData]) -> None:
         status = _run_inspection_http_status(result)
@@ -5097,48 +5093,6 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         self.end_headers()
         self.wfile.write(body)
-
-
-def _client_error_payload(
-    code: str,
-    operation: str,
-    ids: Mapping[str, PlainData] | None = None,
-    *,
-    mutation_outcome: str | None = None,
-) -> dict[str, object]:
-    """Keep new client failures structured while preserving the old envelope."""
-
-    return {
-        "ok": False,
-        "error": code,
-        "message": code,
-        "error_detail": {
-            "schema_version": 1,
-            "code": code,
-            "boundary": "coordinator",
-            "operation": operation,
-            "ids": dict(ids or {}),
-            "evidence_refs": [],
-            "mutation_outcome": mutation_outcome,
-        },
-    }
-
-
-def _client_request_ids(
-    payload: Mapping[str, object], extra: Mapping[str, PlainData] | None = None
-) -> dict[str, PlainData]:
-    ids: dict[str, PlainData] = dict(extra or {})
-    for key in ("admission_id", "queue_item_id", "operation_id", "run_uri"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            ids[key] = value
-    request = payload.get("request")
-    if isinstance(request, Mapping):
-        for key in ("queue_item_id", "run_uri"):
-            value = request.get(key)
-            if isinstance(value, str):
-                ids[key] = value
-    return ids
 
 
 def _dispatch(
@@ -5407,14 +5361,21 @@ def _dispatch_application(
     inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
     daemon_control: bool = False,
 ) -> Mapping[str, PlainData]:
+    if role == "client":
+        result = dict(dispatch_control(
+            daemon, principal, operation, value, transport="https", wait_slice=5.0,
+            inspect_run=inspect_run, legacy=not daemon_control,
+        ))
+        if operation == "handshake":
+            result["role"] = role
+            result["capabilities"] = ["authenticated-application-v1", CONTROL_CAPABILITY]
+        return result
     if operation == "handshake":
         _exact(value, set())
         if role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
             return daemon.slurm_bootstrap_view(principal).handshake()
         daemon._require_view_role(principal, LocalDaemonRole(role))
         capabilities: list[PlainData] = ["authenticated-application-v1"]
-        if role == LocalDaemonRole.CLIENT.value and daemon_control:
-            capabilities.append("daemon-control-v1")
         if role == LocalDaemonRole.QUERY.value and inspect_run is not None:
             capabilities.append("run-inspection-v1")
         result: dict[str, PlainData] = {
@@ -5423,80 +5384,12 @@ def _dispatch_application(
             "coordinator_id": daemon._require_started(),
             "coordinator_epoch": daemon._epoch or "",
         }
-        if role == LocalDaemonRole.CLIENT.value and daemon_control:
-            result.update(
-                {
-                    "transport": "https",
-                    "source_modes": [],
-                    "preparation_profiles": [],
-                    "source_roots": [],
-                }
-            )
-        else:
-            result["role"] = role
+        result["role"] = role
         return freeze_plain_data(
             result,
             path="authenticated application handshake",
         )
-    if role == "client":
-        view = daemon.client_view(principal)
-        if operation == "status":
-            _exact(value, set())
-            return view.status().to_dict()
-        if operation == "cancel":
-            _exact(value, {"queue_item_id"})
-            return view.cancel(_string(value, "queue_item_id")).to_dict()
-        if operation == "submit":
-            request = value.get("request")
-            if not isinstance(request, Mapping):
-                raise QueueServiceError("client admission request is invalid")
-            return view.submit(LocalDaemonAdmissionRequest.from_dict(request)).to_dict()
-        if operation == "admissions":
-            _exact(value, {"limit", "cursor"})
-            limit = _integer(value, "limit")
-            cursor = value["cursor"]
-            if cursor is not None and not isinstance(cursor, str):
-                raise QueueServiceError("client admission cursor is invalid")
-            return view.admissions(limit=limit, cursor=cursor).to_dict()
-        if operation == "admission":
-            _exact(value, {"admission_id"})
-            return view.admission(_string(value, "admission_id")).to_dict()
-        if operation == "admission_for_queue_item":
-            _exact(value, {"queue_item_id"})
-            return view.admission_for_queue_item(_string(value, "queue_item_id")).to_dict()
-        if operation == "agents":
-            _exact(value, {"limit", "cursor"})
-            limit = _integer(value, "limit")
-            cursor = value["cursor"]
-            if cursor is not None and not isinstance(cursor, str):
-                raise QueueServiceError("client agent cursor is invalid")
-            return view.agents(limit=limit, cursor=cursor).to_dict()
-        if operation == "agent":
-            _exact(value, {"agent_id"})
-            return view.agent(_string(value, "agent_id")).to_dict()
-        if operation == "operation":
-            _exact(value, {"operation_id"})
-            return view.operation(_string(value, "operation_id")).to_dict()
-        if operation == "wait_operation":
-            _exact(value, {"operation_id", "timeout"})
-            timeout = value["timeout"]
-            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-                raise QueueServiceError("client operation wait is invalid")
-            return view.wait_operation(_string(value, "operation_id"), timeout=min(5.0, float(timeout))).to_dict()
-        if operation == "wait_admission":
-            _exact(value, {"admission_id", "expected_revision", "timeout"})
-            timeout = value["timeout"]
-            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-                raise QueueServiceError("client admission wait is invalid")
-            return view.wait_admission(_string(value, "admission_id"), expected_revision=_integer(value, "expected_revision"), timeout=min(5.0, float(timeout))).to_dict()
-        if operation == "inspect_run":
-            _exact(value, {"run_uri"})
-            if inspect_run is None:
-                raise QueueServiceError("run inspection is unsupported")
-            run_uri = _string(value, "run_uri")
-            daemon.admission_for_run_uri(run_uri)
-            return inspect_run(run_uri)
-    elif role == LocalDaemonRole.QUERY.value:
+    if role == LocalDaemonRole.QUERY.value:
         if operation != "inspect_run" or inspect_run is None:
             raise _RunInspectionHttpError("invalid_request", 400)
         try:
