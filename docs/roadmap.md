@@ -162,6 +162,7 @@ written.
 | v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
 | v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
 | v29 | Durable dependency-aware stage scheduler and multi-machine agent pools | One managed system that admits runs, schedules each dependency-ready stage attempt across authenticated agent resources, moves artifacts safely, and preserves fenced lifecycle truth through restart, disconnection, cancellation, and recovery. |
+| v40 | Coordinator client, agent preparation, and MCP | One native Unix/HTTPS coordinator client, preparation in existing worker environments, and project-neutral Codex tools/skills over the same durable operations. |
 | v41 | Unified run lifecycle and agent execution | One configured run across cold/persistent local services, fleets and connected Slurm, with agent-owned execution, durable restart/result reconciliation and removal of parallel execution pathways. |
 
 ## v0 - Local Runtime Kernel
@@ -3006,6 +3007,35 @@ changes or protected physical execution.
 
 - [Current planning and design tasks](roadmap/stage-39/planning.md)
 - [Implementation manifest](roadmap/stage-39/implementation-plan.md)
+
+## v40 - Coordinator Client, Agent Preparation, And MCP
+
+Status: expanded design and independent plan reviews passed after one bounded
+correction. Manager documentation checks passed; the maintainer approved the
+Stage 40 behavior and revised four-phase delivery on 2026-09-10. Focused
+independent plan/startup review passed with no blockers or required corrections.
+Ready for implementation; no implementation has started. Phase 1,
+coordinator-client, remains the next pending phase.
+
+Unify Python, CLI and MCP access to the coordinator through local Unix or
+authenticated HTTPS connections. Add coordinator-owned preparation that schedules
+an ordinary managed child on an eligible worker in a specified existing
+environment, then publishes its checked composition through the current managed
+publisher. Support shared NAS and explicit staged preparation inputs. Preserve
+existing client behavior, admission identities, authority and worker ownership.
+
+Four phases deliver native coordinator control, complete shared-storage
+preparation with its coordinator-only root upgrade, staged input transfer over
+that lifecycle, then optional stdio MCP and four portable Loom skills. Each phase
+contains smaller validated implementation steps within one PR. Preparation
+initially retains embedded coordinator
+authority and the current no-configured-SLURM-profile limitation. Source staging
+does not install code or deliver arbitrary target-stage files. Scientific choices,
+environment provisioning and general source deployment remain outside this stage.
+
+- [Detailed behavior and implementation guide](briefs/mcp-implementation-plan.md)
+- [Planning and design review](roadmap/stage-40/planning.md)
+- [Implementation manifest and phase cards](roadmap/stage-40/implementation-plan.md)
 
 ## v41 - Unified Run Lifecycle And Agent Execution
 
