@@ -83,8 +83,8 @@ Maintainer approval: agreed behavior and nine-phase structure approved on 2026-0
 
 ## Phase Boundaries And Ordering
 
-Nine phases are a deliberate exception to the workflow's preferred one-to-three
-shape, approved by the maintainer. Publication, durable admission, service
+The maintainer approved nine independently acceptable phases. Publication,
+durable admission, service
 lifetime, process execution, scheduler ownership, result transport and separate
 consumers have distinct implementation/review boundaries. Each card delivers a
 working outcome with code, tests, documentation and local removal.
