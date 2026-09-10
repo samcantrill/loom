@@ -67,8 +67,9 @@ Do not duplicate full procedures across these layers.
 Manager-local work is the default.
 
 A normal planning workflow uses no subagent. A normal implementation phase uses
-one spawned loom_phase_executor. Spawn another role only when the workflow names
-a concrete expanded-path risk, independent-review need, or qualified blocker.
+manager implementation and one independent loom_phase_reviewer. Delegate execution
+to loom_phase_executor only when size or context isolation justifies it. Other
+roles require the workflow's named expanded-path risk or qualified blocker.
 
 - Use fork_turns=none for every workflow subagent.
 - Hand off paths and exact headings, not conversation history, prompt bodies,
@@ -139,34 +140,32 @@ resuming it.
 Start with .codex/workflows/roadmap-stage-implementation.md and follow
 .codex/prompts/phase-loop-management.md.
 
-Every phase uses:
+Every stage uses one persistent worktree, including startup review, code/tests,
+metadata and closeout. Each phase keeps branch agent/stage-<N>-p<P>-<phase-slug>
+and one PR targeting develop. The named agent/stage-<N> coordination branch owns
+post-merge metadata and closeout in that same worktree.
 
-- Branch: agent/stage-<N>-p<P>-<phase-slug>
-- One dedicated worktree
-- One PR targeting develop
+Record the clean control checkout, worktree root and stage path once in the
+manifest. Preserve unrelated checkouts. Bootstrap before startup review or any
+writes. The manager prompt owns the mandatory tools/phase_workflow.py Git gate;
+use its verified cwd/branch before each assignment or manager write/test/review
+pass. Never edit or commit local develop; only clean fast-forwards are allowed.
 
-Discover the control checkout and GitHub repository from the current
-environment. The manager must record one worktree root. If none is provided,
-use a loom-worktrees sibling of the control checkout. Do not repeat host-specific
-absolute paths across prompts and templates.
-
-Routine stacked PRs are not supported. A later phase starts after its predecessor
-is remotely merged, explicitly blocked, or eligible for the narrow local
-continuation fallback. Local continuation may support local work after a
-transient remote-merge failure, but the next PR cannot open until the prior merge
-lands and the next branch is based on current origin/develop.
+A later phase starts only after predecessor remote merge, published metadata and
+matching stage/local/remote revisions. Routine stacked PRs and local continuation
+before remote merge are not supported. Finish all agents/background processes
+before a stage branch transition.
 
 Normal phase path:
 
-1. Manager verifies the manifest and prepares the existing phase plan.
-2. Optional loom_phase_planner refinement only for an expanded-path risk.
-3. One loom_phase_executor implementation and phase-test pass.
-4. Optional loom_phase_refiner only for a qualified blocker.
-5. Manager-local validation evidence, pre-submit gate, and PR preparation.
-6. Manager-local review on the fast path; optional independent
-   loom_phase_reviewer on the expanded path or for a material residual risk.
+1. Manager verifies readiness in the stage worktree and prepares the phase plan.
+2. Optional loom_phase_planner refinement for a named uncertainty.
+3. Manager implementation and phase tests; optional loom_phase_executor.
+4. Optional loom_phase_refiner for a qualified blocker.
+5. Manager validation evidence, pre-submit gate and PR preparation.
+6. One independent loom_phase_reviewer reviews the actual PR head.
 7. Local-validation-gated automatic squash merge to develop.
-8. Concise manifest/phase metadata update and cleanup.
+8. Publish phase metadata on the coordination branch, synchronize, then continue.
 
 Do not create new assignment, implementation handoff, PR-body, PR-review,
 refinement, or merge-record sidecars. Record concise current state in the phase
@@ -178,10 +177,10 @@ execution plan and send the PR body directly to GitHub.
   correction on the expanded path.
 - Phase planning: zero spawned passes on the fast path; one refinement on the
   expanded path.
-- Implementation: one executor.
+- Implementation: manager-local; at most one executor when justified.
 - Implementation refinement: at most one refiner for a qualified blocker.
-- PR review: manager-local on fast path; at most one spawned reviewer on
-  expanded path.
+- Phase PR review: one required independent reviewer; affected corrections
+  return to that reviewer within the existing correction budget.
 - Blocker resolution: at most three total scoped corrections per phase,
   including any refiner pass.
 
@@ -203,7 +202,7 @@ Merge automatically when:
 - the PR is not draft and is mergeable;
 - scope matches the phase;
 - required local validation passes with a fresh receipt;
-- manager review or the required expanded review has no blocker; and
+- the required independent phase review has no blocker; and
 - the PR body matches the diff and tests.
 
 Hosted CI is intentionally disabled; do not wait for or require GitHub-hosted
@@ -211,9 +210,16 @@ checks. Do not wait for human GitHub approval. Use admin merge only for a
 review-only protection rule after local validation and review pass. Never bypass
 failing local validation, a wrong target, conflicts, or known blockers.
 
-After merge, safely update the control checkout, record concise status and
-evidence, commit the metadata directly to develop when permitted, and remove the
-worktree and branch. Never reset or discard unrelated work to update develop.
+After merge, use the manager's transition gate, record concise metadata on the
+coordination branch and publish to develop when permitted, then synchronize.
+Retire only verified merged phase branches. Retain the stage worktree and
+coordination branch until final closeout is published and synchronized. Never
+reset or discard unrelated work. A missing required independent review needs an
+explicit recorded maintainer override with accepted risk; manager review alone
+is not independent. Ordinary non-phase work retains proportionate review.
+
+Hosted-check or protection rejections must be inspected and reported. The narrow
+review-only admin exception never bypasses failing checks or known blockers.
 
 Use only these phase statuses:
 
@@ -232,4 +238,6 @@ approval are current with no unresolved blocker.
 
 A phase is done when its implementation and tests match the phase plan,
 validation and review gates pass, its PR is remotely merged into develop,
-metadata is current, and cleanup is complete or explicitly blocked.
+metadata is published, and the synchronization gate passes. A stage is done
+only after final closeout is published and exact stage cleanup is verified;
+unresolved dirty, unknown or unmerged work blocks completion.

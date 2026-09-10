@@ -1,44 +1,54 @@
 # Roadmap Stage Implementation
 
-## Goal
+## Goal And Preconditions
 
-Execute one approved compact implementation manifest through isolated phase
-worktrees, tests, validation, PRs, automatic merge to develop, metadata, and
-cleanup.
+Execute an approved Loom stage in one persistent worktree, with separate phase
+branches/PRs, local validation, independent review, merge and synchronized
+closeout. Keep accepted behavior and private implementation discretion intact.
 
-## Read
+Read AGENTS.md, .codex/prompts/subagent-lifecycle.md,
+.codex/prompts/phase-loop-management.md, the selected manifest and current phase
+card plus exact referenced contracts. Do not preload unrelated planning history.
+Require recorded approval, current readiness, consistent manifest/card scope and
+known control/origin/develop state. Reuse current plan reviews; only missing
+review or relevant contract drift requires a bounded independent plan pass.
 
-- AGENTS.md
-- .codex/prompts/subagent-lifecycle.md
-- .codex/prompts/phase-loop-management.md
-- the selected manifest and current phase execution plan
-- current source, tests, diff, PR, and local validation evidence
+Bootstrap the stage worktree before startup review or writes. Record control,
+worktree root, stage path and coordination branch in the manifest. The manager
+prompt owns the mandatory shared Git gate. Local develop only fast-forwards;
+all metadata is authored on the coordination branch. No later phase starts
+before remote merge, published metadata and synchronization.
 
-Do not load planning.md, unrelated phase plans, completed lifecycle detail, or
-superseded discussion unless a current blocker cites it.
+## Roles
 
-## Preconditions
+Manager-local implementation is the default. Use one loom_phase_executor only
+when size/context isolation justifies delegation. A named uncertainty may use
+loom_phase_planner and a qualified blocker may use loom_phase_refiner. Every
+phase requires one independent loom_phase_reviewer of the actual PR head.
+Specialists do not author and approve the same work. Agent definitions own model
+and authority; the manager prompt owns the procedure and correction budgets.
 
-- Planning and implementation-plan quality gates are passed.
-- The manifest links one complete phase plan per phase.
-- The current develop base and worktree root are known.
-- Any legacy active plan has been audited before resumption.
+## Validation And Merge
 
-## Normal Phase Cost
+Preserve the phase's targeted checks and required make validate-pr and
+make test-summary gates. Record selectors, results, skipped/unavailable cases,
+validated revision/tree and relevant subsequent changes in the phase card.
+Reuse fresh evidence; relevant changes require affected checks. Physical
+container/fleet/Slurm qualification remains distinct from local fixtures.
 
-- Manager-local setup and pre-submit work.
-- One loom_phase_executor.
-- No planner, refiner, PR preparer, or reviewer spawn by default.
+Hosted CI is disabled. Do not enable or wait for it. Merge requires accepted
+scope, passing required local evidence, independent review, the correct live
+PR/head/target/title and mergeability. The helper verifies Git/GitHub facts;
+the manager judges coverage and acceptance. Inspect protection rejections;
+AGENTS.md's narrow review-only admin exception is not an automatic fallback.
 
-Use loom_phase_planner only for an expanded-path contract risk,
-loom_phase_refiner only for a qualified blocker, and loom_phase_reviewer only
-for expanded-path or material residual-risk review.
+## Completion And Stops
 
-## Execution
+Follow .codex/prompts/phase-loop-management.md. Stop for broken isolation, failed
+validation, missing required review, unverified merges, unpublished metadata,
+dirty/divergent control state or ambiguous accepted contracts. Preserve work.
 
-Follow .codex/prompts/phase-loop-management.md as the canonical procedure.
-Every normal phase gets one branch, one worktree, and one PR targeting develop.
-Routine stacked PRs and new workflow sidecars are not used.
-
-A phase is complete only after remote merge, concise metadata update, and
-cleanup or an explicitly recorded cleanup blocker.
+A phase needs remote merge, published metadata and synchronized revisions. Keep
+the stage worktree through final closeout. Remove only exact verified worktrees
+and branches after publication and synchronization. Unknown/unmerged work blocks
+completion. Do not add lifecycle sidecars or rewrite historical plans.

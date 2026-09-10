@@ -1,6 +1,7 @@
 # Prepare Phase PR
 
-Manager-local checklist.
+Manager-local checklist. Consume the verified stage cwd/branch and shared-Git-gate
+handoff from phase-loop-management.md; do not create a separate Git procedure.
 
 Read the manifest summary, selected phase plan, current diff, current validation
 evidence, and .github/PULL_REQUEST_TEMPLATE.md.
