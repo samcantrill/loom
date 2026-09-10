@@ -446,24 +446,57 @@ Read this card in full and the manifest's Shared Constraints. Implement the four
 slices above. Do not reopen direct coordinator topology or the ownership split.
 The manager reconciles new published upstream changes before branch creation.
 
+## Manager Acceptance Correction
+
+The manager checked committed tree
+`49295a67c2ea0d5eaef728e82dee2d918624f2b2` against the fixed contracts. The
+native facade, CLI options, handshake/guard and transport extensions are present,
+but the draft is not merge-ready. Complete these existing obligations in one
+native control boundary correction; no product contract or phase scope changes:
+
+- Share control dispatch, validation and decoding below the facade. The current
+  Unix/HTTPS branches and facade/legacy decoders still duplicate those owners.
+- Enforce cumulative I/O and bounded client/server wait capacity. The current
+  socket read loop does not consume one remaining deadline, and HTTP waits do
+  not have the required reserved capacity. Slow replies or saturated waits can
+  violate the finite-call and ordinary/worker-progress contracts.
+- Classify errors at their actual boundary and retain mutation uncertainty and
+  original IDs. In particular, Unix `_error_detail` currently labels all
+  mutation exceptions `not_applied`; an exception after an accepted mutation
+  cannot establish that outcome. HTTP queue errors also need their native
+  not-found/authorization/storage meanings rather than one invalid-request code.
+- Restrict new Unix client inspection to managed admissions while retaining the
+  old local inspection adapter's behavior. Current HTTPS and Unix paths differ.
+- Add the approved causal coverage for local/mTLS control parity, server-side
+  guards before lookup/mutation, lost/invalid responses, deadlines, saturated
+  waits with ordinary/worker progress, nested failures and legacy adapters.
+  Added handshake/status/option-exclusivity assertions do not prove those cases.
+
+The implementation executor has returned source/test ownership to the manager.
+Its existing full validation process is being allowed to finish before further
+runtime edits. Its result is evidence for the earlier committed source only;
+it cannot close the missing-contract acceptance gate. Final checks and review
+will use the completed implementation. The native client product guide already
+documents the accepted behavior and must remain aligned with the completed code.
+
 ## Workflow State
 
 - Manager preparation: startup verified on 2026-09-11; approved contracts and current source reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: in progress
+- Implementation: source draft committed; manager completing accepted native control boundaries
 - Refiner: not needed
-- Pre-submit gate: not run
+- Pre-submit gate: not passed at `49295a6`; scoped manager correction above
 - Independent review: required before implementation merge
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 in progress; native control boundary completion
 - PR and merge: not created
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
+| Implementation and changed paths | Draft through `49295a6`: `coordinator.py`, Unix/HTTPS transports, queue CLI and native client product docs; accepted boundary completion remains |
+| Tests added or updated | Local handshake/identity, loopback HTTPS status and CLI connection-exclusivity assertions; required causal coverage remains |
+| Validated revision/tree state and evidence | At `49295a6`, `/tmp/loom-stage40-final-validate.log` records Ruff and Pyright passes; `make validate-pr` remains in progress and has no exit receipt yet. `make test-summary` has not run. Product-doc links/example syntax checked separately; no runtime examples executed |
+| Validation-relevant changes after evidence | No runtime edits since validation started; this acceptance metadata update is documentation only. Required upcoming runtime changes will need fresh affected checks and final gates |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Runtime contracts remain unvalidated; persistent stage worktree retained |
+| Residual risk and cleanup | Missing boundaries and coverage listed above prevent merge. Persistent stage worktree retained; no PR or root migration |
