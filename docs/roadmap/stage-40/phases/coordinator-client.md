@@ -2,18 +2,49 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 40 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p1-coordinator-client
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: current published develop at startup; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
+- Base revision: `1a21a78df89f766ef5c19eb6607512a41866ea17`; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 1: Direct Coordinator Control
 - Dependencies: stage plan approved on 2026-09-10; no earlier phase
 - Workflow path: expanded for public API, authentication, failure and concurrency boundaries
-- Blockers: none; implementation not started
+- Blockers: none
+
+### Execution startup
+
+The manager bootstrapped the manifest's persistent stage worktree on 2026-09-11
+before startup review or edits. The shared setup/preflight gates verified
+`/nas/home/can134/work/loom-worktrees/stage-40`, branch
+`agent/stage-40-p1-coordinator-client`, coordination branch `agent/stage-40`,
+and the clean published base above. The control checkout is the manifest's
+`/nas/home/can134/work/loom-worktrees/control`.
+
+The approved packet is published by PR #295. The existing independent readiness
+receipt is reused: changes since its evidence revision concern explicit GPU
+process coexistence and repository workflow tooling. The GPU policy changes in
+deployment/loading and the transport test remain compatible with this phase;
+they do not change native client, authentication, inspection or wait contracts.
+Current client and transport definitions still match the owner map below.
+No refinement or new product-plan review is needed.
+
+The optional phase executor is justified by the four implementation steps across
+native dispatch, two transports, compatibility adapters, CLI and concurrency
+tests. It owns this phase's implementation, tests, product documentation and
+completion evidence; the manager owns stage metadata and subsequent delivery.
+Neither execution delegation nor startup changes accepted scope or gates.
+
+Validation selection starts with the owner map in Test And Validation Plan and
+adds source-mirrored facade/config tests, real Unix/mTLS parity and fault/progress
+tests. Read the assertions before selecting. Shared codec and dispatch changes
+affect public Python, legacy socket and CLI consumers, so both approved full
+commands remain required. New protocol consumers, changed worker/query behavior,
+or failed legacy assertions trigger affected-suite expansion; no physical fleet
+or scientific workload is authorized by these local validation commands.
 
 ## Objective And Context
 
@@ -417,9 +448,9 @@ The manager reconciles new published upstream changes before branch creation.
 
 ## Workflow State
 
-- Manager preparation: phase contract approved with the stage plan on 2026-09-10
+- Manager preparation: startup verified on 2026-09-11; approved contracts and current source reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: in progress
 - Refiner: not needed
 - Pre-submit gate: not run
 - Independent review: required before implementation merge
@@ -435,4 +466,4 @@ The manager reconciles new published upstream changes before branch creation.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created |
+| Residual risk and cleanup | Runtime contracts remain unvalidated; persistent stage worktree retained |

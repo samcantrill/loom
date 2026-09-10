@@ -1,6 +1,6 @@
 # Roadmap Stage 40 Implementation Plan
 
-Status: approved; ready for implementation
+Status: approved; implementation in progress
 Roadmap stage: 40
 Stage descriptor: Coordinator Client, Agent Preparation, And MCP
 Workflow: .codex/workflows/roadmap-stage-implementation.md
@@ -8,8 +8,8 @@ Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: none; implementation not started
-Next phase: 1 - coordinator-client (pending)
+Current phase: 1 - coordinator-client (in_progress)
+Next phase: 2 - agent-preparation (after Phase 1 delivery and synchronization)
 Blockers: none
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
@@ -122,7 +122,7 @@ rewrite existing run/admission identities to make a migration easier.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | coordinator-client | pending | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | pending | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
+| 1 | coordinator-client | in_progress | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | pending | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
 | 2 | agent-preparation | pending | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | pending | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
 | 3 | staged-preparation-inputs | pending | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | pending | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
 | 4 | mcp-skills | pending | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | pending | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |
@@ -166,21 +166,26 @@ and all approved validation commands remain binding.
   `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`. Manager documentation checks passed
   for seven artifacts, four phase/branch mappings, links/anchors, example syntax,
   the unchanged native schema, thirteen tools and four skills.
-- Ready for implementation: yes. Phase 1, coordinator-client, remains next;
-  implementation has not started and awaits an execution instruction.
+- Ready for implementation: yes. Whole-stage execution is authorized. Startup
+  on 2026-09-11 used published develop
+  `1a21a78df89f766ef5c19eb6607512a41866ea17`, containing the approved packet
+  from PR #295 and the execution-mechanics amendments from PRs #296 and #297.
+  The shared Git setup/preflight gates created and verified the manifest's
+  persistent stage worktree, Phase 1 branch and coordination branch. Review
+  reuse and intervening source changes are recorded in the Phase 1 card.
 - Accepted risks: existing source identity observations are finite; preparation
   has bounded inputs and one environment; partial targets remain conflicts;
   retained operation evidence consumes space; client policy is deployment-wide.
 - Revisit triggers: a supported project needs code deployment, large runtime
   inputs, another authority/preparation family or multiple preparation environments.
-- Product implementation remains unstarted. Workflow adoption changes execution
-  mechanics only; the published Stage 41 lifecycle guide is separate product planning.
+- Phase 1 is active. The published Stage 41 lifecycle guide remains separate
+  product planning.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | Not started | No runtime receipt | Pending implementation | Stage worktree not yet created |
+| 1 | Pending | Startup verified; runtime work in progress | Pending implementation | Persistent stage worktree created and retained |
 | 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | Stage worktree not yet created |
 | 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Stage worktree not yet created |
 | 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Stage worktree not yet created |
