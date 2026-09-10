@@ -249,16 +249,72 @@ def test_gpu_provider_applies_external_process_policy_at_offer_and_prepare(
         return
 
     assert prepared.outcome is ClaimOutcome.PREPARED
+    prepared_status = provider.observe(request)
+    assert prepared_status.atoms == ()
+    assert prepared_status.resource_status[0].reason_code == "loom_claimed"
+    assert not prepared_status.resource_status[0].available
     assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
     assert provider.worker_environment(command) == {"CUDA_VISIBLE_DEVICES": "GPU-a"}
-    held = provider.observe(request)
-    assert held.atoms == ()
-    assert held.resource_status[0].reason_code == "loom_claimed"
-    assert not held.resource_status[0].available
+    active_status = provider.observe(request)
+    assert active_status.atoms == ()
+    assert active_status.resource_status[0].reason_code == "loom_claimed"
+    assert not active_status.resource_status[0].available
     assert provider.release(command).outcome is ClaimOutcome.RELEASED
     released = provider.observe(request)
     assert released.resource_status[0].available
     assert released.resource_status[0].reason_code == "external_process_detected"
+
+
+def test_gpu_provider_allow_policy_fails_closed_for_untrusted_observations() -> None:
+    planner = GpuResourcePlanner()
+    atom = CapacityAtom("gpu", "safe-a", ExactQuantity(1), "count", ExactQuantity(1))
+    clock = [0.0]
+    observer = _FakeOccupancyObserver(
+        ("GPU-a",),
+        (GpuProcessObservation("GPU-a", True, False, "available"),),
+    )
+    monitor = GpuOccupancyMonitor(
+        ("GPU-a",),
+        policy=GpuOccupancyPolicy(external_process_policy="allow"),
+        observer=observer,  # type: ignore[arg-type]
+        monotonic_clock=lambda: clock[0],
+        utc_clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    provider = GpuResourceProvider(
+        planner.claim_contracts,
+        (atom,),
+        bindings={"safe-a": "GPU-a"},
+        occupancy_monitor=monitor,
+    )
+    request = ObserveRequest("agent", "session", "offer")
+    provider.refresh_occupancy()
+    assert provider.observe(request).atoms == (atom,)
+
+    observer.observations = (
+        GpuProcessObservation("GPU-a", False, False, "query_failed"),
+    )
+    declined = provider.prepare(_claim_command(provider, planner, atom))
+    assert observer.calls == 2  # Preparation must not reuse the free observation.
+    assert declined.outcome is ClaimOutcome.DECLINED
+    assert declined.detail == "observation_unavailable"
+    failed = provider.observe(request)
+    assert failed.atoms == ()
+    assert failed.resource_status[0].reason_code == "observation_unavailable"
+
+    observer.observations = ()
+    provider.refresh_occupancy(force=True)
+    missing = provider.observe(request)
+    assert missing.atoms == ()
+    assert missing.resource_status[0].reason_code == "device_missing"
+
+    observer.observations = (
+        GpuProcessObservation("GPU-a", True, False, "available"),
+    )
+    provider.refresh_occupancy(force=True)
+    clock[0] = 16.0
+    stale = provider.observe(request)
+    assert stale.atoms == ()
+    assert stale.resource_status[0].reason_code == "observation_stale"
 
 
 def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(tmp_path) -> None:
