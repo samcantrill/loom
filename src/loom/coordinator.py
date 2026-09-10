@@ -246,7 +246,20 @@ class CoordinatorClient:
 
     def wait_operation(self, operation_id: str, timeout_seconds: float = 25, *, expected_coordinator_id: str | None = None) -> OperationWaitResult:
         timeout = _observation_timeout(timeout_seconds)
-        return OperationWaitResult.from_dict(self._call("wait_operation", {"operation_id": operation_id, "timeout": timeout}, expected_coordinator_id=expected_coordinator_id))
+        deadline = time.monotonic() + _REQUEST_BUDGET_SECONDS
+        observation_deadline = min(deadline, time.monotonic() + timeout)
+        while True:
+            remaining = max(0.0, observation_deadline - time.monotonic())
+            result = OperationWaitResult.from_dict(
+                self._call(
+                    "wait_operation",
+                    {"operation_id": operation_id, "timeout": remaining},
+                    expected_coordinator_id=expected_coordinator_id,
+                    deadline=deadline,
+                )
+            )
+            if result.kind.value != "TIMEOUT" or time.monotonic() >= observation_deadline:
+                return result
 
     def submit(self, request: LocalDaemonAdmissionRequest, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
         if not isinstance(request, LocalDaemonAdmissionRequest):
@@ -255,15 +268,20 @@ class CoordinatorClient:
 
     def wait_admission(self, admission_id: str, expected_revision: int, timeout_seconds: float = 25, *, expected_coordinator_id: str | None = None) -> AdmissionWaitResult:
         timeout = _observation_timeout(timeout_seconds)
-        value = self._call("wait_admission", {"admission_id": admission_id, "expected_revision": expected_revision, "timeout": timeout}, expected_coordinator_id=expected_coordinator_id)
-        kind, admission, revision = value.get("kind"), value.get("admission"), value.get("revision")
-        if not isinstance(kind, str) or not isinstance(admission, Mapping) or isinstance(revision, bool) or not isinstance(revision, int):
-            raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission")
-        from loom.queue.local_daemon import AdmissionWaitKind
-        try:
-            return AdmissionWaitResult(AdmissionWaitKind(kind), LocalDaemonAdmission.from_dict(admission), revision)
-        except ValueError as exc:
-            raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission") from exc
+        deadline = time.monotonic() + _REQUEST_BUDGET_SECONDS
+        observation_deadline = min(deadline, time.monotonic() + timeout)
+        while True:
+            remaining = max(0.0, observation_deadline - time.monotonic())
+            result = _admission_wait_result(
+                self._call(
+                    "wait_admission",
+                    {"admission_id": admission_id, "expected_revision": expected_revision, "timeout": remaining},
+                    expected_coordinator_id=expected_coordinator_id,
+                    deadline=deadline,
+                )
+            )
+            if result.kind.value != "TIMEOUT" or time.monotonic() >= observation_deadline:
+                return result
 
     def cancel(self, queue_item_id: str, *, expected_coordinator_id: str | None = None) -> LocalDaemonAdmission:
         return LocalDaemonAdmission.from_dict(self._call("cancel", {"queue_item_id": queue_item_id}, expected_coordinator_id=expected_coordinator_id))
@@ -282,7 +300,14 @@ class CoordinatorClient:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("managed local admission did not reach terminal state")
 
-    def _call(self, operation: str, payload: Mapping[str, PlainData], *, expected_coordinator_id: str | None) -> Mapping[str, object]:
+    def _call(
+        self,
+        operation: str,
+        payload: Mapping[str, PlainData],
+        *,
+        expected_coordinator_id: str | None,
+        deadline: float | None = None,
+    ) -> Mapping[str, object]:
         expected = _merge_guard(self._expected_coordinator_id, expected_coordinator_id)
         if operation != "handshake" and self._description is None:
             # The facade is deliberately unavailable on an old service before a
@@ -291,7 +316,11 @@ class CoordinatorClient:
         envelope: dict[str, PlainData] = dict(payload)
         if expected is not None:
             envelope["expected_coordinator_id"] = expected
-        result = self._transport.call(operation, envelope, time.monotonic() + _REQUEST_BUDGET_SECONDS)
+        result = self._transport.call(
+            operation,
+            envelope,
+            time.monotonic() + _REQUEST_BUDGET_SECONDS if deadline is None else deadline,
+        )
         return result
 
 
@@ -382,6 +411,20 @@ def _admission_page(value: Mapping[str, object]) -> AdmissionPage:
     if not isinstance(records, list) or not all(isinstance(item, Mapping) for item in records) or (cursor is not None and not isinstance(cursor, str)):
         raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="admissions")
     return AdmissionPage(tuple(LocalDaemonAdmission.from_dict(item) for item in records), cursor)
+
+
+def _admission_wait_result(value: Mapping[str, object]) -> AdmissionWaitResult:
+    kind, admission, revision = value.get("kind"), value.get("admission"), value.get("revision")
+    if not isinstance(kind, str) or not isinstance(admission, Mapping) or isinstance(revision, bool) or not isinstance(revision, int):
+        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission")
+    from loom.queue.local_daemon import AdmissionWaitKind
+
+    try:
+        return AdmissionWaitResult(
+            AdmissionWaitKind(kind), LocalDaemonAdmission.from_dict(admission), revision
+        )
+    except ValueError as exc:
+        raise CoordinatorClientError("invalid_response", boundary="client_protocol", operation="wait_admission") from exc
 
 
 __all__ = ["CoordinatorClient", "CoordinatorClientError", "CoordinatorConnectionDescription", "CoordinatorConnectionFile", "load_coordinator_connection_file"]

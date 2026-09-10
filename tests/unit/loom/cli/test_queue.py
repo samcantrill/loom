@@ -320,6 +320,26 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
     assert payload["result"]["service_health"] == "healthy"
 
 
+def test_daemon_client_connection_options_are_mutually_exclusive(tmp_path: Path) -> None:
+    stderr = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-status",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--connection",
+            str(tmp_path / "client.yaml"),
+        ],
+        stdout=io.StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "not allowed with argument" in stderr.getvalue()
+
+
 def test_queue_daemon_admission_renders_private_diagnostic_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

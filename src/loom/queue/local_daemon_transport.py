@@ -430,6 +430,7 @@ class LocalDaemonSocketClient:
             if timeout_seconds is None
             else time.monotonic() + float(timeout_seconds)
         )
+        backoff = 0.01
         while True:
             remaining = (
                 None if deadline is None else max(0.0, deadline - time.monotonic())
@@ -447,8 +448,14 @@ class LocalDaemonSocketClient:
                     raise
                 if deadline is not None and time.monotonic() >= deadline:
                     raise
-                time.sleep(0.005)
+                time.sleep(
+                    backoff
+                    if remaining is None
+                    else min(backoff, max(0.0, remaining))
+                )
+                backoff = min(0.1, backoff * 2)
                 continue
+            backoff = 0.01
             parsed = OperationWaitResult.from_dict(result)
             if parsed.kind is not OperationWaitKind.TIMEOUT:
                 return parsed
@@ -467,6 +474,7 @@ class LocalDaemonSocketClient:
         ):
             raise QueueServiceError("admission wait timeout is invalid")
         deadline = None if timeout is None else time.monotonic() + float(timeout)
+        backoff = 0.01
         while True:
             remaining = (
                 None if deadline is None else max(0.0, deadline - time.monotonic())
@@ -488,8 +496,14 @@ class LocalDaemonSocketClient:
                     raise
                 if deadline is not None and time.monotonic() >= deadline:
                     raise
-                time.sleep(0.005)
+                time.sleep(
+                    backoff
+                    if remaining is None
+                    else min(backoff, max(0.0, remaining))
+                )
+                backoff = min(0.1, backoff * 2)
                 continue
+            backoff = 0.01
             kind = result.get("kind")
             admission = result.get("admission")
             revision = result.get("revision")
