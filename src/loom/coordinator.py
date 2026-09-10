@@ -116,7 +116,11 @@ class _UnixTransport(_Transport):
         self.endpoint = Path(endpoint)
 
     def call(self, operation: str, payload: Mapping[str, PlainData], deadline: float) -> Mapping[str, object]:
-        request = {"operation": operation, **payload}
+        request = {
+            "operation": operation,
+            "daemon_control": "daemon-control-v1",
+            **payload,
+        }
         raw = json.dumps(request, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         if len(raw) > _MAX_MESSAGE_BYTES:
             raise CoordinatorClientError("result_too_large", boundary="client_protocol", operation=operation)

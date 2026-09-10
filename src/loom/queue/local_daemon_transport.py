@@ -171,6 +171,9 @@ class LocalDaemonSocketServer:
             if uid != os.getuid():
                 raise QueueServiceError("local daemon peer is not authorized")
             operation = payload.get("operation")
+            daemon_control = payload.pop("daemon_control", None)
+            if daemon_control not in (None, "daemon-control-v1"):
+                raise QueueValidationError("local daemon client protocol is invalid")
             expected_coordinator_id = payload.get("expected_coordinator_id")
             if expected_coordinator_id is not None:
                 if not isinstance(expected_coordinator_id, str) or not expected_coordinator_id:
@@ -347,8 +350,7 @@ class LocalDaemonSocketServer:
                 "message": diagnostic,
             }
             if "payload" in locals() and (
-                payload.get("expected_coordinator_id") is not None
-                or payload.get("operation") == "handshake"
+                locals().get("daemon_control") == "daemon-control-v1"
             ):
                 response["error_detail"] = _error_detail(
                     exc, str(payload.get("operation", "unknown")), payload
