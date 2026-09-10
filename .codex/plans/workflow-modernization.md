@@ -1,31 +1,20 @@
 # Loom Workflow Modernization
 
-Status: core lean conversion applied; validation not run
+Status: refined stage isolation and delivery implemented; validation and delivery
+facts are recorded in [the refinement plan](refined-stage-implementation.md).
 
-## Goal
+## Current Shape
 
-Adopt the useful RPhys workflow improvements while reducing context, artifacts,
-and routine subagent cost.
-
-## Applied Shape
-
-- Manager-local roadmap planning on the lean path.
-- Zero normal planning spawns.
-- One normal phase spawn: loom_phase_executor.
-- Optional design reviewer, phase planner, refiner, plan reviewer, and PR
-  reviewer only for a named expanded risk or qualified blocker.
-- fork_turns=none and pointer-only handoffs.
-- Current-state planning, compact manifest, and one phase execution plan per
-  phase.
-- No new assignment, PR-body, review, refinement, or merge sidecars.
-- Direct-to-develop phase PRs with no routine stack.
-- Current Loom validation commands retained.
-- Legacy paths remain as small compatibility stubs.
-
-## Follow-Ups
-
-1. Run reference and repository validation.
-2. Audit legacy pr_open roadmap metadata before resuming an old plan.
-3. Decide whether to consolidate suite evidence into make validate-pr.
-4. Consider optional Loom code intelligence separately.
-5. Dry-run planning on the next unstarted roadmap stage before product execution.
+- Lean planning remains manager-local with bounded expanded reviews.
+- Each implementation stage uses one persistent worktree and a coordination
+  branch, with separate phase branches/PRs.
+- Manager implementation is the default; execution delegation is optional.
+- One independent review is required for every phase PR.
+- The manager prompt owns sequencing; tools/phase_workflow.py owns mandatory
+  repository, cwd/branch, merge and synchronization checks.
+- Metadata is authored on coordination and published before continuation;
+  local develop only fast-forwards. There is no local continuation fallback.
+- Existing Loom validation gates, compact manifests, phase cards, pointer-only
+  handoffs and no-sidecar rules remain authoritative.
+- Other unfinished legacy stages are audited only when resumed. Completed
+  history and unrelated code-intelligence work remain outside this change.

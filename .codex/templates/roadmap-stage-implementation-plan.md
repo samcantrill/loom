@@ -28,6 +28,15 @@ Record only constraints used by multiple phases.
 - Shared invariant ownership:
 - Decisions no phase may reopen:
 
+## Execution Context
+
+- Clean control checkout:
+- Execution worktree root:
+- Persistent stage worktree: <root>/stage-<N>
+- Coordination branch: agent/stage-<N>
+- Shared Git gate: .codex/prompts/phase-loop-management.md
+- All phase branches/PRs use this worktree; retain it through final synchronized closeout.
+
 ## Phase Index
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |

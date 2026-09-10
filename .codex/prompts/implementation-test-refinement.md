@@ -2,6 +2,10 @@
 
 Optional prompt for loom_phase_refiner.
 
+Consume the manager's verified persistent stage cwd, assigned branch and
+shared-Git-gate handoff from phase-loop-management.md before any writes. Do not
+switch branches or create another worktree.
+
 The manager must provide one blocker with reachable path, accepted contract or
 invariant, material consequence, evidence, and smallest correction.
 

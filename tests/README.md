@@ -95,3 +95,13 @@ pidfds, and the selected Linux/SingularityCE 3.10.4 foreground namespace path.
 They exercise direct timeout/startup/interruption, root-first exit, TERM-resistant
 descendants, uncertain cleanup, ordinary results, and both managed group owners.
 They neither pull/build an image nor request CPU/RAM cgroups or GPUs.
+
+## Stage workflow tooling
+
+`tests/integration/tools/test_phase_workflow.py` exercises the repository Git
+helper with disposable real repositories, a local bare origin and a fake GitHub
+boundary. It covers isolation, reviewed-head delivery, interrupted merges,
+leased branch retirement, metadata publication and two phases in one stage
+worktree. Run it with `uv run --locked pytest tests/integration/tools/test_phase_workflow.py`.
+The existing integration and full validation lanes collect it. It never operates
+on real GitHub branches or starts Loom services.

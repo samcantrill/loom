@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 40 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p2-agent-preparation
-- Worktree root: recorded once in the manifest; path suffix `stage-40-p2-agent-preparation`.
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 1 merges; recheck the root schema predecessor then.
 - PR target: develop
 - PR title: Prepare managed runs through durable shared-storage worker operations
@@ -771,4 +772,4 @@ The manager owns startup reconciliation and any changed public/durable decision.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | No phase worktree created; no real roots upgraded |
+| Residual risk and cleanup | Stage worktree not yet created; no real roots upgraded |

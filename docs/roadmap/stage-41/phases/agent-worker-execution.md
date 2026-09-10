@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p4-agent-worker-execution
-- Worktree: manifest root, suffix `stage-41-p4-agent-worker-execution`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 3 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Unify supervised native and container workers under the agent

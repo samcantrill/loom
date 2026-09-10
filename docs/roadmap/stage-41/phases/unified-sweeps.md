@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 7
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p7-unified-sweeps
-- Worktree: manifest root, suffix `stage-41-p7-unified-sweeps`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 6 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Dispatch sweep trials through native run operations

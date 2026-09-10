@@ -3,11 +3,12 @@
 Manager-local setup pass for an existing phase plan.
 
 1. Verify the phase matches the manifest and earlier dependencies are merged.
-2. Discover the current repository and GitHub identity.
-3. Create or verify branch agent/stage-<N>-p<P>-<phase-slug> and its dedicated
-   worktree from current develop.
-4. Record base revision, worktree, PR target develop, intended title, and
-   workflow path.
+2. Consume the manager's successful shared-Git-gate handoff from
+   phase-loop-management.md before startup review or writes.
+3. Verify the assigned phase branch in the persistent stage worktree. Do not
+   create another worktree or duplicate the manager's transition procedure.
+4. Record base revision, manifest execution context, coordination branch, PR
+   target develop, intended title and any named refinement trigger.
 5. Refresh only stale source/test paths and current harness facts.
 6. Confirm the executor packet is 800-1,600 words when practical and contains
    scope, fixed contracts, private discretion, tests, validation, risks, and

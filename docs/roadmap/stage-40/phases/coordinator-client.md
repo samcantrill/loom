@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 40 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p1-coordinator-client
-- Worktree root: recorded once in the manifest; path suffix `stage-40-p1-coordinator-client`.
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: current published develop at startup; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
 - PR target: develop
 - PR title: Unify native coordinator control across Unix and HTTPS
@@ -434,4 +435,4 @@ The manager reconciles new published upstream changes before branch creation.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | No phase worktree created |
+| Residual risk and cleanup | Stage worktree not yet created |

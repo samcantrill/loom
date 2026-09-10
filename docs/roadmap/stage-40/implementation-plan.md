@@ -90,14 +90,12 @@ rewrite existing run/admission identities to make a migration easier.
 - Preserve published Stage 39 resource and failure contracts and existing query/
   operator/worker role distinctions. Reconcile intervening published source
   changes before starting each phase; never infer mutable facts from old cards.
-- Planning worktree: the evidence tree recorded in planning.md. Execution worktree
-  root: `/nas/home/can134/work/loom-worktrees`. Control checkout location is
-  `stage-85-control` under that root, on the documentation branch for this task.
+- Execution paths and coordination are recorded in Execution Context below.
   Preserve the original dirty Loom checkout and unrelated worktrees.
-- Each phase uses its own branch/worktree and PR to develop. The successor starts
-  after predecessor merge under the canonical Loom implementation workflow.
-  Required local gates are make validate-pr and make test-summary, plus expanded
-  independent implementation review for the material boundaries in each card.
+- Each phase uses its own branch and PR in the persistent stage worktree. The
+  successor starts after remote predecessor merge, published metadata and the
+  shared synchronization gate. Required local gates remain make validate-pr and
+  make test-summary, plus independent implementation review for every card.
   Hosted CI remains disabled.
 - Phase 4 adds an isolated MCP dependency lane to those gates. Live Codex and
   physical NAS acceptance are separate release claims, not inferred from loopback
@@ -105,6 +103,18 @@ rewrite existing run/admission identities to make a migration easier.
 - This approval adopts the concrete contracts; it is not permission for
   scientific execution, remote environment installation or real-root upgrades
   during this planning task.
+
+## Execution Context
+
+- Execution worktree root: `/nas/home/can134/work/loom-worktrees`.
+- Clean control checkout: `control` under that root; verify or create a clean
+  linked checkout on develop without repurposing unrelated work.
+- Persistent stage worktree: `stage-40` under that root; bootstrap before
+  startup review or writes and retain through final synchronized closeout.
+- Coordination branch: `agent/stage-40` for metadata and closeout.
+- Shared Git gate: `.codex/prompts/phase-loop-management.md`.
+- Execution-mechanics amendment: refined workflow adopted on 2026-09-10;
+  phase scope/order, approvals, fixed contracts and validation remain unchanged.
 
 ## Phase Index
 
@@ -156,15 +166,14 @@ phase changes delivery granularity, not the accepted final behavior.
   retained operation evidence consumes space; client policy is deployment-wide.
 - Revisit triggers: a supported project needs code deployment, large runtime
   inputs, another authority/preparation family or multiple preparation environments.
-- Scope: documentation only. An unrelated untracked
-  `docs/briefs/unified-execution-lifecycle.md` appeared during planning and is
-  preserved outside this task.
+- Product implementation remains unstarted. Workflow adoption changes execution
+  mechanics only; the published Stage 41 lifecycle guide is separate product planning.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | Not started | No runtime receipt | Pending implementation | No phase worktree |
-| 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | No phase worktree |
-| 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | No phase worktree |
-| 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | No phase worktree |
+| 1 | Not started | No runtime receipt | Pending implementation | Stage worktree not yet created |
+| 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | Stage worktree not yet created |
+| 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Stage worktree not yet created |
+| 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Stage worktree not yet created |

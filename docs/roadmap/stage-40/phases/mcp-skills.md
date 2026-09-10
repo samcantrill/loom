@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 40 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p4-mcp-skills
-- Worktree root: recorded once in the manifest; path suffix `stage-40-p4-mcp-skills`.
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 3 merges
 - PR target: develop
 - PR title: Add coordinator MCP tools and portable Loom operational skills
@@ -417,4 +418,4 @@ reopening coordinator topology, source/profile authority or native result names.
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
 | Live Codex and physical NAS acceptance | Not run |
-| Residual risk and cleanup | No phase worktree created |
+| Residual risk and cleanup | Stage worktree not yet created |

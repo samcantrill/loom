@@ -6,7 +6,8 @@
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
-- Worktree: manifest root, suffix `stage-41-p6-slurm-result-recovery`
+- Stage worktree and coordination branch: from the manifest Execution Context;
+  all phases share that stage worktree through synchronized closeout.
 - Base revision: published develop after Phase 5 merges; record exact SHA at execution preparation
 - PR target: develop
 - PR title: Recover completed Slurm results through durable shared delivery

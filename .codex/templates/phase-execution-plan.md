@@ -2,11 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pending
 - Roadmap stage and phase:
 - Manifest:
 - Branch: agent/stage-<N>-p<P>-<phase-slug>
-- Worktree root and path:
+- Stage worktree: from manifest execution context
+- Coordination branch: from manifest execution context
 - Base revision:
 - PR target: develop
 - PR title:
@@ -107,7 +108,7 @@ Final commands:
 - Implementation:
 - Refiner: not needed / result
 - Pre-submit gate:
-- Independent review: not needed / result
+- Independent review: required; reviewed head and result
 - Blocker corrections: 0/3
 - PR and merge:
 
