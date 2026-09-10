@@ -1960,6 +1960,7 @@ def test_shutdown_logs_owner_failure_chain_without_discarding_retention_or_locks
         assert any(isinstance(cause, CoordinatorStoreError) for cause in causes)
         assert "retained daemon owner state is unavailable" in caplog.text
         assert "coordinator store is missing" in caplog.text
+        assert "preserve the deployment and inspect the shutdown refusal" in caplog.text
         assert not store.exists()
         assert supervisor.status()["service_process_id"] == original_pid
         assert config.agent_root is not None

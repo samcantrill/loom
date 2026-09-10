@@ -1873,7 +1873,7 @@ class LocalDaemon:
                 # the detached process running for recovery.
                 _LOGGER.warning(
                     "local daemon retained its supervisor during shutdown; "
-                    "preserve the deployment and resolve the ownership refusal before restarting",
+                    "preserve the deployment and inspect the shutdown refusal",
                     exc_info=True,
                 )
         self._execution = None
