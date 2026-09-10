@@ -5023,7 +5023,10 @@ class _Handler(BaseHTTPRequestHandler):
             if locals().get("new_client", False):
                 self._reply(409, _client_error_payload(
                     "conflict", str(locals().get("operation", "unknown")),
-                    cast(Mapping[str, PlainData], locals().get("error_ids", {})),
+                    _client_request_ids(
+                        cast(Mapping[str, object], locals().get("payload", {})),
+                        cast(Mapping[str, PlainData], locals().get("error_ids", {})),
+                    ),
                     mutation_outcome=("not_applied" if locals().get("operation") in {"submit", "cancel"} else None),
                 ))
             else:
@@ -5032,6 +5035,9 @@ class _Handler(BaseHTTPRequestHandler):
             if locals().get("new_client", False):
                 self._reply(400, _client_error_payload(
                     "invalid_request", str(locals().get("operation", "unknown")),
+                    _client_request_ids(
+                        cast(Mapping[str, object], locals().get("payload", {}))
+                    ),
                     mutation_outcome=("not_applied" if locals().get("operation") in {"submit", "cancel"} else None),
                 ))
                 return
@@ -5044,6 +5050,9 @@ class _Handler(BaseHTTPRequestHandler):
             if locals().get("new_client", False):
                 self._reply(500, _client_error_payload(
                     "internal_error", str(locals().get("operation", "unknown")),
+                    _client_request_ids(
+                        cast(Mapping[str, object], locals().get("payload", {}))
+                    ),
                     mutation_outcome=("unknown" if locals().get("operation") in {"submit", "cancel"} else None),
                 ))
                 return
@@ -5112,6 +5121,23 @@ def _client_error_payload(
             "mutation_outcome": mutation_outcome,
         },
     }
+
+
+def _client_request_ids(
+    payload: Mapping[str, object], extra: Mapping[str, PlainData] | None = None
+) -> dict[str, PlainData]:
+    ids: dict[str, PlainData] = dict(extra or {})
+    for key in ("admission_id", "queue_item_id", "operation_id", "run_uri"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            ids[key] = value
+    request = payload.get("request")
+    if isinstance(request, Mapping):
+        for key in ("queue_item_id", "run_uri"):
+            value = request.get(key)
+            if isinstance(value, str):
+                ids[key] = value
+    return ids
 
 
 def _dispatch(

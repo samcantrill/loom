@@ -613,15 +613,7 @@ class LocalDaemonSocketClient:
                 **request,
                 "expected_coordinator_id": self._expected_coordinator_id,
             }
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            connection.connect(str(self.endpoint))
-            _write_message(connection, request)
-            response = _read_message(connection)
-        except OSError as exc:
-            raise QueueServiceError("local daemon endpoint is unavailable") from exc
-        finally:
-            connection.close()
+        response = self._request(request)
         if response.get("ok") is not True:
             diagnostic = response.get("error")
             if diagnostic == "local_daemon_admission_not_found":
@@ -635,6 +627,41 @@ class LocalDaemonSocketClient:
         if not isinstance(result, Mapping):
             raise QueueServiceError("local daemon returned an invalid result")
         return result
+
+    def control_call(
+        self,
+        operation: str,
+        payload: Mapping[str, PlainData],
+        *,
+        deadline: float,
+    ) -> Mapping[str, object]:
+        """Send one bounded daemon-control-v1 envelope for the new facade."""
+
+        request = {
+            "operation": operation,
+            "daemon_control": "daemon-control-v1",
+            **payload,
+        }
+        return self._request(request, deadline=deadline)
+
+    def _request(
+        self, request: Mapping[str, PlainData], *, deadline: float | None = None
+    ) -> Mapping[str, object]:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise QueueServiceError("local daemon request deadline exceeded")
+                connection.settimeout(remaining)
+            connection.connect(str(self.endpoint))
+            _write_message(connection, request)
+            response = _read_message(connection)
+        except OSError as exc:
+            raise QueueServiceError("local daemon endpoint is unavailable") from exc
+        finally:
+            connection.close()
+        return response
 
     def handshake(self) -> Mapping[str, object]:
         """Return the additive coordinator-control handshake for new clients."""
@@ -680,6 +707,12 @@ def _error_detail(
         value = request.get(key)
         if isinstance(value, str):
             ids[key] = value
+    nested = request.get("request")
+    if isinstance(nested, Mapping):
+        for key in ("queue_item_id", "run_uri"):
+            value = nested.get(key)
+            if isinstance(value, str):
+                ids[key] = value
     expected = request.get("expected_coordinator_id")
     if isinstance(expected, str):
         ids["expected_coordinator_id"] = expected
