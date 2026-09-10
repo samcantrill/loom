@@ -246,6 +246,15 @@ startup fails closed. An empty supervisor may restart after a host restart; a
 supervisor that has accepted a launch cannot be reconstructed from an absent
 process and requires explicit recovery.
 
+Clean daemon shutdown stops the supervisor only when the coordinator, agent
+journal and supervisor prove no retained work. A refused or unavailable proof
+keeps the supervisor running and writes a warning with its original exception
+chain to the daemon's local log; ordinary daemon locks are still released.
+These private diagnostics can include local paths and native messages. Protect
+the logs, retain the deployment, and investigate the stated owner failure rather
+than force-releasing uncertain work. Status availability remains a boolean view;
+it does not replace the detailed shutdown diagnostic.
+
 Managed-local preparation separately requires an explicit exact execution
 requirement for every stage: project, environment, and executor fingerprints.
 It never derives those identities from an authored field, a daemon profile, an

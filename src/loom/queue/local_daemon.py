@@ -23,6 +23,7 @@ from enum import StrEnum
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -78,6 +79,7 @@ _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
 _DEPLOYMENT_BINDING_FILE = "deployment-binding.json"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _default_admission_priority(_run_uri: str) -> int:
@@ -1869,7 +1871,11 @@ class LocalDaemon:
             except (QueueConflictError, QueueServiceError):
                 # A busy or unavailable cross-owner proof deliberately leaves
                 # the detached process running for recovery.
-                pass
+                _LOGGER.warning(
+                    "local daemon retained its supervisor during shutdown; "
+                    "preserve the deployment and resolve the ownership refusal before restarting",
+                    exc_info=True,
+                )
         self._execution = None
         for lock in (self._agent_lock, self._coordinator_lock):
             if lock is not None:

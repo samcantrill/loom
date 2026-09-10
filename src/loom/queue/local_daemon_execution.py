@@ -626,6 +626,23 @@ def local_daemon_owner_stores_available(
     """Whether both retained runtime owners can still be opened read-only."""
 
     try:
+        _require_local_daemon_owner_stores(
+            config, coordinator_id=coordinator_id, agent_id=agent_id
+        )
+    except QueueServiceError:
+        return False
+    return True
+
+
+def _require_local_daemon_owner_stores(
+    config: LocalDaemonConfig,
+    *,
+    coordinator_id: str,
+    agent_id: str | None,
+) -> None:
+    """Check the same owners without discarding a failed proof's cause."""
+
+    try:
         capacity = _coordinator_capacity(config)
         SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
@@ -660,11 +677,12 @@ def local_daemon_owner_stores_available(
                 agent_revision = conn.execute(
                     "SELECT revision FROM local_daemon_status_revision"
                 ).fetchone()
-        return {"scheduling", "assignment"}.issubset(
-            axes
-        ) and agent_revision is not None
-    except Exception:
-        return False
+        if not {"scheduling", "assignment"}.issubset(axes) or agent_revision is None:
+            raise QueueServiceError(
+                "retained daemon owner status revisions are unavailable"
+            )
+    except Exception as exc:
+        raise QueueServiceError("retained daemon owner state is unavailable") from exc
 
 
 def local_daemon_owner_work_is_retained(
@@ -675,10 +693,9 @@ def local_daemon_owner_work_is_retained(
 ) -> bool:
     """Return only a validated cross-owner retained-work result."""
 
-    if not local_daemon_owner_stores_available(
+    _require_local_daemon_owner_stores(
         config, coordinator_id=coordinator_id, agent_id=agent_id
-    ):
-        raise QueueServiceError("retained daemon owner state is unavailable")
+    )
     if agent_id is None:
         return False
     try:
