@@ -19,6 +19,7 @@ from loom.pipeline.reliability import (
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
     CancellationEpochReceipt,
+    CoordinatorAdmissionRequest,
     LocalDaemonAuthority,
     PreparedAttemptExecutionAuthority,
     StatusTransition,
@@ -119,6 +120,21 @@ class CoordinatorAuthorityStore(
 
 
 CoordinatorAuthorityFactory = Callable[[str], CoordinatorAuthorityStore]
+
+
+@runtime_checkable
+class ManagedAdmissionRetryAuthority(Protocol):
+    """Optional atomic continuation capability for the embedded managed owner."""
+
+    def resume_failed_admission(
+        self,
+        run_uri: str,
+        *,
+        admission: CoordinatorAdmissionRequest,
+        operation_id: str,
+        expected_revision: BackendRevision,
+        stage_names: tuple[str, ...],
+    ) -> BackendRevision: ...
 
 
 __all__ = [

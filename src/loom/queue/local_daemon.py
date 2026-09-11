@@ -31,7 +31,7 @@ import sqlite3
 import stat
 from threading import Event, RLock, Thread
 import time
-from typing import TYPE_CHECKING, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -1041,10 +1041,16 @@ class LocalDaemonConfig:
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonAdmissionRequest:
-    """The complete public submission shape."""
+    """Submit prepared work, or explicitly retry an observed failed revision.
+
+    Ordinary replay only observes the retained admission. ``retry_failed_revision``
+    authorizes one continuation of that FAILED admission through its existing
+    coordinator and intent; replay of the same revision cannot authorize another.
+    """
 
     queue_item_id: str
     run_uri: str
+    retry_failed_revision: int | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -1053,16 +1059,36 @@ class LocalDaemonAdmissionRequest:
         ):
             if not isinstance(value, str) or not value:
                 raise QueueServiceError(f"{name} must be a non-empty string")
+        if self.retry_failed_revision is not None and (
+            isinstance(self.retry_failed_revision, bool)
+            or not isinstance(self.retry_failed_revision, int)
+            or self.retry_failed_revision < 1
+        ):
+            raise QueueServiceError("retry failed revision must be a positive integer")
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"queue_item_id": self.queue_item_id, "run_uri": self.run_uri}
+        result: dict[str, PlainData] = {
+            "queue_item_id": self.queue_item_id,
+            "run_uri": self.run_uri,
+        }
+        if self.retry_failed_revision is not None:
+            result["retry_failed_revision"] = self.retry_failed_revision
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonAdmissionRequest":
-        _exact_fields(data, {"queue_item_id", "run_uri"}, "admission request")
+        fields = {"queue_item_id", "run_uri"}
+        if "retry_failed_revision" in data:
+            fields.add("retry_failed_revision")
+        _exact_fields(data, fields, "admission request")
         return cls(
             queue_item_id=_required_string(data, "queue_item_id"),
             run_uri=_required_string(data, "run_uri"),
+            retry_failed_revision=(
+                _required_int(data, "retry_failed_revision")
+                if "retry_failed_revision" in data
+                else None
+            ),
         )
 
 
@@ -2401,6 +2427,7 @@ class LocalDaemon:
             if execution is None:
                 raise QueueServiceError("local daemon execution is absent")
             execution.open_owner_stores()
+            self._resume_pending_admission_retries(execution)
             self._resume_pending_recoveries(execution)
             execution.begin_cycle()
             self._repair_cancelled_admissions(execution)
@@ -2585,12 +2612,18 @@ class LocalDaemon:
                     existing.intent_digest == intent.digest
                     and existing.queue_item_id == request.queue_item_id
                 ):
+                    if request.retry_failed_revision is not None:
+                        return self._retry_failed_admission(
+                            existing, request, execution
+                        )
                     return existing
                 raise QueueConflictError("managed run admission intent conflicts")
             if other is not None:
                 raise QueueConflictError(
                     "queue item identity already admits another run"
                 )
+            if request.retry_failed_revision is not None:
+                raise QueueConflictError("retry requires an existing failed admission")
 
             intent = load_managed_local_intent(self.config, request.run_uri)
             execution.validate_fresh_intent(intent)
@@ -2627,6 +2660,102 @@ class LocalDaemon:
                 conn.commit()
         self._wake.set()
         return self._admission(admission_id)
+
+    def _retry_failed_admission(
+        self,
+        admission: LocalDaemonAdmission,
+        request: LocalDaemonAdmissionRequest,
+        execution: LocalDaemonExecution,
+    ) -> LocalDaemonAdmission:
+        # The coordinator journal bridges its local admission update and the
+        # authority's atomic, replayable lifecycle continuation across restart.
+        key = (
+            f"admission-retry:{admission.admission_id}:{request.retry_failed_revision}"
+        )
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            if (
+                admission.state is not LocalDaemonAdmissionState.FAILED
+                or admission.revision != request.retry_failed_revision
+                or admission.cancellation_operation_id is not None
+            ):
+                raise QueueConflictError("retry failed admission revision is stale")
+            snapshot = execution.validate_admission_retry(admission)
+            record = {
+                "admission_id": admission.admission_id,
+                "failed_revision": admission.revision,
+                "authority_revision": snapshot.revision.to_dict(),
+                "state": "pending",
+            }
+            with self._connection() as conn:
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
+                    (key, json.dumps(record)),
+                )
+                conn.commit()
+        else:
+            record = json.loads(str(row["value"]))
+        if record["state"] == "pending":
+            self._apply_admission_retry(key, record, execution)
+        self._wake.set()
+        return self._admission(admission.admission_id)
+
+    def _apply_admission_retry(
+        self, key: str, record: dict[str, Any], execution: LocalDaemonExecution
+    ) -> None:
+        from loom.pipeline.stores.read_models import BackendRevision
+
+        admission = self._admission(record["admission_id"])
+        if (
+            admission.state is not LocalDaemonAdmissionState.FAILED
+            or admission.revision != record["failed_revision"]
+            or admission.cancellation_operation_id is not None
+        ):
+            raise QueueConflictError("pending admission retry conflicts")
+        execution.resume_failed_admission(
+            admission,
+            operation_id=key,
+            expected_revision=BackendRevision.from_dict(record["authority_revision"]),
+        )
+        record["state"] = "applied"
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
+                "revision = revision + 1 WHERE admission_id = ?",
+                (
+                    LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
+                    admission.admission_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE daemon_metadata SET value = ? WHERE key = ?",
+                (json.dumps(record), key),
+            )
+            conn.commit()
+
+    def _resume_pending_admission_retries(
+        self, execution: LocalDaemonExecution
+    ) -> None:
+        with self._connection() as conn:
+            pending = tuple(
+                conn.execute(
+                    "SELECT key, value FROM daemon_metadata "
+                    "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending'"
+                )
+            )
+        for row in pending:
+            try:
+                self._apply_admission_retry(
+                    str(row["key"]), json.loads(str(row["value"])), execution
+                )
+            except Exception:
+                self._record_admission_health(
+                    json.loads(str(row["value"]))["admission_id"], "unavailable"
+                )
 
     def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
         if self._cancelled_admission_repairs is None:
