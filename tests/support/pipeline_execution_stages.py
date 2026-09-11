@@ -75,6 +75,36 @@ class JsonProducerStage:
         }
 
 
+class TerminalExitProducerStage(JsonProducerStage):
+    """Write normal outputs, then exercise the native root/group terminal join."""
+
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        import atexit
+        import signal
+        import subprocess
+        import sys
+
+        mode = context.stage_config["terminal_mode"]
+        if mode == "nonzero":
+            atexit.register(os._exit, 7)
+        elif mode == "signal":
+            atexit.register(os.kill, os.getpid(), signal.SIGKILL)
+        elif mode == "descendant":
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        if mode == "child_metadata":
+            result_path = context.local_workspace_path().parent / "worker-result.json"
+
+            def child_metadata() -> None:
+                result = json.loads(result_path.read_text())
+                result["executor_metadata"]["managed_successful_exit"] = False
+                result_path.write_text(json.dumps(result))
+
+            atexit.register(child_metadata)
+        return super().run(context, inputs)
+
+
 class EnvironmentProducerStage:
     """Persist one worker-local environment value for process-boundary tests."""
 

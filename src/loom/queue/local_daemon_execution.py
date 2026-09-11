@@ -4899,7 +4899,17 @@ class LocalDaemonExecution:
                 produced_outputs=produced,
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
-                metadata={},
+                metadata={
+                    "managed_output_predecessor": next(
+                        (
+                            fact.latest_commit.commit_id
+                            for fact in snapshot.stages
+                            if fact.stage_name == record.stage_name
+                            and fact.latest_commit is not None
+                        ),
+                        None,
+                    ),
+                },
             )
         )
         if (

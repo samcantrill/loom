@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import replace
 import sqlite3
+import json
 import sys
 import time
 from typing import TypeAlias
@@ -52,6 +53,7 @@ from loom.pipeline.runtime.placement import (
     resolve_stage_placement,
 )
 from loom.pipeline.status import StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     BackendRevision,
     LocalArtifactStore,
@@ -163,7 +165,7 @@ def resident_owner() -> Iterator[Callable[[Path, str], _ResidentOwner]]:
             pass
 
 
-def _spec(*, counter_path: Path | None = None) -> PipelineSpec:
+def _spec(*, counter_path: Path | None = None, terminal_mode: str = "clean") -> PipelineSpec:
     return PipelineSpec.from_config(
         {
             "name": "managed-local",
@@ -172,11 +174,14 @@ def _spec(*, counter_path: Path | None = None) -> PipelineSpec:
                     "name": "build",
                     "factory": {
                         "_target_": (
-                            "tests.support.pipeline_execution_stages.JsonProducerStage"
+                            "tests.support.pipeline_execution_stages."
+                            + ("JsonProducerStage" if terminal_mode in {"clean", "replacement"}
+                               else "TerminalExitProducerStage")
                         )
                     },
                     "config": {
                         "value": 42,
+                        "terminal_mode": terminal_mode,
                         **(
                             {}
                             if counter_path is None
@@ -284,17 +289,22 @@ def _offer_snapshot(
         ("final_event_acknowledged", None),
     ),
 )
+@pytest.mark.parametrize(
+    "terminal_mode",
+    ["clean", "replacement", "nonzero", "signal", "descendant", "child_metadata", "legacy"],
+)
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
     release_crash_point: str,
     reason_code: str | None,
+    terminal_mode: str,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
     run_store.create_run(run_uri)
-    spec = _spec()
+    spec = _spec(terminal_mode=terminal_mode)
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
@@ -314,6 +324,28 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
 
     authority = _CommitThenTimeoutAuthority()
     revision = authority.create_run(run_uri)
+    initial = None
+    prior_attempt_id = None
+    if terminal_mode == "replacement":
+        prior = authority.allocate_stage_attempt(
+            run_uri, "build", owner_id="prior", lease_ttl_seconds=30
+        )
+        assert prior.lease is not None
+        initial = SQLitePerRunAuthorityStore.record_output_commit(
+            authority, run_uri, "build", attempt_id=prior.attempt.attempt_id,
+            fencing_token=prior.lease.fencing_token,
+            outputs={"data": ArtifactRef(artifact_id="prior/data", uri=f"{run_uri}/prior", artifact_type="json")},
+        )
+        authority.transition_stage(
+            run_uri, "build", from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.STALE, intent=TransitionIntent.RESUME,
+        )
+        prior_attempt_id = prior.attempt.attempt_id
+        revision = authority.snapshot(run_uri).revision
+        worker_request = replace(
+            worker_request, attempt=2,
+            metadata={"managed_output_predecessor": initial.commit.commit_id},
+        )
     prepared = authority.ensure_prepared_attempt(
         run_uri,
         PreparedAttemptRequest(
@@ -323,9 +355,9 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             stage_name="build",
             readiness_generation="ready-build-1",
             expected_revision=revision,
-            expected_stage_status=None,
-            expected_attempt_id=None,
-            next_attempt=1,
+            expected_stage_status=StageStatus.STALE if initial is not None else None,
+            expected_attempt_id=prior_attempt_id,
+            next_attempt=worker_request.attempt,
             owner_id="coordinator",
             plan_fingerprint="plan-1",
             bound_inputs={},
@@ -398,6 +430,55 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             resident_launch_profile=launch_profile,
         )
 
+    if terminal_mode in {"nonzero", "signal", "descendant"}:
+        receipt = execute()
+        assert receipt.worker_result.status is StageStatus.FAILED
+        assert receipt.output_commit is None
+        assert receipt.worker_result.failure is not None
+        assert "complete owned-group exit" in receipt.worker_result.failure.message
+        assert authority.list_output_commits(run_uri, stage_name="build") == ()
+        raw_result = json.loads((agent_root / "assignments" / assignment.assignment_id / "worker-result.json").read_text())
+        assert raw_result["status"] == StageStatus.SUCCEEDED.value
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+        assert execute() == receipt
+        assert coordinator.state(assignment.assignment_id) == "released"
+        return
+
+    def fail_before_commit(*args, **kwargs):
+        raise TimeoutError("before authority transaction")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(authority, "record_output_commit", fail_before_commit)
+        if terminal_mode == "legacy":
+            record_result = journal.record_result
+
+            def legacy_result_writer(assignment_id, result):
+                # The previous native parent persisted this supported result
+                # format without any process-completion qualification.
+                payload = dict(result)
+                metadata = dict(payload["executor_metadata"])
+                metadata.pop("managed_successful_exit", None)
+                payload["executor_metadata"] = metadata
+                return record_result(assignment_id, payload)
+
+            patch.setattr(journal, "record_result", legacy_result_writer)
+        with pytest.raises(TimeoutError, match="before authority transaction"):
+            execute()
+    assert authority.snapshot(run_uri).stages[0].status is StageStatus.RUNNING
+    assert len(authority.list_output_commits(run_uri, stage_name="build")) == (0 if initial is None else 1)
+
+    if terminal_mode == "legacy":
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+        with pytest.raises(ManagedLocalError, match="no successful owned-group exit"):
+            execute()
+        assert authority.list_output_commits(run_uri, stage_name="build") == ()
+        return
+    if terminal_mode == "child_metadata":
+        raw_result = json.loads(
+            (agent_root / "assignments" / assignment.assignment_id / "worker-result.json").read_text()
+        )
+        assert raw_result["executor_metadata"]["managed_successful_exit"] is False
+
     with pytest.raises(TimeoutError, match="response was lost"):
         execute()
     assert authority.snapshot(run_uri).stages[0].status is StageStatus.SUCCEEDED
@@ -405,6 +486,14 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     assert (
         journal.read_state(assignment.assignment_id) is AssignmentState.RESULT_DURABLE
     )
+
+    previous_epoch = supervisor.continuity_epoch
+    supervisor.shutdown_clean()
+    supervisor = AgentProcessSupervisorService.start_empty_initialized(
+        agent_root,
+        configuration=SupervisorLaunchConfiguration(assignment.agent_id, (launch_profile,)),
+    )
+    assert supervisor.continuity_epoch != previous_epoch
 
     final_event_id = f"{assignment.assignment_id}:provider_released_availability_fresh"
     if release_crash_point == "availability_published":
@@ -455,10 +544,29 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     replay = execute()
 
     assert receipt.worker_result.status is StageStatus.SUCCEEDED
+    assert receipt.worker_result.executor_metadata["managed_successful_exit"] is True
     assert replay == receipt
     with sqlite3.connect(agent_root / "supervisor" / "supervisor.sqlite") as conn:
         assert int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]) == 1
     assert receipt.output_commit is not None
+    assert receipt.output_commit.commit.supersedes_commit_id == (
+        None if initial is None else initial.commit.commit_id
+    )
+    assert len(authority.list_output_commits(run_uri, stage_name="build")) == (1 if initial is None else 2)
+    replay_kwargs = {
+        "attempt_id": assignment.attempt_id,
+        "fencing_token": receipt.fence.fencing_token,
+        "outputs": receipt.worker_result.outputs,
+        "supersedes_commit_id": None if initial is None else initial.commit.commit_id,
+        "assignment_id": assignment.assignment_id,
+    }
+    for changed in (
+        {"supersedes_commit_id": "stale-head"},
+        {"fencing_token": "stale-fence"},
+        {"outputs": {}},
+    ):
+        with pytest.raises(ValueError):
+            authority.record_output_commit(run_uri, "build", **{**replay_kwargs, **changed})
     artifact = receipt.worker_result.outputs["data"]
     assert LocalArtifactStore(run_store.local_artifact_root(run_uri)).load(
         artifact

@@ -156,3 +156,31 @@ def test_cleanup_budget_is_shared_by_delayed_and_repeated_calls(
     assert group.poll() == 7
     assert now[0] == stopped_at
     assert events == cleanup_events
+
+
+@pytest.mark.parametrize("observation", ["available", "missing", "malformed"])
+def test_successful_exit_observes_real_unreaped_root_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch, observation: str,
+) -> None:
+    import subprocess
+    import sys
+    from time import monotonic, sleep
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    group = OwnedProcessGroup(child)
+    deadline = monotonic() + 5
+    try:
+        while group.root_status() is None:
+            assert monotonic() < deadline
+            sleep(0.01)
+        if observation == "missing":
+            def unavailable(*args: Any, **kwargs: Any) -> None:
+                raise FileNotFoundError("ps unavailable")
+            monkeypatch.setattr(subprocess, "run", unavailable)
+        elif observation == "malformed":
+            monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="invalid"))
+        assert group.successful_exit() is (observation == "available")
+        assert group.contain()
+        assert not group.successful_exit()
+    finally:
+        group.contain()

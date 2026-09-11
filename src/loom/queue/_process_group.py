@@ -134,6 +134,38 @@ class OwnedProcessGroup:
                 self.terminate()
             return self.returncode if self._advance_cleanup() else None
 
+    def successful_exit(self) -> bool:
+        """Prove zero root exit and an empty owned group before cleanup signals.
+
+        POSIX ``ps`` must expose PID/PGID membership. The unreaped leader keeps
+        the group identity reserved while the snapshot is collected. A remaining
+        member (including a zombie), failed observation, or prior stop cannot
+        qualify success; containment remains a separate operation.
+        """
+        with self._lock:
+            if (
+                self.root_status() != 0
+                or self._ownership_lost
+                or self._reaped
+                or self._term_deadline is not None
+                or self._kill_sent
+            ):
+                return False
+            try:
+                observed = subprocess.run(
+                    ["ps", "-e", "-o", "pid=", "-o", "pgid="],
+                    check=True, capture_output=True, text=True, timeout=5,
+                )
+                members = {
+                    pid
+                    for line in observed.stdout.splitlines()
+                    for pid, pgid in [tuple(map(int, line.split()))]
+                    if pgid == self.pgid
+                }
+            except (OSError, subprocess.SubprocessError, ValueError):
+                return False
+            return members == {self.pid}
+
     def contain(self) -> bool:
         """Consume the shared cleanup budget; never renew it on later calls."""
         with self._lock:
