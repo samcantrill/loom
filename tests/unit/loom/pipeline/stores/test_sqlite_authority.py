@@ -882,6 +882,143 @@ def test_managed_failure_can_terminalize_from_submitted_and_replays(
         )
 
 
+@pytest.mark.parametrize("run_status", (RunStatus.FAILED, RunStatus.INTERRUPTED))
+def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
+    tmp_path: Path,
+    run_status: RunStatus,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "explicit-retry")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    admission = CoordinatorAdmissionRequest(
+        "admit-1", "coordinator-1", run_uri, "intent-1"
+    )
+    store.bind_coordinator_admission(run_uri, admission)
+    prepared = store.ensure_prepared_attempt(
+        run_uri, _prepared_request(store.open_run(run_uri).revision)
+    )
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    fence = store.grant_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    store.record_managed_attempt_terminal(
+        run_uri,
+        fence=fence,
+        status=StageStatus.FAILED,
+        reason=LifecycleReason(code="worker.failed"),
+    )
+    pending = store.ensure_prepared_attempt(
+        run_uri,
+        replace(
+            _prepared_request(
+                store.open_run(run_uri).revision, operation_id="prepare-other"
+            ),
+            stage_name="other",
+        ),
+    )
+    snapshot = store.open_run(run_uri)
+    failed = store.transition_run(
+        run_uri,
+        from_status=snapshot.status,
+        to_status=run_status,
+        reason=LifecycleReason(code="run.failed"),
+    )
+    previous = store.open_run(run_uri).stages[0].attempts[0]
+
+    def retry(_):
+        return SQLitePerRunAuthorityStore(clock=FrozenClock()).resume_failed_admission(
+            run_uri,
+            admission=admission,
+            operation_id="retry-1",
+            expected_revision=failed.revision,
+            stage_names=("build", "other"),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = tuple(pool.map(retry, range(2)))
+    assert replies[0] == replies[1]
+    snapshot = store.open_run(run_uri)
+    assert snapshot.status is RunStatus.RUNNING
+    assert snapshot.stages[0].status is StageStatus.STALE
+    assert snapshot.stages[0].attempts == (previous,)
+    assert snapshot.stages[1].attempts == (pending.attempt,)
+    assert snapshot.stages[1].status is StageStatus.PENDING
+    next_attempt = store.ensure_prepared_attempt(
+        run_uri,
+        _prepared_request(
+            snapshot.revision,
+            operation_id="prepare-2",
+            stage_status=StageStatus.STALE,
+            attempt_id=previous.attempt_id,
+            next_attempt=2,
+        ),
+    )
+    assert next_attempt.attempt.attempt == 2
+    assert retry(None) == replies[0]
+    assert len(store.open_run(run_uri).stages[0].attempts) == 2
+    with pytest.raises(AuthorityStoreError, match="terminal result conflicts"):
+        store.record_managed_attempt_terminal(
+            run_uri,
+            fence=fence,
+            status=StageStatus.CANCELLED,
+            reason=LifecycleReason(code="worker.cancelled"),
+        )
+    with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+        receipt = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'managed_admission_retry:retry-1'"
+        ).fetchone()[0]
+    assert "run.failed" in receipt and "worker.failed" in receipt
+
+
+@pytest.mark.parametrize("conflict", ("binding", "revision", "live", "cancellation"))
+def test_managed_admission_retry_refuses_unresolved_authority(
+    tmp_path: Path,
+    conflict: str,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "retry-conflict")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    initial = store.create_run(run_uri, status=RunStatus.RUNNING)
+    admission = CoordinatorAdmissionRequest(
+        "admit-1", "coordinator-1", run_uri, "intent-1"
+    )
+    store.bind_coordinator_admission(run_uri, admission)
+    if conflict == "live":
+        prepared = store.ensure_prepared_attempt(run_uri, _prepared_request(initial))
+        store.bind_prepared_attempt(
+            run_uri,
+            assignment_id="assignment-1",
+            attempt_id=prepared.attempt.attempt_id,
+        )
+        store.grant_prepared_attempt(
+            run_uri,
+            assignment_id="assignment-1",
+            attempt_id=prepared.attempt.attempt_id,
+        )
+    if conflict == "cancellation":
+        store.install_cancellation_epoch(
+            run_uri,
+            CancellationEpochRequest("cancel-1", "coordinator-1", run_uri, ("build",)),
+        )
+    snapshot = store.open_run(run_uri)
+    failed = store.transition_run(
+        run_uri, from_status=snapshot.status, to_status=RunStatus.FAILED
+    )
+    before = store.open_run(run_uri)
+    with pytest.raises(AuthorityStoreError):
+        store.resume_failed_admission(
+            run_uri,
+            admission=replace(admission, coordinator_id="another")
+            if conflict == "binding"
+            else admission,
+            operation_id="retry-1",
+            expected_revision=initial if conflict == "revision" else failed.revision,
+            stage_names=("build",),
+        )
+    assert store.open_run(run_uri) == before
+
+
 def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
     tmp_path: Path,
 ) -> None:

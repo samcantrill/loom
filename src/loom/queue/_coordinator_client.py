@@ -327,7 +327,11 @@ class NativeCoordinatorClient:
         *,
         expected_coordinator_id: str | None = None,
     ) -> LocalDaemonAdmission:
-        """Admit a prepared run once; reconcile unknown outcomes with the same ID."""
+        """Admit prepared work or explicitly retry its observed failed revision.
+
+        Reconcile unknown outcomes with the same request. Ordinary submission
+        replay observes terminal state without authorizing another attempt.
+        """
         if not isinstance(request, LocalDaemonAdmissionRequest):
             raise control_error("invalid_request", "submit", {})
         return cast(

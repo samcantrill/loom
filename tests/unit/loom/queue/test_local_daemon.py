@@ -100,6 +100,23 @@ class _IncompatibleCpuPlanner(CpuResourcePlanner):
     claim_contracts = (ResourceClaimContractDescriptor("cpu", 2, "test-cpu-claim-v2"),)
 
 
+@pytest.mark.parametrize("revision", (None, 1, 17))
+def test_admission_request_round_trips_optional_failed_retry_revision(revision) -> None:
+    request = LocalDaemonAdmissionRequest(
+        "item", "file:///run", retry_failed_revision=revision
+    )
+    assert LocalDaemonAdmissionRequest.from_dict(request.to_dict()) == request
+    assert ("retry_failed_revision" in request.to_dict()) == (revision is not None)
+
+
+@pytest.mark.parametrize("revision", (True, 0, -1, "1"))
+def test_admission_request_rejects_invalid_failed_retry_revision(revision) -> None:
+    with pytest.raises(QueueServiceError):
+        LocalDaemonAdmissionRequest(
+            "item", "file:///run", retry_failed_revision=revision
+        )
+
+
 def test_recovery_request_round_trips_complete_immutable_identity() -> None:
     request = RecoverUnknownAssignment(
         recovery_id="recovery-1",

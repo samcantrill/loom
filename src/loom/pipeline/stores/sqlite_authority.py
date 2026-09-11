@@ -918,6 +918,147 @@ class SQLitePerRunAuthorityStore:
             )
             return receipt
 
+    def resume_failed_admission(
+        self,
+        run_uri: str,
+        *,
+        admission: CoordinatorAdmissionRequest,
+        operation_id: str,
+        expected_revision: BackendRevision,
+        stage_names: tuple[str, ...],
+    ) -> BackendRevision:
+        """Atomically authorize explicit continuation of released failed work.
+
+        The coordinator first proves physical assignment release. This owner
+        checks the exact binding, revision, cancellation and execution fences.
+        RESUME makes failed stages STALE for the existing orchestrator;
+        attempts, commits, workspaces and terminal reasons remain retained.
+        The receipt shares the transaction and survives coordinator restart.
+        """
+        self._bind_run_uri(run_uri)
+        _non_empty(operation_id, "operation_id")
+        request = {
+            "admission": admission.to_dict(),
+            "expected_revision": expected_revision.to_dict(),
+            "stage_names": list(stage_names),
+        }
+        key = f"managed_admission_retry:{operation_id}"
+        with self._transaction(run_uri) as conn:
+            binding = conn.execute(
+                "SELECT request_json FROM coordinator_admission_receipts "
+                "WHERE operation_id = ?",
+                (admission.operation_id,),
+            ).fetchone()
+            if (
+                admission.run_uri != run_uri
+                or binding is None
+                or _json_loads(str(binding["request_json"])) != admission.to_dict()
+            ):
+                raise AuthorityStoreError("managed retry admission binding conflicts")
+            replay = conn.execute(
+                "SELECT value FROM metadata WHERE key = ?", (key,)
+            ).fetchone()
+            if replay is not None:
+                receipt = _json_loads(str(replay["value"]))
+                if receipt["request"] != request:
+                    raise AuthorityStoreError("managed retry operation conflicts")
+                return BackendRevision.from_dict(receipt["revision"])
+            _require_no_cancellation_epoch(conn)
+            _require_expected_revision(_current_run_revision(conn), expected_revision)
+            snapshot = _snapshot(conn, run_uri=run_uri, now=self._now())
+            if snapshot.status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+                raise AuthorityStoreError("managed retry requires a failed run")
+            if (
+                conn.execute(
+                    "SELECT 1 FROM managed_attempt_bindings WHERE state != 'terminal' LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                raise AuthorityStoreError(
+                    "managed retry execution binding remains live or unknown"
+                )
+            if (
+                conn.execute(
+                    "SELECT 1 FROM leases WHERE state = ? AND expires_at > ? LIMIT 1",
+                    (LeaseState.ACTIVE.value, self._now()),
+                ).fetchone()
+                is not None
+            ):
+                raise AuthorityStoreError("managed retry lease remains live")
+            if not {stage.stage_name for stage in snapshot.stages}.issubset(
+                stage_names
+            ) or any(
+                stage.status
+                in {
+                    StageStatus.RUNNING,
+                    StageStatus.SUBMITTED,
+                    StageStatus.CANCELLED,
+                }
+                or any(
+                    attempt.status in {StageStatus.RUNNING, StageStatus.SUBMITTED}
+                    for attempt in stage.attempts
+                )
+                for stage in snapshot.stages
+            ):
+                raise AuthorityStoreError("managed retry stage ownership is unresolved")
+            ensure_run_transition(
+                snapshot.status, RunStatus.RUNNING, intent=TransitionIntent.RESUME
+            )
+            reason = LifecycleReason(
+                code="run.explicit_retry", detail={"operation_id": operation_id}
+            )
+            revision = self._next_revision(conn)
+            for stage in snapshot.stages:
+                if stage.status is StageStatus.FAILED:
+                    ensure_stage_transition(
+                        stage.status, StageStatus.STALE, intent=TransitionIntent.RESUME
+                    )
+                    _upsert_stage(
+                        conn,
+                        stage_name=stage.stage_name,
+                        status=StageStatus.STALE,
+                        revision=revision,
+                        reason=reason,
+                    )
+            prior_run_reason = conn.execute(
+                "SELECT reason_json FROM run_state WHERE id = 1"
+            ).fetchone()["reason_json"]
+            conn.execute(
+                "UPDATE run_state SET status = ?, updated_revision_sequence = ?, reason_json = ? WHERE id = 1",
+                (
+                    RunStatus.RUNNING.value,
+                    revision.sequence,
+                    _json_dumps(reason.to_dict()),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                (
+                    key,
+                    _json_dumps(
+                        {
+                            "request": request,
+                            "revision": revision.to_dict(),
+                            "previous_status": snapshot.status.value,
+                            "previous_reason": None
+                            if prior_run_reason is None
+                            else _json_loads(prior_run_reason),
+                            "previous_stages": [
+                                {
+                                    "stage_name": stage.stage_name,
+                                    "status": stage.status.value,
+                                    "reason": None
+                                    if stage.reason is None
+                                    else stage.reason.to_dict(),
+                                }
+                                for stage in snapshot.stages
+                            ],
+                        }
+                    ),
+                ),
+            )
+            return revision
+
     def install_cancellation_epoch(
         self, run_uri: str, request: CancellationEpochRequest
     ) -> CancellationEpochReceipt:

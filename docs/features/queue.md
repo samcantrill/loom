@@ -301,8 +301,17 @@ The supplied role snapshot and composed object are used as-is. Preparation does
 not reread their source files or compose again, so a later environment or source
 change cannot replace the checked composition. Repeating the same run identity
 with identical intent only reads and verifies the existing artifacts before
-returning its receipt. Changed requirements, composition, or partial state
-conflict and remain untouched. `prepare_managed_local_run()` remains the
+returning its receipt. Concurrent calls for the same URI serialize through the
+complete preparation boundary; matching callers return the same receipt. A
+per-run POSIX advisory lock under the canonical run-store root's
+`.loom/preparation-locks/` directory coordinates local processes. Lock files are
+retained to preserve the shared inode; the OS releases ownership when a caller
+exits. These files contain no run intent or lifecycle state and must not be
+removed while callers may be preparing runs. This guarantee requires filesystem
+support for shared POSIX advisory locks and callers using this preparation
+boundary. Changed requirements, composition, or partial/corrupt state conflict
+and remain untouched, including partial state left by a failed or killed writer.
+Waiting callers validate that state once; they do not repair or retry it. `prepare_managed_local_run()` remains the
 embedded-local convenience facade: it resolves its protected inputs and derives
 the local profile requirements before delegating to this owner. SLURM profiles
 and non-embedded authority families remain outside this preparation route.

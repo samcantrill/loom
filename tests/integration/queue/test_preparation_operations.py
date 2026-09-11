@@ -210,6 +210,181 @@ def _request(mode: str = "shared") -> PrepareRunRequest:
     )
 
 
+@pytest.mark.parametrize("restart_after_authority_commit", (False, True))
+def test_prepared_native_failed_admission_explicit_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restart_after_authority_commit: bool,
+) -> None:
+    from weave import compose_config
+    from loom.pipeline.status import StageStatus
+    from loom.pipeline.stores import AuthorityStoreError, LifecycleReason
+    from loom.pipeline.stores.authority import ExecutionFence
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    service = _service(tmp_path)
+    pipeline_path = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(pipeline_path.read_text())
+    stage = authored["pipeline"]["stages"][0]
+    other = {
+        **json.loads(json.dumps(stage)),
+        "name": "other",
+        "depends_on": ["produce"],
+    }
+    authored["pipeline"]["stages"].append(other)
+    stage["factory"]["_target_"] = (
+        "tests.support.pipeline_execution_stages.FailOnceThenProduceStage"
+    )
+    stage["config"] = {"marker_path": str(tmp_path / "failed-once")}
+    pipeline_path.write_text(json.dumps(authored))
+    assert service.daemon.resident_worker_launch_profile is not None
+    profile = ResidentProfileDescriptor.from_dict(
+        service.daemon.resident_worker_launch_profile.descriptor
+    )
+    prepared = prepare_managed_run(
+        service,
+        compose_config(pipeline_path),
+        "retry-target",
+        execution_requirements={
+            name: ExecutionRequirement(
+                profile.project_fingerprint,
+                profile.environment_fingerprint,
+                profile.executor_fingerprint,
+            )
+            for name in ("produce", "other")
+        },
+    )
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon)
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    store = LocalRunStore(service.daemon.run_store_root)
+    authority = SQLitePerRunAuthorityStore(prepared.run_uri)
+    ordinary = LocalDaemonAdmissionRequest("retry-item", prepared.run_uri)
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            admitted = client.submit(ordinary)
+            failed = client.wait("retry-item", timeout_seconds=25)
+            assert failed.state.value == "FAILED", failed
+            snapshot = authority.open_run(prepared.run_uri)
+            first_attempt = next(
+                item for item in snapshot.stages if item.stage_name == "produce"
+            ).attempts[0]
+            assert first_attempt.status is StageStatus.FAILED
+            retained_result = store.read_stage_worker_result(
+                prepared.run_uri, "produce", attempt=1
+            )
+            assert retained_result is not None
+            assert service.daemon.agent_root is not None
+            with sqlite3.connect(
+                uri_to_path(prepared.run_uri) / ".loom" / "authority.sqlite3"
+            ) as conn:
+                first_assignment = conn.execute(
+                    "SELECT assignment_id FROM managed_attempt_bindings WHERE attempt_id = 'produce-1'"
+                ).fetchone()[0]
+            workspace = _ResidentAssignmentWorkspace(
+                service.daemon.agent_root, first_assignment
+            )
+            retained_request = workspace.request()
+            retained_workspace_result = (
+                workspace.root / "worker-result.json"
+            ).read_bytes()
+            assert client.submit(ordinary) == failed
+            with pytest.raises(CoordinatorClientError):
+                client.submit(
+                    LocalDaemonAdmissionRequest(
+                        "retry-item",
+                        prepared.run_uri,
+                        retry_failed_revision=failed.revision + 1,
+                    )
+                )
+            request = LocalDaemonAdmissionRequest(
+                "retry-item",
+                prepared.run_uri,
+                retry_failed_revision=failed.revision,
+            )
+            if restart_after_authority_commit:
+                resume = LocalDaemonExecution.resume_failed_admission
+
+                def interrupted_resume(self, *args, **kwargs):
+                    resume(self, *args, **kwargs)
+                    raise OSError("injected interruption after atomic authority retry")
+
+                monkeypatch.setattr(
+                    LocalDaemonExecution, "resume_failed_admission", interrupted_resume
+                )
+                with pytest.raises(CoordinatorClientError):
+                    client.submit(request)
+                server.stop()
+                daemon.stop()
+                monkeypatch.setattr(
+                    LocalDaemonExecution, "resume_failed_admission", resume
+                )
+                daemon = LocalDaemon(service.daemon)
+                server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+                daemon.start()
+                server.start()
+
+        def submit_retry():
+            with CoordinatorClient.from_unix_socket(
+                service.daemon.endpoint
+            ) as concurrent:
+                return concurrent.submit(request)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replies = list(pool.map(lambda _: submit_retry(), range(2)))
+        assert {item.admission_id for item in replies} == {admitted.admission_id}
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            try:
+                completed = client.wait("retry-item", timeout_seconds=25)
+            except TimeoutError:
+                daemon.reconcile_once()
+                raise
+            assert completed.state.value == "SUCCEEDED", (
+                completed,
+                daemon._service_error,
+            )
+            assert client.submit(request) == completed
+            assert client.submit(ordinary) == completed
+        final = authority.open_run(prepared.run_uri)
+        final_stages = {item.stage_name: item for item in final.stages}
+        assert [attempt.attempt for attempt in final_stages["produce"].attempts] == [
+            1,
+            2,
+        ]
+        assert final_stages["produce"].attempts[0] == first_attempt
+        assert len(final_stages["other"].attempts) == 1
+        assert final_stages["other"].status is StageStatus.SUCCEEDED
+        assert workspace.request() == retained_request
+        assert (
+            workspace.root / "worker-result.json"
+        ).read_bytes() == retained_workspace_result
+        assert (
+            store.read_stage_worker_result(prepared.run_uri, "produce", attempt=2)
+            is not None
+        )
+        with sqlite3.connect(
+            uri_to_path(prepared.run_uri) / ".loom" / "authority.sqlite3"
+        ) as conn:
+            rows = conn.execute(
+                "SELECT assignment_id, attempt_id, fence FROM managed_attempt_bindings WHERE attempt_id LIKE 'produce-%' ORDER BY attempt_id"
+            ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][2] != rows[1][2]
+        with pytest.raises(AuthorityStoreError, match="terminal result conflicts"):
+            authority.record_managed_attempt_terminal(
+                prepared.run_uri,
+                fence=ExecutionFence(*rows[0]),
+                status=StageStatus.CANCELLED,
+                reason=LifecycleReason(code="worker.cancelled"),
+            )
+    finally:
+        server.stop()
+        daemon.stop()
+
+
 def _cli_result(*arguments: str, expected_exit: int = 0):
     stdout, stderr = io.StringIO(), io.StringIO()
     code = main(["queue", *arguments, "--format", "json"], stdout=stdout, stderr=stderr)

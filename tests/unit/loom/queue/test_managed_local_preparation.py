@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+from multiprocessing.connection import Connection
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -25,6 +28,156 @@ from weave import RecipeCatalog, compose_config, compose_config_with_catalog
 
 
 pytestmark = pytest.mark.unit
+
+
+def _prepare_in_process(
+    coordinator: Path,
+    pipeline: Path,
+    connection: Connection,
+    *,
+    pause: bool,
+    fail: bool = False,
+    changed: bool = False,
+) -> None:
+    from loom.queue import managed_local_preparation as preparation
+
+    service = load_coordinator_service_config(coordinator)
+    composed = compose_config(pipeline)
+    requirements = {
+        "produce": ExecutionRequirement(
+            "project-1", "environment-2" if changed else "environment-1", "executor-1"
+        )
+    }
+    persist = preparation._persist_composed_config
+
+    def paused_persist(store: LocalRunStore, run_uri: str, composed: object) -> None:
+        persist(store, run_uri, composed)
+        connection.send("partial")
+        assert connection.recv() == "continue"
+        if fail:
+            raise OSError("injected preparation write failure")
+
+    connection.send("ready")
+    try:
+        with patch.object(
+            preparation, "_persist_composed_config", paused_persist if pause else persist
+        ):
+            receipt = prepare_managed_run(
+                service, composed, "concurrent", execution_requirements=requirements
+            )
+        connection.send(("ok", receipt.to_dict()))
+    except Exception as exc:
+        connection.send((type(exc).__name__, str(exc)))
+    finally:
+        connection.close()
+
+
+def _run_files(root: Path) -> dict[Path, tuple[bytes, int, int]]:
+    return {
+        item.relative_to(root): (
+            item.read_bytes(), item.stat().st_mtime_ns, item.stat().st_ctime_ns
+        )
+        for item in root.rglob("*") if item.is_file()
+    }
+
+
+@pytest.mark.parametrize("outcome", ["complete", "changed", "failure", "killed"])
+def test_concurrent_fresh_preparation_serializes_and_preserves_conflicts(
+    tmp_path: Path, outcome: str
+) -> None:
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    context = multiprocessing.get_context("spawn")
+    first_parent, first_child = context.Pipe()
+    second_parent, second_child = context.Pipe()
+    first = context.Process(
+        target=_prepare_in_process,
+        args=(coordinator, pipeline, first_child),
+        kwargs={"pause": True, "fail": outcome == "failure"},
+    )
+    second = context.Process(
+        target=_prepare_in_process,
+        args=(coordinator, pipeline, second_child),
+        kwargs={"pause": False, "changed": outcome == "changed"},
+    )
+    run_dir = tmp_path / "runs" / "concurrent"
+    first_result = None
+    try:
+        first.start()
+        first_child.close()
+        assert first_parent.poll(20)
+        assert first_parent.recv() == "ready"
+        assert first_parent.poll(20)
+        assert first_parent.recv() == "partial"
+        partial = _run_files(run_dir)
+        second.start()
+        second_child.close()
+        assert second_parent.poll(20)
+        assert second_parent.recv() == "ready"
+        # The contender must wait for the live writer, not reject its partial run.
+        assert not second_parent.poll(0.3)
+        if outcome == "killed":
+            first.terminate()
+            first.join(20)
+            assert not first.is_alive()
+        else:
+            first_parent.send("continue")
+            assert first_parent.poll(20)
+            first_result = first_parent.recv()
+            assert first_result[0] == ("OSError" if outcome == "failure" else "ok")
+        assert second_parent.poll(20)
+        second_result = second_parent.recv()
+        if outcome == "complete":
+            assert first_result is not None
+            assert second_result == first_result
+        else:
+            assert second_result[0] == "QueueConflictError"
+            assert "existing partial, corrupt, or changed" in second_result[1]
+        if outcome in {"failure", "killed"}:
+            assert _run_files(run_dir) == partial
+            with pytest.raises(QueueConflictError):
+                prepare_managed_run(
+                    load_coordinator_service_config(coordinator), compose_config(pipeline),
+                    "concurrent", execution_requirements={
+                        "produce": ExecutionRequirement("project-1", "environment-1", "executor-1")
+                    },
+                )
+            assert _run_files(run_dir) == partial
+        else:
+            assert first_result is not None
+            complete = _run_files(run_dir)
+            replay = prepare_managed_run(
+                load_coordinator_service_config(coordinator), compose_config(pipeline),
+                "concurrent", execution_requirements={
+                    "produce": ExecutionRequirement("project-1", "environment-1", "executor-1")
+                },
+            )
+            assert replay.to_dict() == first_result[1]
+            assert _run_files(run_dir) == complete
+        for process in (first, second):
+            process.join(20)
+            assert not process.is_alive()
+        assert second.exitcode == 0
+        assert first.exitcode == (-15 if outcome == "killed" else 0)
+    finally:
+        for process in (first, second):
+            if process.pid is not None and process.is_alive():
+                process.terminate()
+                process.join(20)
+        for connection in (first_parent, first_child, second_parent, second_child):
+            connection.close()
+
+
+def test_corrupt_completed_preparation_is_not_repaired(tmp_path: Path) -> None:
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    receipt = prepare_managed_local_run(coordinator, pipeline, "corrupt")
+    run_dir = LocalRunStore(tmp_path / "runs").local_run_dir(receipt.run_uri)
+    (run_dir / "config" / "managed_local_runtime.json").write_text("not json")
+    before = _run_files(run_dir)
+    with pytest.raises(QueueConflictError, match="existing partial, corrupt, or changed"):
+        prepare_managed_local_run(coordinator, pipeline, "corrupt")
+    assert _run_files(run_dir) == before
 
 
 def test_checked_stateful_recipe_is_published_and_replayed_without_recomposition(

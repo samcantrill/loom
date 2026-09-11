@@ -93,6 +93,22 @@ run URI. Admission `ACTIVE` means admitted work; use native owner projections
 to determine actual execution. Agent availability observes capacity and does
 not reserve a worker.
 
+Ordinary `submit` replay observes the same admission, including terminal failure.
+For an explicit retry of a prepared run using embedded authority, submit
+`LocalDaemonAdmissionRequest(queue_item_id, run_uri,
+retry_failed_revision=failed_admission.revision)`. The revision must identify
+the observed `FAILED` admission. The coordinator requires unchanged intent and
+released assignments; authority rejects cancellation, live fences or leases,
+and conflicting revisions. Unavailable authority cannot authorize a retry.
+The same failed revision authorizes at most one continuation, including
+concurrent requests, lost replies and coordinator restart. Replaying that request
+later observes the admission; a later failure requires its own observed revision.
+
+The existing orchestrator prepares the next actual stage attempt. Completed
+stages and prior attempts, worker evidence and fences remain retained. This is
+an explicit lifecycle continuation, with no checkpoint or output selection.
+Authenticated remote authority does not currently offer this retry capability.
+
 ## Python Operations
 
 Every method accepts optional keyword `expected_coordinator_id`. Successful

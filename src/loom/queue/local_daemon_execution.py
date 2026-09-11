@@ -98,6 +98,7 @@ from loom.pipeline.stores import (
 )
 from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
+    BackendRevision,
     LifecycleReason,
     ReliabilityPolicyFact,
     ReliabilityPolicyScope,
@@ -1805,6 +1806,62 @@ class LocalDaemonExecution:
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
         )
         return intent, scoped_authority
+
+    def validate_admission_retry(
+        self, admission: LocalDaemonAdmission
+    ) -> AuthoritativeRunSnapshot:
+        """Require available, released owners before recording retry intent."""
+        from .coordinator_authority import ManagedAdmissionRetryAuthority
+
+        _intent, authority = self._admission_context(admission)
+        if not isinstance(
+            self._authority_store(admission.run_uri), ManagedAdmissionRetryAuthority
+        ):
+            raise QueueServiceError("managed admission retry authority is unavailable")
+        if self.coordinator.list_run_live_states(
+            admission.run_uri
+        ) or self.local_assignment_reconciliation_pending(admission.run_uri):
+            raise QueueConflictError(
+                "managed admission retry requires released assignments"
+            )
+        snapshot = authority.open_run(admission.run_uri)
+        if snapshot.status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+            raise QueueConflictError(
+                "managed admission retry requires failed authority state"
+            )
+        return snapshot
+
+    def resume_failed_admission(
+        self,
+        admission: LocalDaemonAdmission,
+        *,
+        operation_id: str,
+        expected_revision: BackendRevision,
+    ) -> None:
+        from .coordinator_authority import ManagedAdmissionRetryAuthority
+
+        intent, _scoped = self._admission_context(admission)
+        authority = self._authority_store(admission.run_uri)
+        if not isinstance(authority, ManagedAdmissionRetryAuthority):
+            raise QueueServiceError("managed admission retry authority is unavailable")
+        if self.coordinator.list_run_live_states(
+            admission.run_uri
+        ) or self.local_assignment_reconciliation_pending(admission.run_uri):
+            raise QueueConflictError(
+                "managed admission retry requires released assignments"
+            )
+        authority.resume_failed_admission(
+            admission.run_uri,
+            admission=CoordinatorAdmissionRequest(
+                operation_id=admission.authority_operation_id,
+                coordinator_id=self.coordinator_id,
+                run_uri=admission.run_uri,
+                intent_digest=admission.intent_digest,
+            ),
+            operation_id=operation_id,
+            expected_revision=expected_revision,
+            stage_names=intent.plan.stage_order,
+        )
 
     def reconcile_admission(
         self, admission: LocalDaemonAdmission
@@ -4802,11 +4859,35 @@ class LocalDaemonExecution:
         )
         produced = _produced_outputs(snapshot)
         runtime = _worker_runtime(intent, record.stage_name)
+        projected_status = self.run_store.read_stage_status(
+            record.run_uri, record.stage_name
+        )
+        projected_attempt = (
+            record.attempt if projected_status is None else projected_status.attempt
+        )
         raw_worker_request = self.run_store.read_stage_worker_request(
             record.run_uri,
             record.stage_name,
-            attempt=record.attempt,
+            attempt=projected_attempt,
         )
+        if raw_worker_request is not None and projected_attempt != record.attempt:
+            # The run-store document projects the last attempt. The authority
+            # has already prepared the successor; prior immutable execution
+            # evidence remains with its released assignment workspace.
+            prior_failed = any(
+                attempt.attempt == projected_attempt
+                and attempt.status is StageStatus.FAILED
+                for stage_fact in snapshot.stages
+                if stage_fact.stage_name == record.stage_name
+                for attempt in stage_fact.attempts
+            )
+            if (
+                projected_status is None
+                or not prior_failed
+                or projected_attempt + 1 != record.attempt
+            ):
+                raise QueueConflictError("managed retry worker projection conflicts")
+            raw_worker_request = None
         worker_request = (
             StageWorkerRequest.from_dict(raw_worker_request)
             if raw_worker_request is not None
