@@ -483,7 +483,21 @@ class AgentProcessSupervisor:
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         receipt = self.query(launch)
         child = self._children.get(launch.launch_operation_id)
-        if receipt.state is SupervisorLaunchState.CONTAINED or child is None:
+        if receipt.state is SupervisorLaunchState.CONTAINED:
+            result = launch.workspace_root / "worker-result.json"
+            if receipt.worker_result_digest is None and result.is_file():
+                # The parent may repair a missing result after containment. Bind
+                # those bytes once, but they cannot prove worker success.
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE launches SET result_digest = ?, successful_exit = 0, revision = revision + 1 "
+                        "WHERE operation_id = ? AND result_digest IS NULL",
+                        (_file_digest(result), launch.launch_operation_id),
+                    )
+                    conn.commit()
+                return self.query(launch)
+            return receipt
+        if child is None:
             return receipt
         successful_exit = child.successful_exit()
         try:

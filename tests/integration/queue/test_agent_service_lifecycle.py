@@ -341,7 +341,10 @@ def test_remote_worker_loss_commits_failure_and_releases_after_containment(
     _kill_worker(work, launch)
     if restart_before_loss:
         # Exercise repair of a previously observed contained/missing-result state.
-        assert work.supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+        contained = work.supervisor.contain(launch)
+        assert contained.state is SupervisorLaunchState.CONTAINED
+        assert contained.worker_result_digest is None
+        assert not contained.successful_exit
         work.start_agent()
     _wait_until(
         lambda: work.authority.open_run(work.run_uri).status is RunStatus.FAILED
@@ -357,6 +360,9 @@ def test_remote_worker_loss_commits_failure_and_releases_after_containment(
     result = json.loads((launch.workspace_root / "worker-result.json").read_text())
     assert result["failure"]["failure_type"] == "executor_infrastructure"
     assert result["failure"]["signal"] == signal.SIGKILL
+    contained = work.supervisor.query(launch)
+    assert contained.worker_result_digest is not None
+    assert not contained.successful_exit
     assert work.launches() == (launch,)
     assert all(service.errors == [] for service in work.services)
 
