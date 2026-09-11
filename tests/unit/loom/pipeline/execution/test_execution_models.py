@@ -557,7 +557,7 @@ def test_public_worker_request_hides_execution_paths_without_changing_private_ha
 ):
     request = _worker_request()
     private = request.to_dict()
-    public = request.to_safe_metadata()
+    public = cast(dict[str, Any], request.to_safe_metadata())
     assert "/tmp/run" in json.dumps(private)
     assert "/tmp/run" not in json.dumps(public)
     assert public["executor_name"] == "local"
@@ -594,7 +594,7 @@ def test_public_executor_view_preserves_route_facts_but_not_raw_process_channels
         "stdout": "unstructured private output",
         "stderr": "a private credential without a recognizable key",
     }
-    safe = redact_executor_metadata(metadata, public=True)
+    safe = cast(dict[str, Any], redact_executor_metadata(metadata, public=True))
     encoded = json.dumps(safe)
     for private in (
         "/private/data",
@@ -642,10 +642,12 @@ def test_public_worker_failure_keeps_typed_outcome_without_exception_text() -> N
         ),
         exit_code=7,
     )
-    safe = result.to_safe_metadata()
+    safe = cast(dict[str, Any], result.to_safe_metadata())
     assert safe["status"] == StageStatus.FAILED.value
     assert safe["failure"]["failure_type"] == "stage_exception"
     assert safe["failure"]["exception_type"] == "builtins.ValueError"
     assert safe["exit_code"] == 7
     assert "private" not in json.dumps(safe)
-    assert "private value" in result.to_dict()["failure"]["message"]
+    assert (
+        "private value" in cast(dict[str, Any], result.to_dict()["failure"])["message"]
+    )

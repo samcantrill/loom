@@ -451,4 +451,15 @@ root versions remain as approved. Existing full receipts remain evidence for the
 original Phase 3 tree; affected preparation, assignment, native transport and
 execution-model consumers plus static/package checks qualify this merge before
 independent review. This is published-base synchronization, not a new product
-blocker correction or a reset of the 3/3 budget. Reconciliation checks are pending.
+blocker correction or a reset of the 3/3 budget. Reconciliation runtime checks
+started at clean merge `c599bfa385ac982dc938212fa0f5c2c8866cd621` and remain pending.
+
+Full Pyright on that merge exposed 338 errors in eight upstream-added test
+sections that index nested PlainData/object metadata without narrowing. Source
+checks were clean. Localized typing corrections add casts and two test-local
+aliases; assertions, exercised values and production code are unchanged. Full
+Ruff/Pyright now pass with zero errors/warnings at that correction tree
+(/tmp/loom-stage40-p3-published-base-static-corrected.log). These typing-only
+changes do not invalidate the runtime assertions in the already-running merge
+qualification. They are a published-base validation repair, not another product
+blocker or a weakening of the static gate.

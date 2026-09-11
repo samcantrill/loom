@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 from threading import Event
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -390,7 +390,7 @@ def test_ready_stage_container_receipt_redacts_absolute_owner_paths() -> None:
     assert request.container_metadata is not None
     receipt = stable_json_dumps(request.container_metadata)
     assert "/private/owner" not in receipt
-    command = request.container_metadata["container_command"]
+    command = cast(dict[str, Any], request.container_metadata["container_command"])
     assert command["command"] == "[redacted-path]"
     container = command["container"]
     assert container["image"] == "[redacted-path]"
