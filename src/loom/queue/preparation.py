@@ -24,7 +24,7 @@ from uuid import uuid4
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest, hash_mapping, validate_digest
 from loom.io.uris import path_to_file_uri
-from loom.serialization import PlainData, stable_json_bytes
+from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 
 from .errors import QueueServiceError
 from .models import validate_queue_id
@@ -239,11 +239,14 @@ class StagedInputReceipt:
         if (
             set(data) != {"mode", "manifest_digest", "reference"}
             or data.get("mode") != "staged"
-            or not isinstance(reference, dict)
+            or not isinstance(reference, Mapping)
         ):
             raise QueueServiceError("preparation staged input receipt is invalid")
         try:
-            artifact = ArtifactRef.from_dict(reference)
+            normalized = thaw_plain_data(reference)
+            if not isinstance(normalized, dict):
+                raise ValueError("preparation staged input reference is not a mapping")
+            artifact = ArtifactRef.from_dict(normalized)
         except Exception as exc:
             raise QueueServiceError(
                 "preparation staged input receipt is invalid"
@@ -252,6 +255,15 @@ class StagedInputReceipt:
 
 
 PreparationInputReceipt = SharedInputReceipt | StagedInputReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedSource:
+    project: Path
+    files: Mapping[str, os.stat_result]
+    contents: Mapping[str, bytes]
+    manifest: Mapping[str, PlainData]
+    digest: str
 
 
 def input_receipt_from_dict(data: Mapping[str, object]) -> PreparationInputReceipt:
@@ -327,6 +339,59 @@ class PreparationChildInput:
         )
 
 
+def _capture_selected_source(
+    request: PrepareRunRequest, source_root: Path
+) -> _CapturedSource:
+    """Read the existing finite selection once and build its native manifest."""
+    project = _contained_path(source_root.absolute(), request.source.path)
+    _require_directory(project)
+    files = _selected_files(project, request.source.include)
+    if request.config_path not in files:
+        raise QueueServiceError("preparation config_path is not included")
+    manifest: list[PlainData] = []
+    contents: dict[str, bytes] = {}
+    total = 0
+    for relative, details in sorted(files.items()):
+        data = _read_regular_file(
+            project, relative, _MAX_BYTES - total, expected=details
+        )
+        total += len(data)
+        contents[relative] = data
+        manifest.append(
+            {
+                "path": relative,
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    encoded: dict[str, PlainData] = {"schema_version": 1, "files": manifest}
+    return _CapturedSource(project, files, contents, encoded, hash_mapping(encoded))
+
+
+def _verify_source_unchanged(
+    request: PrepareRunRequest, captured: _CapturedSource
+) -> None:
+    """Refuse publication when the selected authoring closure changed mid-capture."""
+    try:
+        if _file_identities(
+            _selected_files(captured.project, request.source.include)
+        ) != _file_identities(captured.files):
+            raise QueueServiceError("preparation source_changed")
+        for relative, original in captured.contents.items():
+            if (
+                _read_regular_file(
+                    captured.project,
+                    relative,
+                    len(original),
+                    expected=captured.files[relative],
+                )
+                != original
+            ):
+                raise QueueServiceError("preparation source_changed")
+    except (OSError, QueueServiceError) as exc:
+        raise QueueServiceError("preparation source_changed") from exc
+
+
 def capture_shared_input(
     request: PrepareRunRequest,
     *,
@@ -345,30 +410,8 @@ def capture_shared_input(
         raise QueueServiceError("staged preparation input is unsupported")
     staging: Path | None = None
     try:
-        root = source_root.absolute()
-        project = _contained_path(root, request.source.path)
-        _require_directory(project)
-        files = _selected_files(project, request.source.include)
-        if request.config_path not in files:
-            raise QueueServiceError("preparation config_path is not included")
-        manifest: list[PlainData] = []
-        contents: dict[str, bytes] = {}
-        total = 0
-        for rel, details in sorted(files.items()):
-            data = _read_regular_file(
-                project, rel, _MAX_BYTES - total, expected=details
-            )
-            total += len(data)
-            contents[rel] = data
-            manifest.append(
-                {
-                    "path": rel,
-                    "size_bytes": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                }
-            )
-        encoded: dict[str, PlainData] = {"schema_version": 1, "files": manifest}
-        digest = hash_mapping(encoded)
+        capture = _capture_selected_source(request, source_root)
+        digest = capture.digest
         # IDs keep their native syntax; directory names are bounded independently.
         operation_key = _capture_operation_key(request.operation_id, owner_id)
         relative = f"{operation_key}-{digest.removeprefix('sha256:')}"
@@ -383,26 +426,12 @@ def capture_shared_input(
         staging.mkdir()
         captured = staging / "files"
         captured.mkdir()
-        for rel, data in contents.items():
+        for rel, data in capture.contents.items():
             output = captured / rel
             output.parent.mkdir(parents=True, exist_ok=True)
             _write_durable(output, data)
-        # Re-enumeration detects added/removed files as well as replaced/edited
-        # members, including changes to files read earlier in the capture.
-        try:
-            if _file_identities(
-                _selected_files(project, request.source.include)
-            ) != _file_identities(files):
-                raise QueueServiceError("preparation source_changed")
-            for rel, original in contents.items():
-                if (
-                    _read_regular_file(project, rel, len(original), expected=files[rel])
-                    != original
-                ):
-                    raise QueueServiceError("preparation source_changed")
-        except (OSError, QueueServiceError) as exc:
-            raise QueueServiceError("preparation source_changed") from exc
-        _write_durable(staging / "manifest.json", stable_json_bytes(encoded))
+        _verify_source_unchanged(request, capture)
+        _write_durable(staging / "manifest.json", stable_json_bytes(capture.manifest))
         _verify_capture(staging, digest)
         for directory, _, _ in os.walk(staging, topdown=False):
             _sync_directory(Path(directory))
@@ -440,30 +469,8 @@ def capture_staged_input(
         raise QueueServiceError("shared preparation input is not a staged capture")
     staging: Path | None = None
     try:
-        root = source_root.absolute()
-        project = _contained_path(root, request.source.path)
-        _require_directory(project)
-        files = _selected_files(project, request.source.include)
-        if request.config_path not in files:
-            raise QueueServiceError("preparation config_path is not included")
-        manifest: list[PlainData] = []
-        contents: dict[str, bytes] = {}
-        total = 0
-        for relative, details in sorted(files.items()):
-            data = _read_regular_file(
-                project, relative, _MAX_BYTES - total, expected=details
-            )
-            total += len(data)
-            contents[relative] = data
-            manifest.append(
-                {
-                    "path": relative,
-                    "size_bytes": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                }
-            )
-        encoded: dict[str, PlainData] = {"schema_version": 1, "files": manifest}
-        digest = hash_mapping(encoded)
+        capture = _capture_selected_source(request, source_root)
+        digest = capture.digest
         operation_key = _capture_operation_key(request.operation_id, owner_id)
         relative = f"{operation_key}-{digest.removeprefix('sha256:')}.tar"
         artifact_root = artifact_root.absolute()
@@ -474,22 +481,9 @@ def capture_staged_input(
             _verify_staged_archive(destination, digest, artifact_root)
             return _staged_archive_receipt(destination, digest, operation_key)
         staging = artifact_root / f".{operation_key}.tmp-{uuid4().hex}.tar"
-        _write_staged_archive(staging, encoded, contents)
-        try:
-            if _file_identities(
-                _selected_files(project, request.source.include)
-            ) != _file_identities(files):
-                raise QueueServiceError("preparation source_changed")
-            for relative, original in contents.items():
-                if (
-                    _read_regular_file(
-                        project, relative, len(original), expected=files[relative]
-                    )
-                    != original
-                ):
-                    raise QueueServiceError("preparation source_changed")
-        except (OSError, QueueServiceError) as exc:
-            raise QueueServiceError("preparation source_changed") from exc
+        _write_staged_archive(staging, capture.manifest, capture.contents)
+        _require_staged_archive_within_transfer_limit(staging)
+        _verify_source_unchanged(request, capture)
         try:
             staging.rename(destination)
         except FileExistsError:
@@ -539,7 +533,7 @@ def resolve_staged_input(
     if not isinstance(receipt, StagedInputReceipt):
         raise QueueServiceError("preparation staged input receipt is invalid")
     try:
-        _require_regular_file(archive_path)
+        _require_staged_archive_within_transfer_limit(archive_path)
         _verify_archive_checksum(archive_path, receipt.reference.checksum)
         workspace_root = workspace_root.absolute()
         _require_directory(workspace_root)
@@ -612,7 +606,7 @@ def _add_archive_member(archive: tarfile.TarFile, name: str, data: bytes) -> Non
 
 def _verify_staged_archive(path: Path, digest: str, artifact_root: Path) -> None:
     """Check an existing published archive before reusing its deterministic name."""
-    _require_regular_file(path)
+    _require_staged_archive_within_transfer_limit(path)
     staging = artifact_root / f".verify-staged-input-{uuid4().hex}"
     staging.mkdir()
     try:
@@ -690,6 +684,12 @@ def _require_regular_file(path: Path) -> None:
     details = path.lstat()
     if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
         raise QueueServiceError("preparation staged archive must be a regular file")
+
+
+def _require_staged_archive_within_transfer_limit(path: Path) -> None:
+    _require_regular_file(path)
+    if path.stat().st_size > _MAX_BYTES:
+        raise QueueServiceError("preparation input_limit_exceeded")
 
 
 def _file_checksum(path: Path) -> str:

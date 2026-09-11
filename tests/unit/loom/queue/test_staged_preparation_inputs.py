@@ -24,6 +24,7 @@ from loom.queue.preparation import (
     input_receipt_from_dict,
     resolve_staged_input,
 )
+from loom.serialization import freeze_plain_data
 
 
 def _request() -> PrepareRunRequest:
@@ -88,6 +89,45 @@ def test_staged_capture_commits_a_native_receipt_and_child_union(
         ).to_dict(),
     )
     assert PreparationChildInput.from_dict(binding.to_dict()) == binding
+    assert (
+        PreparationChildInput.from_dict(freeze_plain_data(binding.to_dict())) == binding
+    )
+
+
+def test_staged_capture_rejects_archive_padding_above_transfer_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _source(tmp_path, content=b"x")
+    artifact_root = tmp_path / "artifacts"
+    # A tar has fixed block padding, so its transport size can exceed its selected
+    # content size without needing a large fixture.
+    monkeypatch.setattr(inputs, "_MAX_BYTES", 4096)
+    with pytest.raises(QueueServiceError, match="input_limit_exceeded"):
+        capture_staged_input(
+            _request(),
+            source_root=root,
+            artifact_root=artifact_root,
+            owner_id="coordinator-a",
+        )
+    assert not tuple(artifact_root.iterdir())
+
+
+def test_staged_capture_replay_rejects_existing_oversized_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt = _receipt(tmp_path, content=b"x")
+    root = tmp_path / "projects"
+    artifact_root = tmp_path / "artifacts"
+    archive = uri_to_path(receipt.reference.uri)
+    monkeypatch.setattr(inputs, "_MAX_BYTES", 4096)
+    with pytest.raises(QueueServiceError, match="input_limit_exceeded"):
+        capture_staged_input(
+            _request(),
+            source_root=root,
+            artifact_root=artifact_root,
+            owner_id="coordinator-a",
+        )
+    assert tuple(artifact_root.iterdir()) == (archive,)
 
 
 def test_staged_capture_detects_source_change_before_publishing(
