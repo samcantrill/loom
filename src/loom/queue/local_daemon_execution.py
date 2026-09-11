@@ -5158,6 +5158,8 @@ class LocalDaemonExecution:
         run_uri: str,
         report: _RemoteExecutionReport,
         outputs: Mapping[str, ArtifactRef],
+        *,
+        container_metadata: Mapping[str, PlainData] | None = None,
     ) -> None:
         if report.schema_version == 1:
             return
@@ -5166,6 +5168,8 @@ class LocalDaemonExecution:
             metadata["resource_controls"] = [
                 dict(item) for item in report.resource_controls
             ]
+        if container_metadata is not None:
+            metadata["container"] = dict(container_metadata)
         failure = (
             None if report.failure is None else replace(report.failure, run_uri=run_uri)
         )
@@ -5488,7 +5492,17 @@ class LocalDaemonExecution:
                     },
                 ),
             )
-        self._persist_remote_report_result(record.assignment.run_uri, report, outputs)
+        container_metadata = record.request.get("container_metadata")
+        self._persist_remote_report_result(
+            record.assignment.run_uri,
+            report,
+            outputs,
+            container_metadata=(
+                cast(Mapping[str, PlainData], container_metadata)
+                if isinstance(container_metadata, Mapping)
+                else None
+            ),
+        )
         self.slurm_assignments.mark_terminal(assignment_id)
 
     def slurm_release(

@@ -51,6 +51,7 @@ def _profile(
     available: bool = True,
     cluster: str | None = "cluster-a",
     provider: SlurmJobPrivateFileProvider | None = None,
+    container_options: dict[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
         profile_id="training",
@@ -71,9 +72,26 @@ def _profile(
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
+        container_options=container_options,
         cluster=cluster,
         available=available,
     )
+
+
+def _ready_container_options() -> dict[str, object]:
+    return {
+        "image": {"reference": "analysis.sif"},
+        "mounts": [
+            {
+                "source": "/tmp/loom-unit-capability",
+                "target": "/tmp/loom-unit-capability",
+                "mode": "rw",
+            }
+        ],
+        "environment": {
+            "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"],
+        },
+    }
 
 
 def _request(profile: SlurmReadyStageProfile):  # type: ignore[no-untyped-def]
@@ -117,6 +135,9 @@ def test_ready_stage_script_is_fixed_safe_and_deterministic() -> None:
     assert "runs/example" not in request.script
     assert profile.credential_reference not in request.script
     assert "capability" not in request.script
+    assert request.schema_version == 3
+    assert request.container_metadata is None
+    assert type(request).from_dict(request.to_dict()) == request
 
     with pytest.raises(SlurmPlanningError, match="fixed Loom bootstrap"):
         SlurmReadyStageProfile(
@@ -138,6 +159,89 @@ def test_ready_stage_script_is_fixed_safe_and_deterministic() -> None:
                 helper_argv=_TEST_HELPER,
             ),
         )
+
+
+def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receipt(
+    tmp_path: Path,
+) -> None:
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, container_options=_ready_container_options())
+    request = _request(profile)
+    replay = _request(profile)
+
+    assert request == replay
+    assert request.schema_version == 4
+    assert request.container_metadata is not None
+    assert "exec 'apptainer' 'exec' '--cleanenv'" in request.script
+    assert "'analysis.sif' 'loom' 'slurm-bootstrap'" in request.script
+    assert '"${LOOM_SLURM_BOOTSTRAP_CONFIG:?ready-stage container bootstrap config is unavailable}"' in request.script
+    assert "export APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG" in request.script
+    assert "/tmp/loom-unit-capability" not in repr(request.container_metadata)
+    assert request.container_metadata["container_runtime"] == "apptainer"
+    assert request.container_metadata["bootstrap_environment"] == (
+        "LOOM_SLURM_BOOTSTRAP_CONFIG"
+    )
+    assert type(request).from_dict(request.to_dict()) == request
+
+    changed = _profile(
+        FakeSlurmCommandRunner(),
+        container_options={
+            **_ready_container_options(),
+            "image": {"reference": "analysis-next.sif"},
+        },
+    )
+    assert changed.configuration_fingerprint != profile.configuration_fingerprint
+    assert _request(changed).digest != request.digest
+
+    accepted = SQLiteReadyStageSubmissions(tmp_path / "submissions.sqlite").submit(
+        request, profile, _script(tmp_path, request)
+    )
+    assert accepted.state is ReadyStageState.ACCEPTED
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("container_options", "message"),
+    [
+        (
+            {"image": {"reference": "analysis.sif"}},
+            "bootstrap config environment",
+        ),
+        (
+            {
+                "image": {"reference": "analysis.sif"},
+                "environment": {
+                    "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]
+                },
+            },
+            "writable capability path",
+        ),
+        (
+            {
+                "image": {"reference": "analysis.sif"},
+                "mounts": [
+                    {
+                        "source": "/tmp/loom-unit-capability",
+                        "target": "/tmp/loom-unit-capability",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "variables": {
+                        "LOOM_SLURM_BOOTSTRAP_CONFIG": "/private/bootstrap.json"
+                    },
+                    "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"],
+                },
+            },
+            "cannot persist",
+        ),
+    ],
+)
+def test_ready_stage_container_rejects_missing_or_persisted_bootstrap_delivery(
+    container_options: dict[str, object], message: str
+) -> None:
+    with pytest.raises(SlurmPlanningError, match=message):
+        _profile(FakeSlurmCommandRunner(), container_options=container_options)
 
 
 def test_job_private_provider_requires_a_concrete_site_helper() -> None:

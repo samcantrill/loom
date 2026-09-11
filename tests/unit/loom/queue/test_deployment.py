@@ -1086,6 +1086,19 @@ def test_coordinator_config_constructs_complete_protected_composition(
                 "descriptor": "test-prolog-v1",
                 "helper_argv": ["/bin/true"],
             },
+            "container_options": {
+                "image": {"reference": "analysis.sif"},
+                "mounts": [
+                    {
+                        "source": "/run/loom/capability",
+                        "target": "/run/loom/capability",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]
+                },
+            },
         }
     ]
 
@@ -1105,6 +1118,8 @@ def test_coordinator_config_constructs_complete_protected_composition(
     assert isinstance(profile.runner, FakeSlurmCommandRunner)
     assert isinstance(profile.job_private_file_provider, SlurmJobPrivateFileProvider)
     assert profile.bootstrap_argv == ("loom", "slurm-bootstrap")
+    assert profile.container_options is not None
+    assert profile.apptainer_options is not None
 
 
 def test_https_authority_schema_resolves_tls_and_service_scope(

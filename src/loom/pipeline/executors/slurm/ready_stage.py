@@ -12,9 +12,22 @@ from pathlib import Path
 import sqlite3
 from typing import cast
 
+from loom.pipeline.executors.apptainer import ApptainerExecOptions
+from loom.pipeline.executors.containers import (
+    ContainerMount,
+    ContainerMountMode,
+    ContainerOptions,
+    ContainerEnvironment,
+    parse_container_options,
+)
 from loom.pipeline.runtime.placement import ExecutionRouteKind, ResolvedStagePlacement
 from loom.scheduling import SchedulingComponentDescriptor
-from loom.serialization import PlainData, stable_json_dumps
+from loom.serialization import (
+    PlainData,
+    freeze_plain_data,
+    stable_json_dumps,
+    thaw_plain_data,
+)
 from loom.timestamps import utc_timestamp
 
 from .commands import (
@@ -23,16 +36,20 @@ from .commands import (
     parse_sbatch_parsable_output,
 )
 from .errors import SlurmPlanningError, SlurmResourceMappingError
+from .container import wrap_slurm_command_with_apptainer
+from .options import SlurmCommandArgv
 from .rendering import render_sbatch_directive
 from .resources import SlurmSbatchDirective, map_slurm_resources
 
 
-READY_STAGE_REQUEST_SCHEMA_VERSION = 3
+READY_STAGE_REQUEST_SCHEMA_VERSION = 4
+_RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION = 3
 READY_STAGE_SUBMISSION_SCHEMA_VERSION = 3
 _HELPER_ENVELOPE_VERSION = 2
 _PROFILE_IMPLEMENTATION_FINGERPRINT = "loom.slurm.ready-stage-profile.v1"
 _OPERATION_MARKER_PREFIX = "loom-op-v1:"
 _SUBMISSION_TABLE = "ready_stage_submissions"
+_SLURM_BOOTSTRAP_CONFIG_ENV = "LOOM_SLURM_BOOTSTRAP_CONFIG"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +349,8 @@ class SlurmReadyStageProfile:
     environment_fingerprint: str
     executor_fingerprint: str
     job_private_file_provider: SlurmJobPrivateFileProvider
+    container_options: ContainerOptions | Mapping[str, object] | None = None
+    apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None
     executor_name: str = "local"
     credential_policy_revision: str = "slurm-policy-1"
     account: str | None = None
@@ -373,6 +392,30 @@ class SlurmReadyStageProfile:
             )
         if not isinstance(self.job_private_file_provider, SlurmJobPrivateFileProvider):
             raise SlurmPlanningError("ready-stage profile requires job_private_file_v1")
+        container = (
+            None
+            if self.container_options is None
+            else parse_container_options(self.container_options)
+        )
+        apptainer = (
+            None
+            if container is None
+            else (
+                self.apptainer_options
+                if isinstance(self.apptainer_options, ApptainerExecOptions)
+                else ApptainerExecOptions.from_dict(self.apptainer_options)
+            )
+        )
+        if container is None and self.apptainer_options is not None:
+            raise SlurmPlanningError(
+                "ready-stage Apptainer options require a selected container"
+            )
+        if container is not None:
+            _validate_ready_stage_container_delivery(
+                container, self.job_private_file_provider
+            )
+        object.__setattr__(self, "container_options", container)
+        object.__setattr__(self, "apptainer_options", apptainer)
         argv = tuple(self.bootstrap_argv)
         if argv != ("loom", "slurm-bootstrap"):
             raise SlurmPlanningError(
@@ -395,6 +438,10 @@ class SlurmReadyStageProfile:
             "environment_fingerprint": self.environment_fingerprint,
             "executor_fingerprint": self.executor_fingerprint,
             "executor_name": self.executor_name,
+            "container": (
+                None if container is None else container.to_redacted_metadata()
+            ),
+            "apptainer": None if apptainer is None else apptainer.to_dict(),
             "credential_policy_revision": self.credential_policy_revision,
             "capability_delivery_kind": self.job_private_file_provider.delivery_kind,
             "capability_descriptor": self.job_private_file_provider.descriptor,
@@ -462,10 +509,14 @@ class SlurmReadyStageRequest:
     script: str
     digest: str
     script_digest: str
+    container_metadata: Mapping[str, PlainData] | None = None
     schema_version: int = READY_STAGE_REQUEST_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != READY_STAGE_REQUEST_SCHEMA_VERSION:
+        if self.schema_version not in {
+            _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION,
+            READY_STAGE_REQUEST_SCHEMA_VERSION,
+        }:
             raise SlurmPlanningError("ready-stage request schema is unsupported")
         for value in (
             self.operation_id,
@@ -485,7 +536,23 @@ class SlurmReadyStageRequest:
             raise SlurmPlanningError("ready-stage directives are invalid")
         if not isinstance(self.script, str) or not self.script:
             raise SlurmPlanningError("ready-stage script is required")
+        metadata = self.container_metadata
+        if self.schema_version == _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION:
+            if metadata is not None:
+                raise SlurmPlanningError(
+                    "retained native ready-stage request cannot select a container"
+                )
+        elif not isinstance(metadata, Mapping):
+            raise SlurmPlanningError(
+                "container ready-stage request metadata is required"
+            )
+        if metadata is not None:
+            metadata = cast(
+                Mapping[str, PlainData],
+                _plain_mapping(metadata, "ready-stage container metadata"),
+            )
         object.__setattr__(self, "directives", directives)
+        object.__setattr__(self, "container_metadata", metadata)
         expected = _digest(stable_json_dumps(self.semantic_dict()))
         if self.digest != expected:
             raise SlurmPlanningError("ready-stage request digest conflicts")
@@ -493,7 +560,7 @@ class SlurmReadyStageRequest:
             raise SlurmPlanningError("ready-stage script digest conflicts")
 
     def semantic_dict(self) -> dict[str, PlainData]:
-        return {
+        value: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "operation_id": self.operation_id,
             "stage_work_id": self.stage_work_id,
@@ -504,6 +571,9 @@ class SlurmReadyStageRequest:
             "placement_fingerprint": self.placement_fingerprint,
             "directives": [item.to_dict() for item in self.directives],
         }
+        if self.container_metadata is not None:
+            value["container_metadata"] = dict(self.container_metadata)
+        return value
 
     def to_dict(self, *, include_digest: bool = True) -> dict[str, PlainData]:
         value: dict[str, PlainData] = {
@@ -519,6 +589,8 @@ class SlurmReadyStageRequest:
             "script": self.script,
             "script_digest": self.script_digest,
         }
+        if self.container_metadata is not None:
+            value["container_metadata"] = dict(self.container_metadata)
         if include_digest:
             value["digest"] = self.digest
         return value
@@ -526,7 +598,7 @@ class SlurmReadyStageRequest:
     @classmethod
     def from_dict(cls, value: object) -> "SlurmReadyStageRequest":
         mapping = _mapping(value, "ready-stage request")
-        expected = {
+        base_fields = {
             "schema_version",
             "operation_id",
             "stage_work_id",
@@ -540,6 +612,19 @@ class SlurmReadyStageRequest:
             "digest",
             "script_digest",
         }
+        schema_version = mapping.get("schema_version")
+        if schema_version not in {
+            _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION,
+            READY_STAGE_REQUEST_SCHEMA_VERSION,
+        }:
+            raise SlurmPlanningError("ready-stage request schema is unsupported")
+        expected = (
+            base_fields
+            if schema_version == _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION
+            else base_fields | {"container_metadata"}
+            if schema_version == READY_STAGE_REQUEST_SCHEMA_VERSION
+            else set()
+        )
         if set(mapping) != expected:
             raise SlurmPlanningError("ready-stage request fields are unsupported")
         raw_directives = mapping["directives"]
@@ -563,7 +648,10 @@ class SlurmReadyStageRequest:
             script=cast(str, mapping["script"]),
             digest=cast(str, mapping["digest"]),
             script_digest=cast(str, mapping["script_digest"]),
-            schema_version=cast(int, mapping["schema_version"]),
+            container_metadata=cast(
+                Mapping[str, PlainData] | None, mapping.get("container_metadata")
+            ),
+            schema_version=cast(int, schema_version),
         )
 
 
@@ -607,9 +695,30 @@ def map_ready_stage(
         directives.append(SlurmSbatchDirective("qos", profile.qos, "profile"))
     directives.extend(resources)
     directives.append(SlurmSbatchDirective("comment", marker, "operation"))
-    argv = " ".join(_shell_quote(item) for item in profile.bootstrap_argv)
+    command = SlurmCommandArgv(launcher_argv=profile.bootstrap_argv)
+    container_metadata: Mapping[str, PlainData] | None = None
+    container = profile.container_options
+    if container is not None:
+        if not isinstance(container, ContainerOptions):
+            raise SlurmPlanningError("ready-stage container selection is invalid")
+        command = wrap_slurm_command_with_apptainer(
+            command,
+            container_options=_container_command_options(container),
+            apptainer_options=profile.apptainer_options,
+            resources=placement.resource_request,
+        )
+        container_metadata = {
+            **_redact_ready_container_metadata(command.metadata),
+            "bootstrap_environment": _SLURM_BOOTSTRAP_CONFIG_ENV,
+        }
+    argv = " ".join(_shell_quote(item) for item in command.argv)
+    schema_version = (
+        _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION
+        if container_metadata is None
+        else READY_STAGE_REQUEST_SCHEMA_VERSION
+    )
     semantic: dict[str, PlainData] = {
-        "schema_version": READY_STAGE_REQUEST_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "operation_id": operation_id,
         "stage_work_id": stage_work_id,
         "run_uri": run_uri,
@@ -619,11 +728,21 @@ def map_ready_stage(
         "placement_fingerprint": placement.fingerprint,
         "directives": [item.to_dict() for item in directives],
     }
+    if container_metadata is not None:
+        semantic["container_metadata"] = dict(container_metadata)
     request_digest = _digest(stable_json_dumps(semantic))
     script_lines = [
         "#!/usr/bin/env bash",
         *(render_sbatch_directive(item) for item in directives),
         "set -euo pipefail",
+        *(
+            [
+                f': "${{{_SLURM_BOOTSTRAP_CONFIG_ENV}:?ready-stage container bootstrap config is unavailable}}"',
+                f"export APPTAINERENV_{_SLURM_BOOTSTRAP_CONFIG_ENV}",
+            ]
+            if container_metadata is not None
+            else []
+        ),
         (
             f"exec {argv} --operation-id {_shell_quote(operation_id)} "
             f"--request-digest {_shell_quote(request_digest)}"
@@ -643,6 +762,8 @@ def map_ready_stage(
         script=script,
         digest=request_digest,
         script_digest=_digest(script),
+        container_metadata=container_metadata,
+        schema_version=schema_version,
     )
 
 
@@ -1569,6 +1690,123 @@ def _mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
         raise SlurmPlanningError(f"{path} must be a string-keyed mapping")
     return cast(Mapping[str, object], value)
+
+
+def _plain_mapping(value: object, path: str) -> Mapping[str, PlainData]:
+    try:
+        normalized = freeze_plain_data(value, path=path)
+    except Exception as exc:
+        raise SlurmPlanningError(f"{path} must be plain data") from exc
+    thawed = thaw_plain_data(normalized, path=path)
+    if not isinstance(thawed, Mapping):
+        raise SlurmPlanningError(f"{path} must be a mapping")
+    return cast(Mapping[str, PlainData], dict(thawed))
+
+
+def _validate_ready_stage_container_delivery(
+    container: ContainerOptions,
+    provider: SlurmJobPrivateFileProvider,
+) -> None:
+    """Require the selected SIF to retain the fixed bootstrap's inputs."""
+
+    environment = container.environment
+    if _SLURM_BOOTSTRAP_CONFIG_ENV in environment.variables:
+        raise SlurmPlanningError(
+            "ready-stage container cannot persist the bootstrap config value"
+        )
+    if _SLURM_BOOTSTRAP_CONFIG_ENV not in environment.required_host_variables:
+        raise SlurmPlanningError(
+            "ready-stage container must require the bootstrap config environment"
+        )
+    mounts = cast(tuple[ContainerMount, ...], container.mounts)
+    capability_path = Path(provider.fixed_path)
+    if not any(
+        _mount_exposes(mount, capability_path)
+        and mount.mode is ContainerMountMode.READ_WRITE
+        for mount in mounts
+    ):
+        raise SlurmPlanningError(
+            "ready-stage container must provide a writable capability path"
+        )
+
+
+def _container_command_options(container: ContainerOptions) -> ContainerOptions:
+    """Leave bootstrap's protected runtime value to the job-side outer boundary."""
+
+    environment = cast(ContainerEnvironment, container.environment)
+    return replace(
+        container,
+        environment=replace(
+            environment,
+            required_host_variables=tuple(
+                name
+                for name in environment.required_host_variables
+                if name != _SLURM_BOOTSTRAP_CONFIG_ENV
+            ),
+        ),
+    )
+
+
+def _redact_ready_container_metadata(
+    metadata: Mapping[str, PlainData],
+) -> dict[str, PlainData]:
+    """Keep durable ready receipts free of protected host path values."""
+
+    receipt = dict(metadata)
+    redacted_argv = receipt.get("redacted_argv")
+    if isinstance(redacted_argv, Sequence) and not isinstance(
+        redacted_argv, (str, bytes)
+    ):
+        receipt["redacted_argv"] = [
+            _redact_ready_path_argument(cast(str, value)) for value in redacted_argv
+        ]
+    command = receipt.get("container_command")
+    if not isinstance(command, Mapping):
+        return receipt
+    command_receipt = dict(cast(Mapping[str, PlainData], command))
+    argv = command_receipt.get("argv")
+    if isinstance(argv, Sequence) and not isinstance(argv, (str, bytes)):
+        command_receipt["argv"] = [
+            _redact_ready_path_argument(cast(str, value)) for value in argv
+        ]
+    container = command_receipt.get("container")
+    if isinstance(container, Mapping):
+        container_receipt = dict(cast(Mapping[str, PlainData], container))
+        workdir = container_receipt.get("workdir")
+        if isinstance(workdir, str) and Path(workdir).is_absolute():
+            container_receipt["workdir"] = "[redacted-path]"
+        mounts = container_receipt.get("mounts")
+        if isinstance(mounts, Sequence) and not isinstance(mounts, (str, bytes)):
+            container_receipt["mounts"] = [
+                {
+                    "source": "[redacted-path]",
+                    "target": "[redacted-path]",
+                    "mode": cast(Mapping[str, PlainData], mount).get("mode"),
+                }
+                for mount in mounts
+                if isinstance(mount, Mapping)
+            ]
+        command_receipt["container"] = container_receipt
+    receipt["container_command"] = command_receipt
+    return receipt
+
+
+def _redact_ready_path_argument(value: str) -> str:
+    if value.startswith("/"):
+        return "[redacted-path]"
+    return value
+
+
+def _mount_exposes(mount: ContainerMount, path: Path) -> bool:
+    """Whether one mount exposes a same-path bootstrap file in the container."""
+
+    source = Path(mount.source)
+    target = Path(mount.target)
+    try:
+        relative = path.relative_to(source)
+    except ValueError:
+        return False
+    return target / relative == path
 
 
 def _job_id(value: object) -> str:
