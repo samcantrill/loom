@@ -8,15 +8,18 @@ native request deadlines.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 import time
-from typing import Any, TypeVar
+from typing import Any, TypeVar, TypedDict, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from loom.coordinator import CoordinatorClientError, PrepareRunRequest
+from loom.diagnostics.run_inspection import decode_run_inspection_response
+from loom.queue._coordinator_control import control_error
 from loom.queue._coordinator_transport import (
     CLIENT_CAPACITY,
     CLIENT_WAIT_CAPACITY,
@@ -30,6 +33,23 @@ from loom.serialization import PlainData
 _Result = TypeVar("_Result")
 
 
+class _PreparationSourceInput(TypedDict):
+    """SDK discovery shape for the native preparation-source request object."""
+
+    mode: str
+    root: str
+    path: str
+    include: list[str]
+
+
+class _CapacityUnavailable(Exception):
+    """Adapter admission ended before synchronous native work could start."""
+
+
+class _CapacityClosed(Exception):
+    """The stdio adapter is shutting down its local execution capacity."""
+
+
 class _Capacity:
     """Keep SDK-loop work bounded while native calls run on independent threads."""
 
@@ -41,11 +61,11 @@ class _Capacity:
         )
         self._closed = False
 
-    async def call(self, action: Callable[[], _Result], *, waiting: bool) -> _Result:
+    async def call(
+        self, action: Callable[[float], _Result], *, waiting: bool
+    ) -> _Result:
         if self._closed:
-            raise CoordinatorClientError(
-                "unavailable", boundary="client_protocol", operation="mcp"
-            )
+            raise _CapacityClosed()
         deadline = time.monotonic() + REQUEST_BUDGET_SECONDS
         wait_reserved = request_reserved = False
         try:
@@ -62,7 +82,7 @@ class _Capacity:
             raise
 
         loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(self._executor, action)
+        future = loop.run_in_executor(self._executor, action, deadline)
         released = False
 
         def release(_: object | None = None) -> None:
@@ -75,34 +95,31 @@ class _Capacity:
                 self._waits.release()
 
         try:
-            return await asyncio.shield(future)
+            value = await asyncio.shield(future)
         except asyncio.CancelledError:
             # Keep capacity reserved until the native deadline/connection cleanup
             # finishes.  Cancellation never becomes a durable lifecycle request.
-            future.add_done_callback(lambda done: loop.call_soon_threadsafe(release, done))
+            future.add_done_callback(
+                lambda done: loop.call_soon_threadsafe(release, done)
+            )
             raise
         except BaseException:
             release()
             raise
         else:
             release()
+        return value
 
     async def _acquire(
         self, semaphore: asyncio.BoundedSemaphore, deadline: float
     ) -> None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise self._capacity_error()
+            raise _CapacityUnavailable()
         try:
             await asyncio.wait_for(semaphore.acquire(), timeout=remaining)
         except TimeoutError as exc:
-            raise self._capacity_error() from exc
-
-    @staticmethod
-    def _capacity_error() -> CoordinatorClientError:
-        return CoordinatorClientError(
-            "capacity_exhausted", boundary="client_protocol", operation="mcp"
-        )
+            raise _CapacityUnavailable() from exc
 
     def close(self) -> None:
         self._closed = True
@@ -119,7 +136,7 @@ def _payload(value: object) -> Any:
 def _result(value: object, text: str) -> CallToolResult:
     payload = _payload(value)
     return CallToolResult(
-        content=[TextContent(text=text)], structured_content=payload
+        content=[TextContent(text=_summary(payload, text))], structured_content=payload
     )
 
 
@@ -132,48 +149,152 @@ def _error(error: CoordinatorClientError) -> CallToolResult:
     )
 
 
+def _summary(payload: object, text: str) -> str:
+    """Add stable native identifiers, state, and retained report evidence to tool text."""
+    values = _named_values(payload)
+    details = [text.rstrip(".")]
+    identifiers = [
+        f"{key}={values[key]}"
+        for key in ("coordinator_id", "operation_id", "admission_id", "queue_item_id")
+        if isinstance(values.get(key), str)
+    ]
+    if identifiers:
+        details.append("Identifiers: " + ", ".join(identifiers))
+    for key in ("state", "kind", "preflight_status"):
+        if isinstance(values.get(key), str):
+            details.append(f"{key}: {values[key]}")
+            break
+    if isinstance(values.get("report_ref"), str):
+        details.append(f"Report evidence: {values['report_ref']}")
+    return ". ".join(details) + "."
+
+
+def _named_values(payload: object) -> dict[str, object]:
+    """Find the first native summary fields without altering the structured result."""
+    found: dict[str, object] = {}
+
+    def visit(value: object) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if (
+                    key
+                    in {
+                        "coordinator_id",
+                        "operation_id",
+                        "admission_id",
+                        "queue_item_id",
+                        "state",
+                        "kind",
+                        "preflight_status",
+                        "report_ref",
+                    }
+                    and key not in found
+                ):
+                    found[key] = item
+                visit(item)
+        elif isinstance(value, list | tuple):
+            for item in value:
+                visit(item)
+
+    visit(payload)
+    return found
+
+
 class _Adapter:
     def __init__(self, client: Any) -> None:
         self._client = client
         self._capacity = _Capacity()
+        self._closed = False
 
     async def _call(
         self,
         operation: str,
-        action: Callable[[], _Result],
+        action: Callable[[float], _Result],
         *,
         text: str,
-        ids: dict[str, PlainData],
+        payload: dict[str, object],
         waiting: bool = False,
     ) -> CallToolResult:
         try:
             value = await self._capacity.call(action, waiting=waiting)
         except asyncio.CancelledError:
             raise
+        except _CapacityClosed:
+            return _error(control_error("unavailable", operation, payload))
+        except _CapacityUnavailable:
+            return _error(control_error("capacity_exhausted", operation, payload))
         except CoordinatorClientError as exc:
             return _error(exc)
         except (QueueError, TypeError, ValueError):
-            return _error(
-                CoordinatorClientError(
-                    "invalid_request",
-                    boundary="client_protocol",
-                    operation=operation,
-                    ids=ids,
-                )
-            )
+            return _error(control_error("invalid_request", operation, payload))
         except Exception:
-            return _error(
-                CoordinatorClientError(
-                    "internal_error",
-                    boundary="client_protocol",
-                    operation=operation,
-                    ids=ids,
-                )
-            )
+            return _error(control_error("internal_error", operation, payload))
         return _result(value, text)
 
+    def _native(
+        self,
+        operation: str,
+        payload: dict[str, PlainData],
+        expected_coordinator_id: str | None,
+        deadline: float,
+        *,
+        negotiate: bool = True,
+    ) -> Any:
+        return self._client._native_call(
+            operation,
+            payload,
+            expected_coordinator_id,
+            deadline=deadline,
+            negotiate=negotiate,
+        )
+
+    def _wait_native(
+        self,
+        operation: str,
+        payload: dict[str, PlainData],
+        timeout_seconds: float,
+        expected_coordinator_id: str | None,
+        deadline: float,
+    ) -> Any:
+        return self._client._wait_native(
+            operation,
+            payload,
+            timeout_seconds,
+            expected_coordinator_id,
+            terminal_deadline=deadline,
+        )
+
+    def _inspect_run(
+        self, run_uri: str, expected_coordinator_id: str | None, deadline: float
+    ) -> Any:
+        try:
+            return decode_run_inspection_response(
+                self._native(
+                    "inspect_run",
+                    {"run_uri": run_uri},
+                    expected_coordinator_id,
+                    deadline,
+                )
+            )
+        except CoordinatorClientError:
+            raise
+        except (QueueError, TypeError, ValueError, KeyError, RecursionError) as exc:
+            raise control_error(
+                "invalid_response",
+                "inspect_run",
+                {"run_uri": run_uri},
+                dispatched=True,
+            ) from exc
+
     def server(self) -> MCPServer:
-        server = MCPServer(name="loom")
+        @asynccontextmanager
+        async def lifespan(_: Any):
+            try:
+                yield
+            finally:
+                self.close()
+
+        server = MCPServer(name="loom", lifespan=lifespan)
         read = ToolAnnotations(read_only_hint=True)
         mutate = ToolAnnotations(read_only_hint=False)
 
@@ -184,23 +305,23 @@ class _Adapter:
             """Read the configured connection and current native coordinator status."""
             return await self._call(
                 "status",
-                lambda: {
-                    "connection": self._client.describe_connection(
-                        expected_coordinator_id=expected_coordinator_id
+                lambda deadline: {
+                    "connection": self._native(
+                        "handshake", {}, expected_coordinator_id, deadline
                     ).to_dict(),
-                    "status": self._client.status(
-                        expected_coordinator_id=expected_coordinator_id
+                    "status": self._native(
+                        "status", {}, expected_coordinator_id, deadline, negotiate=False
                     ).to_dict(),
                 },
                 text="Observed connection and coordinator status.",
-                ids={"expected_coordinator_id": expected_coordinator_id},
+                payload={"expected_coordinator_id": expected_coordinator_id},
             )
 
         @server.tool(annotations=mutate)
         async def loom_prepare_run(
             operation_id: str,
             run_name: str,
-            source: dict[str, object],
+            source: _PreparationSourceInput,
             config_path: str,
             preparation_profile: str,
             expected_coordinator_id: str | None = None,
@@ -209,18 +330,23 @@ class _Adapter:
             request_data = {
                 "operation_id": operation_id,
                 "run_name": run_name,
-                "source": source,
+                "source": cast(dict[str, object], source),
                 "config_path": config_path,
                 "preparation_profile": preparation_profile,
             }
             return await self._call(
                 "prepare_run",
-                lambda: self._client.prepare_run(
-                    PrepareRunRequest.from_dict(request_data),
-                    expected_coordinator_id=expected_coordinator_id,
+                lambda deadline: self._native(
+                    "prepare_run",
+                    {"request": PrepareRunRequest.from_dict(request_data).to_dict()},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Preparation operation {operation_id} was observed.",
-                ids={"operation_id": operation_id},
+                payload={
+                    **request_data,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -230,11 +356,17 @@ class _Adapter:
             """Read one native preparation operation and its retained evidence."""
             return await self._call(
                 "operation",
-                lambda: self._client.operation(
-                    operation_id, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "operation",
+                    {"operation_id": operation_id},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Observed operation {operation_id}.",
-                ids={"operation_id": operation_id},
+                payload={
+                    "operation_id": operation_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -246,13 +378,19 @@ class _Adapter:
             """Observe an operation for 0–25 seconds without cancelling durable work."""
             return await self._call(
                 "wait_operation",
-                lambda: self._client.wait_operation(
-                    operation_id,
-                    timeout_seconds=timeout_seconds,
-                    expected_coordinator_id=expected_coordinator_id,
+                lambda deadline: self._wait_native(
+                    "wait_operation",
+                    {"operation_id": operation_id},
+                    timeout_seconds,
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Bounded observation for operation {operation_id} completed.",
-                ids={"operation_id": operation_id},
+                payload={
+                    "operation_id": operation_id,
+                    "timeout": timeout_seconds,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
                 waiting=True,
             )
 
@@ -263,11 +401,17 @@ class _Adapter:
             """Request native cancellation of one preparation operation."""
             return await self._call(
                 "cancel_preparation",
-                lambda: self._client.cancel_preparation(
-                    operation_id, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "cancel_preparation",
+                    {"operation_id": operation_id},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Cancellation request for preparation {operation_id} was observed.",
-                ids={"operation_id": operation_id},
+                payload={
+                    "operation_id": operation_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -279,11 +423,18 @@ class _Adapter:
             """Read a native admissions page, including preparation child admissions."""
             return await self._call(
                 "admissions",
-                lambda: self._client.admissions(
-                    limit, cursor, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "admissions",
+                    {"limit": limit, "cursor": cursor},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text="Observed native admissions.",
-                ids={},
+                payload={
+                    "limit": limit,
+                    "cursor": cursor,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -295,15 +446,15 @@ class _Adapter:
             """Read one admission by exactly one admission or queue-item identifier."""
             if (admission_id is None) == (queue_item_id is None):
                 return _error(
-                    CoordinatorClientError(
+                    control_error(
                         "invalid_request",
-                        boundary="client_protocol",
-                        operation="admission",
-                        ids={
+                        "admission",
+                        {
                             key: value
                             for key, value in {
                                 "admission_id": admission_id,
                                 "queue_item_id": queue_item_id,
+                                "expected_coordinator_id": expected_coordinator_id,
                             }.items()
                             if value is not None
                         },
@@ -312,24 +463,39 @@ class _Adapter:
             if queue_item_id is not None:
                 return await self._call(
                     "admission_for_queue_item",
-                    lambda: self._client.admission(
-                        self._client.admission_for_queue_item(
-                            queue_item_id,
-                            expected_coordinator_id=expected_coordinator_id,
-                        ).admission_id,
-                        expected_coordinator_id=expected_coordinator_id,
+                    lambda deadline: self._native(
+                        "admission",
+                        {
+                            "admission_id": self._native(
+                                "admission_for_queue_item",
+                                {"queue_item_id": queue_item_id},
+                                expected_coordinator_id,
+                                deadline,
+                            ).admission_id
+                        },
+                        expected_coordinator_id,
+                        deadline,
                     ),
                     text=f"Observed admission for queue item {queue_item_id}.",
-                    ids={"queue_item_id": queue_item_id},
+                    payload={
+                        "queue_item_id": queue_item_id,
+                        "expected_coordinator_id": expected_coordinator_id,
+                    },
                 )
             assert admission_id is not None
             return await self._call(
                 "admission",
-                lambda: self._client.admission(
-                    admission_id, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "admission",
+                    {"admission_id": admission_id},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Observed admission {admission_id}.",
-                ids={"admission_id": admission_id},
+                payload={
+                    "admission_id": admission_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -339,11 +505,14 @@ class _Adapter:
             """Inspect a run, returning either native diagnostic union member."""
             return await self._call(
                 "inspect_run",
-                lambda: self._client.inspect_run(
-                    run_uri, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._inspect_run(
+                    run_uri, expected_coordinator_id, deadline
                 ),
                 text=f"Observed run inspection for {run_uri}.",
-                ids={"run_uri": run_uri},
+                payload={
+                    "run_uri": run_uri,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -355,11 +524,18 @@ class _Adapter:
             """Read a native page of observed agents."""
             return await self._call(
                 "agents",
-                lambda: self._client.agents(
-                    limit, cursor, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "agents",
+                    {"limit": limit, "cursor": cursor},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text="Observed native agents.",
-                ids={},
+                payload={
+                    "limit": limit,
+                    "cursor": cursor,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -369,11 +545,14 @@ class _Adapter:
             """Read one native agent projection."""
             return await self._call(
                 "agent",
-                lambda: self._client.agent(
-                    agent_id, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "agent", {"agent_id": agent_id}, expected_coordinator_id, deadline
                 ),
                 text=f"Observed agent {agent_id}.",
-                ids={"agent_id": agent_id},
+                payload={
+                    "agent_id": agent_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=mutate)
@@ -385,12 +564,22 @@ class _Adapter:
             """Submit a prepared run with its stable native queue-item identifier."""
             return await self._call(
                 "submit",
-                lambda: self._client.submit(
-                    LocalDaemonAdmissionRequest(queue_item_id, run_uri),
-                    expected_coordinator_id=expected_coordinator_id,
+                lambda deadline: self._native(
+                    "submit",
+                    {
+                        "request": LocalDaemonAdmissionRequest(
+                            queue_item_id, run_uri
+                        ).to_dict()
+                    },
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Submission for queue item {queue_item_id} was observed.",
-                ids={"queue_item_id": queue_item_id, "run_uri": run_uri},
+                payload={
+                    "queue_item_id": queue_item_id,
+                    "run_uri": run_uri,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         @server.tool(annotations=read)
@@ -403,14 +592,23 @@ class _Adapter:
             """Observe one admission revision for 0–25 seconds."""
             return await self._call(
                 "wait_admission",
-                lambda: self._client.wait_admission(
-                    admission_id,
-                    expected_revision,
-                    timeout_seconds=timeout_seconds,
-                    expected_coordinator_id=expected_coordinator_id,
+                lambda deadline: self._wait_native(
+                    "wait_admission",
+                    {
+                        "admission_id": admission_id,
+                        "expected_revision": expected_revision,
+                    },
+                    timeout_seconds,
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Bounded observation for admission {admission_id} completed.",
-                ids={"admission_id": admission_id},
+                payload={
+                    "admission_id": admission_id,
+                    "expected_revision": expected_revision,
+                    "timeout": timeout_seconds,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
                 waiting=True,
             )
 
@@ -421,16 +619,25 @@ class _Adapter:
             """Request native cancellation for one queue-item identifier."""
             return await self._call(
                 "cancel",
-                lambda: self._client.cancel(
-                    queue_item_id, expected_coordinator_id=expected_coordinator_id
+                lambda deadline: self._native(
+                    "cancel",
+                    {"queue_item_id": queue_item_id},
+                    expected_coordinator_id,
+                    deadline,
                 ),
                 text=f"Cancellation request for queue item {queue_item_id} was observed.",
-                ids={"queue_item_id": queue_item_id},
+                payload={
+                    "queue_item_id": queue_item_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                },
             )
 
         return server
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self._capacity.close()
         close = getattr(self._client, "close", None)
         if callable(close):
