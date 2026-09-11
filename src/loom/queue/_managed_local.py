@@ -3387,6 +3387,11 @@ def run_managed_local_assignment(
     """
 
     _require_worker_assignment_match(assignment, worker_request)
+    predecessor = worker_request.metadata.get("managed_output_predecessor")
+    if predecessor is not None and (
+        not isinstance(predecessor, str) or not predecessor
+    ):
+        raise ManagedLocalError("managed output predecessor is invalid")
     if not isinstance(run_store, LocalRunStore):
         raise ManagedLocalError(
             "managed parent requires the configured local run store"
@@ -3659,6 +3664,13 @@ def run_managed_local_assignment(
     def finalize_result(
         worker_result: StageWorkerResult, *, coordinator_expected: str
     ) -> ManagedExecutionReceipt:
+        if (
+            worker_result.status is StageStatus.SUCCEEDED
+            and worker_result.executor_metadata.get("managed_successful_exit") is not True
+        ):
+            raise ManagedLocalError(
+                "successful result has no successful owned-group exit"
+            )
         if journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED:
             output_commit: OutputCommit | None = None
             if worker_result.status is StageStatus.SUCCEEDED:
@@ -3668,6 +3680,7 @@ def run_managed_local_assignment(
                     attempt_id=assignment.attempt_id,
                     fencing_token=fence.fencing_token,
                     outputs=worker_result.outputs,
+                    supersedes_commit_id=predecessor,
                     assignment_id=assignment.assignment_id,
                 )
             _persist_managed_result(run_store, worker_result)
@@ -3714,6 +3727,7 @@ def run_managed_local_assignment(
                 attempt_id=assignment.attempt_id,
                 fencing_token=fence.fencing_token,
                 outputs=worker_result.outputs,
+                supersedes_commit_id=predecessor,
                 assignment_id=assignment.assignment_id,
             )
         else:
@@ -4002,6 +4016,14 @@ def run_managed_local_assignment(
         child_result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
         workspace.persist_worker_result(child_result)
         child_result = cast(StageWorkerResult, workspace.worker_result())
+        if child_result.status is StageStatus.SUCCEEDED and not contained.successful_exit:
+            worker_result = _managed_root_failed_worker_result(
+                worker_request,
+                ManagedLocalError("worker success lacks successful complete owned-group exit"),
+                process_exit_code=contained.exit_code,
+                worker_result_state="unqualified_success",
+            )
+            return finalize_result(worker_result, coordinator_expected="running")
         report = workspace.retain_outputs()
         worker_result = _project_resident_result(
             child_result,
@@ -4010,6 +4032,13 @@ def run_managed_local_assignment(
             worker_request=worker_request,
             run_store=run_store,
         )
+        # The parent owns this fact; never inherit a worker-supplied qualification.
+        # Result replay survives clean supervisor continuity rotation.
+        metadata = dict(worker_result.executor_metadata)
+        metadata.pop("managed_successful_exit", None)
+        if worker_result.status is StageStatus.SUCCEEDED:
+            metadata["managed_successful_exit"] = contained.successful_exit
+        worker_result = replace(worker_result, executor_metadata=metadata)
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
     return finalize_result(worker_result, coordinator_expected="running")
 
@@ -5084,6 +5113,7 @@ def _managed_root_failed_worker_result(
     error: BaseException,
     *,
     process_exit_code: int | None = None,
+    worker_result_state: str = "missing",
 ) -> StageWorkerResult:
     failed_at = utc_timestamp()
     message = str(error) or type(error).__name__
@@ -5106,7 +5136,7 @@ def _managed_root_failed_worker_result(
         exit_code=exit_code,
         signal=process_signal,
         details=_capture_exception_details(
-            error, details={"process_created": True, "worker_result": "missing"}
+            error, details={"process_created": True, "worker_result": worker_result_state}
         ),
     )
     return StageWorkerResult(
@@ -5127,7 +5157,7 @@ def _managed_root_failed_worker_result(
         executor_metadata={
             "request": request.to_safe_metadata(),
             "process_created": True,
-            "worker_result": "missing",
+            "worker_result": worker_result_state,
         },
     )
 

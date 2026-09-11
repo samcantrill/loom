@@ -244,6 +244,7 @@ class SupervisorReceipt:
     process_id: int | None = None
     exit_code: int | None = None
     worker_result_digest: str | None = None
+    successful_exit: bool = False
 
 
 class AgentProcessSupervisor:
@@ -254,7 +255,7 @@ class AgentProcessSupervisor:
     ``UNKNOWN`` for a nonterminal launch: a PID is not adoption evidence.
     """
 
-    _SCHEMA_VERSION = 2
+    _SCHEMA_VERSION = 3
 
     def __init__(
         self,
@@ -299,7 +300,8 @@ class AgentProcessSupervisor:
             CREATE TABLE launches (
               operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
               launch_json TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL,
-              pid INTEGER, exit_code INTEGER, result_digest TEXT
+              pid INTEGER, exit_code INTEGER, result_digest TEXT,
+              successful_exit INTEGER NOT NULL DEFAULT 0
             );
             """)
             conn.executemany(
@@ -322,10 +324,24 @@ class AgentProcessSupervisor:
             )
         try:
             with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 values = {
                     str(row["key"]): str(row["value"])
                     for row in conn.execute("SELECT key, value FROM metadata")
                 }
+                if (
+                    values.get("schema_version") == "2"
+                    and values.get("agent_id") == self._agent_id
+                    and values.get("configuration_fingerprint") == self._configuration.fingerprint
+                ):
+                    conn.execute(
+                        "ALTER TABLE launches ADD COLUMN successful_exit INTEGER NOT NULL DEFAULT 0"
+                    )
+                    conn.execute(
+                        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
+                        (str(self._SCHEMA_VERSION),),
+                    )
+                    values["schema_version"] = str(self._SCHEMA_VERSION)
         except sqlite3.Error as exc:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
@@ -467,8 +483,23 @@ class AgentProcessSupervisor:
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         receipt = self.query(launch)
         child = self._children.get(launch.launch_operation_id)
+        if receipt.state is SupervisorLaunchState.CONTAINED:
+            result = launch.workspace_root / "worker-result.json"
+            if receipt.worker_result_digest is None and result.is_file():
+                # The parent may repair a missing result after containment. Bind
+                # those bytes once, but they cannot prove worker success.
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE launches SET result_digest = ?, successful_exit = 0, revision = revision + 1 "
+                        "WHERE operation_id = ? AND result_digest IS NULL",
+                        (_file_digest(result), launch.launch_operation_id),
+                    )
+                    conn.commit()
+                return self.query(launch)
+            return receipt
         if child is None:
             return receipt
+        successful_exit = child.successful_exit()
         try:
             contained = child.contain()
         except OSError:
@@ -480,11 +511,12 @@ class AgentProcessSupervisor:
         result = launch.workspace_root / "worker-result.json"
         with self._connect() as conn:
             conn.execute(
-                "UPDATE launches SET state = ?, exit_code = ?, result_digest = ?, revision = revision + 1 WHERE operation_id = ?",
+                "UPDATE launches SET state = ?, exit_code = ?, result_digest = ?, successful_exit = ?, revision = revision + 1 WHERE operation_id = ?",
                 (
                     SupervisorLaunchState.CONTAINED.value,
                     child.returncode,
                     _file_digest(result) if result.is_file() else None,
+                    int(successful_exit),
                     launch.launch_operation_id,
                 ),
             )
@@ -599,6 +631,7 @@ class AgentProcessSupervisor:
             cast_int(row["pid"]),
             cast_int(row["exit_code"]),
             str(row["result_digest"]) if row["result_digest"] is not None else None,
+            bool(row["successful_exit"]),
         )
 
 
@@ -765,6 +798,7 @@ def _receipt_value(receipt: SupervisorReceipt) -> dict[str, object]:
         "process_id": receipt.process_id,
         "exit_code": receipt.exit_code,
         "worker_result_digest": receipt.worker_result_digest,
+        "successful_exit": receipt.successful_exit,
     }
 
 
@@ -776,7 +810,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         "process_id",
         "exit_code",
         "worker_result_digest",
-    }:
+        "successful_exit",
+    } or not isinstance(value.get("successful_exit"), bool):
         raise AgentProcessSupervisorError("supervisor receipt is invalid")
     return SupervisorReceipt(
         SupervisorLaunchState(cast(str, value["state"])),
@@ -785,6 +820,7 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         cast_int(value["process_id"]),
         cast_int(value["exit_code"]),
         cast(str | None, value["worker_result_digest"]),
+        cast(bool, value["successful_exit"]),
     )
 
 

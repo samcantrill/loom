@@ -293,6 +293,7 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
         ([], None),
         ("all", "exact"),
         ("all", "conflict"),
+        ("all", "predecessor"),
     ],
 )
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
@@ -351,6 +352,8 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             },
         ],
     }
+    if retained_worker == "predecessor":
+        pipeline_config["stages"] = pipeline_config["stages"][:1]
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,
@@ -381,6 +384,33 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
+    predecessor = None
+    if retained_worker == "predecessor":
+        from loom.artifacts import ArtifactRef
+        from loom.pipeline.transition_policy import TransitionIntent
+
+        # Existing lease execution can leave a committed stale stage in a run
+        # that is still running. Native admission must retain that exact head.
+        prior = authority.allocate_stage_attempt(
+            run_uri, "preprocess", owner_id="prior", lease_ttl_seconds=30
+        )
+        assert prior.lease is not None
+        predecessor = authority.record_output_commit(
+            run_uri, "preprocess", attempt_id=prior.attempt.attempt_id,
+            fencing_token=prior.lease.fencing_token,
+            outputs={"data": ArtifactRef(artifact_id="prior/data", uri=f"{run_uri}/prior", artifact_type="json")},
+        )
+        authority.transition_stage(
+            run_uri, "preprocess", from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.STALE, intent=TransitionIntent.RESUME,
+        )
+        run_store.write_stage_status(
+            run_uri, "preprocess",
+            StageStatusRecord(
+                run_uri=run_uri, stage_name="preprocess", status=StageStatus.STALE,
+                attempt=1, updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
 
     provider = _RecordingCpuProvider(
         CapacityAtom(
@@ -399,7 +429,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     retained_bytes: bytes | None = None
     retained_mtime: int | None = None
     rejected = Event()
-    if retained_worker is not None:
+    if retained_worker in {"exact", "conflict"}:
         from loom.pipeline.execution import prepare_stage_attempt, StageWorkerRequest
         import loom.queue.local_daemon_execution as execution_owner
 
@@ -454,6 +484,17 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             assert _supervisor_launch_count(config) == 0
             return
         completed = client.wait("queue-1", timeout_seconds=10)
+        if predecessor is not None:
+            assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+            snapshot = authority.open_run(run_uri)
+            request = run_store.read_stage_worker_request(run_uri, "preprocess", attempt=2)
+            assert request is not None
+            assert cast(Mapping[str, object], request["metadata"])["managed_output_predecessor"] == predecessor.commit.commit_id
+            head = snapshot.stages[0].latest_commit
+            assert head is not None
+            assert head.supersedes_commit_id == predecessor.commit.commit_id
+            assert len(authority.list_output_commits(run_uri, stage_name="preprocess")) == 2
+            return
         if retained_worker == "exact":
             assert retained_path.read_bytes() == retained_bytes
             assert retained_path.stat().st_mtime_ns == retained_mtime

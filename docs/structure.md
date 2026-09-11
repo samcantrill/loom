@@ -1379,3 +1379,28 @@ instructions. They are separate from `.agents/skills` contributor workflows and
 do not select scientific parameters, project environments or resource budgets.
 `make test-mcp-extra` and its summary lane use an isolated locked SDK/config
 environment; config-only and base lanes exclude the MCP marker.
+
+
+### Native managed terminal publication
+
+The POSIX local supervisor requires `ps -e -o pid= -o pgid=` to observe owned
+process-group membership. Before any containment signal, success requires a
+zero exit status from the unreaped root and no other group members. Missing or
+invalid process observations, surviving work, nonzero exits, and signals cannot
+qualify a successful worker result. Containment still owns stopping and releasing
+unfinished work; a prior failed worker result remains the primary failure.
+
+The supervisor retains this success qualification with its contained receipt.
+The parent copies it into the durable result's `managed_successful_exit`
+executor metadata, overwriting child-supplied values. Result replay requires this
+qualification, including after clean supervisor continuity rotation; legacy
+results without it cannot authorize success. Supervisor schema 2 is
+upgraded to schema 3 with old receipts explicitly unqualified. This observation
+establishes process completion only; domain code still owns aggregate scientific
+success and must report failures from work it joins.
+
+The native parent retains the admitted stage head in the prepared worker
+request's `managed_output_predecessor` metadata and supplies that exact predecessor
+to initial and replayed managed output commits. The authority's existing fenced
+transaction owns immutable output history and terminal success; replay after a
+lost response does not substitute the new head for the original predecessor.

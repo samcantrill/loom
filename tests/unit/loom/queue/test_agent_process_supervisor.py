@@ -459,3 +459,93 @@ def test_preparation_root_mapping_is_retained_in_launch_identity(tmp_path: Path)
     assert changed.descriptor == configured.descriptor
     assert changed.fingerprint != configured.fingerprint
     assert _profile_from_value(retained).preparation_shared_roots == {"projects": tmp_path / "first-mount"}
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_successful_exit_qualification_is_durable_and_legacy_is_unqualified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+) -> None:
+    profile = _profile()
+    (tmp_path / "agent").mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        tmp_path / "agent", agent_id="agent-A", profiles=(profile,)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    original_popen = subprocess.Popen
+
+    def start_root(args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        if args[0] == "ps":
+            return cast(Any, original_popen(args, **kwargs))
+        return cast(Any, original_popen([sys.executable, "-c", "pass"], **kwargs))
+
+    monkeypatch.setattr("loom.queue._agent_process_supervisor.subprocess.Popen", start_root)
+    supervisor.launch(launch)
+    deadline = monotonic() + 5
+    while supervisor.query(launch).state is SupervisorLaunchState.RUNNING:
+        assert monotonic() < deadline
+        sleep(0.01)
+    contained = supervisor.contain(launch)
+    assert contained.state is SupervisorLaunchState.CONTAINED
+    assert contained.successful_exit
+    assert supervisor.contain(launch) == contained
+    if legacy:
+        with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
+            conn.execute("ALTER TABLE launches DROP COLUMN successful_exit")
+            conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
+    reopened = AgentProcessSupervisor(
+        tmp_path / "agent" / "supervisor", agent_id="agent-A", profiles=(profile,)
+    )
+    retained = reopened.contain(launch)
+    assert retained.state is SupervisorLaunchState.CONTAINED
+    assert retained.successful_exit is (not legacy)
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_contained_missing_result_binds_late_bytes_without_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int,
+) -> None:
+    profile = _profile()
+    (tmp_path / "agent").mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        tmp_path / "agent", agent_id="agent-A", profiles=(profile,)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    original_popen = subprocess.Popen
+
+    def start_root(args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        if args[0] == "ps":
+            return cast(Any, original_popen(args, **kwargs))
+        return cast(Any, original_popen(
+            [sys.executable, "-c", f"raise SystemExit({exit_code})"], **kwargs
+        ))
+
+    monkeypatch.setattr("loom.queue._agent_process_supervisor.subprocess.Popen", start_root)
+    supervisor.launch(launch)
+    deadline = monotonic() + 5
+    while supervisor.query(launch).state is SupervisorLaunchState.RUNNING:
+        assert monotonic() < deadline
+        sleep(0.01)
+    contained = supervisor.contain(launch)
+    assert contained.state is SupervisorLaunchState.CONTAINED
+    assert contained.worker_result_digest is None
+    assert contained.successful_exit is (exit_code == 0)
+
+    reopened = AgentProcessSupervisor(
+        tmp_path / "agent" / "supervisor", agent_id="agent-A", profiles=(profile,)
+    )
+    result_path = workspace / "worker-result.json"
+    result_path.write_text('{"status":"failed"}')
+    repaired = reopened.contain(launch)
+    assert repaired.state is SupervisorLaunchState.CONTAINED
+    assert repaired.exit_code == exit_code
+    assert repaired.worker_result_digest == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert not repaired.successful_exit
+    assert repaired.supervisor_revision == contained.supervisor_revision + 1
+    assert reopened.contain(launch) == repaired
+    # Already bound bytes remain immutable evidence if the workspace changes.
+    result_path.write_text('{"status":"succeeded"}')
+    assert reopened.contain(launch) == repaired
