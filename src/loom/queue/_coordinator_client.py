@@ -40,6 +40,7 @@ from .local_daemon import (
     LocalDaemonOperation,
     OperationWaitResult,
 )
+from .preparation import PrepareRunRequest
 
 
 class NativeCoordinatorClient:
@@ -333,6 +334,36 @@ class NativeCoordinatorClient:
             LocalDaemonAdmission,
             self._native_call(
                 "submit", {"request": request.to_dict()}, expected_coordinator_id
+            ),
+        )
+
+    def prepare_run(
+        self,
+        request: PrepareRunRequest,
+        *,
+        expected_coordinator_id: str | None = None,
+    ) -> LocalDaemonOperation:
+        """Durably accept shared preparation; completion is observed separately."""
+        if not isinstance(request, PrepareRunRequest):
+            raise control_error("invalid_request", "prepare_run", {})
+        return cast(
+            LocalDaemonOperation,
+            self._native_call(
+                "prepare_run", {"request": request.to_dict()}, expected_coordinator_id
+            ),
+        )
+
+    def cancel_preparation(
+        self,
+        operation_id: str,
+        *,
+        expected_coordinator_id: str | None = None,
+    ) -> LocalDaemonOperation:
+        """Request cancellation of one preparation operation."""
+        return cast(
+            LocalDaemonOperation,
+            self._native_call(
+                "cancel_preparation", {"operation_id": operation_id}, expected_coordinator_id
             ),
         )
 

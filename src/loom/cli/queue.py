@@ -202,6 +202,13 @@ def register_subparser(
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
 
+    daemon_upgrade = queue_subparsers.add_parser(
+        "daemon-upgrade", help="offline upgrade a stopped coordinator root"
+    )
+    _add_role_config_arguments(daemon_upgrade)
+    _add_output_options(daemon_upgrade)
+    daemon_upgrade.set_defaults(handler=handle_daemon_upgrade)
+
     daemon_serve = queue_subparsers.add_parser(
         "daemon-serve",
         help="serve one initialized coordinator deployment bundle",
@@ -260,6 +267,22 @@ def register_subparser(
             daemon_client.add_argument("--timeout", type=float, default=None)
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
+
+    prepare = queue_subparsers.add_parser(
+        "daemon-prepare", help="durably accept one shared preparation request"
+    )
+    _add_client_connection_arguments(prepare)
+    prepare.add_argument("--request", type=Path, required=True, metavar="PATH")
+    _add_output_options(prepare)
+    prepare.set_defaults(handler=handle_daemon_prepare)
+
+    cancel_preparation = queue_subparsers.add_parser(
+        "daemon-cancel-preparation", help="request cancellation of one preparation"
+    )
+    _add_client_connection_arguments(cancel_preparation)
+    cancel_preparation.add_argument("operation_id", metavar="OPERATION_ID")
+    _add_output_options(cancel_preparation)
+    cancel_preparation.set_defaults(handler=handle_daemon_cancel_preparation)
 
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
@@ -761,6 +784,39 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
         result = _daemon_client(namespace).submit(
             LocalDaemonAdmissionRequest(namespace.queue_item_id, namespace.run_uri)
         )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_upgrade(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
+
+    try:
+        service = load_coordinator_service_config(namespace.config, env_file=namespace.env_file, _allow_unready=True)
+        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(service.daemon.coordinator_root)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version})
+
+
+def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
+    from loom.queue.preparation import PrepareRunRequest
+
+    try:
+        raw = json.loads(namespace.request.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("prepare request must be a JSON object")
+        result = _daemon_client(namespace).prepare_run(PrepareRunRequest.from_dict(raw))
+    except (OSError, json.JSONDecodeError, QueueError) as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_cancel_preparation(namespace: argparse.Namespace) -> int:
+    try:
+        result = _daemon_client(namespace).cancel_preparation(namespace.operation_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -1381,12 +1437,14 @@ __all__ = [
     "handle_drain_foreground",
     "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
+    "handle_daemon_cancel_preparation",
     "handle_daemon_admission",
     "handle_daemon_admissions",
     "handle_daemon_agent",
     "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
+    "handle_daemon_upgrade",
     "handle_daemon_check",
     "handle_daemon_serve",
     "handle_daemon_status",
@@ -1397,6 +1455,7 @@ __all__ = [
     "handle_daemon_replace_agent_session",
     "handle_daemon_recover_unknown",
     "handle_daemon_submit",
+    "handle_daemon_prepare",
     "handle_daemon_wait",
     "handle_preflight",
     "handle_start",

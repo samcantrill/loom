@@ -72,9 +72,14 @@ if TYPE_CHECKING:
         LocalDaemonExecution,
         LocalDaemonExecutionOutcome,
     )
+    from .preparation import PrepareRunRequest
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 12
+_COORDINATOR_SCHEMA_VERSION = 13
+_AGENT_SCHEMA_VERSION = 12
+# Kept for the outbound-session transport, whose retained worker journal stays
+# at schema 12 through the coordinator-only migration.
+_LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
@@ -660,9 +665,12 @@ class LocalDaemonConfig:
     active_configuration_fingerprint: str | None = None
     coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
     gpu_occupancy_policy: GpuOccupancyPolicy | None = None
+    preparation_enabled: bool = False
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
+        if not isinstance(self.preparation_enabled, bool):
+            raise QueueServiceError("preparation_enabled must be boolean")
         agent = None if self.agent_root is None else Path(self.agent_root)
         run_store = Path(self.run_store_root)
         deployment_root = (
@@ -1626,6 +1634,52 @@ class LocalDaemon:
             raise
 
     @classmethod
+    def upgrade_coordinator_root(cls, root: Path) -> tuple[str, int]:
+        """Atomically upgrade a stopped coordinator root from schema 12 to 13.
+
+        Worker roots intentionally remain schema 12.  The backup is evidence for
+        an operator, never an automatic rollback path.
+        """
+        _validate_private_directory(root)
+        database = root / "control.sqlite"
+        if not database.is_file() or stat.S_IMODE(database.stat().st_mode) & 0o077:
+            raise QueueStorageError("coordinator root is unavailable")
+        with sqlite3.connect(database) as conn:
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            identity = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+            ).fetchone()
+            role = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'role'"
+            ).fetchone()
+            if role is None or str(role[0]) != "coordinator" or identity is None:
+                raise QueueStorageError("coordinator root identity is invalid")
+            if version == _COORDINATOR_SCHEMA_VERSION:
+                return str(identity[0]), version
+            if version != 12:
+                raise QueueStorageError("coordinator root schema cannot be upgraded")
+            backup = root / f"control.sqlite.{str(identity[0])}.schema-12.backup"
+            if backup.exists():
+                raise QueueStorageError("coordinator upgrade backup already exists")
+            with sqlite3.connect(backup) as destination:
+                conn.backup(destination)
+            backup.chmod(0o600)
+            try:
+                conn.execute(
+                    "CREATE TABLE preparation_operations ("
+                    "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                    "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+                    "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
+                    "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
+                )
+                conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
+                conn.commit()
+            except sqlite3.Error as exc:
+                conn.rollback()
+                raise QueueStorageError("coordinator root upgrade failed") from exc
+        return str(identity[0]), _COORDINATOR_SCHEMA_VERSION
+
+    @classmethod
     def initialize_agent_root(cls, root: Path) -> None:
         """Create one fresh protected agent root for an outbound agent owner."""
         path = Path(root)
@@ -2228,6 +2282,71 @@ class LocalDaemon:
         if management_operation is not None:
             return management_operation
         raise QueueServiceError("managed operation was not found")
+
+    def prepare_run(
+        self, request: "PrepareRunRequest", *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Durably accept one preparation intent before any capture or dispatch.
+
+        Capture and child reconciliation are deliberately separate from this
+        transaction.  This makes same-ID recovery unambiguous if a client loses
+        the response immediately after acceptance.
+        """
+        from .preparation import PrepareRunRequest
+
+        if not self.config.preparation_enabled:
+            raise QueueServiceError("preparation is unsupported")
+        if not isinstance(request, PrepareRunRequest):
+            raise QueueServiceError("prepare request is invalid")
+        if request.source.mode != "shared":
+            raise QueueServiceError("staged preparation input is unsupported")
+        coordinator_id = self._require_started()
+        intent = request.intent_digest(principal_id)
+        result: dict[str, PlainData] = {
+            "schema_version": 1,
+            "coordinator_id": coordinator_id,
+            "input_receipt": None,
+            "preparation_admission_id": None,
+            "preflight_status": None,
+            "preflight": None,
+            "report_ref": None,
+            "prepared_run": None,
+            "evidence_refs": [],
+        }
+        with self._connection() as conn:
+            existing = conn.execute(
+                "SELECT principal_id, intent_digest, state, result_code, result_json "
+                "FROM preparation_operations WHERE operation_id = ?", (request.operation_id,)
+            ).fetchone()
+            if existing is not None:
+                if str(existing["principal_id"]) != principal_id or str(existing["intent_digest"]) != intent:
+                    raise QueueConflictError("preparation operation intent conflicts")
+                return LocalDaemonOperation(request.operation_id, "prepare_run", str(existing["state"]), None if existing["result_code"] is None else str(existing["result_code"]), freeze_plain_data(json.loads(str(existing["result_json"])), path="preparation result"))
+            if _operation_projection(conn, request.operation_id) is not None:
+                raise QueueConflictError("managed operation identity is ambiguous")
+            conn.execute(
+                "INSERT INTO preparation_operations(operation_id, principal_id, intent_digest, request_json, state, result_code, result_json, cancellation_requested) VALUES (?, ?, ?, ?, 'pending', NULL, ?, 0)",
+                (request.operation_id, principal_id, intent, json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":")), json.dumps(result, sort_keys=True, separators=(",", ":"))),
+            )
+            conn.commit()
+        return LocalDaemonOperation(request.operation_id, "prepare_run", "pending", None, freeze_plain_data(result, path="preparation result"))
+
+    def cancel_preparation(self, operation_id: str, *, principal_id: str) -> LocalDaemonOperation:
+        _required_string({"operation_id": operation_id}, "operation_id")
+        with self._connection() as conn:
+            row = conn.execute("SELECT principal_id, state, result_code, result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+            if row is None:
+                raise QueueServiceError("managed preparation operation was not found")
+            if str(row["principal_id"]) != principal_id:
+                raise QueueConflictError("preparation operation belongs to another principal")
+            state = str(row["state"])
+            if state in {"pending", "applying"}:
+                # There is no child to release before the runtime has admitted it;
+                # cancellation is therefore terminal proof, rather than an ACK.
+                state = "cancelled"
+                conn.execute("UPDATE preparation_operations SET state = ?, cancellation_requested = 1 WHERE operation_id = ?", (state, operation_id))
+                conn.commit()
+            return LocalDaemonOperation(operation_id, "prepare_run", state, None if row["result_code"] is None else str(row["result_code"]), freeze_plain_data(json.loads(str(row["result_json"])), path="preparation result"))
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
@@ -3800,6 +3919,14 @@ class LocalDaemonClientView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.operation(operation_id)
 
+    def prepare_run(self, request: "PrepareRunRequest") -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.prepare_run(request, principal_id=self._principal.subject)
+
+    def cancel_preparation(self, operation_id: str) -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.cancel_preparation(operation_id, principal_id=self._principal.subject)
+
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
     ) -> OperationWaitResult:
@@ -4069,7 +4196,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
             "INSERT INTO root_metadata (key, value) VALUES ('stable_id', ?)",
             (f"{role}-{uuid4()}",),
         )
-        conn.execute(f"PRAGMA user_version = {_LOCAL_DAEMON_SCHEMA_VERSION}")
+        conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION if role == 'coordinator' else _AGENT_SCHEMA_VERSION}")
         if role == "coordinator":
             conn.execute(
                 "CREATE TABLE daemon_metadata "
@@ -4137,6 +4264,13 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
                 "result_json TEXT NOT NULL)"
             )
+            conn.execute(
+                "CREATE TABLE preparation_operations ("
+                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+                "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
+                "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
+            )
         initialize_agent_session_schema(conn, coordinator=role == "coordinator")
         conn.commit()
     database.chmod(0o600)
@@ -4152,7 +4286,8 @@ def _open_root(path: Path, *, role: str) -> str:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version != _LOCAL_DAEMON_SCHEMA_VERSION:
+        expected_version = _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
+        if version != expected_version:
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
@@ -4425,6 +4560,10 @@ def _operation_projection(
         (
             "recovery",
             "SELECT state, NULL AS result_code, result_json AS effect_json FROM recovery_operations WHERE recovery_id = ?",
+        ),
+        (
+            "prepare_run",
+            "SELECT state, result_code, result_json AS effect_json FROM preparation_operations WHERE operation_id = ?",
         ),
     )
     matches: list[LocalDaemonOperation] = []

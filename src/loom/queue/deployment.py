@@ -203,7 +203,7 @@ def load_coordinator_service_config(
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles"},
+        {"scheduling", "slurm_profiles", "preparation"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
@@ -279,6 +279,7 @@ def load_coordinator_service_config(
         gpu_occupancy_policy=None
         if local_agent is None
         else local_agent.gpu_occupancy_policy,
+        preparation_enabled=_preparation_enabled(payload.get("preparation")),
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -1230,9 +1231,19 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),
                 "slurm_profiles": payload.get("slurm_profiles"),
+                "preparation": payload.get("preparation"),
             }
         ),
     )
+
+
+def _preparation_enabled(value: object) -> bool:
+    """Accept only an explicit nonempty protected preparation policy."""
+    if value is None:
+        return False
+    if not isinstance(value, Mapping) or not value:
+        raise QueueConfigError("preparation policy is invalid")
+    return True
 
 
 def _local_agent_immutable_projection(

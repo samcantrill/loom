@@ -38,6 +38,7 @@ from .local_daemon import (
     LocalDaemonRole,
     OperationWaitResult,
 )
+from .preparation import PrepareRunRequest
 
 
 CONTROL_CAPABILITY = "daemon-control-v1"
@@ -55,13 +56,15 @@ CONTROL_OPERATIONS = frozenset(
         "inspect_run",
         "operation",
         "wait_operation",
+        "prepare_run",
+        "cancel_preparation",
         "submit",
         "wait_admission",
         "cancel",
     }
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
-MUTATION_OPERATIONS = frozenset({"submit", "cancel"})
+MUTATION_OPERATIONS = frozenset({"submit", "cancel", "prepare_run", "cancel_preparation"})
 
 
 class CoordinatorClientError(QueueServiceError):
@@ -344,7 +347,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return AgentPage.from_dict(value)
     if operation == "agent":
         return AgentProjection.from_dict(value)
-    if operation == "operation":
+    if operation in {"operation", "prepare_run", "cancel_preparation"}:
         return LocalDaemonOperation.from_dict(value)
     if operation == "wait_operation":
         return OperationWaitResult.from_dict(value)
@@ -398,6 +401,8 @@ def validate_request(
         "status": set(),
         "submit": {"request"},
         "cancel": {"queue_item_id"},
+        "prepare_run": {"request"},
+        "cancel_preparation": {"operation_id"},
         "admissions": {"limit", "cursor"},
         "agents": {"limit", "cursor"},
         "admission": {"admission_id"},
@@ -439,6 +444,11 @@ def validate_request(
         if not isinstance(request, Mapping):
             raise ValueError("admission request must be an object")
         value["request"] = LocalDaemonAdmissionRequest.from_dict(request)
+    if operation == "prepare_run":
+        request = value["request"]
+        if not isinstance(request, Mapping):
+            raise ValueError("prepare request must be an object")
+        value["request"] = PrepareRunRequest.from_dict(request)
     return value
 
 
@@ -498,8 +508,8 @@ def dispatch_control(
                 transport,
                 status.coordinator_id,
                 status.coordinator_epoch,
-                (CONTROL_CAPABILITY,),
-                (),
+                (CONTROL_CAPABILITY, *( ("agent-preparation-v1",) if daemon.config.preparation_enabled else () )),
+                (("shared",) if daemon.config.preparation_enabled else ()),
                 (),
                 (),
             )
@@ -548,6 +558,17 @@ def dispatch_control(
         elif operation == "submit":
             dispatched = True
             result = view.submit(cast(LocalDaemonAdmissionRequest, value["request"]))
+            applied = True
+        elif operation == "prepare_run":
+            request = cast(PrepareRunRequest, value["request"])
+            if not daemon.config.preparation_enabled or request.source.mode != "shared":
+                raise control_error("unsupported", operation, payload, boundary="coordinator")
+            dispatched = True
+            result = view.prepare_run(request)
+            applied = True
+        elif operation == "cancel_preparation":
+            dispatched = True
+            result = view.cancel_preparation(cast(str, value["operation_id"]))
             applied = True
         elif operation == "cancel":
             dispatched = True

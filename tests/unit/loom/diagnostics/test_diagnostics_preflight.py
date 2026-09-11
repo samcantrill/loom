@@ -17,6 +17,7 @@ from loom.diagnostics import (
     PreflightSeverity,
     PreflightStatus,
     run_preflight,
+    run_preflight_composed,
 )
 from loom.diagnostics.models import PreflightError
 from loom.pipeline.stores import (
@@ -28,6 +29,23 @@ from loom.pipeline.stores import (
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_supplied_composition_is_checked_without_reloading_or_reapplying_overrides() -> None:
+    @dataclass
+    class _Composed:
+        source_artifacts: tuple[object, ...] = ()
+
+    result = run_preflight_composed(
+        _Composed(), PreflightRequest(config_path="missing.yaml", groups=("config",))
+    )
+
+    assert result.status is PreflightStatus.PASS
+    with pytest.raises(ValueError, match="overlays"):
+        run_preflight_composed(
+            _Composed(),
+            PreflightRequest(config_path="missing.yaml", groups=("config",), overlays=("other.yaml",)),
+        )
 
 
 def test_selected_codec_group_runs_only_codec_check() -> None:

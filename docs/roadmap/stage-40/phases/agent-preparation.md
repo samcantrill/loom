@@ -795,9 +795,9 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
+| Implementation and changed paths | Added native request/source/capture value models, supplied-composition preflight, initial coordinator prepare/cancel operation persistence, coordinator-only 12-to-13 root upgrade, native client/transport dispatch and CLI request/cancel/upgrade entrypoints. The shared capture validates contained regular files, manifest/reuse integrity and copied bytes. |
+| Tests added or updated | Added focused request/capture and durable operation tests plus supplied-composition preflight coverage. |
+| Validated revision/tree state and evidence | Focused Ruff passed. Unit selection passed: 173 tests across preparation, publisher, deployment, diagnostics, coordinator client and CLI. The broader existing integration selection ran 166 tests with one existing GPU placement test failure: `test_gpu_model_preference_selects_exact_private_local_or_remote_binding[False]` timed out waiting for its preprocess stage; no preparation path is involved. |
+| Validation-relevant changes after evidence | None after the focused evidence; the integration failure remains to be triaged or rerun by the manager. |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Persistent Stage 40 worktree retained and correct phase branch verified; no real roots upgraded |
+| Residual risk and cleanup | The managed child/report/final publication/reconciliation integration remains incomplete: this initial durable operation currently stops at acceptance and cancellation. It cannot satisfy Phase 2 delivery until that runtime is wired through qualified profiles, native child execution and `prepare_managed_run`. Persistent Stage 40 worktree retained; no real roots upgraded. |
