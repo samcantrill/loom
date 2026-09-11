@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 40 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p2-agent-preparation
@@ -14,7 +14,7 @@
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 2: Durable Preparation On Shared Storage
 - Dependencies: Phase 1 PR #298 remotely merged as `3b3942a88ee0729612f02fe3d7dbda3164c762d4`; stage plan approved on 2026-09-10
 - Workflow path: expanded for durable operations, filesystem/process handoffs, migration and cancellation
-- Blockers: the malformed-evidence correction passes affected validation; independent confirmation is pending.
+- Blockers: none
 
 ### Execution startup
 
@@ -839,13 +839,13 @@ The manager owns startup reconciliation and any changed public/durable decision.
 - Named profile/capability discovery: optional explorer returned unavailable after empty tool output; no evidence was used. Manager source investigation and qualification/dispatch tests resolved the question
 - Refiner: not needed
 - Pre-submit gate: passed; accepted scope, source boundaries, current full/affected evidence, documentation and residual limitations agree
-- Independent review: reviewed PR head `8d357aa4cc495da8dd8970c3b1d76aedd92e3438`; one blocker requires normalizing malformed committed native evidence into invalid_preparation_report. Return the correction to the same reviewer.
-- Blocker corrections: 3/3; profile process-spawn compatibility, summary-run test synchronization assumptions, and committed-report decoder classification. The third correction passes affected validation and awaits the same reviewer's confirmation.
-- PR and merge: #300 open against develop; independent review and delivery pending
+- Independent review: passed at `b0f6f91a389022926062548d2889138d0fe15704`; the same reviewer confirmed the malformed-evidence correction with no remaining findings and declared the actual PR head merge-eligible.
+- Blocker corrections: 3/3; profile process-spawn compatibility, summary-run test synchronization assumptions, and committed-report decoder classification. All three corrections passed their applicable validation and independent review.
+- PR and merge: #300 squash-merged into develop as `5918bfd364a8637a0aa6acf87b60a5d71defd39d` on 2026-09-11T07:50:04Z; the shared delivery gate verified the remote merge and retired the exact remote phase branch.
 
 ## Completion Record
 
-Current correction coverage: normalize native value/serialization failures only
+Review correction coverage: normalize native value/serialization failures only
 at the report, worker-result and runtime decoding boundaries, and native artifact
 codec failures after checksum validation. Preserve storage/I/O retry behavior and
 the publication claim. The real worker fixture commits malformed preflight,
@@ -854,9 +854,8 @@ worker result exercises its codec boundary. Each must terminate as
 failed/invalid_preparation_report with no target. The complete preparation
 operation, child, CLI and unit files passed in the isolated locked config environment
 (44 tests), with affected Ruff/Pyright and diff checks passing. This includes existing publication,
-placement, cancellation and unavailable-report recovery consumers. Expand only
-for a newly affected consumer or unresolved failure; reuse the two completed full
-gate receipts for unchanged behavior.
+placement, cancellation and unavailable-report recovery consumers. The bounded correction reused the two completed full
+gate receipts for unchanged behavior; independent review accepted that coverage.
 
 | Item | Result |
 | --- | --- |
@@ -874,6 +873,6 @@ gate receipts for unchanged behavior.
 | Required summary gate | Corrected `make test-summary` passed at `533919291759df738e3432164e465aa17dc44162`: 125 package, 2,263 unit, 301 contract, 493 integration, 70 E2E and 199 config-extra tests passed; 3,451 passed overall, zero failures/errors and 18 skipped. Evidence: `/tmp/loom-stage40-p2-synchronized-summary.log` and `build/test-summary.md` (generated 2026-09-11T07:20:56Z). The complete result supersedes the initial summary failures. Its test-only corrections put a direct reconciliation call under the native daemon lock and use durable no-assignment evidence across ordinary execution rather than requiring one intermediate admission projection. The summary precedes the bounded report-decoder correction recorded below. |
 | Independent-review correction and current validation | Native report, worker-result and runtime value/serialization failures now become invalid_preparation_report; checksummed artifact codec failures follow the same path. Storage/I/O errors remain retryable and the applying publication claim is preserved. At `503b6d02b40c9b7fa0ba285757bf01073d68099e`, `env -u VIRTUAL_ENV uv run --python 3.12 --isolated --locked --group dev --extra config pytest tests/unit/loom/test_preparation.py tests/integration/queue/test_preparation_operations.py tests/integration/queue/test_preparation_child.py tests/integration/queue/test_preparation_cli.py -x` passed all 44 cases, including six malformed native producer regressions and existing unavailable-report recovery. Affected Ruff and Pyright passed (zero errors/warnings); diff whitespace passed. Evidence: `/tmp/loom-stage40-p2-report-decoder-tests.log`, `/tmp/loom-stage40-p2-report-decoder-pyright.log`. These affected checks reconcile the bounded source/test delta with both completed full gates; subsequent phase-record edits only update evidence. |
 | Documentation checks | All 23 added relative file links resolve; previously checked anchors are unchanged. The feature guide and two operation examples contain 24 shell/Python blocks that parse. Both example requests and the guide request round-trip through the native request model. Both YAML blocks parse, and the guide policy passes the native loader with its documented observed-profile placeholder. The CLI fixtures exercise the documented lifecycle. One unchanged link in `docs/loom.md` points to absent historical migration notes; this phase does not alter it. |
-| Pre-submit, PR and independent review | Pre-submit passed: the phase implements its accepted common lifecycle and shared-only boundary, reuses native authority/scheduling/publication, preserves ordinary protocols and import boundaries, and carries complete local evidence and accurate deployment limitations. [PR #300](https://github.com/samcantrill/loom/pull/300) is open, non-draft and mergeable against develop with the canonical title and phase branch. Independent review of `8d357aa4cc495da8dd8970c3b1d76aedd92e3438` found the report decoder blocker. Its correction and affected evidence now await confirmation from the same reviewer; no approval is claimed yet. |
+| Pre-submit, PR and independent review | Pre-submit passed: the phase implements its accepted common lifecycle and shared-only boundary, reuses native authority/scheduling/publication, preserves ordinary protocols and import boundaries, and carries complete local evidence and accurate deployment limitations. [PR #300](https://github.com/samcantrill/loom/pull/300) had the canonical title, phase branch and develop target. Independent review found and then confirmed correction of the report decoder blocker at `b0f6f91a389022926062548d2889138d0fe15704`, with no remaining findings. Both full gates plus affected correction checks were reconciled to that reviewed head; the subsequent delta from the tested correction was evidence documentation only. The shared delivery gate verified its remote squash merge. |
 | Residual limitations | Shared mode only; staged mode belongs to Phase 3. Finite capture, one existing qualified preparation environment, embedded authority with no configured SLURM preparation, no code/environment installation, retained evidence without automatic expiration, and preserved partial-target conflicts remain accepted limits. The 18 summary skips are opt-in Docker/Apptainer acceptance cases. Physical fleet/NAS/Codex acceptance is assigned to Phase 4. No real roots were upgraded. |
-| Delivery and cleanup | Phase 2 remains in progress until independent review, remote merge, metadata publication and synchronization complete. Persistent Stage 40 worktree retained; Phase 3 has not started. |
+| Delivery and cleanup | PR #300 remotely merged as `5918bfd364a8637a0aa6acf87b60a5d71defd39d`; the exact remote phase branch was deleted. The transition gate verified the merge and moved the retained stage worktree onto agent/stage-40 at that commit with clean control develop synchronized. This completion record is published from coordination before the mandatory synchronization and exact local phase-branch retirement gates permit Phase 3. The stage worktree remains owned by Stage 40 through final closeout. |
