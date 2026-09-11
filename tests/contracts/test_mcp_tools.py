@@ -80,7 +80,12 @@ class Spy:
     "tool,arguments,native,args",
     [
         ("loom_status", {}, ["describe_connection", "status"], [(), ()]),
-        ("loom_prepare_run", PREPARE, ["prepare_run"], [(PREPARE,)]),
+        (
+            "loom_prepare_run",
+            PREPARE,
+            ["prepare_run"],
+            [({**PREPARE, "overlays": [], "overrides": [], "run_options": {}},)],
+        ),
         (
             "loom_get_operation",
             {"operation_id": "prepare-one"},

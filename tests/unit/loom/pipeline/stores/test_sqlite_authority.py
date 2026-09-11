@@ -940,7 +940,7 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
         replies = tuple(pool.map(retry, range(2)))
     assert replies[0] == replies[1]
     snapshot = store.open_run(run_uri)
-    assert snapshot.status is RunStatus.RUNNING
+    assert snapshot.status is RunStatus.PLANNED
     assert snapshot.stages[0].status is StageStatus.STALE
     assert snapshot.stages[0].attempts == (previous,)
     assert snapshot.stages[1].attempts == (pending.attempt,)
@@ -958,6 +958,19 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
     assert next_attempt.attempt.attempt == 2
     assert retry(None) == replies[0]
     assert len(store.open_run(run_uri).stages[0].attempts) == 2
+    store.bind_prepared_attempt(
+        run_uri,
+        assignment_id="retry-assignment",
+        attempt_id=next_attempt.attempt.attempt_id,
+    )
+    next_fence = store.grant_prepared_attempt(
+        run_uri,
+        assignment_id="retry-assignment",
+        attempt_id=next_attempt.attempt.attempt_id,
+    )
+    assert store.open_run(run_uri).status is RunStatus.PLANNED
+    store.confirm_execution_started(run_uri, fence=next_fence)
+    assert store.open_run(run_uri).status is RunStatus.RUNNING
     with pytest.raises(AuthorityStoreError, match="terminal result conflicts"):
         store.record_managed_attempt_terminal(
             run_uri,

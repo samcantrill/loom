@@ -909,7 +909,7 @@ that assertion. Source and import roots resolve against `project_root`.
 
 `readiness.preparation: true` additionally checks Loom's preparation stage and
 Weave's configuration loader in the selected Python. A nonempty
-`preparation_shared_roots` mapping or outbound `preparation-input-v1` capability
+`preparation_shared_roots` mapping or outbound `preparation-input-v2` capability
 requests this check automatically. It reports `packages.preparation_imports`
 without adding imports to the portable software fingerprint declaration. See
 [preparation rollout](agent-preparation.md#operator-configuration-and-rollout)
@@ -1384,7 +1384,7 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. Current control uses the v5 CLI result shape and agent
-protocol 11. Coordinator roots use schema 13; agent roots and journals remain
+protocol 11. Coordinator roots use schema 14; agent roots and journals remain
 at schema 12. Existing schema-12 coordinator roots use the explicit
 [offline upgrade](../downstream-operations.md#upgrade-a-retained-coordinator-root),
 which preserves stable identities, admissions and worker state. Older unsupported

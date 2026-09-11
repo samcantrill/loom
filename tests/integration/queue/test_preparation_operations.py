@@ -398,9 +398,51 @@ def _result(operation: LocalDaemonOperation) -> Mapping[str, Any]:
     return operation.result
 
 
-@pytest.mark.parametrize("mode", ("shared", "staged"))
-def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize(
+    ("mode", "family"),
+    (("shared", "embedded"), ("staged", "embedded"), ("shared", "authenticated")),
+)
+def test_native_unix_prepare_publish_submit_and_reconnect(
+    tmp_path: Path, mode: str, family: str
+) -> None:
     service = _service(tmp_path, mode=mode)
+    if family == "authenticated":
+        from fastapi.testclient import TestClient
+        from urllib.parse import urlsplit
+        from loom.authority._repository import initialize_authority_repository
+        from loom.authority.app import create_authority_app
+        from loom.authority.services import repository_authority_services
+        from loom.pipeline.stores import AuthorityClient
+        from loom.pipeline.stores.coordinator_authority import (
+            authenticated_coordinator_authority_factory,
+        )
+
+        repository = initialize_authority_repository(
+            tmp_path / "authority", service_generation="generation-1"
+        )
+        api = TestClient(
+            create_authority_app(
+                services=repository_authority_services(
+                    repository, workspace_id="workspace"
+                )
+            )
+        )
+
+        def transport(url, payload, timeout):
+            response = api.post(urlsplit(url).path, json=payload)
+            assert response.status_code == 200
+            return response.json()
+
+        factory = authenticated_coordinator_authority_factory(
+            AuthorityClient("https://authority.test", transport=transport),
+            service_id="coordinator",
+            workspace_id="workspace",
+            service_generation="generation-1",
+        )
+        service = replace(
+            service,
+            daemon=replace(service.daemon, coordinator_authority_factory=factory),
+        )
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
@@ -418,6 +460,14 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path, mode: 
                 daemon._service_error,
             )
             receipt = _result(completed)["prepared_run"]
+            from loom.pipeline.status import RunStatus
+
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            assert (
+                factory(receipt["run_uri"]).open_run(receipt["run_uri"]).status
+                is RunStatus.PLANNED
+            )
             assert _result(completed)["preflight_status"] == "PASS"
             assert _result(completed)["report_ref"] is not None
             assert client.prepare_run(_request(mode)) == completed
@@ -1223,7 +1273,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 13}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 14}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1235,7 +1285,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 13)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 14)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1437,7 +1487,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1833,4 +1883,280 @@ def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_
             assert completed.code == "result_too_large"
             assert not (service.daemon.run_store_root / "target-1").exists()
     finally:
+        daemon.stop()
+
+
+def test_slurm_target_is_prepared_by_resident_child_without_dispatch(
+    tmp_path: Path,
+) -> None:
+    from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+    from loom.pipeline.status import RunStatus
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+    from tests.integration.queue.test_slurm_ready_stage import _profile
+
+    service = _service(tmp_path)
+    worker = service.daemon.resident_worker_launch_profile
+    assert worker is not None
+    runner = FakeSlurmCommandRunner()
+    profile = replace(
+        _profile(runner),
+        **{
+            key: worker.descriptor[key]
+            for key in (
+                "project_fingerprint",
+                "environment_fingerprint",
+                "executor_fingerprint",
+            )
+        },
+    )
+    from tests.integration.authority.test_coordinator_authority_api import (
+        _authority_factory,
+    )
+    from loom.pipeline.stores.coordinator_authority import (
+        embedded_coordinator_authority,
+    )
+
+    _, factory = _authority_factory(tmp_path)
+    service = replace(
+        service,
+        daemon=replace(
+            service.daemon,
+            slurm_profiles=(profile,),
+            coordinator_authority_factory=factory,
+        ),
+    )
+    source = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(source.read_text())
+    authored["pipeline"]["stages"][0]["placement"] = {
+        "execution_route": {"kind": "slurm", "profile": profile.profile_id}
+    }
+    source.write_text(json.dumps(authored))
+    LocalDaemon.initialize_deployment(service.daemon)
+    captured = Event()
+
+    class HeldPreparation(CoordinatorPreparation):
+        def prepare_child(self, *args, **kwargs):
+            captured.set()
+            raise OSError("preparation installation temporarily unavailable")
+
+    first = LocalDaemon(service.daemon, preparation=HeldPreparation(service))
+    first.start()
+    try:
+        accepted = first._preparations.accept(_request(), "local-owner")
+        assert captured.wait(10)
+    finally:
+        first.stop()
+    for changed in (
+        replace(
+            service.daemon, coordinator_authority_factory=embedded_coordinator_authority
+        ),
+        replace(
+            service.daemon, slurm_profiles=(replace(profile, partition="different"),)
+        ),
+    ):
+        unavailable = LocalDaemon(changed, preparation=CoordinatorPreparation(service))
+        unavailable.start()
+        try:
+            unavailable.reconcile_once()
+            with unavailable._connection() as connection:
+                row = connection.execute(
+                    "SELECT state, result_code FROM preparation_operations WHERE operation_id = ?",
+                    (accepted.operation_id,),
+                ).fetchone()
+            assert (
+                row["state"] == "pending"
+                and row["result_code"] == "preparation_unavailable"
+            )
+            assert not (service.daemon.run_store_root / "target-1").exists()
+        finally:
+            unavailable.stop()
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            operation = client.operation(accepted.operation_id)
+            complete = client.wait_operation(
+                operation.operation_id, timeout_seconds=25
+            ).operation
+            assert complete.state == "applied", complete.to_dict()
+            receipt = _result(complete)["prepared_run"]
+            store = LocalRunStore(service.daemon.run_store_root)
+            record = load_managed_local_runtime_record(store, receipt["run_uri"])
+            placements = record["placements"]
+            assert isinstance(placements, dict)
+            target = placements["produce"]
+            assert isinstance(target, dict)
+            route = target["route"]
+            assert isinstance(route, dict)
+            assert route["profile_descriptor"] == profile.descriptor.to_dict()
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            assert (
+                factory(receipt["run_uri"]).open_run(receipt["run_uri"]).status
+                is RunStatus.PLANNED
+            )
+            assert runner.calls == []
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+def test_skip_only_prepared_target_terminalizes_without_executing(
+    tmp_path: Path,
+) -> None:
+    from loom.pipeline.status import RunStatus, StageStatus
+
+    service = _service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            request = replace(
+                _request(), run_options={"selectors": {"skip_stages": ["produce"]}}
+            )
+            operation = client.prepare_run(request)
+            complete = client.wait_operation(
+                operation.operation_id, timeout_seconds=25
+            ).operation
+            assert complete.state == "applied", complete.to_dict()
+            receipt = _result(complete)["prepared_run"]
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            authority = factory(receipt["run_uri"])
+            assert authority.open_run(receipt["run_uri"]).status is RunStatus.PLANNED
+            client.submit(
+                LocalDaemonAdmissionRequest("skip-target", receipt["run_uri"])
+            )
+            assert (
+                client.wait("skip-target", timeout_seconds=25).state.value
+                == "SUCCEEDED"
+            )
+            snapshot = authority.open_run(receipt["run_uri"])
+            assert snapshot.status is RunStatus.SUCCEEDED
+            assert snapshot.stages[0].status is StageStatus.SKIPPED
+            assert not snapshot.stages[0].attempts
+            assert (
+                LocalRunStore(service.daemon.run_store_root).read_stage_worker_result(
+                    receipt["run_uri"], "produce", attempt=1
+                )
+                is None
+            )
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+def test_reuse_only_plan_completes_from_planned_without_new_attempt(
+    tmp_path: Path,
+) -> None:
+    from weave import compose_config
+    from loom.pipeline import PipelineSpec
+    from loom.pipeline.planning import (
+        PlanAction,
+        build_stage_fingerprint,
+        plan_pipeline,
+    )
+    from loom.pipeline.runtime import RunOptions, build_runtime_metadata
+    from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
+    from loom.pipeline.stores import path_to_run_uri
+    from loom.pipeline.stores.coordinator_authority import publish_prepared_run
+    from loom.queue.local_daemon_runtime import prepare_managed_local_runtime_record
+    from loom.queue.managed_local_preparation import _persist_composed_config
+
+    service = _service(tmp_path)
+    store = LocalRunStore(service.daemon.run_store_root)
+    run_uri = path_to_run_uri(service.daemon.run_store_root / "reusable")
+    store.create_run(run_uri)
+    composed = compose_config(tmp_path / "projects" / "pipeline.yaml")
+    pipeline = PipelineSpec.from_config(composed.resolved["pipeline"])
+    stage = pipeline.get_stage("produce")
+    artifacts = LocalArtifactStore(store.local_artifact_root(run_uri))
+    output = artifacts.save(
+        {"value": 41},
+        stage_name="produce",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    store.write_stage_status(
+        run_uri,
+        "produce",
+        StageStatusRecord(
+            run_uri, "produce", StageStatus.SUCCEEDED, 1, "2026-09-12T00:00:00Z"
+        ),
+    )
+    store.write_stage_inputs(run_uri, "produce", {}, attempt=1)
+    store.write_stage_outputs(run_uri, "produce", {"data": output}, attempt=1)
+    store.write_stage_fingerprint(
+        run_uri,
+        "produce",
+        build_stage_fingerprint(stage, bound_inputs={}).to_dict(),
+        attempt=1,
+    )
+    store.write_artifact_index(run_uri, {"produce.data": output})
+    plan = plan_pipeline(
+        pipeline,
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=artifacts,
+        persist=True,
+    )
+    assert plan.stage_plans[0].action is PlanAction.REUSE
+    _persist_composed_config(store, run_uri, composed)
+    options = RunOptions(run_uri=run_uri, executor="local")
+    store.write_runtime_metadata(
+        run_uri,
+        build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict(),
+    )
+    digest = prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements={
+            "produce": ExecutionRequirement("project", "environment", "executor")
+        },
+        options=options,
+    )
+    publish_prepared_run(service.daemon.coordinator_authority_factory, run_uri, digest)
+    factory = service.daemon.coordinator_authority_factory
+    assert factory is not None
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    allocation = authority.allocate_stage_attempt(
+        run_uri, "produce", owner_id="prior-worker", lease_ttl_seconds=30
+    )
+    assert allocation.lease is not None
+    authority.record_output_commit(
+        run_uri,
+        "produce",
+        attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs={"data": output},
+    )
+    previous = authority.open_run(run_uri).stages[0].attempts
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon)
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.submit(LocalDaemonAdmissionRequest("reuse-target", run_uri))
+            outcome = client.wait("reuse-target", timeout_seconds=25)
+            assert outcome.state.value == "SUCCEEDED", outcome
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            snapshot = factory(run_uri).open_run(run_uri)
+            assert snapshot.status is RunStatus.SUCCEEDED
+            assert snapshot.stages[0].attempts == previous
+            assert artifacts.load(output) == {"value": 41}
+    finally:
+        server.stop()
         daemon.stop()

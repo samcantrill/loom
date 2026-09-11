@@ -29,6 +29,7 @@ from loom.pipeline.context import StageContext
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime.options import RunOptions
+from loom.pipeline.runtime import merge_config_run_options
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 from loom.pipeline.stores.errors import ArtifactChecksumMismatchError, ArtifactStoreError
@@ -59,6 +60,7 @@ from loom.queue.preparation import (
     PrepareRunRequest,
     SharedInputReceipt,
     resolve_shared_input,
+    _invocation_data,
 )
 from loom.serialization import PlainData, ensure_plain_data
 
@@ -78,6 +80,8 @@ _REPORT_FIELDS = {
     "composition",
     "execution_requirements",
     "preflight",
+    "invocation",
+    "effective_run_options",
 }
 
 
@@ -110,14 +114,39 @@ class PreparationStage:
             raise QueueServiceError(
                 "preparation source_unavailable: selected config is absent"
             )
-        composed = _compose_worker_config(config_path)
+        composed = _compose_worker_config(
+            config_path,
+            overlays=tuple(captured / path for path in binding.overlays),
+            overrides=binding.overrides,
+        )
+        # Includes and overlays are trusted config, but cannot escape the captured closure.
+        for source in cast(Any, composed).source_artifacts:
+            if source.kind == "recipe":
+                continue  # Installed recipe identity is qualified by the worker profile.
+            path = Path(source.path).resolve()
+            if not path.is_relative_to(captured.resolve()) or not path.is_file():
+                raise QueueServiceError(
+                    "preparation composition dependency is outside captured inputs"
+                )
         preflight = run_preflight_composed(
             composed,
             PreflightRequest(
-                config_path=config_path, cwd=captured, groups=_PREPARATION_GROUPS
+                config_path=config_path,
+                cwd=captured,
+                groups=_PREPARATION_GROUPS,
+                runtime_options=binding.run_options,
             ),
         )
         composition = _composition_data(composed)
+        provenance = cast(dict[str, PlainData], composition["provenance"])
+        metadata = cast(dict[str, PlainData], provenance["metadata"])
+        metadata["loom_invocation"] = _invocation_data(binding)
+        effective_options = None
+        if preparation_checks_allow_publication(preflight):
+            effective_options = merge_config_run_options(
+                cast(Any, composed).resolved, explicit=binding.run_options
+            )
+
         requirements: dict[str, PlainData] = {}
         if preflight.status != PreflightStatus.FAIL:
             pipeline = _pipeline_from_resolved(
@@ -128,7 +157,7 @@ class PreparationStage:
                 name: requirement.to_dict() for name in pipeline.stage_names
             }
         report: dict[str, PlainData] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "operation_id": binding.operation_id,
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "preparation_profile": binding.preparation_profile,
@@ -136,6 +165,10 @@ class PreparationStage:
             "composition": composition,
             "execution_requirements": requirements,
             "preflight": preflight.to_dict(),
+            "invocation": _invocation_data(binding),
+            "effective_run_options": None
+            if effective_options is None
+            else effective_options.to_dict(),
         }
         return {
             "report": context.save_artifact(
@@ -144,7 +177,12 @@ class PreparationStage:
         }
 
 
-def _compose_worker_config(config_path: Path) -> object:
+def _compose_worker_config(
+    config_path: Path,
+    *,
+    overlays: tuple[Path, ...] = (),
+    overrides: tuple[str, ...] = (),
+) -> object:
     from weave import RecipeCatalog, compose_config
     from loom.plugins import list_entry_points, load_recipe_entry_points
     from loom.plugins.entrypoints import LOOM_RECIPES_GROUP
@@ -154,7 +192,9 @@ def _compose_worker_config(config_path: Path) -> object:
     catalog = RecipeCatalog()
     records = list_entry_points(groups=(LOOM_RECIPES_GROUP,))
     load_recipe_entry_points(records, catalog, strict=True)
-    return compose_config(config_path, recipe_catalog=catalog)
+    return compose_config(
+        config_path, recipe_catalog=catalog, overlays=overlays, overrides=overrides
+    )
 
 
 def _worker_context() -> Mapping[str, PlainData]:
@@ -217,6 +257,7 @@ class _ReceivedComposition:
     manifest: _PlainEvidence
     recipe_manifest: tuple[dict[str, PlainData], ...]
     provenance: _PlainEvidence
+    effective_run_options: RunOptions | None = None
 
 
 def decode_preparation_report(
@@ -246,11 +287,12 @@ def _decode_preparation_report(
     if (
         set(report) != _REPORT_FIELDS
         or type(report["schema_version"]) is not int
-        or report["schema_version"] != 1
+        or report["schema_version"] != 2
     ):
         raise QueueServiceError("preparation report fields are invalid")
     if (
-        report["operation_id"] != expected.operation_id
+        report["invocation"] != _invocation_data(expected)
+        or report["operation_id"] != expected.operation_id
         or report["input_manifest_digest"] != expected.input_receipt.manifest_digest
         or report["preparation_profile"] != expected.preparation_profile
     ):
@@ -279,6 +321,9 @@ def _decode_preparation_report(
         _PlainEvidence(_plain_mapping(composition["manifest"])),
         tuple(_plain_mapping(recipe) for recipe in recipes),
         _PlainEvidence(_plain_mapping(composition["provenance"])),
+        None
+        if report["effective_run_options"] is None
+        else RunOptions.from_dict(report["effective_run_options"]),
     )
     preflight = PreflightResult.from_dict(report["preflight"])
     if preflight.groups != _PREPARATION_GROUPS:
@@ -290,7 +335,25 @@ def _decode_preparation_report(
         for name, data in _plain_mapping(report["execution_requirements"]).items()
     }
     if preparation_checks_allow_publication(preflight):
+        if received.effective_run_options is None:
+            raise QueueConflictError("preparation checked runtime options are missing")
         pipeline = _pipeline_from_resolved(received.resolved)
+        # Validate the serialized report against accepted invocation intent;
+        # publication still uses the worker's checked options unchanged.
+        expected_options = merge_config_run_options(
+            received.resolved,
+            explicit=expected.run_options,
+            known_stage_ids=pipeline.stage_names,
+        )
+        if expected_options != received.effective_run_options:
+            raise QueueConflictError(
+                "preparation report effective invocation conflicts"
+            )
+        provenance_metadata = _plain_mapping(received.provenance.value.get("metadata"))
+        if provenance_metadata.get("loom_invocation") != _invocation_data(expected):
+            raise QueueConflictError(
+                "preparation report invocation provenance conflicts"
+            )
         requirement = _profile_requirement(
             ResidentProfileDescriptor.from_dict(expected.profile_descriptor)
         )
@@ -498,7 +561,13 @@ class CoordinatorPreparation:
             pipeline = _pipeline_from_resolved(resolved)
             try:
                 run_uri, _options = _runtime_for_service(
-                    self._service(config), resolved, pipeline, request.run_name
+                    self._service(config),
+                    resolved,
+                    pipeline,
+                    request.run_name,
+                    effective_options=cast(
+                        _ReceivedComposition, composed
+                    ).effective_run_options,
                 )
             except (ValueError, ValidationError, SerializationError) as exc:
                 raise QueueConflictError(

@@ -1,17 +1,18 @@
 # Roadmap Stage 41 Implementation Plan
 
-Status: approved; nine-phase implementation baseline
+Status: implementation in progress; approved nine-phase baseline
 Roadmap stage: 41
 Stage descriptor: Unified Run Lifecycle And Agent Execution
 Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: none; implementation not started
-Next phase: Phase 1, preparation-publication, after packet landing and startup verification
-Blockers: none in the reviewed packet; landing and stage-worktree verification pending
+Current phase: Phase 1, preparation-publication
+Next phase: Phase 2, durable-run-operation, after Phase 1 merge and synchronization
+Blockers: none; the reviewed packet is published and stage-worktree startup passed
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
-published-source refinements and startup review requested on 2026-09-12.
+published-source refinements, startup review and whole-stage implementation
+requested on 2026-09-12.
 
 ## Summary
 
@@ -126,7 +127,7 @@ links directly to all nine walkthroughs.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | preparation-publication | pending | [Phase 1](phases/preparation-publication.md) | agent/stage-41-p1-preparation-publication | pending | Managed preparation publisher and selected authority | Prepare exact invocation intent and publish a truthful, replayable target through the selected authority. |
+| 1 | preparation-publication | pr_open | [Phase 1](phases/preparation-publication.md) | agent/stage-41-p1-preparation-publication | [308](https://github.com/samcantrill/loom/pull/308) | Managed preparation publisher and selected authority | Prepare exact invocation intent and publish a truthful, replayable target through the selected authority. |
 | 2 | durable-run-operation | pending | [Phase 2](phases/durable-run-operation.md) | agent/stage-41-p2-durable-run-operation | pending | Native run operation, coordinator continuation and cancellation | An accepted run reaches its exact admission after client loss and supports race-safe cancellation and observation against existing services. |
 | 3 | service-startup-lifetime | pending | [Phase 3](phases/service-startup-lifetime.md) | agent/stage-41-p3-service-startup-lifetime | pending | Deployment initializer, per-service lifetime and public run composition | The ordinary run command connects or safely starts configured services, then cleans only the roles whose lifetime permits it. |
 | 4 | agent-worker-execution | pending | [Phase 4](phases/agent-worker-execution.md) | agent/stage-41-p4-agent-worker-execution | pending | Agent resident execution, process supervisor and native/container executors | Native and configured container attempts use the same agent-owned worker and result boundary with correct resource and containment evidence. |
@@ -177,9 +178,9 @@ and all approved validation commands remain binding.
   neither receipt establishes runtime implementation or physical qualification.
 - Original planning quality: pass; the approved behavior and nine-phase shape
   remain the baseline. The current published-source amendment is reviewed below.
-- Execution readiness: amended packet passed independent review; landing and
-  stage-worktree verification remain the implementation handoff.
-  All phase execution statuses remain pending. No runtime work started.
+- Execution readiness: amended packet passed independent review and is published;
+  stage-worktree startup passed as recorded in Phase 1's Workflow State.
+  Phase execution state and runtime evidence are owned by the phase index/cards.
 
 ### Published-source startup readiness review
 
@@ -207,11 +208,12 @@ and all approved validation commands remain binding.
 - Post-review changes: readiness/status and receipt updates only. No accepted
   contract, example, validation obligation or phase boundary changed.
 - Landing/startup handoff: [plan PR 307](https://github.com/samcantrill/loom/pull/307).
-  Publication is pending. After landing, bootstrap `stage-41` with
-  `tools/phase_workflow.py` before implementation startup review or writes,
-  verify the exact packet/source, and reuse this receipt if unchanged. Record
-  the published base and startup result in Phase 1's Workflow State. Startup-only
-  scope does not authorize implementing Phase 1.
+  The reviewed packet is published; the exact merged base and completed startup
+  verification are recorded in [Phase 1's Workflow State](phases/preparation-publication.md#workflow-state).
+  The stage-worktree helper verified isolation before startup review and writes.
+  No relevant source drift invalidated the independent review. Startup receipts
+  join the Phase 1 PR. The subsequent whole-stage implementation request is
+  recorded above; this readiness pass itself claimed no runtime implementation.
 
 - Accepted risks: breaking APIs; original owner loss/accounting delay can leave
   work unresolved; live fleet/container/HPC/MCP qualification remains explicit.
@@ -222,7 +224,7 @@ and all approved validation commands remain binding.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | not started | Selected-authority/invocation integration evidence pending | not started |
+| 1 | [308](https://github.com/samcantrill/loom/pull/308), open | Implemented; both required gates and manager pre-submit review passed; evidence in Phase 1 card | Independent PR review and delivery pending; physical qualification remains with later owners | Replaced publication helper and consumers removed; branch retirement follows merge |
 | 2 | pending | not started | Persistent-service execution/cancellation evidence pending | not started |
 | 3 | pending | not started | Live fleet qualification and mixed-role process evidence pending | not started |
 | 4 | pending | not started | Real container/runtime qualification pending | not started |

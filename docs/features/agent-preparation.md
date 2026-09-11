@@ -31,7 +31,10 @@ This request selects `configs` within `example-project` under the allowed
     "include": ["configs"]
   },
   "config_path": "configs/experiment.yaml",
-  "preparation_profile": "example-cpu"
+  "preparation_profile": "example-cpu",
+  "overlays": ["configs/site.yaml"],
+  "overrides": ["model.width=64"],
+  "run_options": {"tags": {"experiment": "demo"}}
 }
 ```
 
@@ -40,6 +43,17 @@ relative to the selected project; `source.path` is relative to the configured
 root. `.` may select the root itself. Include explicit files or directories,
 including any configuration fragments composition needs. Includes are not globs.
 Absolute paths, traversal, symbolic links and special files are rejected.
+
+Ordered `overlays` name captured files relative to the selected project.
+Ordered `overrides` use existing configuration override strings. Sparse
+`run_options` preserve omitted fields and explicit values, and use Loom's usual
+base, selected runtime profile, then explicit invocation precedence. The worker
+merges these controls before preflight; publication consumes its effective
+options without changing them. Selectors, reuse, reliability/timeouts, resource
+settings, tags and notes remain governed by their native validators. Executor
+and adapter invocation inputs are rejected; validator registries and live Python
+objects are not serialized options. Preparation-profile options apply only to the
+internal child. Accepted requests and published provenance retain invocation intent.
 
 The selection permits at most 100 includes, 4,096 captured regular files and
 64 MiB of selected file bytes. The configuration must be in that selected
@@ -357,12 +371,14 @@ original selections; it cannot reinterpret a worker's retained input mapping.
 The coordinator-only upgrade does not rewrite or recreate worker roots.
 
 The profile chooses an existing installation, with no inferred default
-environment or shell command. Preparation requires embedded coordinator
-authority and rejects services with configured SLURM profiles. This restriction
-does not remove ordinary coordinator control of existing jobs.
+environment or shell command. Preparation publishes through the configured
+embedded or authenticated coordinator authority. A target routed to SLURM must
+match a configured profile and its checked project, environment and executor
+requirements. Accepted preparation retains that selected authority and those
+profile bindings across recovery.
 
 The selected worker installation must qualify the Loom preparation module and
-the finite input binding, advertised as `preparation-input-v1`. Old workers can
+the finite input binding, advertised as `preparation-input-v2`. Old workers can
 continue compatible ordinary jobs; they cannot receive a preparation child whose
 capability or profile they lack. The coordinator advertises
 `agent-preparation-v1` and safe source/profile aliases only when the capability
@@ -376,7 +392,7 @@ change the declared members used to calculate portable software fingerprints.
 Adding a shared-root mapping alone therefore does not make a previously compatible
 execution environment incompatible.
 
-An outbound agent must also include `preparation-input-v1` in its protected
+An outbound agent must also include `preparation-input-v2` in its protected
 `registration.capabilities`, with the same capability allowed for that agent in
 the coordinator's `agent_policy.agents` entry. That declaration qualifies every
 configured resident profile, because the capability belongs to the agent session.
@@ -389,7 +405,7 @@ in the coordinator agent policy and outbound registration. Its qualification
 imports `loom.queue.preparation.resolve_staged_input` in the actual selected
 Python, as well as the ordinary preparation entrypoints, and reports
 `packages.preparation_staged_imports`. It does not change portable software
-fingerprint meaning. A shared-only installation advertising `preparation-input-v1`
+fingerprint meaning. A shared-only installation advertising `preparation-input-v2`
 cannot receive staged preparation work. Each advertised resident environment must
 qualify the declared modes before registration.
 
@@ -401,11 +417,13 @@ preparation does not prevent other work from running. Published target stages
 retain their normal software requirements and authored placement; they do not
 inherit the child's preparation-only constraints.
 
-For an existing coordinator root at schema 12, follow the explicit
-[offline upgrade procedure](../downstream-operations.md#upgrade-a-retained-coordinator-root)
-before restarting with schema 13. Worker roots and journals stay at schema 12. A schema-13 coordinator already
-running shared preparation needs no second migration to enable staged input;
-its existing shared operations and receipts retain their identities and replay.
+Coordinator roots use schema 14. Child input and report schemas are version 2;
+input receipts and the public preparation-operation projection remain version 1.
+Older schema-13 roots are rejected before mutation: settle their retained work
+with the original installation before replacing services. Outputs are not reset
+or rewritten. The existing schema-12 offline upgrade remains explicit. Worker
+roots and journals remain schema 12, with preparation-capable installations
+advertising `preparation-input-v2`.
 Then qualify participating installations, configure the allowed sources/profiles
 and worker mappings, and enable preparation through the protected role settings.
 Existing accepted operations retain their selected configuration after reload.
@@ -415,3 +433,26 @@ The [local](../../examples/operations/managed-local-basic/README.md) and
 show how this connects to the existing submit/observe workflow. Physical NAS,
 fleet and container availability must be checked on the actual deployment;
 temporary-directory and loopback tests do not qualify those environments.
+
+## Selected Authority And Pre-execution State
+
+Both embedded and authenticated authorities publish checked targets. Preparation
+retains the selected authority identity and target profile descriptors at
+acceptance. Restart resolves those exact protected implementations; changed or
+unavailable owners retain `preparation_unavailable` instead of selecting a new
+database or current profile. Public receipts contain no factories or credentials.
+Slurm routes can be checked and published when their selected profile satisfies
+the preparation installation's software requirements. The preparation child still
+runs in its qualified resident environment; prepare-only never dispatches Slurm.
+
+A run starts `CREATED`, becomes `PLANNED` after publication, and becomes `RUNNING`
+only on confirmed stage execution. Admission, queuing and a start grant do not
+make it running. Reuse/skip-only targets can complete without a worker. Explicit
+failed-admission retry returns released work to `PLANNED`, preserving the existing
+failed-revision guard and attempt history; authenticated retry remains unsupported.
+
+Publication keeps its per-run POSIX advisory lock and retained lock inode.
+Qualified storage must support cross-process advisory locking. A locally partial,
+corrupt or changed target remains an inspectable conflict. Once local publication
+is complete, an unknown authority reply is reconciled idempotently using the same
+publication identity. Successful replay returns the original target receipt.

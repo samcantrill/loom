@@ -890,7 +890,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 inputs_summary=fingerprint.inputs_summary,
             ).to_dict(),
         )
-        with pytest.raises(QueueServiceError, match="lacks preparation-input-v1"):
+        with pytest.raises(QueueServiceError, match="lacks preparation-input-v2"):
             _target_remote_delivery(
                 daemon,
                 session_id=session.session_id,

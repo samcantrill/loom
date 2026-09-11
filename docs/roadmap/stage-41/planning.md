@@ -6,8 +6,8 @@ Evidence base: published develop `25d97f50d66f44273bf979a5488a312e7f1a15d2`.
 Authoring tree: `/nas/home/can134/work/loom-worktrees/stage-41-startup-plan`,
 branch `agent/stage-41-startup-plan`; clean on entry. Preserve unrelated worktrees.
 Planning route: published-source refinement and requested startup-readiness review.
-Current gate: reviewed amended packet ready for landing and stage-worktree verification
-Blockers: none in the published prerequisite or reviewed packet; see the manifest receipt.
+Current gate: reviewed amended packet published; startup verified in the stage worktree
+Blockers: none; see the manifest readiness receipt and Phase 1 startup record.
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 the maintainer requested the reviewed refinements and startup review on 2026-09-12.
 
@@ -22,7 +22,7 @@ new APIs and behavior below are planned, not available runtime functionality.
 | Functionality/design | Agreed behavior; independent design pass | None |
 | Validation/phases | Nine bounded cards; contracts and validation owners retained | None |
 | Plan quality | Original review retained; current amendment review owned by the manifest | [Quality Gate](implementation-plan.md#quality-gate) |
-| Approval/execution | Maintainer requested these refinements; runtime work not started | Land reviewed packet, then verify stage-worktree startup |
+| Approval/execution | Maintainer requested whole-stage implementation on 2026-09-12 | Execution state and evidence at the [implementation manifest](implementation-plan.md) |
 
 ## Evidence And Scope
 

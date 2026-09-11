@@ -12,18 +12,24 @@ from typing import Any, cast
 from loom.pipeline import PipelineSpec
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.planning import ExecutionPlan, plan_pipeline
+from loom.pipeline.status import RunStatus
 from loom.pipeline.runtime import (
     RunOptions,
     RunStoreOptions,
+    StageRuntimeOptions,
     build_runtime_metadata,
     merge_config_run_options,
 )
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.coordinator_authority import (
     embedded_coordinator_authority,
-    initialize_embedded_coordinator_authority,
+    AuthenticatedCoordinatorAuthorityError,
+    coordinator_authority_identity,
+    publish_prepared_run,
 )
 from loom.serialization import PlainData, json_dumps_pretty
+from loom.pipeline.stores.authority import AuthorityStoreError
+from loom.pipeline.stores.authority_protocol import AuthorityProtocolErrorCategory
 
 from .deployment import CoordinatorServiceConfig, load_coordinator_service_config
 from .errors import QueueConflictError, QueueServiceError
@@ -110,7 +116,30 @@ def prepare_managed_run(
     resolved = _resolved_mapping(composed)
     pipeline = _pipeline_from_resolved(resolved)
     requirements = _validated_execution_requirements(pipeline, execution_requirements)
-    run_uri, options = _runtime_for_service(service, resolved, pipeline, run_name_text)
+    profiles = {
+        profile.profile_id: profile for profile in service.daemon.slurm_profiles
+    }
+    for stage in pipeline.stages:
+        route = stage.placement.get("execution_route")
+        if isinstance(route, Mapping) and route.get("kind") == "slurm":
+            profile = profiles.get(cast(str, route.get("profile")))
+            requirement = requirements[stage.name]
+            if profile is None or (
+                profile.project_fingerprint != requirement.project_fingerprint
+                or profile.environment_fingerprint
+                != requirement.environment_fingerprint
+                or profile.executor_fingerprint != requirement.executor_fingerprint
+            ):
+                raise QueueServiceError(
+                    "prepared SLURM profile installation does not satisfy checked requirements"
+                )
+    run_uri, options = _runtime_for_service(
+        service,
+        resolved,
+        pipeline,
+        run_name_text,
+        effective_options=getattr(composed, "effective_run_options", None),
+    )
     store = LocalRunStore(service.daemon.run_store_root)
 
     # Keep the lock outside the target: creating the lock must not manufacture a
@@ -136,6 +165,15 @@ def prepare_managed_run(
         store.create_run(run_uri)
         try:
             _persist_composed_config(store, run_uri, composed)
+            store.write_run_user_metadata(
+                run_uri,
+                {
+                    **store.read_run_user_metadata(run_uri),
+                    "coordinator_authority": coordinator_authority_identity(
+                        service.daemon.coordinator_authority_factory
+                    ),
+                },
+            )
             plan = plan_pipeline(
                 pipeline,
                 run_uri=run_uri,
@@ -157,13 +195,36 @@ def prepare_managed_run(
                 execution_requirements=requirements,
                 options=options,
                 scheduling_components=service.daemon.scheduling_components,
+                slurm_profiles=service.daemon.slurm_profiles,
             )
-            initialize_embedded_coordinator_authority(run_uri)
+            _publish_authority(service, run_uri, runtime_digest)
         except Exception:
             # A partial directory is intentionally a durable conflict, not a repair
             # opportunity for a subsequent preparation call.
             raise
         return _receipt(run_uri, plan, runtime_digest)
+
+
+def _publish_authority(
+    service: CoordinatorServiceConfig, run_uri: str, digest: str
+) -> None:
+    try:
+        publish_prepared_run(
+            service.daemon.coordinator_authority_factory, run_uri, digest
+        )
+    except AuthenticatedCoordinatorAuthorityError as exc:
+        if exc.category in {
+            AuthorityProtocolErrorCategory.CONFLICT,
+            AuthorityProtocolErrorCategory.VALIDATION,
+        }:
+            raise QueueConflictError(
+                "preparation selected authority publication conflicts"
+            ) from exc
+        raise
+    except AuthorityStoreError as exc:
+        raise QueueConflictError(
+            "preparation embedded authority publication conflicts"
+        ) from exc
 
 
 def _compose_pipeline_config(path: str | Path) -> object:
@@ -195,13 +256,11 @@ def _validate_embedded_service(service: CoordinatorServiceConfig) -> None:
 
 
 def _validate_preparation_service(service: CoordinatorServiceConfig) -> None:
-    """Keep preparation within the existing embedded-authority runtime family."""
-
-    daemon = service.daemon
-    if daemon.slurm_profiles:
-        raise QueueServiceError("managed preparation does not support SLURM profiles")
-    if daemon.coordinator_authority_factory is not embedded_coordinator_authority:
-        raise QueueServiceError("managed preparation requires embedded authority")
+    """Require one supported selected authority without opening another owner."""
+    try:
+        coordinator_authority_identity(service.daemon.coordinator_authority_factory)
+    except Exception as exc:
+        raise QueueServiceError("managed preparation authority is unsupported") from exc
 
 
 def _validate_run_name(value: str) -> str:
@@ -237,14 +296,27 @@ def _runtime_for_service(
     resolved: Mapping[str, object],
     pipeline: PipelineSpec,
     run_name: str,
+    *,
+    effective_options: RunOptions | None = None,
 ) -> tuple[str, RunOptions]:
     protected_root = service.daemon.run_store_root.resolve()
     run_uri = path_to_run_uri(protected_root / run_name)
-    authored = merge_config_run_options(resolved, known_stage_ids=pipeline.stage_names)
+    authored = effective_options or merge_config_run_options(
+        resolved, known_stage_ids=pipeline.stage_names
+    )
     if authored.run_uri not in {None, run_uri}:
         raise QueueServiceError("managed-local runtime options belong to another run")
     if authored.executor not in {None, "local"}:
         raise QueueServiceError("managed-local runtime requires the local executor")
+    if authored.adapter_options or any(
+        option.adapter_options
+        for option in cast(
+            Mapping[str, StageRuntimeOptions], authored.stage_options
+        ).values()
+    ):
+        raise QueueServiceError(
+            "managed preparation executor adapter inputs are obsolete"
+        )
     run_store = cast(RunStoreOptions | None, authored.run_store)
     if (
         run_store is not None
@@ -334,19 +406,27 @@ def _replay_receipt(
         _replay_matches(
             store, run_uri, composed, pipeline, options, requirements, service
         )
+        if service.daemon.coordinator_authority_factory is embedded_coordinator_authority:
+            # Local publication failures leave an inspectable conflict. Only the
+            # authenticated owner reconciles uncertain remote publication.
+            authority = embedded_coordinator_authority(run_uri)
+            if authority.open_run(run_uri).status is RunStatus.CREATED:
+                raise QueueServiceError("local authority publication is incomplete")
         record = load_managed_local_runtime_record(store, run_uri)
-        embedded_coordinator_authority(run_uri)
         plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
         runtime_digest = record["digest"]
         if not isinstance(runtime_digest, str):
             raise QueueServiceError("managed-local runtime record digest is invalid")
-        return _receipt(run_uri, plan, runtime_digest)
     except Exception as exc:
         if isinstance(exc, QueueConflictError):
             raise
         raise QueueConflictError(
             "managed-local preparation conflicts with existing partial, corrupt, or changed state"
         ) from exc
+
+    if service.daemon.coordinator_authority_factory is not embedded_coordinator_authority:
+        _publish_authority(service, run_uri, runtime_digest)
+    return _receipt(run_uri, plan, runtime_digest)
 
 
 def _replay_matches(
@@ -383,19 +463,15 @@ def _replay_matches(
     if store.read_recipe_manifest(run_uri) != recipe_manifest:
         raise QueueServiceError("managed-local recipe manifest conflicts")
     if store.read_run_user_metadata(run_uri) != {
-        "config_provenance": _plain_mapping(cast(Any, provenance).to_dict())
+        "config_provenance": _plain_mapping(cast(Any, provenance).to_dict()),
+        "coordinator_authority": coordinator_authority_identity(
+            service.daemon.coordinator_authority_factory
+        ),
     }:
         raise QueueServiceError("managed-local config provenance conflicts")
-    plan = plan_pipeline(
-        pipeline,
-        run_uri=run_uri,
-        run_store=store,
-        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
-        selectors=options.to_plan_selectors(),
-        resume=options.to_resume_options(),
-    )
-    if store.read_plan(run_uri) != plan.to_dict():
-        raise QueueServiceError("managed-local plan conflicts")
+    # Publication owns this plan. Later accepted results may alter reuse facts,
+    # but replay must retain the exact original prepared target.
+    plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
     if (
         store.read_runtime_metadata(run_uri)
         != build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict()

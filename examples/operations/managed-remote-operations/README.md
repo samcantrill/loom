@@ -250,7 +250,7 @@ options. In the worker profile, `preparation_shared_roots.projects` names the
 worker-visible mount of the same snapshot directory. The mount prefix may
 differ. Configure this private mapping before worker initialization; an existing
 root keeps its launch binding until the normal replacement procedure after work
-settles. Append `preparation-input-v1` to both the agent's
+settles. Append `preparation-input-v2` to both the agent's
 `registration.capabilities` and its coordinator policy entry's allowed
 `capabilities`. The actual installed Python must pass the preparation import
 check before advertising that capability. Missing mapping or incompatible

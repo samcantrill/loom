@@ -258,6 +258,19 @@ class CoordinatorPreparations:
             selected = policy.select(request)
             selected["run_store_root"] = str(self.daemon.config.run_store_root)
             selected["scheduling"] = scheduling_snapshot(self.daemon.config)
+            from loom.pipeline.stores.coordinator_authority import (
+                coordinator_authority_identity,
+            )
+
+            selected["authority"] = coordinator_authority_identity(
+                self.daemon.config.coordinator_authority_factory
+            )
+            selected["slurm_profiles"] = [
+                item.descriptor.to_dict() for item in self.daemon.config.slurm_profiles
+            ]
+            selected["remote_profiles"] = [
+                item.to_dict() for item in self.daemon.config.remote_profiles
+            ]
             if _operation_projection(conn, request.operation_id) is not None:
                 raise QueueConflictError("managed operation identity is ambiguous")
             execution = self.daemon._execution
@@ -355,10 +368,6 @@ class CoordinatorPreparations:
                 self._cursor = int(row["sequence"])
                 try:
                     self._advance(row)
-                except PreparationConfigurationUnavailable:
-                    # Existing retained-component rules require a matching
-                    # protected implementation; never redirect to a new one.
-                    continue
                 except Exception:
                     # A lost result after a durable action is reconciled from
                     # its original claim. It must not starve ordinary jobs or
@@ -440,7 +449,7 @@ class CoordinatorPreparations:
 
     def _configuration(self, selected: Mapping[str, PlainData]) -> LocalDaemonConfig:
         from loom.pipeline.stores.coordinator_authority import (
-            embedded_coordinator_authority,
+            coordinator_authority_identity,
         )
 
         execution = self.daemon._execution
@@ -449,6 +458,46 @@ class CoordinatorPreparations:
                 "preparation execution owner is unavailable"
             )
         with self.daemon._cycle_lock:
+            if (
+                coordinator_authority_identity(
+                    self.daemon.config.coordinator_authority_factory
+                )
+                != selected["authority"]
+            ):
+                raise PreparationConfigurationUnavailable(
+                    "accepted preparation authority is unavailable"
+                )
+            available = tuple(execution.slurm_profiles.values())
+            profiles = []
+            for descriptor in cast(list[PlainData], selected["slurm_profiles"]):
+                profile = next(
+                    (
+                        item
+                        for item in available
+                        if item.descriptor.to_dict() == descriptor
+                    ),
+                    None,
+                )
+                if profile is None:
+                    raise PreparationConfigurationUnavailable(
+                        "accepted preparation Slurm profile is unavailable"
+                    )
+                profiles.append(profile)
+            remote_profiles = []
+            for descriptor in cast(list[PlainData], selected["remote_profiles"]):
+                remote = next(
+                    (
+                        item
+                        for item in self.daemon.config.remote_profiles
+                        if item.to_dict() == descriptor
+                    ),
+                    None,
+                )
+                if remote is None:
+                    raise PreparationConfigurationUnavailable(
+                        "accepted preparation remote profile is unavailable"
+                    )
+                remote_profiles.append(remote)
             components = execution.preparation_scheduling_components(
                 _mapping(selected["scheduling"])
             )
@@ -456,8 +505,8 @@ class CoordinatorPreparations:
                 self.daemon.config,
                 run_store_root=Path(cast(str, selected["run_store_root"])),
                 scheduling_components=components,
-                slurm_profiles=(),
-                coordinator_authority_factory=embedded_coordinator_authority,
+                slurm_profiles=tuple(profiles),
+                remote_profiles=tuple(remote_profiles),
             )
 
     def _advance(self, row: sqlite3.Row) -> None:
@@ -559,6 +608,9 @@ class CoordinatorPreparations:
             request.config_path,
             receipt,
             _mapping(profile["profile_descriptor"]),
+            request.overlays,
+            request.overrides,
+            request.run_options,
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:

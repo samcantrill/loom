@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -56,7 +57,7 @@ from loom.scheduling import (
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _child(tmp_path: Path, *, fault: str | None = None):
+def _child(tmp_path: Path, *, fault: str | None = None, invocation: bool = False):
     pytest.importorskip("weave")
     installation = tmp_path / "worker-installation"
     installation.mkdir()
@@ -102,18 +103,55 @@ def _child(tmp_path: Path, *, fault: str | None = None):
         config["pipeline"]["stages"][0]["inputs"] = {"missing": "unknown.data"}
     elif fault == "compose":
         config["pipeline"]["stages"][0]["config"] = {"_recipe_": "uninstalled-recipe"}
+    elif fault == "closure":
+        outside = tmp_path / "uncaptured.yaml"
+        outside.write_text("value: 42")
+        config["pipeline"]["stages"][0]["config"] = {"_include_": str(outside)}
     elif fault == "portability":
         config["pipeline"]["stages"][0]["config"] = {
             "input_path": str(installation / "private-input")
         }
+    if invocation:
+        config["runtime"].update(
+            tags={"base": "kept", "precedence": "base"}, notes=["base-note"]
+        )
+        (authored / "first.yaml").write_text(
+            json.dumps({"runtime": {"tags": {"precedence": "first"}}})
+        )
+        (authored / "last.yaml").write_text(
+            json.dumps({"runtime": {"tags": {"precedence": "last"}}})
+        )
     config_path = authored / "pipeline.yaml"
     config_path.write_text(json.dumps(config))
     request = PrepareRunRequest(
         "prepare-1",
         "target-1",
-        PreparationSource("shared", "projects", "example", ("pipeline.yaml",)),
+        PreparationSource("shared", "projects", "example", (".",)),
         "pipeline.yaml",
         "existing-project",
+        overlays=("first.yaml", "last.yaml") if invocation else (),
+        overrides=(
+            "runtime.tags.precedence=override-first",
+            "runtime.tags.precedence=override-last",
+        )
+        if invocation
+        else (),
+        run_options={
+            "tags": {"explicit": "yes"},
+            "notes": ["explicit-note"],
+            "selectors": {"force_stages": ["produce"]},
+            "stage_options": {
+                "produce": {
+                    "resources": {
+                        "entries": {
+                            "cpu": {"kind": "cpu", "amount": 3, "unit": "count"}
+                        }
+                    }
+                }
+            },
+        }
+        if invocation
+        else {},
     )
     snapshots = tmp_path / "shared-snapshots"
     receipt = capture_shared_input(
@@ -130,6 +168,9 @@ def _child(tmp_path: Path, *, fault: str | None = None):
         request.config_path,
         receipt,
         descriptor.to_dict(),
+        request.overlays,
+        request.overrides,
+        request.run_options,
     )
     profile = ResidentExecutionProfile(
         descriptor,
@@ -325,7 +366,8 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
         == report["composition"]["manifest"]
     )
     assert store.read_run_user_metadata(receipt.run_uri) == {
-        "config_provenance": report["composition"]["provenance"]
+        "config_provenance": report["composition"]["provenance"],
+        "coordinator_authority": {"family": "embedded"},
     }
     target = store.local_run_dir(receipt.run_uri)
     before = {
@@ -348,12 +390,14 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
     assert "prepared_project" not in sys.modules
 
 
-@pytest.mark.parametrize("fault", ("checks", "compose", "mapping", "portability"))
+@pytest.mark.parametrize(
+    "fault", ("checks", "compose", "mapping", "portability", "closure")
+)
 def test_real_child_preserves_failed_checks_or_native_worker_failure(
     tmp_path: Path, fault: str
 ) -> None:
     service, binding, result, workspace, _counter = _child(tmp_path, fault=fault)
-    if fault in {"compose", "mapping"}:
+    if fault in {"compose", "mapping", "closure"}:
         assert result.status is StageStatus.FAILED
         assert result.failure is not None and not result.outputs
     else:
@@ -389,3 +433,79 @@ def test_preparation_report_requires_its_exact_selected_profile(tmp_path: Path) 
             workspace.request(),
             profile=ResidentProfileDescriptor.from_dict(other.profile_descriptor),
         )
+
+
+def test_ordered_invocation_reaches_checked_report_and_published_runtime(
+    tmp_path: Path,
+) -> None:
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+    from loom.pipeline.stores.coordinator_authority import (
+        embedded_coordinator_authority,
+    )
+    from loom.pipeline.status import RunStatus
+
+    service, binding, result, workspace, counter = _child(tmp_path, invocation=True)
+    assert result.status is StageStatus.SUCCEEDED, result.failure
+    report = cast(
+        dict[str, Any],
+        LocalArtifactStore(workspace.root / "artifacts").load(result.outputs["report"]),
+    )
+    composed, requirements, preflight = decode_preparation_report(
+        report, expected=binding
+    )
+    assert preparation_checks_allow_publication(preflight)
+    assert report["effective_run_options"]["tags"] == {
+        "base": "kept",
+        "precedence": "override-last",
+        "explicit": "yes",
+    }
+    assert report["effective_run_options"]["selectors"]["force_stages"] == ["produce"]
+    from weave.provenance import ConfigProvenance
+
+    assert (
+        ConfigProvenance.from_dict(report["composition"]["provenance"]).metadata[
+            "loom_invocation"
+        ]
+        == report["invocation"]
+    )
+    receipt = prepare_managed_run(
+        service, composed, "target-1", execution_requirements=requirements
+    )
+    store = LocalRunStore(service.daemon.run_store_root)
+    record = cast(
+        dict[str, Any], load_managed_local_runtime_record(store, receipt.run_uri)
+    )
+    assert record["runtime_options"]["tags"] == report["effective_run_options"]["tags"]
+    assert (
+        record["runtime_options"]["notes"] == report["effective_run_options"]["notes"]
+    )
+    assert (
+        record["runtime_options"]["stage_options"]["produce"]["resources"]["entries"][
+            "cpu"
+        ]["amount"]
+        == 3
+    )
+    child_record = cast(
+        dict[str, Any],
+        load_managed_local_runtime_record(
+            store, (service.daemon.run_store_root / "internal-child-1").as_uri()
+        ),
+    )
+    assert child_record["runtime_options"]["stage_options"] == {}
+    assert (
+        cast(dict[str, Any], store.read_run_user_metadata(receipt.run_uri))[
+            "config_provenance"
+        ]["metadata"]["loom_invocation"]
+        == report["invocation"]
+    )
+    assert (
+        embedded_coordinator_authority(receipt.run_uri).open_run(receipt.run_uri).status
+        is RunStatus.PLANNED
+    )
+    assert (
+        prepare_managed_run(
+            service, composed, "target-1", execution_requirements=requirements
+        )
+        == receipt
+    )
+    assert counter.read_text() == "1"

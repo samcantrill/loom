@@ -32,6 +32,7 @@ router = APIRouter(
 )
 
 _ROUTES = {
+    "/runs/publish": AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
     "/runs/open": AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
     "/runs/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
     "/stages/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,

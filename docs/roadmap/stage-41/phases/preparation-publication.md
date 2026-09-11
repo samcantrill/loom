@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 41 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p1-preparation-publication
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop containing Stage 40; record exact SHA at execution preparation
+- Base revision: `ae1470149e84f679933ee3ec9765888556f78e67` (published develop with Stage 40 and plan PR 307)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 1: Preparation And Publication
 - Dependencies: Published Stage 40; Stage 41 plan and nine-phase split approved on 2026-09-10
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none in the reviewed packet; landing and stage-worktree verification pending
+- Blockers: none; reviewed packet published and stage-worktree startup verified
 
 ## Objective And Context
 
@@ -273,23 +273,101 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: startup passed on 2026-09-12 in the manifest's persistent
+  stage worktree, on this card's phase branch. Phase 1 is in progress.
+- Publication: plan PR 307 merged as the Base revision above; its tree
+  `ecc307c1af9fccb471dcedacd203d7278926f271` exactly matches the validated packet.
+  Stage 40 implementation and closeout are present in that published base.
+- Startup checks: `tools/phase_workflow.py setup` and `preflight` passed before
+  review/writes. The phase, coordination, local develop and origin/develop refs
+  matched the published base, with a clean stage worktree. All nine cards are
+  published and pending; no relevant source or workflow drift from the reviewed
+  evidence base. The manifest's independent pass is reusable.
+- Named refinement: none needed. Scope, contracts, source/test references,
+  merge boundary, private discretion and required validation remain current.
+- Startup evidence: documentation and Git checks only; subsequent changes only
+  record these startup facts. Keep this receipt with the future Phase 1 PR.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: complete; PR review and delivery pending under the 2026-09-12 whole-stage execution request
 - Refiner: not used
-- Pre-submit gate: not run
-- Independent implementation review: required for selected-authority publication and lifecycle transitions
-- Blocker corrections: 0/3
-- PR and merge: not started
+- Coverage selection: invocation request/capture/child/report/publication, selected
+  authority identity and principal binding, retained Slurm profiles, native readiness,
+  first confirmed execution and explicit failed-admission retry. Existing
+  managed publisher/authority/preparation suites are selected, with added shared
+  and staged sparse-intent cases, exact option precedence/resource separation,
+  authenticated lost-response/partial-publication cases, owner/profile restart
+  refusal and recovery, and worker-free skip/reuse completion. Changed shared
+  lifecycle/authority contracts retain both required full gates. Expand only for
+  relevant failures or remaining accepted evidence gaps.
+- Format decision: child input/report version 2 and `preparation-input-v2`;
+  coordinator root 14 rejects old preparation intent before mutation. Shared/staged
+  input receipts, result projection and worker-root formats remain unchanged.
+- Executor validation: complete; both required commands exited 0. This card is
+  `pr_open` while independent phase review and delivery remain pending.
+- Validated implementation: `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree
+  `5481f01c1efc95701bc4f7836a12627dae0ebb82`. Subsequent changes record workflow
+  evidence and PR identity only.
+- Required `make validate-pr`: final run exited 0; Ruff and Pyright passed;
+  baseline 3333 passed, 2 skipped, 253 deselected; config-extra 223 passed,
+  18 skipped, 3374 deselected; MCP-extra 36 passed, 3552 deselected; wheel and
+  sdist built. Log: `/tmp/loom-stage41-p1-validate-pr-final.log`.
+  It started at `f3a4c1703a4501b077cb0f8fe7bb4bc3dab1c900` (tree
+  `7c4cb1d8a962c6e9bd234bc7e7fe25f9113c1711`). Later commits were rollout
+  prose (`c8b50ae`) and the normalized-default MCP assertion (`767a139`),
+  both present before their affected test collection. The changed assertion
+  passed focused Ruff and all 21 MCP contract tests, then the full MCP gate.
+  Runtime source and executable example stayed unchanged throughout this run.
+- Required `make test-summary`: exited 0; 3594 passed, 18 skipped, no failures or
+  errors across package 127, unit 2329, contract 301, integration 508, e2e 70,
+  config-extra 223 and MCP-extra 36. Report: `build/test-summary.md`; JUnit and
+  coverage: `build/test-summary/`; log: `/tmp/loom-stage41-p1-test-summary.log`.
+  Started after `d8be797` (tree `fb55c78626fd340438243620e13e4a6531093300`):
+  package collection 07:56:30+10 followed that commit at 07:56:27; the corrected
+  example at 08:10 preceded e2e collection at 08:22:38; rollout prose at 08:13
+  preceded config-extra collection at 08:26:52; the MCP assertion at 08:25
+  preceded MCP-extra collection at 08:38:39 (all 2026-09-12). Thus later changes
+  were covered by the affected summary suites; no summary restart was needed.
+- Earlier evidence is qualified: initial `make validate-pr` started at `6ec24c3`
+  (tree `231c4b3ed8a09498bfc492f73dec4aa99ebb8189`) and overlapped the embedded
+  interruption correction, so it is not a corrected-revision receipt. It exited
+  2 with one stale example-import failure, 3330 passes, 2 skips and 253
+  deselections (`/tmp/loom-stage41-p1-validate-pr.log`). The supplemental remaining
+  components passed config-extra but failed the stale MCP expected payload;
+  that command did not replace the required full command. Both failures were
+  corrected before their passing final selections.
+- Focused correction checks: managed-local publisher plus authority API suites
+  passed 24 tests; both missing-authority and CREATED-only local interruption
+  variants passed with bytes/mtime/ctime unchanged on retry; the isolated
+  Slurm-example e2e passed; MCP contracts passed 21 tests. Post-correction
+  Pyright reported zero errors; affected Ruff and `git diff --check` passed.
+- Pre-submit gate: passed. Manager reviewed accepted scope, invocation and
+  publication/lifecycle boundaries, affected tests, current consumers, removal,
+  validation logs and summary/JUnit timing. Required results reconcile to
+  `767a139`; subsequent changes only record workflow evidence. No outstanding
+  product blocker or future-phase implementation was found.
+- Independent implementation review: pending on actual PR 308; required for selected-authority publication and lifecycle transitions
+- Blocker corrections: 1/3. Manager regression reproduced interrupted embedded
+  authority publication repairing a partial local target. Embedded replay now
+  opens only completed publication; missing or CREATED-only authority remains a
+  non-mutating conflict. Authenticated lost-response reconciliation is retained.
+  Both local fault variants and selected-authority publisher coverage pass.
+- Full-gate correction: the baseline found the executable fake-Slurm example
+  still importing the removed initializer. Its script and invocation manifest now
+  use selected embedded PLANNED publication; the isolated e2e passes. The initial
+  `make validate-pr` failed (3330 passed, 2 skipped, 253 deselected, one failure).
+  The fresh required command passed on the corrected tree as qualified above.
+- PR: [308](https://github.com/samcantrill/loom/pull/308), open and non-draft;
+  canonical title, `develop` base and this phase branch verified after creation.
+  Merge remains pending independent review.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Selected-authority/invocation integration evidence pending |
+| Implementation and changed paths | Implemented invocation request/child/report propagation; selected-authority publication/principal binding and retained profile recovery; truthful lifecycle/retry transitions; current preparation/operations docs. Source and related tests are in this phase branch. |
+| Tests added, updated or intentionally removed | Added ordered/sparse immutable invocation and closure checks, checked/published resource separation, embedded/authenticated state and lost-response/partial-authority replay, authenticated Slurm-profile restart recovery, and worker-free skip/reuse completion. Updated existing metadata, format and retry assertions. |
+| Validated revision/tree and evidence | `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree `5481f01c1efc95701bc4f7836a12627dae0ebb82`; both required full commands exited 0 with exact timing and totals above. |
+| Validation-relevant changes after evidence | Workflow evidence and PR identity only; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
+| Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
+| PR, review and merge | [PR 308](https://github.com/samcantrill/loom/pull/308) open; independent review and merge pending. |
+| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored; independent phase review and delivery are pending. |

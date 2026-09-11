@@ -61,7 +61,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     worker_database = worker / "control.sqlite"
     worker_before = worker_database.read_bytes()
 
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 13)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 14)
     after = _contents(database)
     assert {name: after[name] for name in before} == before
     assert after["preparation_operations"] == ()
@@ -75,7 +75,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     with sqlite3.connect(backups[0]) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     published = database.read_bytes(), database.stat().st_mtime_ns
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 13)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 14)
     assert (database.read_bytes(), database.stat().st_mtime_ns) == published
     assert tuple(config.coordinator_root.glob("*.schema-12.*.backup")) == backups
 
@@ -115,13 +115,15 @@ def test_upgrade_rolls_back_both_schema_and_marker_and_retries_without_overwriti
     backup, = config.coordinator_root.glob("*.backup")
     original_backup = backup.read_bytes(), backup.stat().st_mtime_ns
     monkeypatch.setattr(upgrade, "_apply_upgrade", original)
-    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 13
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 14
     assert (backup.read_bytes(), backup.stat().st_mtime_ns) == original_backup
     assert len(tuple(config.coordinator_root.glob("*.backup"))) == 2
 
 
-@pytest.mark.parametrize("version", [11, 14])
-def test_upgrade_rejects_unsupported_versions_without_repair(tmp_path: Path, version: int) -> None:
+@pytest.mark.parametrize("version", [11, 13, 15])
+def test_upgrade_rejects_unsupported_versions_without_repair(
+    tmp_path: Path, version: int
+) -> None:
     config = _predecessor(tmp_path)
     database = config.coordinator_root / "control.sqlite"
     with sqlite3.connect(database) as conn:
@@ -137,7 +139,7 @@ def test_current_marker_without_complete_schema_is_rejected(tmp_path: Path) -> N
     config = _predecessor(tmp_path)
     database = config.coordinator_root / "control.sqlite"
     with sqlite3.connect(database) as conn:
-        conn.execute("PRAGMA user_version = 13")
+        conn.execute("PRAGMA user_version = 14")
     before = database.read_bytes()
     with pytest.raises(QueueStorageError, match="schema is incomplete"):
         LocalDaemon.upgrade_coordinator_root(config)

@@ -23,28 +23,31 @@ class InvalidStageTransition(ValueError):
     """Raised when a requested stage transition is not meaningful."""
 
 
-_RUN_NORMAL = frozenset({
-    (RunStatus.CREATED, RunStatus.PLANNED),
-    # Kept for the established public direct-execution contract.
-    (RunStatus.CREATED, RunStatus.RUNNING),
-    (RunStatus.CREATED, RunStatus.SUBMITTED),
-    (RunStatus.CREATED, RunStatus.FAILED),
-    (RunStatus.CREATED, RunStatus.CANCELLED),
-    (RunStatus.PLANNED, RunStatus.RUNNING),
-    (RunStatus.PLANNED, RunStatus.SUBMITTED),
-    (RunStatus.PLANNED, RunStatus.FAILED),
-    (RunStatus.PLANNED, RunStatus.CANCELLED),
-    (RunStatus.RUNNING, RunStatus.SUBMITTED),
-    (RunStatus.RUNNING, RunStatus.SUCCEEDED),
-    (RunStatus.RUNNING, RunStatus.FAILED),
-    (RunStatus.RUNNING, RunStatus.CANCELLED),
-    (RunStatus.RUNNING, RunStatus.INTERRUPTED),
-    (RunStatus.SUBMITTED, RunStatus.RUNNING),
-    (RunStatus.SUBMITTED, RunStatus.SUCCEEDED),
-    (RunStatus.SUBMITTED, RunStatus.FAILED),
-    (RunStatus.SUBMITTED, RunStatus.CANCELLED),
-    (RunStatus.SUBMITTED, RunStatus.INTERRUPTED),
-})
+_RUN_NORMAL = frozenset(
+    {
+        (RunStatus.CREATED, RunStatus.PLANNED),
+        # Kept for the established public direct-execution contract.
+        (RunStatus.CREATED, RunStatus.RUNNING),
+        (RunStatus.CREATED, RunStatus.SUBMITTED),
+        (RunStatus.CREATED, RunStatus.FAILED),
+        (RunStatus.CREATED, RunStatus.CANCELLED),
+        (RunStatus.PLANNED, RunStatus.RUNNING),
+        (RunStatus.PLANNED, RunStatus.SUCCEEDED),
+        (RunStatus.PLANNED, RunStatus.SUBMITTED),
+        (RunStatus.PLANNED, RunStatus.FAILED),
+        (RunStatus.PLANNED, RunStatus.CANCELLED),
+        (RunStatus.RUNNING, RunStatus.SUBMITTED),
+        (RunStatus.RUNNING, RunStatus.SUCCEEDED),
+        (RunStatus.RUNNING, RunStatus.FAILED),
+        (RunStatus.RUNNING, RunStatus.CANCELLED),
+        (RunStatus.RUNNING, RunStatus.INTERRUPTED),
+        (RunStatus.SUBMITTED, RunStatus.RUNNING),
+        (RunStatus.SUBMITTED, RunStatus.SUCCEEDED),
+        (RunStatus.SUBMITTED, RunStatus.FAILED),
+        (RunStatus.SUBMITTED, RunStatus.CANCELLED),
+        (RunStatus.SUBMITTED, RunStatus.INTERRUPTED),
+    }
+)
 _RUN_RESUME = frozenset(
     (previous, target)
     for previous in (
