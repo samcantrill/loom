@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p1-preparation-publication
@@ -288,7 +288,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Startup evidence: documentation and Git checks only; subsequent changes only
   record these startup facts. Keep this receipt with the future Phase 1 PR.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: complete; PR review and delivery pending under the 2026-09-12 whole-stage execution request
+- Implementation: complete and merged under the 2026-09-12 whole-stage execution request
 - Refiner: not used
 - Coverage selection: invocation request/capture/child/report/publication, selected
   authority identity and principal binding, retained Slurm profiles, native readiness,
@@ -302,8 +302,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Format decision: child input/report version 2 and `preparation-input-v2`;
   coordinator root 14 rejects old preparation intent before mutation. Shared/staged
   input receipts, result projection and worker-root formats remain unchanged.
-- Executor validation: complete; both required commands exited 0. This card is
-  `pr_open` while independent phase review and delivery remain pending.
+- Executor validation: complete; both required commands exited 0. Independent
+  phase review and remote delivery also passed.
 - Validated implementation: `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree
   `5481f01c1efc95701bc4f7836a12627dae0ebb82`. Subsequent changes record workflow
   evidence and PR identity only.
@@ -345,7 +345,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   validation logs and summary/JUnit timing. Required results reconcile to
   `767a139`; subsequent changes only record workflow evidence. No outstanding
   product blocker or future-phase implementation was found.
-- Independent implementation review: pending on actual PR 308; required for selected-authority publication and lifecycle transitions
+- Independent implementation review: passed on PR 308 at
+  `4983595b79c103ee38c568d6847d1b5a778b4b24`, with no product blockers, localized
+  corrections or workflow issues. The reviewer verified actual PR identity,
+  accepted contracts, affected assertions, logs/JUnit timing and metadata-only
+  deltas. The PR body retains the reviewed-head receipt; local validation was
+  reconciled to that same head.
 - Blocker corrections: 1/3. Manager regression reproduced interrupted embedded
   authority publication repairing a partial local target. Embedded replay now
   opens only completed publication; missing or CREATED-only authority remains a
@@ -356,9 +361,16 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   use selected embedded PLANNED publication; the isolated e2e passes. The initial
   `make validate-pr` failed (3330 passed, 2 skipped, 253 deselected, one failure).
   The fresh required command passed on the corrected tree as qualified above.
-- PR: [308](https://github.com/samcantrill/loom/pull/308), open and non-draft;
-  canonical title, `develop` base and this phase branch verified after creation.
-  Merge remains pending independent review.
+- PR: [308](https://github.com/samcantrill/loom/pull/308), squash-merged to
+  `develop` as `c133d1798a73d3a4e8903527aa813a70b7659091` on 2026-09-12.
+  Delivery verified the canonical title/base/head, required local gates and
+  independent review before merge, then confirmed the remote outcome and
+  retired the remote branch at the reviewed SHA.
+- Post-merge transition: all phase agents and validation processes finished;
+  the shared gate entered `agent/stage-41` and synchronized stage/control/live
+  develop to the verified merge. This completion metadata is published from
+  coordination before the final synchronization and successor startup. Retire
+  only the exact reviewed local phase branch after that synchronization.
 
 ## Completion Record
 
@@ -369,5 +381,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree `5481f01c1efc95701bc4f7836a12627dae0ebb82`; both required full commands exited 0 with exact timing and totals above. |
 | Validation-relevant changes after evidence | Workflow evidence and PR identity only; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
 | Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
-| PR, review and merge | [PR 308](https://github.com/samcantrill/loom/pull/308) open; independent review and merge pending. |
-| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored; independent phase review and delivery are pending. |
+| PR, review and merge | [PR 308](https://github.com/samcantrill/loom/pull/308); independent pass at `4983595`; merged as `c133d1798a73d3a4e8903527aa813a70b7659091`. |
+| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored. Remote phase branch retired; local retirement follows published-metadata synchronization, with the stage worktree retained for Phase 2. |
