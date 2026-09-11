@@ -1,6 +1,6 @@
 # Roadmap Stage 40 Planning: Coordinator Client, Agent Preparation, And MCP
 
-Status: approved; ready for implementation
+Status: approved design; implementation delivery tracked in the manifest
 Roadmap stage: 40
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-85-control` at
 `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`, branch `agent/loom-mcp-plan`.
@@ -8,14 +8,15 @@ Relevant dirty paths on entry: `README.md` and the untracked
 `docs/briefs/mcp-implementation-plan.md`, both earlier work for this request.
 Planning route: expanded, for a public client, durable preparation, authenticated
 filesystem access, publication/cancellation races, and retained-root migration.
-Current gate: four-phase planning and startup review complete; implementation not started
+Current gate: planning/startup complete; Phases 1–3 delivered and Phase 4 locally validated, with PR review pending
 Blockers: none.
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
 This is the current design authority. The implementation manifest indexes
 phase-specific execution contracts. The brief is an explanatory entrypoint,
-not a second implementation contract. No runtime implementation is authorized by
-this planning request.
+not a second implementation contract. Implementation was authorized separately
+and is tracked by the manifest; this document preserves the approved design and
+planning evidence.
 
 ## Current State
 
@@ -24,7 +25,7 @@ this planning request.
 | Evidence / functionality | Existing coordinator submission and agreed direct-client workflow | None | Preserve current owners |
 | Minimum design | Expanded review passed; finite preparation scope and native publisher retained | None | Preserve agreed design |
 | Validation / phase shape | Four complete cards; independent review confirmed all accepted coverage has an owner | None | Preserve phase obligations |
-| Quality / approval | Four-phase delivery approved and startup review passed on 2026-09-10 | None | Phase 1 coordinator-client is next; await execution instruction |
+| Quality / approval | Four-phase delivery approved and startup review passed on 2026-09-10 | None | Follow the implementation manifest for current delivery status |
 
 ## Evidence And Scope
 
@@ -308,10 +309,10 @@ receipts govern those release claims. No scientific/GPU/SLURM run is needed.
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Python/CLI direct coordinator control on either transport | Client, compatible transport/CLI migration; preparation excluded | Published develop | Parity, roles, waits, legacy behavior | pending |
-| 2 | Complete native preparation through shared storage and target execution | Common operation/report, shared capture, diagnostics, profiles, upgrade/publication and cancellation; staged delivery excluded | Phase 1 merged | Local/remote shared workers, restart/cancel, retained roots, target consumption, staged refused before mutation | pending |
-| 3 | Same preparation lifecycle with transferred inputs | Archive capture, native relay/extraction, staged support and boundary validation; shared lifecycle reused | Phase 2 merged | Disjoint-root worker, archive/transfer limits, staged recovery/cancel, unchanged shared state | pending |
-| 4 | Codex tools and portable skills over both native modes | Optional adapter, skills, docs, SDK lane | Phase 3 merged | Real stdio workflow and distinct live acceptance | pending |
+| 1 | Python/CLI direct coordinator control on either transport | Client, compatible transport/CLI migration; preparation excluded | Published develop | Parity, roles, waits, legacy behavior | merged |
+| 2 | Complete native preparation through shared storage and target execution | Common operation/report, shared capture, diagnostics, profiles, upgrade/publication and cancellation; staged delivery excluded | Phase 1 merged | Local/remote shared workers, restart/cancel, retained roots, target consumption, staged refused before mutation | merged |
+| 3 | Same preparation lifecycle with transferred inputs | Archive capture, native relay/extraction, staged support and boundary validation; shared lifecycle reused | Phase 2 merged | Disjoint-root worker, archive/transfer limits, staged recovery/cancel, unchanged shared state | merged |
+| 4 | Codex tools and portable skills over both native modes | Optional adapter, skills, docs, SDK lane | Phase 3 merged | Real stdio workflow and distinct live acceptance | locally validated; PR review pending |
 
 The approved four-phase shape isolates archive/relay/extraction as a complete
 second input mode after shared-NAS preparation works. This justifies one phase

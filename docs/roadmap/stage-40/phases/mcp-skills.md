@@ -31,8 +31,8 @@ do not repair them with subprocess CLI parsing or an MCP-specific implementation
 - Phase 1's `loom.coordinator.CoordinatorClient`, Phase 2's preparation APIs and
   Phase 3's staged input support over those same APIs.
 - `pyproject.toml`, `uv.lock`: dependency extra and script registration.
-- Proposed `src/loom/mcp/`: adapter and entrypoint; create only implemented files.
-- Proposed `skills/loom-prepare/SKILL.md`, `skills/loom-run/SKILL.md`,
+- `src/loom/mcp/`: implemented adapter and entrypoint.
+- `skills/loom-prepare/SKILL.md`, `skills/loom-run/SKILL.md`,
   `skills/loom-monitor/SKILL.md`, `skills/loom-diagnose/SKILL.md`.
 - `make/dev/targets.mk`, `make/test/targets.mk`,
   `tools/test_harness/cli.py`, `tests/README.md`: optional SDK test lane.
@@ -401,11 +401,11 @@ reopening coordinator topology, source/profile authority or native result names.
 
 - Manager preparation: approved boundaries reconciled against the published predecessor on 2026-09-11; shared start/preflight gates verified the persistent stage worktree and phase branch. No refinement needed.
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: complete; executor ownership has returned. Manager completed the native/SDK boundary corrections, packaging/harness lane, real stdio contracts and daemon journeys, four skills, documentation and relocated behavior trials. Final full validation and delivery remain.
+- Implementation: complete; executor ownership has returned. Manager completed the native/SDK boundary corrections, packaging/harness lane, real stdio contracts and daemon journeys, four skills, documentation and relocated behavior trials. Both required full gates pass; PR review and delivery remain.
 - Refiner: not needed
-- Pre-submit gate: not run
+- Pre-submit gate: passed; accepted scope, native ownership, both required full gates, optional dependency isolation, documentation, skill trials and committed diff are reconciled.
 - Independent review: required before implementation merge
-- Blocker corrections: 3/3. Correction 1 (`ed0c935`) releases successful calls and shares one absolute native deadline; seven focused unit cases pass. Correction 2 uses Loom plain-data conversion before SDK serialization: real stdio preparation exposed frozen MappingProxyType evidence in native operation results. The same projection correction selects summary fields from native envelopes and shows the report reference URI without interpreting project details as lifecycle state. Correction 3 preserves raw source keys until native decoding: the SDK TypedDict normalization silently removed an unsupported exclude field. Source discovery now derives from the native dataclass schema while native decoding receives the complete dictionary and refuses unsupported intent before dispatch. All affected SDK contract/integration cases pass; all seven adapter units pass after the schema assertion update. Final full gates remain.
+- Blocker corrections: 3/3. Correction 1 (`ed0c935`) releases successful calls and shares one absolute native deadline; seven focused unit cases pass. Correction 2 uses Loom plain-data conversion before SDK serialization: real stdio preparation exposed frozen MappingProxyType evidence in native operation results. The same projection correction selects summary fields from native envelopes and shows the report reference URI without interpreting project details as lifecycle state. Correction 3 preserves raw source keys until native decoding: the SDK TypedDict normalization silently removed an unsupported exclude field. Source discovery now derives from the native dataclass schema while native decoding receives the complete dictionary and refuses unsupported intent before dispatch. All affected SDK contract/integration cases pass; all seven adapter units pass after the schema assertion update. Both required full gates pass.
 - PR and merge: not created
 
 ## Completion Record
@@ -413,9 +413,9 @@ reopening coordinator topology, source/profile authority or native result names.
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Optional SDK entrypoint and thirteen tools in src/loom/mcp; optional dependency/lock and isolated MCP lane; full tool mapping and real stdio/daemon checks; four individually portable skills; feature/operations/install docs and package/harness checks. Executor foundation `af26f0a`, capacity/deadline correction `ed0c935`; manager boundary corrections and integration are complete in this tree. |
-| Tests added or updated | Initial adapter unit cases and base import checks pass. Real installed SDK stdio discovery and offline failure pass for auto and legacy protocol modes: two tests, `/tmp/loom-stage40-p4-offline.log`. Further boundary and daemon checks remain in progress. |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
+| Tests added or updated | All 36 MCP cases pass: 21 contract mappings/schema/result/error cases, eight real SDK stdio/native daemon cases and seven adapter units. Package tests cover explicit no-extra failure and native import isolation; harness tests cover marker selection and isolated dependency commands. |
+| Validated revision/tree state and evidence | Both required gates ran at clean `b675257aa20f4e0b16f3fe12f887fbe6a03ea3bd`. make validate-pr passed: Ruff/Pyright zero errors; 3,284 baseline, 213 config-extra and 36 MCP tests passed; wheel and source distribution built. make test-summary passed: 3,535 tests, zero failures/errors, 18 existing opt-in container skips. Logs: /tmp/loom-stage40-p4-validate-pr.log and /tmp/loom-stage40-p4-test-summary.log; summary: build/test-summary.md. |
+| Validation-relevant changes after evidence | Merge `c78d1cbce974e6f18b78f06cf3ef8d6064023d52` incorporates published PR #303 (`5971117e3eaef9e62d644c3dd178a36eb40ae924`), changing only nine Codex model-setting TOML files. They parse successfully; production code, tests, dependency lock and harness are unchanged from the validated tree. Later phase/status records are documentation only. |
 | PR, review, and merge | Pending |
 | Live Codex and physical NAS acceptance | Not run. Read-only Codex configuration inspection found no registered Loom MCP server; no real client session was configured or changed. No physical two-machine synthetic deployment was selected/configured for this task. Automated SDK/loopback evidence does not qualify either release claim. |
 | Residual risk and cleanup | Persistent stage worktree retained. Physical NAS and live Codex acceptance remain unqualified. |
@@ -464,28 +464,6 @@ dependencies are retained. The SDK remains an optional extra, with a dedicated
 isolated config/MCP test lane and normal imports that fail if its dependencies
 are missing. No running worker environment or real Codex registration is changed.
 
-### Current automated boundary evidence
-
-The real SDK boundary run at the corrected serialization tree passed 27 cases;
-its remaining failure was a test comparing native frozen tuples against their
-JSON lists. The assertion now compares the same native plain-data projection.
-The complete isolated MCP lane then passed all 21 contract and eight real stdio
-integration cases, with six of seven adapter units passing; the only remaining
-assertion named the superseded private TypedDict `$defs` path. It now checks
-required source fields at the tool's actual public source schema. These are
-localized test corrections preserving the accepted assertions. The three product
-corrections above remain the complete 3/3 budget; no budget reset is claimed.
-
-The runtime cases prove all thirteen operation mappings and guards, SDK/native
-errors, frozen evidence and native report projection, unsupported source-key
-refusal before mutation, installed discovery in auto/legacy modes, local shared
-and authenticated HTTPS staged preparation through real workers to target output
-41, close/reconnect before and after submission, inspection failure as a normal
-union member, concurrent waits with quick status/explicit cancellation, lost
-preparation replies with original-ID reconciliation, and SDK task cancellation/EOF
-without native lifecycle cancellation. Full Ruff/Pyright passed; the final full
-gates still follow the completed stable implementation tree.
-
 ### Final implementation ownership
 
 The adapter uses native `_native_call` and `_wait_native` deadline hooks so all
@@ -504,10 +482,21 @@ operation/report evidence in SDK structured output. Text summaries inspect nativ
 envelopes only and expose state, stable IDs and the report URI without interpreting
 project detail fields as native state.
 
-Package/import boundaries passed in the isolated no-extra checks and the selected
-package suite. Seventeen selected package/harness cases passed, and all seven
-adapter unit cases passed in `/tmp/loom-stage40-p4-unit-final.log`. The last
-complete MCP lane qualified 21 contract and eight stdio cases; its stale schema
-assertion is covered by this seven-case retry. Full static checks passed. Four
-local guide links and four shell/JSON/TOML examples were checked; all four skills
-passed quick_validate and the six relocated behavior trials described above.
+Both required gates passed at the clean implementation revision in Completion
+Record. The summary's suite counts are package 127, unit 2,294, contract 301,
+integration 494, E2E 70, config-extra 213 and MCP-extra 36: 3,535 passed with
+zero failures/errors. Its 18 skips are thirteen existing opt-in Apptainer
+namespace/timeout lifecycle cases and five other physical container cases, not
+omitted MCP coverage. The baseline gate emitted two existing Textual monitor
+coroutine warnings in test_loom_monitor.py; that unrelated test passed and no
+monitor source changed.
+
+Four local guide links and four shell/JSON/TOML examples were checked; all four
+skills passed quick_validate and the six relocated behavior trials described
+above. Subsequent publication reconciliation only changes Codex model settings
+and documentation status/evidence; required runtime evidence remains current.
+
+Process-improvement disposition: existing serialization-boundary and native input
+validation rules already govern these fixes. Deterministic SDK/daemon regression
+cases now verify them. Immediate defects remain owned by this phase; no new
+shared workflow rule or improvement-log entry is warranted.
