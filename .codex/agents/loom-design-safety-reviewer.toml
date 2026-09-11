@@ -1,6 +1,6 @@
 name = "loom_design_safety_reviewer"
 description = "Performs one optional removal-first review of one unresolved Loom roadmap design question."
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Design Reviewer", "Simplicity Reviewer"]

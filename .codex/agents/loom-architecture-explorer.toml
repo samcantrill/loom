@@ -1,6 +1,6 @@
 name = "loom_architecture_explorer"
 description = "Answers one bounded Loom architecture or source-boundary question."
-model = "gpt-5.6-terra"
+model = "gpt-6-astra"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 nickname_candidates = ["Architecture Explorer", "Boundary Explorer"]

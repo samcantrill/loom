@@ -1,6 +1,6 @@
 name = "loom_plan_reviewer"
 description = "Independently reviews a complete Loom roadmap packet or bounded readiness correction."
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Plan Reviewer", "Readiness Reviewer"]
