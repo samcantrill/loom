@@ -107,7 +107,7 @@ def render_gpu_allocation_environment(requested_count: int) -> tuple[str, ...]:
         f"  echo 'loom GPU admission failed: requested {requested_count}, CUDA_VISIBLE_DEVICES is missing' >&2",
         "  exit 78",
         "fi",
-        'if [[ "${_loom_cuda_visible_devices}" == *$\'\\n\'* ]]; then',
+        "if [[ \"${_loom_cuda_visible_devices}\" == *$'\\n'* ]]; then",
         "  echo 'loom GPU admission failed: invalid visibility token' >&2",
         "  exit 78",
         "fi",

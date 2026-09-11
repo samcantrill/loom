@@ -339,7 +339,9 @@ def _exercise_mixed_route_run(
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     containment_helper = _positive_containment_helper() if guarded_recovery else None
     profile = _profile(
-        runner, containment_helper=containment_helper, container_options=container_options
+        runner,
+        containment_helper=containment_helper,
+        container_options=container_options,
     )
     original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
     intent_crash_injected = False
@@ -966,9 +968,9 @@ def _exercise_mixed_route_run(
                 container = cast(Mapping[str, object], metadata["container"])
                 assert container["container_runtime"] == "apptainer"
                 assert "/fixture/bootstrap.json" not in json.dumps(container)
-                assert str(profile.job_private_file_provider.fixed_path) not in json.dumps(
-                    container
-                )
+                assert str(
+                    profile.job_private_file_provider.fixed_path
+                ) not in json.dumps(container)
             script = (
                 config.slurm_script_root / f"{record.assignment.assignment_id}.sh"
             ).read_text(encoding="utf-8")
@@ -1065,9 +1067,7 @@ def test_selected_container_ready_run_persists_redacted_receipt_after_replay(
                     "mode": "rw",
                 }
             ],
-            "environment": {
-                "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]
-            },
+            "environment": {"required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]},
         },
     )
 

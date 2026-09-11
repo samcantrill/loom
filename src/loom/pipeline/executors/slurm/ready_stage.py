@@ -717,7 +717,9 @@ def map_ready_stage(
             **_redact_ready_container_metadata(command.metadata),
             "bootstrap_environment": _SLURM_BOOTSTRAP_CONFIG_ENV,
         }
-        requested_gpu_count = _ready_stage_requested_gpu_count(placement.resource_request)
+        requested_gpu_count = _ready_stage_requested_gpu_count(
+            placement.resource_request
+        )
         if requested_gpu_count:
             # Job-side validation has not run yet.  Retain only the requested
             # outer allocation and leave actual visibility observation pending.

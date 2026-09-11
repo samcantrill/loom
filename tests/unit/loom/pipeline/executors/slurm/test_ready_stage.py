@@ -280,7 +280,9 @@ def test_ready_stage_container_bootstrap_env_reaches_rendered_runtime(
     tmp_path: Path, runtime_name: str, bootstrap_prefix: str
 ) -> None:
     profile = replace(
-        _profile(FakeSlurmCommandRunner(), container_options=_ready_container_options()),
+        _profile(
+            FakeSlurmCommandRunner(), container_options=_ready_container_options()
+        ),
         apptainer_options={"command": runtime_name},
     )
     request = _request(profile)
