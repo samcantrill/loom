@@ -1195,6 +1195,12 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         ("profile", "installation_mismatch"),
         ("requirements", "installation_mismatch"),
         ("missing_requirement", "invalid_preparation_report"),
+        ("malformed_preflight", "invalid_preparation_report"),
+        ("malformed_requirements", "invalid_preparation_report"),
+        ("malformed_pipeline", "invalid_preparation_report"),
+        ("malformed_runtime", "invalid_preparation_report"),
+        ("malformed_worker_result", "invalid_preparation_report"),
+        ("malformed_json", "invalid_preparation_report"),
         ("worker_result", "invalid_preparation_report"),
         ("checksum", "invalid_preparation_report"),
         ("required_unavailable", "preflight_failed"),
@@ -1222,6 +1228,11 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         "requirements",
         "missing_requirement",
         "required_unavailable",
+        "malformed_preflight",
+        "malformed_requirements",
+        "malformed_pipeline",
+        "malformed_runtime",
+        "malformed_json",
     }:
         # A selected installed Python writes an inconsistent report before its
         # native artifact checksum and authoritative output commit are created.
@@ -1232,6 +1243,13 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
             "from dataclasses import replace\n"
             "from loom.pipeline.context import StageContext\n"
             "from loom.diagnostics import PreflightResult, PreflightCheckStatus\n"
+            "from loom.io.codecs.json_codec import JSONCodec\n"
+            "encode = JSONCodec.encode\n"
+            "def encoded(self, obj, **kwargs):\n"
+            "    if os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_json' and isinstance(obj, dict) and 'input_manifest_digest' in obj:\n"
+            "        return b'{invalid json'\n"
+            "    return encode(self, obj, **kwargs)\n"
+            "JSONCodec.encode = encoded\n"
             "save = StageContext.save_artifact\n"
             "def changed(self, name, value, **kwargs):\n"
             "    if name == 'report' and self.stage_name == 'prepare':\n"
@@ -1242,7 +1260,15 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
             "            value['execution_requirements']['produce']['environment_fingerprint'] = 'another-environment'\n"
             "        elif fault == 'missing_requirement':\n"
             "            value['execution_requirements'] = {}\n"
-            "        else:\n"
+            "        elif fault == 'malformed_preflight':\n"
+            "            value['preflight']['checks'] = None\n"
+            "        elif fault == 'malformed_requirements':\n"
+            "            value['execution_requirements']['produce']['environment_fingerprint'] = None\n"
+            "        elif fault == 'malformed_pipeline':\n"
+            "            value['composition']['resolved']['pipeline']['stages'] = None\n"
+            "        elif fault == 'malformed_runtime':\n"
+            "            value['composition']['resolved']['runtime'] = {'invalid_field': True}\n"
+            "        elif fault == 'required_unavailable':\n"
             "            preflight = PreflightResult.from_dict(value['preflight'])\n"
             "            checks = (replace(preflight.checks[0], status=PreflightCheckStatus.SKIP, details={'applicability': 'required'}), *preflight.checks[1:])\n"
             "            value['preflight'] = PreflightResult(checks, preflight.groups).to_dict()\n"
@@ -1268,8 +1294,11 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
             )
             assert stored_result is not None
             result: dict[str, Any] = stored_result
-            if fault == "worker_result":
-                result["outputs"]["report"]["artifact_id"] = "different-report"
+            if fault in {"worker_result", "malformed_worker_result"}:
+                if fault == "worker_result":
+                    result["outputs"]["report"]["artifact_id"] = "different-report"
+                else:
+                    result["outputs"]["report"]["artifact_id"] = None
                 store.write_stage_worker_result(
                     admission.run_uri, "prepare", result, attempt=1
                 )

@@ -23,13 +23,15 @@ from loom.diagnostics.models import (
     PreflightStatus,
 )
 from loom.diagnostics.preflight import run_preflight_composed
+from loom.errors import SerializationError, ValidationError
+from loom.io.codecs.errors import CodecDecodeError
 from loom.pipeline.context import StageContext
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
-from loom.pipeline.stores.errors import ArtifactChecksumMismatchError
+from loom.pipeline.stores.errors import ArtifactChecksumMismatchError, ArtifactStoreError
 from loom.queue._preparation_operations import (
     PreparationInstallationMismatch,
     PreparationReport,
@@ -213,7 +215,19 @@ def decode_preparation_report(
     The coordinator operation owner must first establish the committed artifact's
     child/run/assignment identity. This function checks report identity and native
     value contracts, without executing or recomposing the reported configuration.
+    Malformed native values raise QueueConflictError for terminal report rejection.
     """
+    try:
+        return _decode_preparation_report(value, expected=expected)
+    except (ValueError, ValidationError, SerializationError) as exc:
+        raise QueueConflictError("preparation report native evidence is invalid") from exc
+
+
+def _decode_preparation_report(
+    value: object,
+    *,
+    expected: PreparationChildInput,
+) -> tuple[object, dict[str, ExecutionRequirement], PreflightResult]:
     report = _plain_mapping(value)
     if (
         set(report) != _REPORT_FIELDS
@@ -430,7 +444,12 @@ class CoordinatorPreparation:
         )
         if result_data is None:
             raise QueueServiceError("preparation child result is unavailable")
-        result = StageWorkerResult.from_dict(result_data)
+        try:
+            result = StageWorkerResult.from_dict(result_data)
+        except (ValueError, ValidationError, SerializationError) as exc:
+            raise QueueConflictError(
+                "preparation committed worker result is invalid"
+            ) from exc
         if (
             result.run_uri != admission.run_uri
             or result.stage_name != "prepare"
@@ -449,6 +468,12 @@ class CoordinatorPreparation:
             raise QueueConflictError(
                 "preparation committed report checksum conflicts"
             ) from exc
+        except ArtifactStoreError as exc:
+            if isinstance(exc.__cause__, CodecDecodeError):
+                raise QueueConflictError(
+                    "preparation committed report cannot be decoded"
+                ) from exc
+            raise
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
@@ -457,9 +482,14 @@ class CoordinatorPreparation:
         if allowed:
             resolved = cast(_ReceivedComposition, composed).resolved
             pipeline = _pipeline_from_resolved(resolved)
-            run_uri, _options = _runtime_for_service(
-                self._service(config), resolved, pipeline, request.run_name
-            )
+            try:
+                run_uri, _options = _runtime_for_service(
+                    self._service(config), resolved, pipeline, request.run_name
+                )
+            except (ValueError, ValidationError, SerializationError) as exc:
+                raise QueueConflictError(
+                    "preparation report runtime evidence is invalid"
+                ) from exc
             prospective = ManagedLocalPreparationReceipt(
                 run_uri, "f" * 64, "f" * 64, pipeline.stage_names
             )
