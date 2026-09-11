@@ -56,7 +56,9 @@ def test_execution_failure_capture_does_not_import_diagnostics() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp() -> None:
+def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp() -> (
+    None
+):
     script = dedent(
         """
         import sys
@@ -81,7 +83,9 @@ def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp()
                            for name in sys.modules), forbidden
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -2098,3 +2102,52 @@ def test_core_runtime_imports_do_not_depend_on_weave() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_native_imports_do_not_load_optional_mcp_sdk() -> None:
+    script = dedent(
+        """
+        import importlib.abc
+        import sys
+        class NoSDK(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'mcp' or fullname.startswith('mcp.'):
+                    raise ModuleNotFoundError('MCP SDK is absent', name='mcp')
+        sys.meta_path.insert(0, NoSDK())
+        import loom
+        import loom.coordinator
+        import loom.queue.local_daemon
+        import loom.mcp
+        assert 'mcp' not in sys.modules
+        print('ok')
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_explicit_mcp_without_extra_has_actionable_stderr() -> None:
+    script = dedent(
+        """
+        import importlib.abc
+        import sys
+        class NoSDK(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'mcp' or fullname.startswith('mcp.'):
+                    raise ModuleNotFoundError('MCP SDK is absent', name='mcp')
+        sys.meta_path.insert(0, NoSDK())
+        from loom.mcp import main
+        sys.argv = ['loom-mcp', '--endpoint', '/tmp/absent.sock']
+        raise SystemExit(main())
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "loom[mcp]" in result.stderr
+    assert "Traceback" not in result.stderr

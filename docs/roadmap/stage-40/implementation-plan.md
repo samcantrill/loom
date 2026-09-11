@@ -1,6 +1,6 @@
 # Roadmap Stage 40 Implementation Plan
 
-Status: approved; implementation in progress
+Status: implementation complete; all four phases merged into develop
 Roadmap stage: 40
 Stage descriptor: Coordinator Client, Agent Preparation, And MCP
 Workflow: .codex/workflows/roadmap-stage-implementation.md
@@ -8,8 +8,8 @@ Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 3 - staged-preparation-inputs (merged)
-Next phase: 4 - mcp-skills (after publication of this completion metadata and synchronization)
+Current phase: none; Phases 1–4 delivered
+Next phase: none within Stage 40
 Blockers: none
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
@@ -127,7 +127,7 @@ rewrite existing run/admission identities to make a migration easier.
 | 1 | coordinator-client | merged | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | [#298](https://github.com/samcantrill/loom/pull/298) | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
 | 2 | agent-preparation | merged | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | [#300](https://github.com/samcantrill/loom/pull/300) | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
 | 3 | staged-preparation-inputs | merged | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | [#302](https://github.com/samcantrill/loom/pull/302) | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
-| 4 | mcp-skills | pending | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | pending | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |
+| 4 | mcp-skills | merged | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | [#304](https://github.com/samcantrill/loom/pull/304) | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |
 
 Each phase is one independently mergeable PR. Its card has four or five bounded
 implementation steps with focused validation; steps do not create extra PRs.
@@ -180,17 +180,53 @@ and all approved validation commands remain binding.
   retained operation evidence consumes space; client policy is deployment-wide.
 - Revisit triggers: a supported project needs code deployment, large runtime
   inputs, another authority/preparation family or multiple preparation environments.
-- Phases 1 through 3 are merged and independently reviewed. Phase 3 review
-  passed at `27b54165d4943f47f3213702c24b0b4f53414c68` with no findings;
-  PR #302 merged at `82ee364bc73856be2f709ff5ac682fc9a4844b27`.
-  Both required full gates and the published-base qualification passed.
-  The published Stage 41 lifecycle guide remains separate product planning.
+- All four phases are merged and independently reviewed. Final Phase 4 review
+  passed at `67c68f38a2c241b4b56816f585163aabb7fc6c55` with no findings;
+  PR #304 merged at `31f4310e18d56ece4969bc2df2bfd42c707f37c1` on
+  2026-09-11. Both required full gates and published-base reconciliation passed.
+  The published Stage 41 lifecycle guide remains separate product planning;
+  no Stage 41 implementation is part of this delivery.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#298](https://github.com/samcantrill/loom/pull/298), merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` | Native control delivered; both required full gates and affected TLS checks passed; independent review found no issues. See the phase card for revisions and counts | Physical deployment/Codex deferred as planned | Remote branch retired; persistent stage worktree retained through remaining phases |
+| 1 | [#298](https://github.com/samcantrill/loom/pull/298), merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` | Native control delivered; both required full gates and affected TLS checks passed; independent review found no issues. See the phase card for revisions and counts | Physical deployment/Codex deferred as planned | Both exact phase branches retired; persistent stage worktree retained through remaining phases |
 | 2 | [#300](https://github.com/samcantrill/loom/pull/300), merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d` | Shared preparation lifecycle and native/CLI journeys implemented; focused worker placement, recovery, cancellation, report, retention and populated-root upgrade checks pass. Both required full gates pass; all 44 preparation cases and affected static checks qualify the later decoder correction. Independent review confirmed the final head with no remaining findings. See the phase card | Loopback and fixture-root evidence; no physical deployment claim or real-root upgrade | Both exact phase branches retired; published metadata synchronized at `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, then the shared start gate created Phase 3 in the retained worktree |
-| 3 | [#302](https://github.com/samcantrill/loom/pull/302), merge `82ee364bc73856be2f709ff5ac682fc9a4844b27` | Transferred inputs, qualified placement and native recovery implemented. Both required full gates pass at `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`; 3,478 tests pass in the summary. Published-base reconciliation adds 465 passing affected cases and full static checks. Independent review passed with no findings. See the phase card for revisions and evidence | Loopback and fixture-root evidence; physical fleet/NAS/Codex remains separate | Remote phase branch retired; transition verified the merge and synchronized the retained stage worktree and clean control. Completion metadata publication and exact local phase retirement precede Phase 4 |
-| 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Reuses the retained Stage 40 worktree through final closeout |
+| 3 | [#302](https://github.com/samcantrill/loom/pull/302), merge `82ee364bc73856be2f709ff5ac682fc9a4844b27` | Transferred inputs, qualified placement and native recovery implemented. Both required full gates pass at `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`; 3,478 tests pass in the summary. Published-base reconciliation adds 465 passing affected cases and full static checks. Independent review passed with no findings. See the phase card for revisions and evidence | Loopback and fixture-root evidence; physical fleet/NAS/Codex remains separate | Remote phase branch retired; transition verified the merge and synchronized the retained stage worktree and clean control. Both exact phase branches retired; published metadata synchronized at `d9b283b5352b6ab246af30fb9d6f67c51853361b`, then the shared start gate created Phase 4 |
+| 4 | [#304](https://github.com/samcantrill/loom/pull/304), merge `31f4310e18d56ece4969bc2df2bfd42c707f37c1` | Optional MCP, thirteen tools, four portable skills and isolated SDK lane delivered. Both required gates passed at `b675257aa20f4e0b16f3fe12f887fbe6a03ea3bd`; 3,535 summary tests passed, including all 36 MCP cases. Six relocated skill trials passed. Independent review passed at `67c68f38a2c241b4b56816f585163aabb7fc6c55` with no findings | Live Codex and physical NAS remain unqualified, as explicitly permitted for code-phase completion | Remote phase branch retired; transition verified the merge and synchronized the stage worktree and clean control. Local phase and coordination refs remain through publication of this closeout |
+
+### Final stage closeout
+
+All accepted code, migration, compatibility, documentation and automated
+validation obligations are delivered. The current installation and usage guide
+is [MCP coordinator access](../../features/mcp.md). The phase cards retain exact
+review revisions, validation selections, correction evidence and merge commits.
+
+Final full validation passed: `make validate-pr` includes static checks, baseline,
+configuration and optional MCP tests plus package builds; `make test-summary`
+reports 3,535 passed, zero failures/errors and 18 existing opt-in physical
+container skips. All 36 MCP cases ran. Phase 4 records the two existing warnings
+from a passing unrelated monitor test. Later changes only reconcile published
+Codex settings and document delivery; runtime validation remains applicable.
+
+Live Codex and physical two-machine NAS trials remain release limitations:
+the inspected Codex setup has no registered Loom server, and no physical
+synthetic deployment was selected. SDK subprocess and loopback tests do not
+qualify those deployments. No running worker environment, real coordinator root,
+global Codex configuration or scientific workload was changed by this delivery.
+
+All repository implementation, validation and closeout used the persistent
+`stage-40` worktree with explicit phase/coordination branches and the shared Git
+preflight gate. The clean control checkout is used only for administration and
+fast-forward synchronization. Unrelated occupied checkouts were preserved.
+After this closeout is published, the shared sync gate must verify equality of
+stage HEAD, local develop, fetched origin/develop and live remote develop before
+the exact verified phase/coordination branches and clean stage worktree are
+retired. Actual synchronization and cleanup facts belong in the final handoff,
+not a self-referential commit receipt.
+
+Process-improvement disposition: the native validation and serialization rules
+already own the corrected boundaries, now backed by deterministic regressions.
+No new reusable workflow rule or improvement-log entry is warranted. No further
+phase is selected; Stage 41 remains a separate approved plan.

@@ -20,8 +20,10 @@ research workflow evidence:
   structured failure records
 - [native coordinator control](docs/features/coordinator-client.md) from Python
   and CLI over the local Unix socket or authenticated HTTPS
-- [agent preparation](docs/features/agent-preparation.md) of shared configuration
-  in a specified existing environment, with coordinator-owned publication
+- [agent preparation](docs/features/agent-preparation.md) of shared or explicitly
+  staged configuration in a specified existing environment, with coordinator-owned publication
+- [MCP tools and portable skills](docs/features/mcp.md) for native coordinator
+  control from Codex sessions
 - import-safe boundaries between config, pipeline, execution, stores, authority,
   plugins, and CLI modules
 

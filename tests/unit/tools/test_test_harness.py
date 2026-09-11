@@ -145,3 +145,32 @@ def test_write_summary_renders_overall_and_suite_breakdowns(tmp_path: Path) -> N
     assert "## unit" in rendered
     assert "| config | passed | 2 | 0 | 0 | 0 | 2 | 0.50s | 75% |" in rendered
     assert "unit output" in rendered
+
+
+def test_mcp_suite_is_dependency_isolated_and_in_default_summary() -> None:
+    from _pytest.mark.expression import Expression
+    from tools.test_harness.cli import (
+        CONFIG_EXTRA_MARKER_EXPR,
+        DEFAULT_MARKER_EXPR,
+        MCP_EXTRA_MARKER_EXPR,
+        SUITES,
+        uv_command_for_suite,
+    )
+
+    markers = {"integration", "optional_dependency", "mcp_extra"}
+
+    def matches(name: str, **kwargs: object) -> bool:
+        return name in markers
+
+    assert not Expression.compile(DEFAULT_MARKER_EXPR).evaluate(matches)
+    assert not Expression.compile(CONFIG_EXTRA_MARKER_EXPR).evaluate(matches)
+    assert Expression.compile(MCP_EXTRA_MARKER_EXPR).evaluate(matches)
+    assert "mcp-extra" in SUITES
+    args = uv_command_for_suite("mcp-extra")
+    assert "--isolated" in args and "--locked" in args
+    assert [args[i + 1] for i, value in enumerate(args) if value == "--extra"] == [
+        "config",
+        "mcp",
+    ]
+    assert "mcp" not in uv_command_for_suite("config-extra")
+    assert "--extra" not in uv_command_for_suite("unit")

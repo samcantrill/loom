@@ -3014,8 +3014,10 @@ Status: expanded design and independent plan reviews passed after one bounded
 correction. Manager documentation checks passed; the maintainer approved the
 Stage 40 behavior and revised four-phase delivery on 2026-09-10. Focused
 independent plan/startup review passed with no blockers or required corrections.
-Ready for implementation; no implementation has started. Phase 1,
-coordinator-client, remains the next pending phase.
+All four implementation phases are merged into develop as of 2026-09-11, with
+passing required local gates and independent reviews. The implementation
+manifest records revisions, evidence and the remaining live Codex/physical NAS
+deployment limitations.
 
 Unify Python, CLI and MCP access to the coordinator through local Unix or
 authenticated HTTPS connections. Add coordinator-owned preparation that schedules
@@ -3041,8 +3043,8 @@ environment provisioning and general source deployment remain outside this stage
 
 Status: approved on 2026-09-10 with nine bounded implementation phases. The
 reviewed behavior/correction is retained; the manager checked the approved phase
-decomposition and documentation. Execution awaits published Stage 40; no runtime
-work has started.
+decomposition and documentation. The Stage 40 prerequisite is now delivered;
+no Stage 41 runtime work has started.
 
 Build on Stage 40's native client and assigned preparation. One public run
 connects to or starts configured coordinator/agent services, prepares and admits

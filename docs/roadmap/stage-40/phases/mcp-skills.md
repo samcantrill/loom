@@ -2,18 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: 40 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p4-mcp-skills
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 3 merges
+- Base revision: `d9b283b5352b6ab246af30fb9d6f67c51853361b`, published Phase 3 completion metadata.
+- PR: [#304](https://github.com/samcantrill/loom/pull/304)
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 4: MCP Tools And Portable Loom Skills
-- Dependencies: Phase 3 remotely merged; shared and staged native contracts validated
+- Dependencies: Phase 3 PR #302 merged at `82ee364bc73856be2f709ff5ac682fc9a4844b27`; metadata published, synchronization passed and both phase branches retired.
 - Workflow path: expanded for assistant mutation/error semantics and dependency isolation
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: none; no refinement needed
 
 ## Objective And Context
 
@@ -31,8 +32,8 @@ do not repair them with subprocess CLI parsing or an MCP-specific implementation
 - Phase 1's `loom.coordinator.CoordinatorClient`, Phase 2's preparation APIs and
   Phase 3's staged input support over those same APIs.
 - `pyproject.toml`, `uv.lock`: dependency extra and script registration.
-- Proposed `src/loom/mcp/`: adapter and entrypoint; create only implemented files.
-- Proposed `skills/loom-prepare/SKILL.md`, `skills/loom-run/SKILL.md`,
+- `src/loom/mcp/`: implemented adapter and entrypoint.
+- `skills/loom-prepare/SKILL.md`, `skills/loom-run/SKILL.md`,
   `skills/loom-monitor/SKILL.md`, `skills/loom-diagnose/SKILL.md`.
 - `make/dev/targets.mk`, `make/test/targets.mk`,
   `tools/test_harness/cli.py`, `tests/README.md`: optional SDK test lane.
@@ -399,23 +400,104 @@ reopening coordinator topology, source/profile authority or native result names.
 
 ## Workflow State
 
-- Manager preparation: Phase 4 sequencing approved on 2026-09-10
+- Manager preparation: approved boundaries reconciled against the published predecessor on 2026-09-11; shared start/preflight gates verified the persistent stage worktree and phase branch. No refinement needed.
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: complete and merged; executor ownership has returned. Manager completed the native/SDK boundary corrections, packaging/harness lane, real stdio contracts and daemon journeys, four skills, documentation and relocated behavior trials. Both required full gates and independent review pass.
 - Refiner: not needed
-- Pre-submit gate: not run
-- Independent review: required before implementation merge
-- Blocker corrections: 0/3
-- PR and merge: not created
+- Pre-submit gate: passed; accepted scope, native ownership, both required full gates, optional dependency isolation, documentation, skill trials and committed diff are reconciled.
+- Independent review: passed at `67c68f38a2c241b4b56816f585163aabb7fc6c55`; the required independent phase reviewer found no product blockers, localized corrections, workflow issues or additional acceptance requirements. Review verified the actual PR identity, native/MCP contracts, skills, dependency isolation and current evidence.
+- Blocker corrections: 3/3. Correction 1 (`ed0c935`) releases successful calls and shares one absolute native deadline; seven focused unit cases pass. Correction 2 uses Loom plain-data conversion before SDK serialization: real stdio preparation exposed frozen MappingProxyType evidence in native operation results. The same projection correction selects summary fields from native envelopes and shows the report reference URI without interpreting project details as lifecycle state. Correction 3 preserves raw source keys until native decoding: the SDK TypedDict normalization silently removed an unsupported exclude field. Source discovery now derives from the native dataclass schema while native decoding receives the complete dictionary and refuses unsupported intent before dispatch. All affected SDK contract/integration cases pass; all seven adapter units pass after the schema assertion update. Both required full gates pass.
+- PR and merge: #304 merged into develop at `31f4310e18d56ece4969bc2df2bfd42c707f37c1` on 2026-09-11T12:00:35Z. The delivery helper verified the remote merge at the reviewed head and retired the matching remote phase branch. Transition returned the retained stage worktree to coordination and synchronized published state.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
-| PR, review, and merge | Pending |
-| Live Codex and physical NAS acceptance | Not run |
-| Residual risk and cleanup | Stage worktree not yet created |
+| Implementation and changed paths | Optional SDK entrypoint and thirteen tools in src/loom/mcp; optional dependency/lock and isolated MCP lane; full tool mapping and real stdio/daemon checks; four individually portable skills; feature/operations/install docs and package/harness checks. Executor foundation `af26f0a`, capacity/deadline correction `ed0c935`; manager boundary corrections and integration are complete in this tree. |
+| Tests added or updated | All 36 MCP cases pass: 21 contract mappings/schema/result/error cases, eight real SDK stdio/native daemon cases and seven adapter units. Package tests cover explicit no-extra failure and native import isolation; harness tests cover marker selection and isolated dependency commands. |
+| Validated revision/tree state and evidence | Both required gates ran at clean `b675257aa20f4e0b16f3fe12f887fbe6a03ea3bd`. make validate-pr passed: Ruff/Pyright zero errors; 3,284 baseline, 213 config-extra and 36 MCP tests passed; wheel and source distribution built. make test-summary passed: 3,535 tests, zero failures/errors, 18 existing opt-in container skips. Logs: /tmp/loom-stage40-p4-validate-pr.log and /tmp/loom-stage40-p4-test-summary.log; summary: build/test-summary.md. |
+| Validation-relevant changes after evidence | Merge `c78d1cbce974e6f18b78f06cf3ef8d6064023d52` incorporates published PR #303 (`5971117e3eaef9e62d644c3dd178a36eb40ae924`), changing only nine Codex model-setting TOML files. They parse successfully; production code, tests, dependency lock and harness are unchanged from the validated tree. Later phase/status records are documentation only. |
+| PR, review, and merge | [#304](https://github.com/samcantrill/loom/pull/304) passed independent review at `67c68f38a2c241b4b56816f585163aabb7fc6c55` with no findings and merged into develop at `31f4310e18d56ece4969bc2df2bfd42c707f37c1` on 2026-09-11T12:00:35Z. Required local validation is reconciled to the reviewed head; review also confirmed the six skill trials and explicit deployment limitations. |
+| Live Codex and physical NAS acceptance | Not run. Read-only Codex configuration inspection found no registered Loom MCP server; no real client session was configured or changed. No physical two-machine synthetic deployment was selected/configured for this task. Automated SDK/loopback evidence does not qualify either release claim. |
+| Residual risk and cleanup | Physical NAS and live Codex acceptance remain unqualified. The matching remote phase branch is retired and transition verified the merged state. The persistent stage worktree and local refs remain through final metadata publication and synchronization; exact cleanup is reported in the final handoff. |
+
+### Startup and validation selection
+
+The manifest readiness receipt remains applicable. Phase 3 delivers both native
+source modes; its published-base reconciliation retains the intervening execution
+contracts. No new native policy or durable format is required. MCP SDK 2.2.0 is
+the maintained release inspected for this phase; validate its installed public
+API before use. The optional dependency is isolated from native runtime imports.
+
+Coverage follows the adapter boundary: SDK stdio schemas/results/errors, native
+guards and mutation outcomes, capacity/deadlines/closure; daemon fixture journeys
+reuse the existing shared/staged preparation owners. Package checks prove base
+imports and explicit optional entrypoint behavior. Harness checks cover the new
+MCP lane and summary selection. Four relocated skill directories receive behavior
+trials with project-supplied inputs. Run focused checks during implementation,
+then both make validate-pr and make test-summary at the stable tree. Expand for
+changed native transport semantics, missing cross-boundary evidence or failures;
+never infer physical deployment from loopback fixtures.
+
+### Skill validation
+
+All four skills passed the skill-creator quick validator. Each directory was
+copied independently to `/tmp/loom-stage40-p4-skill-trials` and an independent
+forward test evaluated six synthetic continuations from minimal observation
+excerpts. The manager inspected `results.md`: build/checksum preparation stopped
+at its receipt; transform/report prepare-and-run proceeded to a guarded admission
+and one status read without an artificial approval; status-only stopped after
+one observation; small-report diagnosis used its inline failing check without
+repair; large-report diagnosis identified the pinned reference and unavailable
+artifact reader without claiming download; a lost admission used the original
+queue ID and coordinator guard before any same-intent replay. No domain defaults,
+new IDs, implicit cancellation or operator recovery were introduced.
+
+These are recorded behavioral simulations, not native schema or live tool-call
+qualification. Real stdio and daemon tests own runtime evidence. The relocated
+skills require no repository reference files or project installation.
+
+### Dependency reconciliation
+
+The maintained SDK is locked at 2.2.0. Its httpx2 dependency requires idna>=3.18,
+so the lock resolution advances idna from 3.14 to 3.19; other prior locked native
+dependencies are retained. The SDK remains an optional extra, with a dedicated
+isolated config/MCP test lane and normal imports that fail if its dependencies
+are missing. No running worker environment or real Codex registration is changed.
+
+### Final implementation ownership
+
+The adapter uses native `_native_call` and `_wait_native` deadline hooks so all
+wire validation, capability negotiation, coordinator guards, error decoding and
+mutation uncertainty remain in the shared native client. Compound status and
+queue-ID/detail reads use one absolute budget; synchronous work is admitted to
+bounded threads with separate wait capacity. Inspection uses the existing native
+union decoder. SDK lifespan and stdio exit close local transport/capacity only.
+No native source, durable schema, daemon policy or worker installation changes
+are introduced by this phase.
+
+Native source discovery is derived from `PreparationSource`; the full raw input
+dictionary reaches the native decoder, so SDK normalization cannot silently remove
+unsupported authored fields. Native plain-data conversion preserves frozen
+operation/report evidence in SDK structured output. Text summaries inspect native
+envelopes only and expose state, stable IDs and the report URI without interpreting
+project detail fields as native state.
+
+Both required gates passed at the clean implementation revision in Completion
+Record. The summary's suite counts are package 127, unit 2,294, contract 301,
+integration 494, E2E 70, config-extra 213 and MCP-extra 36: 3,535 passed with
+zero failures/errors. Its 18 skips are thirteen existing opt-in Apptainer
+namespace/timeout lifecycle cases and five other physical container cases, not
+omitted MCP coverage. The baseline gate emitted two existing Textual monitor
+coroutine warnings in test_loom_monitor.py; that unrelated test passed and no
+monitor source changed.
+
+Four local guide links and four shell/JSON/TOML examples were checked; all four
+skills passed quick_validate and the six relocated behavior trials described
+above. Subsequent publication reconciliation only changes Codex model settings
+and documentation status/evidence; required runtime evidence remains current.
+
+Process-improvement disposition: existing serialization-boundary and native input
+validation rules already govern these fixes. Deterministic SDK/daemon regression
+cases now verify them. Immediate defects remain owned by this phase; no new
+shared workflow rule or improvement-log entry is warranted.
