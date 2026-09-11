@@ -29,6 +29,7 @@ from loom.queue.preparation import (
 )
 from loom.queue._agent_process_supervisor import ResidentWorkerLaunchProfile
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue._preparation_policy import load_preparation_policy
 import sys
 
 
@@ -97,6 +98,9 @@ def test_request_rejects_escape_paths_before_capture(path: str) -> None:
 
 
 def test_preparation_operation_is_principal_bound_idempotent_and_cancellable(tmp_path: Path) -> None:
+    from loom.coordinator import CoordinatorClient
+    from loom.queue.local_daemon_transport import LocalDaemonSocketServer
+
     profile = ResidentWorkerLaunchProfile(
         project_root=Path.cwd(),
         python_executable=Path(sys.executable),
@@ -107,12 +111,26 @@ def test_preparation_operation_is_principal_bound_idempotent_and_cancellable(tmp
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
         resident_worker_launch_profile=profile,
-        preparation_enabled=True,
+        preparation_policy=load_preparation_policy(
+            {"source_roots": {"projects": {"path": "projects", "shared_snapshot_root": "snapshots"}},
+             "profiles": {"example-cpu": {"resident_profile_id": "local", "allowed_source_roots": ["projects"], "source_modes": ["shared"], "runtime_options": {"executor": "local"}}}},
+            base=tmp_path,
+            descriptors=(ResidentProfileDescriptor.from_dict(profile.descriptor),),
+        ),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
     try:
+        server.start()
+        with CoordinatorClient.from_unix_socket(config.endpoint) as client:
+            description = client.describe_connection()
+            assert description.source_modes == ("shared",)
+            assert description.preparation_profiles == ("example-cpu",)
+            assert description.source_roots == ("projects",)
+            assert "agent-preparation-v1" in description.capabilities
+            assert str(tmp_path) not in json.dumps(description.to_dict())
         view = daemon.client_view(LocalDaemonPrincipal("client-a", LocalDaemonRole.CLIENT))
         accepted = view.prepare_run(_request())
         replay = view.prepare_run(_request())
@@ -124,6 +142,7 @@ def test_preparation_operation_is_principal_bound_idempotent_and_cancellable(tmp
         with pytest.raises(Exception, match="conflicts"):
             daemon.client_view(LocalDaemonPrincipal("client-b", LocalDaemonRole.CLIENT)).prepare_run(_request())
     finally:
+        server.stop()
         daemon.stop()
 
 
@@ -246,3 +265,20 @@ def test_request_normalizes_equivalent_explicit_selections_and_native_intent() -
         replace(request, source=PreparationSource("shared", "projects", ".", ("configs/*.yaml",)))
     with pytest.raises(QueueServiceError, match="1..100"):
         replace(request, source=PreparationSource("shared", "projects", ".", tuple(f"file-{i}" for i in range(101))))
+
+
+def test_source_removed_between_selection_and_open_is_a_detected_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "projects"
+    config = root / "example-project" / "configs" / "experiment.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("original")
+    read = inputs._read_regular_file
+
+    def remove_before_open(directory: Path, relative: str, limit: int, *, expected: os.stat_result | None = None) -> bytes:
+        config.unlink()
+        return read(directory, relative, limit, expected=expected)
+
+    monkeypatch.setattr(inputs, "_read_regular_file", remove_before_open)
+    with pytest.raises(QueueServiceError, match="source_changed"):
+        capture_shared_input(_request(), source_root=root, snapshot_root=tmp_path / "snapshots")
+    assert not (tmp_path / "snapshots").exists()

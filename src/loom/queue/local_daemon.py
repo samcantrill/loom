@@ -64,6 +64,7 @@ from ._agent_process_supervisor import (
 )
 from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
+from ._preparation_policy import PreparationPolicy
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -665,12 +666,16 @@ class LocalDaemonConfig:
     active_configuration_fingerprint: str | None = None
     coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
     gpu_occupancy_policy: GpuOccupancyPolicy | None = None
-    preparation_enabled: bool = False
+    preparation_policy: PreparationPolicy | None = None
+
+    @property
+    def preparation_enabled(self) -> bool:
+        return self.preparation_policy is not None and bool(self.preparation_policy.effective_modes)
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
-        if not isinstance(self.preparation_enabled, bool):
-            raise QueueServiceError("preparation_enabled must be boolean")
+        if self.preparation_policy is not None and not isinstance(self.preparation_policy, PreparationPolicy):
+            raise QueueServiceError("preparation policy is invalid")
         agent = None if self.agent_root is None else Path(self.agent_root)
         run_store = Path(self.run_store_root)
         deployment_root = (

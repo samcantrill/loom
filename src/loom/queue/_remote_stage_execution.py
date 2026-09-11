@@ -58,6 +58,7 @@ from loom.serialization import (
 from ._agent_process_supervisor import (
     ResidentWorkerLaunchProfile,
     _launch_from_value,
+    _preparation_root_bindings,
 )
 from .errors import QueueConflictError, QueueServiceError
 
@@ -441,6 +442,7 @@ class ResidentExecutionProfile:
     )
     readiness_identity: str | None = None
     readiness_result: "ResidentReadinessResult | None" = None
+    preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -478,6 +480,7 @@ class ResidentExecutionProfile:
         ):
             raise QueueServiceError("resident execution environment is invalid")
         object.__setattr__(self, "environment", environment)
+        object.__setattr__(self, "preparation_shared_roots", _preparation_root_bindings(self.preparation_shared_roots))
         from .resident_readiness import ResidentReadinessRequirements
 
         if not isinstance(self.readiness_requirements, ResidentReadinessRequirements):
@@ -508,6 +511,7 @@ class ResidentExecutionProfile:
             descriptor=self.descriptor.to_dict(),
             environment=self.environment,
             readiness_identity=self.readiness_identity,
+            preparation_shared_roots=self.preparation_shared_roots,
         )
 
 

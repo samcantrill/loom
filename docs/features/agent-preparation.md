@@ -50,7 +50,9 @@ existing installation and source-identity checks.
 Shared mode uses one coordinator-published snapshot visible to eligible workers.
 An agent can mount it under a different prefix: its protected root mapping
 resolves the reference. The worker verifies the captured manifest and bytes
-before composition. No per-worker project copy is needed.
+before composition. No per-worker project copy is needed. Each snapshot has a
+Loom-owned `manifest.json` beside a `files/` directory containing the selected
+project files. An authored file named `manifest.json` is preserved under `files/`.
 
 The captured manifest identifies the exact consumed bytes. A mutable project
 directory is not an atomic Git snapshot; detected changes during capture fail

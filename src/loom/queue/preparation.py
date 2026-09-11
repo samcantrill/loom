@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
@@ -301,31 +302,36 @@ def _file_identities(files: Mapping[str, os.stat_result]) -> dict[str, tuple[int
 
 
 def _read_regular_file(root: Path, relative: str, limit: int, *, expected: os.stat_result | None = None) -> bytes:
-    # Open each component relative to an already-open directory. A concurrent
-    # authoring edit cannot redirect a later open through a symbolic link.
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        parts = PurePosixPath(relative).parts
-        for part in parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        # Open each component relative to an already-open directory. A concurrent
+        # authoring edit cannot redirect a later open through a symbolic link.
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            parts = PurePosixPath(relative).parts
+            for part in parts[:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                os.close(directory)
+                directory = child
+            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        finally:
             os.close(directory)
-            directory = child
-        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-    finally:
-        os.close(directory)
-    with os.fdopen(descriptor, "rb") as stream:
-        before = os.fstat(stream.fileno())
-        if not stat.S_ISREG(before.st_mode):
-            raise QueueServiceError("preparation source contains unsupported file")
-        if expected is not None and _identity(before) != _identity(expected):
-            raise QueueServiceError("preparation source_changed")
-        if before.st_size > limit:
-            raise QueueServiceError("preparation input_limit_exceeded")
-        data = stream.read(limit + 1)
-        after = os.fstat(stream.fileno())
-        if len(data) != before.st_size or _identity(before) != _identity(after):
-            raise QueueServiceError("preparation source_changed")
-        return data
+        with os.fdopen(descriptor, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise QueueServiceError("preparation source contains unsupported file")
+            if expected is not None and _identity(before) != _identity(expected):
+                raise QueueServiceError("preparation source_changed")
+            if before.st_size > limit:
+                raise QueueServiceError("preparation input_limit_exceeded")
+            data = stream.read(limit + 1)
+            after = os.fstat(stream.fileno())
+            if len(data) != before.st_size or _identity(before) != _identity(after):
+                raise QueueServiceError("preparation source_changed")
+            return data
+    except OSError as exc:
+        if expected is not None and exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+            raise QueueServiceError("preparation source_changed") from exc
+        raise
 
 
 def _write_durable(path: Path, data: bytes) -> None:

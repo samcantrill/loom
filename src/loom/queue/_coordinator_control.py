@@ -503,15 +503,16 @@ def dispatch_control(
         result: Any
         if operation == "handshake":
             status = view.status()
+            preparation = daemon.config.preparation_policy
             result = CoordinatorConnectionDescription(
                 "1",
                 transport,
                 status.coordinator_id,
                 status.coordinator_epoch,
                 (CONTROL_CAPABILITY, *( ("agent-preparation-v1",) if daemon.config.preparation_enabled else () )),
-                (("shared",) if daemon.config.preparation_enabled else ()),
-                (),
-                (),
+                (() if preparation is None else preparation.effective_modes),
+                (() if preparation is None else preparation.effective_profiles),
+                (() if preparation is None else preparation.effective_roots),
             )
         elif operation == "status":
             result = view.status()

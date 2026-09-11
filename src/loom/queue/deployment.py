@@ -60,6 +60,7 @@ from .resident_readiness import (
     qualified_resident_profile,
 )
 from .gpu.occupancy import GpuOccupancyPolicy
+from ._preparation_policy import PreparationPolicy, load_preparation_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +212,14 @@ def load_coordinator_service_config(
     base = source.parent
     root = _path(payload, "deployment_root", base)
     local_agent = _local_agent_service(payload["local_agent"], base, allow_unready=_allow_unready)
+    remote_profiles = tuple(
+        _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
+        for index, value in enumerate(_sequence(payload, "remote_profiles"))
+    )
+    preparation_policy = load_preparation_policy(
+        payload.get("preparation"), base=base,
+        descriptors=(*remote_profiles, *((local_agent.profile.descriptor,) if local_agent is not None else ())),
+    )
     fingerprint = _canonical_fingerprint(
         {
             "coordinator": _coordinator_immutable_projection(payload),
@@ -219,7 +228,7 @@ def load_coordinator_service_config(
     )
     active_fingerprint = _canonical_fingerprint(
         {
-            "coordinator": _coordinator_active_projection(payload),
+            "coordinator": _coordinator_active_projection(payload, preparation=preparation_policy),
             "local_agent": _local_agent_active_projection(local_agent),
         }
     )
@@ -234,11 +243,6 @@ def load_coordinator_service_config(
         None
         if server_value is None
         else _agent_server(_mapping_value(server_value, "agent_server"), base)
-    )
-    remote_values = _sequence(payload, "remote_profiles")
-    remote_profiles = tuple(
-        _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
-        for index, value in enumerate(remote_values)
     )
     daemon = LocalDaemonConfig(
         coordinator_root=root / "coordinator",
@@ -279,7 +283,7 @@ def load_coordinator_service_config(
         gpu_occupancy_policy=None
         if local_agent is None
         else local_agent.gpu_occupancy_policy,
-        preparation_enabled=_preparation_enabled(payload.get("preparation")),
+        preparation_policy=preparation_policy,
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -338,7 +342,9 @@ def load_outbound_agent_service_config(
         raise QueueConfigError("resident_profiles must not be empty")
     authored_profiles = _sequence(payload, "resident_profiles")
     payload = {**payload, "resident_profiles": [
-        {**_mapping_value(value, "resident profile"), "descriptor": profile.descriptor.to_dict()}
+        {**_mapping_value(value, "resident profile"), "descriptor": profile.descriptor.to_dict(),
+         **({"preparation_shared_roots": {alias: str(path) for alias, path in profile.preparation_shared_roots.items()}}
+            if profile.preparation_shared_roots else {})}
         for value, profile in zip(authored_profiles, profiles, strict=True)
     ]}
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
@@ -1210,7 +1216,7 @@ def _outbound_immutable_projection(
     }
 
 
-def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+def _coordinator_active_projection(payload: Mapping[str, object], *, preparation: PreparationPolicy | None = None) -> dict[str, object]:
     server = payload.get("agent_server")
     server_mapping = None if server is None else _mapping_value(server, "agent_server")
     server_credentials = (
@@ -1231,19 +1237,10 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),
                 "slurm_profiles": payload.get("slurm_profiles"),
-                "preparation": payload.get("preparation"),
+                **({"preparation": preparation.safe_identity()} if preparation is not None else {}),
             }
         ),
     )
-
-
-def _preparation_enabled(value: object) -> bool:
-    """Accept only an explicit nonempty protected preparation policy."""
-    if value is None:
-        return False
-    if not isinstance(value, Mapping) or not value:
-        raise QueueConfigError("preparation policy is invalid")
-    return True
 
 
 def _local_agent_immutable_projection(
@@ -1273,6 +1270,8 @@ def _local_agent_active_projection(
             for item in profile.gpu_devices
         ],
         "providers": local_agent.provider_configuration,
+        **({"preparation_shared_roots": _preparation_mapping_identity(profile.preparation_shared_roots)}
+           if profile.preparation_shared_roots else {}),
         **(
             {"gpu_occupancy": local_agent.gpu_occupancy_policy.to_dict()}
             if local_agent.gpu_occupancy_policy is not None
@@ -1289,10 +1288,16 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
         {
             key: item
             for key, item in _mapping_value(value, "resident profile").items()
-            if key != "readiness"
+            if key not in {"readiness", "preparation_shared_roots"}
         }
         for value in _sequence(payload, "resident_profiles")
     ]
+    for profile, value in zip(profiles, _sequence(payload, "resident_profiles"), strict=True):
+        roots = _mapping_value(value, "resident profile").get("preparation_shared_roots")
+        if roots:
+            profile["preparation_shared_roots"] = _preparation_mapping_identity(
+                cast(Mapping[str, Path], roots)
+            )
     return cast(
         dict[str, object],
         _without_paths(
@@ -1304,6 +1309,11 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
             }
         ),
     )
+
+
+def _preparation_mapping_identity(roots: Mapping[str, Path]) -> list[dict[str, str]]:
+    return [{"alias": alias, "binding_digest": hashlib.sha256(str(path).encode()).hexdigest()}
+            for alias, path in sorted(roots.items())]
 
 
 def _without_paths(value: object) -> object:
@@ -1360,7 +1370,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
-        {"readiness"},
+        {"readiness", "preparation_shared_roots"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1390,6 +1400,10 @@ def _resident_profile(
         tuple(devices),
         cast(Mapping[str, str], environment),
         requirements,
+        preparation_shared_roots={
+            alias: _path({"root": path}, "root", base)
+            for alias, path in _mapping_value(value.get("preparation_shared_roots", {}), "preparation shared roots").items()
+        },
     )
     profile = qualified_resident_profile(profile)
     result = profile.readiness_result

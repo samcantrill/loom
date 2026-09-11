@@ -54,6 +54,7 @@ class ResidentWorkerLaunchProfile:
     descriptor: Mapping[str, PlainData]
     environment: Mapping[str, str] = field(default_factory=dict)
     readiness_identity: str | None = None
+    preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).resolve()
@@ -78,6 +79,7 @@ class ResidentWorkerLaunchProfile:
         ):
             raise AgentProcessSupervisorError("resident profile environment is invalid")
         object.__setattr__(self, "environment", environment)
+        object.__setattr__(self, "preparation_shared_roots", _preparation_root_bindings(self.preparation_shared_roots))
         if self.readiness_identity is not None and (
             not isinstance(self.readiness_identity, str)
             or len(self.readiness_identity) != 64
@@ -89,15 +91,7 @@ class ResidentWorkerLaunchProfile:
 
     @property
     def fingerprint(self) -> str:
-        return _digest(
-            {
-                "project_root": str(self.project_root),
-                "python_executable": str(self.python_executable),
-                "descriptor": self.descriptor,
-                "environment": self.environment,
-                "readiness_identity": self.readiness_identity,
-            }
-        )
+        return _digest(_profile_value(self))
 
     @property
     def profile_id(self) -> str:
@@ -618,17 +612,20 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "descriptor": profile.descriptor,
         "environment": dict(profile.environment),
         "readiness_identity": profile.readiness_identity,
+        **({"preparation_shared_roots": {key: str(path) for key, path in profile.preparation_shared_roots.items()}}
+           if profile.preparation_shared_roots else {}),
     }
 
 
 def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
-    if not isinstance(value, Mapping) or set(value) != {
+    required = {
         "project_root",
         "python_executable",
         "descriptor",
         "environment",
         "readiness_identity",
-    }:
+    }
+    if not isinstance(value, Mapping) or not required.issubset(value) or not set(value).issubset(required | {"preparation_shared_roots"}):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
         project_root=Path(cast(str, value["project_root"])),
@@ -636,7 +633,25 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),
         environment=cast(Mapping[str, str], value["environment"]),
         readiness_identity=cast(str | None, value["readiness_identity"]),
+        preparation_shared_roots=cast(Mapping[str, Path], value.get("preparation_shared_roots", {})),
     )
+
+
+def _preparation_root_bindings(value: Mapping[str, Path]) -> Mapping[str, Path]:
+    """Normalize the finite agent-private mapping retained by a launch profile."""
+    from types import MappingProxyType
+
+    if not isinstance(value, Mapping):
+        raise AgentProcessSupervisorError("preparation shared roots must be a mapping")
+    roots: dict[str, Path] = {}
+    for alias, path in value.items():
+        if not isinstance(alias, str) or not alias or not isinstance(path, (str, Path)):
+            raise AgentProcessSupervisorError("preparation shared root binding is invalid")
+        directory = Path(path)
+        if not directory.is_absolute():
+            raise AgentProcessSupervisorError("preparation shared root must be absolute")
+        roots[alias] = Path(os.path.normpath(directory))
+    return MappingProxyType(roots)
 
 
 def _launch_evidence_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
