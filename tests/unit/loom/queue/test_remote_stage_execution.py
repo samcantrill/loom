@@ -56,7 +56,9 @@ from loom.queue._remote_stage_execution import (
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue.preparation import (
-    PREPARATION_STAGE_TARGET, PreparationChildInput, SharedInputReceipt,
+    PREPARATION_STAGE_TARGET,
+    PreparationChildInput,
+    SharedInputReceipt,
 )
 from loom.scheduling import (
     CapacityAtom,
@@ -303,32 +305,50 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
         )
 
 
-def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(tmp_path: Path) -> None:
+def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
+    tmp_path: Path,
+) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
     binding = PreparationChildInput(
-        "prepare-1", "existing", "configs/pipeline.yaml",
+        "prepare-1",
+        "existing",
+        "configs/pipeline.yaml",
         SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
         profile.descriptor.to_dict(),
     )
     fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
     prepared_fingerprint = StageFingerprintRecord.create(
         algorithm=fingerprint.algorithm,
-        payload=replace(fingerprint.payload, factory_target=PREPARATION_STAGE_TARGET, stage_config=binding.to_dict()),
+        payload=replace(
+            fingerprint.payload,
+            factory_target=PREPARATION_STAGE_TARGET,
+            stage_config=binding.to_dict(),
+        ),
         inputs_summary=fingerprint.inputs_summary,
     )
     preparation = replace(request, fingerprint=prepared_fingerprint.to_dict())
-    assert _ResidentAssignmentBundle.from_remote_dict(preparation.to_dict()) == preparation
+    assert (
+        _ResidentAssignmentBundle.from_remote_dict(preparation.to_dict()) == preparation
+    )
     assert preparation.preparation_input == binding
     with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(preparation, resolved_runtime={**preparation.resolved_runtime, "scratch_path": "/worker/private"}).validate_remote_transport()
+        replace(
+            preparation,
+            resolved_runtime={
+                **preparation.resolved_runtime,
+                "scratch_path": "/worker/private",
+            },
+        ).validate_remote_transport()
     ordinary_fingerprint = StageFingerprintRecord.create(
         algorithm=fingerprint.algorithm,
         payload=replace(prepared_fingerprint.payload, factory_target="pkg.Stage"),
         inputs_summary=fingerprint.inputs_summary,
     )
     with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(request, fingerprint=ordinary_fingerprint.to_dict()).validate_remote_transport()
+        replace(
+            request, fingerprint=ordinary_fingerprint.to_dict()
+        ).validate_remote_transport()
 
 
 def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:
@@ -511,6 +531,11 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
                 )
             },
             exit_code=0,
+            executor_metadata={
+                "request": {"executor": "local", "stage_name": "build"},
+                "command": ["python", "--workspace", str(workspace.root)],
+                "stdout": "private worker output",
+            },
         )
     )
     report = workspace.retain_outputs()
@@ -518,8 +543,18 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
     assert report.outputs[0].metadata == {"quality": "verified"}
     replayed = _RemoteExecutionReport.from_dict(report.to_dict())
     assert replayed.outputs[0].metadata == {"quality": "verified"}
-    assert replayed.schema_version == 2
+    assert replayed.schema_version == 3
     assert replayed.process_created is True
+    assert replayed.executor_metadata is not None
+    assert replayed.executor_metadata["request"] == {
+        "executor": "local",
+        "stage_name": "build",
+    }
+    assert (
+        replayed.to_dict()["executor_metadata"] == report.to_dict()["executor_metadata"]
+    )
+    assert "private worker output" not in json.dumps(report.to_dict())
+    assert str(workspace.root) not in json.dumps(report.to_dict())
     with sqlite3.connect(":memory:") as conn:
         conn.row_factory = sqlite3.Row
         conn.execute(
@@ -657,7 +692,16 @@ def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
         process_created=None,
         schema_version=2,
     )
-    assert _RemoteExecutionReport.from_dict(report.to_dict()).failure == failure
+    retained = report.to_dict()
+    assert "executor_metadata" not in retained
+    replayed = _RemoteExecutionReport.from_dict(retained)
+    assert replayed.failure == failure
+    assert json.dumps(replayed.to_dict(), sort_keys=True) == json.dumps(
+        retained, sort_keys=True
+    )
+    assert replayed.executor_metadata is None
+    with pytest.raises(QueueServiceError, match="shape is invalid"):
+        _RemoteExecutionReport.from_dict({**retained, "executor_metadata": {}})
     with pytest.raises(QueueConflictError, match="summary conflicts"):
         _RemoteExecutionReport(
             assignment_id="assignment-1",
@@ -827,7 +871,9 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         input_path = tmp_path / "input.data"
         input_path.write_bytes(b"input")
         binding = PreparationChildInput(
-            "prepare-1", "existing", "configs/pipeline.yaml",
+            "prepare-1",
+            "existing",
+            "configs/pipeline.yaml",
             SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
             profile.descriptor.to_dict(),
         )
@@ -854,7 +900,9 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 input_paths={"input-1": input_path},
             )
         with sqlite3.connect(config.control_database) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+            )
         with pytest.raises(QueueServiceError, match="path-bearing"):
             _target_remote_delivery(
                 daemon,

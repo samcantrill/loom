@@ -1460,7 +1460,8 @@ class SlurmBootstrapWorkspace:
                 tuple[Mapping[str, PlainData], ...], tuple(controls)
             ),
             process_created=True,
-            schema_version=2,
+            executor_metadata=result.executor_metadata,
+            schema_version=3,
         )
         encoded = (_json(report.to_dict()) + "\n").encode()
         if self._retained_report_path.exists():

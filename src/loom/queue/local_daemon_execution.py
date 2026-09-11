@@ -26,6 +26,7 @@ from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
     StageWorkerResult,
+    redact_executor_metadata,
 )
 from loom.pipeline.reliability import (
     RetryDecisionRecord,
@@ -5250,14 +5251,26 @@ class LocalDaemonExecution:
         run_uri: str,
         report: _RemoteExecutionReport,
         outputs: Mapping[str, ArtifactRef],
+        *,
+        container_metadata: Mapping[str, PlainData] | None = None,
+        scheduler_metadata: Mapping[str, PlainData] | None = None,
     ) -> None:
         if report.schema_version == 1:
             return
-        metadata: dict[str, PlainData] = {"process_created": report.process_created}
+        metadata: dict[str, PlainData] = {
+            **dict(report.executor_metadata or {}),
+            "process_created": report.process_created,
+        }
+        if scheduler_metadata is not None:
+            metadata["scheduler"] = redact_executor_metadata(
+                scheduler_metadata, public=True
+            )
         if report.resource_controls is not None:
             metadata["resource_controls"] = [
                 dict(item) for item in report.resource_controls
             ]
+        if container_metadata is not None:
+            metadata["container"] = dict(container_metadata)
         failure = (
             None if report.failure is None else replace(report.failure, run_uri=run_uri)
         )
@@ -5580,7 +5593,23 @@ class LocalDaemonExecution:
                     },
                 ),
             )
-        self._persist_remote_report_result(record.assignment.run_uri, report, outputs)
+        container_metadata = record.request.get("container_metadata")
+        self._persist_remote_report_result(
+            record.assignment.run_uri,
+            report,
+            outputs,
+            scheduler_metadata={
+                "mode": "ready",
+                "job_id": record.job_id,
+                "input_ready": record.input_ready,
+                "request": dict(record.request),
+            },
+            container_metadata=(
+                cast(Mapping[str, PlainData], container_metadata)
+                if isinstance(container_metadata, Mapping)
+                else None
+            ),
+        )
         self.slurm_assignments.mark_terminal(assignment_id)
 
     def slurm_release(

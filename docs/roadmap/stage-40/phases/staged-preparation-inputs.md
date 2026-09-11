@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 40 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p3-staged-preparation-inputs
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
 - Base revision: `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, published Phase 2 completion metadata after squash merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d`.
+- PR: [#302](https://github.com/samcantrill/loom/pull/302)
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 3: Preparation With Transferred Inputs
 - Dependencies: Phase 2 PR #300 remotely merged, metadata published, exact stage/control/remote synchronization passed and both exact phase branches retired.
@@ -414,7 +415,7 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 - Pre-submit gate: passed; accepted scope, native ownership, complete local evidence, documentation and committed diff reconciled on 2026-09-11
 - Independent review: required before implementation merge
 - Blocker corrections: 3/3; archive transfer ceiling/frozen receipt handoff, redundant archive metadata exceeding the native JSON depth limit, and retained pre-grant transfer recovery. Each has a concrete correction, focused evidence and passing required full validation.
-- PR and merge: not created
+- PR and merge: #302 open against develop; independent review pending upstream reconciliation checks
 
 ## Completion Record
 
@@ -427,8 +428,27 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 | Archive evidence | Executor commits `8738f97ac1d96342602df5338394a529903d5b0b` and `a458cc5f3d5de1c1e582041b2c4b9b284ccb2b68` provide staged/shared receipt/capture tests, native frozen mapping roundtrip, source changes, owned partial cleanup, checksum/manifest identity, unsafe path/type/duplicate rejection and packed/expanded limits. All 33 focused staged/shared input cases passed. Manager removed redundant reference metadata; the receipt already owns the manifest identity and native transfer owns size. The current compatibility run passed the same archive/shared cases after that change. |
 | New journeys and lifecycle | The isolated locked config run at the manager implementation tree passed eight selected cases: actual mTLS staged B preparation/C target execution with no shared mapping, dropped acceptance response, agent restart after a persisted transfer chunk, interrupted extraction and same-reference recovery after author edits, no readiness for partial files, cancellation before input acceptance with native pre-grant release, coordinator restart after ready staged capture, shared-only qualification excluded from staged work while ordinary execution proceeds, cancellation during archive capture, and all four shared/staged Unix/HTTPS CLI journeys. Evidence: /tmp/loom-stage40-p3-staged-lifecycle.log. The local staged/shared journey and selected-environment handler qualification also passed in the earlier focused run. |
 | Retained compatibility | Focused and full gates pass the schema-13 fixture containing both a pending and completed shared operation: restart/replay preserves prior completed target bytes/mtimes and IDs, then completes the pending capture from retained bytes despite source edits. Worker root user_version remains 12 and coordinator 13. Shared/staged input, remote assignment and effective staged policy cases pass. |
-| Validated revision and static evidence | Both required full gates ran at clean `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`, containing implementation `4c166d39c4579bc39610cfe4eb79228f90779b4e`. Ruff and full Pyright passed with zero errors/warnings, and both distribution builds passed. The complete committed diff passes git diff --check. Subsequent card/manifest/PR edits record evidence only; no runtime, test, dependency or executable example changed after those gates. |
+| Validated revision and static evidence | Both required full gates ran at clean `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`, containing implementation `4c166d39c4579bc39610cfe4eb79228f90779b4e`. Ruff and full Pyright passed with zero errors/warnings, and both distribution builds passed. The complete committed diff passes git diff --check. The initial evidence-recording edits were metadata only. PR creation then found published develop had advanced through #299 and #301; the upstream reconciliation below identifies the subsequent changes and required affected checks. |
 | Required full validation | make validate-pr passed: baseline 3,263 passed / 2 skipped / 207 deselected; isolated config-extra 213 passed / 18 skipped / 3,268 deselected. Evidence: /tmp/loom-stage40-p3-validate-pr.log. make test-summary passed: package 125, unit 2,276, contract 301, integration 493, E2E 70 and config-extra 213 passed; 3,478 total passed, zero failures/errors, 18 skipped. Those skips are the existing opt-in Docker/Apptainer physical acceptance cases (13 namespace lifecycle and five other container cases), not omitted staged-preparation tests. Evidence: /tmp/loom-stage40-p3-test-summary.log and build/test-summary.md. These full receipts supersede intermediate failures and cover ordinary native agent/control/lifecycle consumers affected by the shared delivered-assignment helper, all preparation cases, deployment, package/import boundaries and the approved lanes. |
 | Documentation | Feature guide and local/remote examples now explain both source modes, explicit existing-environment qualification, tar/expanded/aggregate bounds, no laptop upload or target code delivery, restart/cancel behavior and schema-13 compatibility. Documentation checks passed for the three changed user guides: 15 local links resolve, 20 shell and four Python examples parse, two YAML examples load, and the documented request roundtrips through the native model in both source modes; the protected policy example also loads. |
-| PR, review, and merge | Ready to open. Both required full gates and manager pre-submit review pass; one independent reviewer must assess the actual PR head before merge. |
+| PR, review, and merge | #302 is open with the canonical title, branch and develop target. Independent review follows the affected upstream-reconciliation checks. |
 | Residual risk and cleanup | Finite regular tar input only; explicit selected existing installation; embedded managed authority with no SLURM preparation; retained archive/report without automatic expiry; native partial-target conflicts preserved. Loopback/fixture roots do not qualify physical NAS/fleet/Codex. No real roots upgraded or environments provisioned. Stage worktree retained; Phase 4 has not started. |
+
+### Published-base reconciliation
+
+While both required gates ran, develop advanced through ready-Slurm container
+support (#299) and retained safe execution observations (#301), ending at
+`c3d23b547d8ff90e061eb95cfe12ab00705edb15`. Their published changes are preserved.
+The only conflicted file was _remote_stage_execution.py: upstream reformatted
+the preparation launch check and helper signature where Phase 3 adds staged
+handling. Resolution retains both the formatted existing check and staged branch,
+plus the staged input helpers. Auto-merged shared owners were inspected.
+
+The upstream changes extend remote execution reports with safe executor metadata
+(version 3, retaining version 1/2 decode/replay), terminal worker request evidence,
+and ready-Slurm container support. Preparation request/input/report versions and
+root versions remain as approved. Existing full receipts remain evidence for the
+original Phase 3 tree; affected preparation, assignment, native transport and
+execution-model consumers plus static/package checks qualify this merge before
+independent review. This is published-base synchronization, not a new product
+blocker correction or a reset of the 3/3 budget. Reconciliation checks are pending.

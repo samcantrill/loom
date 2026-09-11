@@ -887,7 +887,10 @@ def _result_from_execution_result(
             else execution_result.traceback_path or worker_request.traceback_path
         ),
         exit_code=0 if execution_result.status != StageStatus.FAILED else 1,
-        executor_metadata=execution_result.executor_metadata,
+        executor_metadata={
+            "request": worker_request.to_safe_metadata(),
+            **execution_result.executor_metadata,
+        },
     )
 
 
@@ -954,6 +957,7 @@ def _failed_worker_result_from_exception(
             None if reported_failure is not None else worker_request.traceback_path
         ),
         exit_code=1,
+        executor_metadata={"request": worker_request.to_safe_metadata()},
     )
 
 

@@ -93,6 +93,7 @@ def _profile(
     available: bool = True,
     containment_helper: SlurmContainmentHelper | None = None,
     capability_path: Path | None = None,
+    container_options: Mapping[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
         profile_id="training",
@@ -115,6 +116,7 @@ def _profile(
         cluster="cluster-a",
         available=available,
         containment_helper=containment_helper,
+        container_options=container_options,
     )
 
 
@@ -332,10 +334,15 @@ def _exercise_mixed_route_run(
     *,
     guarded_recovery: bool = False,
     native_failure: bool = False,
+    container_options: Mapping[str, object] | None = None,
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     containment_helper = _positive_containment_helper() if guarded_recovery else None
-    profile = _profile(runner, containment_helper=containment_helper)
+    profile = _profile(
+        runner,
+        containment_helper=containment_helper,
+        container_options=container_options,
+    )
     original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
     intent_crash_injected = False
 
@@ -520,7 +527,11 @@ def _exercise_mixed_route_run(
         fresh_runner = FakeSlurmCommandRunner(
             scripted_results={"sbatch": [AssertionError("must not submit")]}
         )
-        profile = _profile(fresh_runner, containment_helper=containment_helper)
+        profile = _profile(
+            fresh_runner,
+            containment_helper=containment_helper,
+            container_options=container_options,
+        )
         reopened_config = LocalDaemonConfig(
             coordinator_root=tmp_path / "daemon" / "coordinator",
             agent_root=tmp_path / "daemon" / "agent",
@@ -808,7 +819,7 @@ def _exercise_mixed_route_run(
             process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
         )
         report = workspace.retain_result(worker_result)
-        assert report.schema_version == 2
+        assert report.schema_version == 3
         assert report.process_created is True
         assert report.resource_controls is not None
         assert {
@@ -908,7 +919,7 @@ def _exercise_mixed_route_run(
             completed = client.wait("mixed-route", timeout_seconds=10)
             if native_failure:
                 assert completed.state is LocalDaemonAdmissionState.FAILED
-                assert report.schema_version == 2
+                assert report.schema_version == 3
                 assert report.failure is not None
                 saved_failure = run_store.read_stage_failure(run_uri, "train")
                 assert saved_failure is not None
@@ -948,6 +959,27 @@ def _exercise_mixed_route_run(
                 StageStatus.SUCCEEDED,
             ]
             assert execution.slurm_assignments.read(assignment_id).state == "released"
+            if container_options is not None:
+                saved_result = run_store.read_stage_worker_result(
+                    run_uri, "train", attempt=1
+                )
+                assert saved_result is not None
+                metadata = cast(Mapping[str, object], saved_result["executor_metadata"])
+                assert metadata["request"]["executor_name"] == "local"
+                scheduler = cast(Mapping[str, object], metadata["scheduler"])
+                assert scheduler["mode"] == "ready"
+                assert scheduler["job_id"] == record.job_id
+                assert scheduler["input_ready"] is True
+                assert (
+                    execution.slurm_assignments.read(assignment_id).input_ready is True
+                )
+                assert str(tmp_path) not in json.dumps(metadata)
+                container = cast(Mapping[str, object], metadata["container"])
+                assert container["container_runtime"] == "apptainer"
+                assert "/fixture/bootstrap.json" not in json.dumps(container)
+                assert str(
+                    profile.job_private_file_provider.fixed_path
+                ) not in json.dumps(container)
             script = (
                 config.slurm_script_root / f"{record.assignment.assignment_id}.sh"
             ).read_text(encoding="utf-8")
@@ -1027,6 +1059,26 @@ def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch)
+
+
+def test_selected_container_ready_run_persists_redacted_receipt_after_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exercise_mixed_route_run(
+        tmp_path,
+        monkeypatch,
+        container_options={
+            "image": {"reference": "/private/analysis.sif"},
+            "mounts": [
+                {
+                    "source": "/tmp/loom-integration-capability",
+                    "target": "/tmp/loom-integration-capability",
+                    "mode": "rw",
+                }
+            ],
+            "environment": {"required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]},
+        },
+    )
 
 
 def test_slurm_native_failure_retains_portable_cause_through_result_replay(

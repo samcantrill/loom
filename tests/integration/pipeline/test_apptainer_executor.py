@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+import json
 from typing import cast
 
 import pytest
@@ -155,6 +156,14 @@ def test_apptainer_executor_fake_runner_parent_finalizes_stage(
 
         assert result.status == RunStatus.SUCCEEDED
         assert result.stage_results["build"].status == StageStatus.SUCCEEDED
+        receipt = result.stage_results["build"].to_safe_metadata()
+        route = receipt["executor_metadata"]
+        assert route["executor"] == "apptainer"
+        assert route["command"][:3] == ["apptainer", "exec", "--cleanenv"]
+        assert route["container"]["image"] == "analysis.sif"
+        assert route["request"]["resolved_runtime"]["executor"] == "apptainer"
+        assert str(tmp_path) not in json.dumps(receipt)
+        assert "secret" not in json.dumps(receipt)
         outputs = store.read_stage_outputs(result.run_uri, "build")
         assert outputs is not None
         artifact_store = LocalArtifactStore(store.local_artifact_root(result.run_uri))

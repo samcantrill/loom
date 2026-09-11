@@ -83,15 +83,31 @@ def _gpu_allocation_lines(job: SlurmPlannedJob) -> tuple[str, ...]:
     amount = raw.get("amount")
     if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
         raise SlurmPlanningError("planned GPU resource amount must be non-negative")
-    if amount == 0:
+    return render_gpu_allocation_environment(amount)
+
+
+def render_gpu_allocation_environment(requested_count: int) -> tuple[str, ...]:
+    """Render the outer-Slurm GPU admission check and cleanenv projection.
+
+    The scheduler owns the allocation.  This shell boundary validates its
+    opaque visibility tokens before forwarding them to either supported
+    Singularity-family runtime; it does not record those tokens as a realized
+    binding.
+    """
+
+    if isinstance(requested_count, bool) or not isinstance(requested_count, int):
+        raise SlurmPlanningError("planned GPU resource amount must be an integer")
+    if requested_count < 0:
+        raise SlurmPlanningError("planned GPU resource amount must be non-negative")
+    if requested_count == 0:
         return ()
     return (
         '_loom_cuda_visible_devices="${CUDA_VISIBLE_DEVICES-}"',
         'if [[ -z "${_loom_cuda_visible_devices}" || "${_loom_cuda_visible_devices}" == "-1" ]]; then',
-        f"  echo 'loom GPU admission failed: requested {amount}, CUDA_VISIBLE_DEVICES is missing' >&2",
+        f"  echo 'loom GPU admission failed: requested {requested_count}, CUDA_VISIBLE_DEVICES is missing' >&2",
         "  exit 78",
         "fi",
-        'if [[ "${_loom_cuda_visible_devices}" == *$\'\\n\'* ]]; then',
+        "if [[ \"${_loom_cuda_visible_devices}\" == *$'\\n'* ]]; then",
         "  echo 'loom GPU admission failed: invalid visibility token' >&2",
         "  exit 78",
         "fi",
@@ -100,8 +116,8 @@ def _gpu_allocation_lines(job: SlurmPlannedJob) -> tuple[str, ...]:
         "  exit 78",
         "fi",
         "IFS=',' read -r -a _loom_cuda_devices <<< \"${_loom_cuda_visible_devices}\"",
-        f'if [[ "${{#_loom_cuda_devices[@]}}" -ne {amount} ]]; then',
-        f"  echo 'loom GPU admission failed: requested {amount}, visibility count differs' >&2",
+        f'if [[ "${{#_loom_cuda_devices[@]}}" -ne {requested_count} ]]; then',
+        f"  echo 'loom GPU admission failed: requested {requested_count}, visibility count differs' >&2",
         "  exit 78",
         "fi",
         'for _loom_cuda_device in "${_loom_cuda_devices[@]}"; do',
@@ -125,6 +141,7 @@ def _gpu_allocation_lines(job: SlurmPlannedJob) -> tuple[str, ...]:
 __all__ = [
     "render_command_argv",
     "render_dependency_value",
+    "render_gpu_allocation_environment",
     "render_sbatch_directive",
     "render_slurm_script",
 ]
