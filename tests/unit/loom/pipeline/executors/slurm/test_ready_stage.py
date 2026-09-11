@@ -40,6 +40,7 @@ from loom.pipeline.runtime import (
     StagePlacementPolicy,
     resolve_stage_placement,
 )
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.serialization import stable_json_dumps
 
 _TEST_HELPER = (
@@ -98,9 +99,17 @@ def _ready_container_options() -> dict[str, object]:
     }
 
 
-def _request(profile: SlurmReadyStageProfile):  # type: ignore[no-untyped-def]
+def _request(
+    profile: SlurmReadyStageProfile,
+    *,
+    resources: ResourceRequest | None = None,
+):  # type: ignore[no-untyped-def]
     placement = resolve_stage_placement(
-        authored=ResourceRequest(entries={"cpu": ResourceEntry("cpu", 2, "count")}),
+        authored=(
+            ResourceRequest(entries={"cpu": ResourceEntry("cpu", 2, "count")})
+            if resources is None
+            else resources
+        ),
         runtime=None,
         policy=StagePlacementPolicy(
             route=ExecutionRoute(
@@ -110,7 +119,7 @@ def _request(profile: SlurmReadyStageProfile):  # type: ignore[no-untyped-def]
                 profile_configuration_fingerprint=profile.configuration_fingerprint,
             )
         ),
-        planners={"cpu": CpuResourcePlanner()},
+        planners={"cpu": CpuResourcePlanner(), "gpu": GpuResourcePlanner()},
     )
     return map_ready_stage(
         placement=placement,
@@ -263,17 +272,23 @@ def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receip
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
 
 
+@pytest.mark.parametrize(
+    ("runtime_name", "bootstrap_prefix"),
+    (("apptainer", "APPTAINERENV"), ("singularity", "SINGULARITYENV")),
+)
 def test_ready_stage_container_bootstrap_env_reaches_rendered_runtime(
-    tmp_path: Path,
+    tmp_path: Path, runtime_name: str, bootstrap_prefix: str
 ) -> None:
-    request = _request(
-        _profile(FakeSlurmCommandRunner(), container_options=_ready_container_options())
+    profile = replace(
+        _profile(FakeSlurmCommandRunner(), container_options=_ready_container_options()),
+        apptainer_options={"command": runtime_name},
     )
+    request = _request(profile)
     script = _script(tmp_path, request)
     capture = tmp_path / "bootstrap-env"
-    runtime = tmp_path / "apptainer"
+    runtime = tmp_path / runtime_name
     runtime.write_text(
-        '#!/bin/sh\nprintf \'%s\' "$APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG" > "$LOOM_TEST_CAPTURE"\n',
+        f'#!/bin/sh\nprintf \'%s\' "${bootstrap_prefix}_LOOM_SLURM_BOOTSTRAP_CONFIG" > "$LOOM_TEST_CAPTURE"\n',
         encoding="utf-8",
     )
     runtime.chmod(0o755)
@@ -290,6 +305,55 @@ def test_ready_stage_container_bootstrap_env_reaches_rendered_runtime(
     )
 
     assert capture.read_text(encoding="utf-8") == "/fixture/bootstrap.json"
+
+
+@pytest.mark.parametrize(
+    ("visible", "expected_returncode"),
+    (("GPU-allocated", 0), (None, 78), ("GPU-a,GPU-b", 78)),
+)
+def test_ready_stage_gpu_admission_runs_before_selected_container(
+    tmp_path: Path, visible: str | None, expected_returncode: int
+) -> None:
+    profile = _profile(
+        FakeSlurmCommandRunner(), container_options=_ready_container_options()
+    )
+    request = _request(
+        profile,
+        resources=ResourceRequest(
+            entries={
+                "gpu": ResourceEntry(
+                    "gpu", 1, "count", {"allocation_mode": "exclusive"}
+                )
+            }
+        ),
+    )
+    runtime = tmp_path / "apptainer"
+    runtime.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runtime.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "LOOM_SLURM_BOOTSTRAP_CONFIG": "/fixture/bootstrap.json",
+    }
+    if visible is None:
+        environment.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        environment["CUDA_VISIBLE_DEVICES"] = visible
+
+    result = subprocess.run(
+        ["bash", str(_script(tmp_path, request))],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_returncode, result.stderr
+    assert request.container_metadata is not None
+    assert request.container_metadata["gpu_visibility"] == {
+        "requested_gpu_count": 1,
+        "visible_gpu_count": None,
+    }
 
 
 def test_ready_stage_container_receipt_redacts_absolute_owner_paths() -> None:

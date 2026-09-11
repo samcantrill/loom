@@ -20,6 +20,7 @@ from loom.pipeline.executors.containers import (
     ContainerEnvironment,
     parse_container_options,
 )
+from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime.placement import ExecutionRouteKind, ResolvedStagePlacement
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import (
@@ -38,7 +39,7 @@ from .commands import (
 from .errors import SlurmPlanningError, SlurmResourceMappingError
 from .container import wrap_slurm_command_with_apptainer
 from .options import SlurmCommandArgv
-from .rendering import render_sbatch_directive
+from .rendering import render_gpu_allocation_environment, render_sbatch_directive
 from .resources import SlurmSbatchDirective, map_slurm_resources
 
 
@@ -716,6 +717,14 @@ def map_ready_stage(
             **_redact_ready_container_metadata(command.metadata),
             "bootstrap_environment": _SLURM_BOOTSTRAP_CONFIG_ENV,
         }
+        requested_gpu_count = _ready_stage_requested_gpu_count(placement.resource_request)
+        if requested_gpu_count:
+            # Job-side validation has not run yet.  Retain only the requested
+            # outer allocation and leave actual visibility observation pending.
+            container_metadata["gpu_visibility"] = {
+                "requested_gpu_count": requested_gpu_count,
+                "visible_gpu_count": None,
+            }
     argv = " ".join(_shell_quote(item) for item in command.argv)
     schema_version = (
         _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION
@@ -744,9 +753,13 @@ def map_ready_stage(
             [
                 f': "${{{_SLURM_BOOTSTRAP_CONFIG_ENV}:?ready-stage container bootstrap config is unavailable}}"',
                 f'export APPTAINERENV_{_SLURM_BOOTSTRAP_CONFIG_ENV}="${{{_SLURM_BOOTSTRAP_CONFIG_ENV}}}"',
+                f'export SINGULARITYENV_{_SLURM_BOOTSTRAP_CONFIG_ENV}="${{{_SLURM_BOOTSTRAP_CONFIG_ENV}}}"',
             ]
             if container_metadata is not None
             else []
+        ),
+        *render_gpu_allocation_environment(
+            _ready_stage_requested_gpu_count(placement.resource_request)
         ),
         (
             f"exec {argv} --operation-id {_shell_quote(operation_id)} "
@@ -1750,6 +1763,18 @@ def _container_command_options(container: ContainerOptions) -> ContainerOptions:
             ),
         ),
     )
+
+
+def _ready_stage_requested_gpu_count(resources: ResourceRequest) -> int:
+    """Return the validated outer Slurm GPU request for job-side admission."""
+
+    entry = resources.entries.get("gpu")
+    if entry is None:
+        return 0
+    amount = entry.amount
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+        raise SlurmPlanningError("ready-stage GPU resource amount is invalid")
+    return amount
 
 
 def _redact_ready_container_metadata(
