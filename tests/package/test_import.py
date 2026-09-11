@@ -57,6 +57,7 @@ def test_import_loom_diagnostics_public_api() -> None:
         "inspect_backend_capabilities",
         "parse_projection_revision",
         "run_preflight",
+        "run_preflight_composed",
         "RunInspectionAxis",
         "RunInspectionAxisName",
         "RunInspectionFailure",

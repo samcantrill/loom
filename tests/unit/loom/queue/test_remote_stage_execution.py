@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import replace
 import json
 from pathlib import Path
+import pickle
 import sqlite3
 import sys
 
@@ -100,6 +101,20 @@ def _profile(tmp_path: Path) -> ResidentExecutionProfile:
         project_root,
         Path(sys.executable),
     )
+
+
+def test_preparation_profile_preserves_its_binding_across_process_serialization(
+    tmp_path: Path,
+) -> None:
+    roots = {"projects": tmp_path / "snapshots"}
+    profile = replace(_profile(tmp_path), preparation_shared_roots=roots)
+    retained_launch = profile.launch_profile
+    roots["projects"] = tmp_path / "different-snapshots"
+
+    received = pickle.loads(pickle.dumps(profile))
+    assert received == profile
+    assert received.launch_profile == retained_launch
+    assert received.preparation_shared_roots == {"projects": tmp_path / "snapshots"}
 
 
 def _request(

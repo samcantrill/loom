@@ -639,8 +639,6 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
 
 def _preparation_root_bindings(value: Mapping[str, Path]) -> Mapping[str, Path]:
     """Normalize the finite agent-private mapping retained by a launch profile."""
-    from types import MappingProxyType
-
     if not isinstance(value, Mapping):
         raise AgentProcessSupervisorError("preparation shared roots must be a mapping")
     roots: dict[str, Path] = {}
@@ -651,7 +649,8 @@ def _preparation_root_bindings(value: Mapping[str, Path]) -> Mapping[str, Path]:
         if not directory.is_absolute():
             raise AgentProcessSupervisorError("preparation shared root must be absolute")
         roots[alias] = Path(os.path.normpath(directory))
-    return MappingProxyType(roots)
+    # Like the other copied profile mappings, this must cross process spawn.
+    return roots
 
 
 def _launch_evidence_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
