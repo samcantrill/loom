@@ -78,7 +78,7 @@ the isolated baseline environment, not an environment retaining optional extras.
 
 Use existing `make test-<suite>` targets for affected suites. Broad/unbounded
 impact and explicitly approved final gates use `make validate-pr`, which runs
-Ruff, Pyright, baseline and config-extra tests, and distribution builds. Do not
+Ruff, Pyright, baseline, config-extra and MCP-extra tests, and distribution builds. Do not
 repeat its included checks without new evidence. Run `git diff --check` for the
 affected diff. Documentation/skill edits normally need only affected link,
 metadata, routing, and diff checks.
@@ -123,15 +123,22 @@ acceptance evidence and are not required by `make validate-pr` or
 
 ## Validation split for optional dependencies
 
-Phase 1 splits validation into two install surfaces:
+Validation separates three install surfaces:
 
 - `test-no-extra` (default target): run baseline checks without `loom[config]`
   extras in an isolated environment.
 - `test-config-extra`: run config-marked package/unit/integration/docs tests with
-  `--extra config` in a separate isolated environment.
+  `--extra config` in a separate isolated environment, excluding `mcp_extra`.
+- `test-mcp-extra`: run tests marked `mcp_extra` with both `--extra mcp` and
+  `--extra config` in an isolated locked environment. Mark these tests with
+  `optional_dependency` too; defer SDK imports until the selected test/fixture.
+  The required lane imports the SDK normally so a missing install fails, rather
+  than reporting skipped SDK tests as success.
 
-`make test-summary` documents both rows so reviewers can see executed config
-evidence versus default no-extra evidence. The summary e2e row runs with
+`make test-summary` includes the MCP-extra row alongside the other suites and
+documents the separate dependency rows so reviewers can see executed config
+evidence versus default no-extra evidence. Use `make test-mcp-extra-summary`
+only when an additional execution/report is required. The summary e2e row runs with
 `loom[config]` when the public workflow under test is config-backed.
 
 The timeout acceptance image needs `sh`, `setsid`, and `sleep`; the supplied path

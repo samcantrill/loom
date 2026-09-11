@@ -1360,3 +1360,22 @@ Is CLI behavior a thin wrapper around Python APIs?
 Are tests placed near the source boundary they protect?
 Do the relevant docs mention any accepted debt or deferred behavior?
 ```
+
+
+## MCP and operational skills
+
+Detailed specification: [mcp.md](features/mcp.md).
+
+`loom.mcp` owns the optional `loom-mcp` stdio executable. Its private SDK adapter
+registers thirteen tools over `loom.coordinator`, preserves native values/errors
+and bounds synchronous work outside the SDK event loop. SDK imports occur only
+when explicitly constructing/running the adapter; base, daemon and native client
+imports remain independent. Scheduling, preparation, durable state, identity guards
+and transfer remain native owners. MCP has no state store or CLI parsing layer.
+
+`skills/loom-prepare`, `skills/loom-run`, `skills/loom-monitor` and
+`skills/loom-diagnose` contain independently installable project-neutral product
+instructions. They are separate from `.agents/skills` contributor workflows and
+do not select scientific parameters, project environments or resource budgets.
+`make test-mcp-extra` and its summary lane use an isolated locked SDK/config
+environment; config-only and base lanes exclude the MCP marker.

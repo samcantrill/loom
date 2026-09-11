@@ -71,7 +71,7 @@ def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
     }
     prepare = next(tool for tool in tools if tool.name == "loom_prepare_run")
     schema = prepare.model_dump(by_alias=True)["inputSchema"]
-    source = schema["$defs"]["_PreparationSourceInput"]
+    source = schema["properties"]["source"]
     assert set(source["required"]) == {
         "mode",
         "root",

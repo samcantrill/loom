@@ -12,10 +12,11 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import time
-from typing import Any, TypeVar, TypedDict, cast
+from typing import Annotated, Any, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import TypeAdapter, WithJsonSchema
 
 from loom.coordinator import CoordinatorClientError, PrepareRunRequest
 from loom.diagnostics.run_inspection import decode_run_inspection_response
@@ -26,20 +27,20 @@ from loom.queue._coordinator_transport import (
     REQUEST_BUDGET_SECONDS,
 )
 from loom.queue.errors import QueueError
+from loom.queue.preparation import PreparationSource
 from loom.queue.local_daemon import LocalDaemonAdmissionRequest
-from loom.serialization import PlainData
+from loom.serialization import PlainData, to_plain_data
 
 
 _Result = TypeVar("_Result")
 
 
-class _PreparationSourceInput(TypedDict):
-    """SDK discovery shape for the native preparation-source request object."""
-
-    mode: str
-    root: str
-    path: str
-    include: list[str]
+# Advertise the native source fields without SDK normalization dropping unknown
+# keys before the native exact-field decoder can reject the authored intent.
+_PreparationSourceInput = Annotated[
+    dict[str, object],
+    WithJsonSchema(TypeAdapter(PreparationSource).json_schema()),
+]
 
 
 class _CapacityUnavailable(Exception):
@@ -126,11 +127,10 @@ class _Capacity:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
 
-def _payload(value: object) -> Any:
-    to_dict = getattr(value, "to_dict", None)
-    if callable(to_dict):
-        return to_dict()
-    return value
+def _payload(value: object) -> PlainData:
+    # Native operations freeze nested evidence after decoding; use the same
+    # plain-data owner as native wire output before the SDK serializes it.
+    return to_plain_data(value)
 
 
 def _result(value: object, text: str) -> CallToolResult:
@@ -164,39 +164,30 @@ def _summary(payload: object, text: str) -> str:
         if isinstance(values.get(key), str):
             details.append(f"{key}: {values[key]}")
             break
-    if isinstance(values.get("report_ref"), str):
-        details.append(f"Report evidence: {values['report_ref']}")
+    reference = values.get("report_ref")
+    if isinstance(reference, Mapping) and isinstance(reference.get("uri"), str):
+        details.append(f"Report evidence: {reference['uri']}")
     return ". ".join(details) + "."
 
 
 def _named_values(payload: object) -> dict[str, object]:
-    """Find the first native summary fields without altering the structured result."""
-    found: dict[str, object] = {}
-
-    def visit(value: object) -> None:
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                if (
-                    key
-                    in {
-                        "coordinator_id",
-                        "operation_id",
-                        "admission_id",
-                        "queue_item_id",
-                        "state",
-                        "kind",
-                        "preflight_status",
-                        "report_ref",
-                    }
-                    and key not in found
-                ):
-                    found[key] = item
-                visit(item)
-        elif isinstance(value, list | tuple):
-            for item in value:
-                visit(item)
-
-    visit(payload)
+    """Summarize native envelopes without interpreting project evidence as state."""
+    if not isinstance(payload, Mapping):
+        return {}
+    keys = {
+        "coordinator_id",
+        "operation_id",
+        "admission_id",
+        "queue_item_id",
+        "state",
+        "kind",
+        "preflight_status",
+        "report_ref",
+    }
+    found = {key: value for key, value in payload.items() if key in keys}
+    for wrapper in ("operation", "admission", "result", "status", "connection"):
+        for key, value in _named_values(payload.get(wrapper)).items():
+            found.setdefault(key, value)
     return found
 
 
