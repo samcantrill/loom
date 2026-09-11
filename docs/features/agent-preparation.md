@@ -371,9 +371,11 @@ original selections; it cannot reinterpret a worker's retained input mapping.
 The coordinator-only upgrade does not rewrite or recreate worker roots.
 
 The profile chooses an existing installation, with no inferred default
-environment or shell command. Preparation requires embedded coordinator
-authority and rejects services with configured SLURM profiles. This restriction
-does not remove ordinary coordinator control of existing jobs.
+environment or shell command. Preparation publishes through the configured
+embedded or authenticated coordinator authority. A target routed to SLURM must
+match a configured profile and its checked project, environment and executor
+requirements. Accepted preparation retains that selected authority and those
+profile bindings across recovery.
 
 The selected worker installation must qualify the Loom preparation module and
 the finite input binding, advertised as `preparation-input-v2`. Old workers can
