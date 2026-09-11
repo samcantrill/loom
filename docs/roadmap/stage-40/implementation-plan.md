@@ -178,8 +178,9 @@ and all approved validation commands remain binding.
   retained operation evidence consumes space; client policy is deployment-wide.
 - Revisit triggers: a supported project needs code deployment, large runtime
   inputs, another authority/preparation family or multiple preparation environments.
-- Phases 1 and 2 are merged and independently reviewed; Phase 3 is next. The published Stage 41 lifecycle guide remains separate
-  product planning.
+- Phases 1 and 2 are merged and independently reviewed. Phase 3 implementation
+  and both required local gates pass; its PR and independent review are next.
+  The published Stage 41 lifecycle guide remains separate product planning.
 
 ## Completion
 
@@ -187,5 +188,5 @@ and all approved validation commands remain binding.
 | --- | --- | --- | --- | --- |
 | 1 | [#298](https://github.com/samcantrill/loom/pull/298), merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` | Native control delivered; both required full gates and affected TLS checks passed; independent review found no issues. See the phase card for revisions and counts | Physical deployment/Codex deferred as planned | Remote branch retired; persistent stage worktree retained through remaining phases |
 | 2 | [#300](https://github.com/samcantrill/loom/pull/300), merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d` | Shared preparation lifecycle and native/CLI journeys implemented; focused worker placement, recovery, cancellation, report, retention and populated-root upgrade checks pass. Both required full gates pass; all 44 preparation cases and affected static checks qualify the later decoder correction. Independent review confirmed the final head with no remaining findings. See the phase card | Loopback and fixture-root evidence; no physical deployment claim or real-root upgrade | Both exact phase branches retired; published metadata synchronized at `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, then the shared start gate created Phase 3 in the retained worktree |
-| 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Reuses the retained Stage 40 worktree after predecessor synchronization |
+| 3 | PR preparation | Transferred inputs, qualified placement and native recovery implemented. Both required full gates pass at `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`; 3,478 tests pass in the summary. See the phase card for selected and full evidence | Loopback and fixture-root evidence; physical fleet/NAS/Codex remains separate | Active phase branch in the retained Stage 40 worktree; predecessor synchronization complete |
 | 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Reuses the retained Stage 40 worktree through final closeout |
