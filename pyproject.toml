@@ -15,8 +15,12 @@ dependencies = [
 
 [project.scripts]
 loom = "loom.cli.main:main"
+loom-mcp = "loom.mcp:main"
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=2.2,<3",
+]
 config = [
     "python-dotenv>=1,<2",
     "weave",
@@ -69,6 +73,7 @@ markers = [
     "slurm: tests that require or simulate SLURM-specific execution behavior",
     "network: tests that require network access",
     "optional_dependency: tests that require optional dependencies outside the default dev environment",
+    "mcp_extra: tests requiring the MCP SDK and config extras in the isolated MCP lane",
     "gpu: opt-in tests that observe a locally installed NVIDIA GPU",
 ]
 

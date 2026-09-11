@@ -111,3 +111,9 @@ Run them directly when you need the support path:
 uv run python examples/operations/authority-backend-diagnostics/run_backend_diagnostics.py
 uv run python examples/operations/submitted-status/run_submitted_status.py
 ```
+
+
+The [MCP coordinator conversation](mcp-coordinator/README.md) explains project
+authoring, shared/staged preparation, submission, bounded observation and guarded
+reconnect with the optional SDK adapter. It is a conversation recipe, not an
+automatically executed example manifest or a live Codex/NAS acceptance claim.

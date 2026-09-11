@@ -3014,8 +3014,9 @@ Status: expanded design and independent plan reviews passed after one bounded
 correction. Manager documentation checks passed; the maintainer approved the
 Stage 40 behavior and revised four-phase delivery on 2026-09-10. Focused
 independent plan/startup review passed with no blockers or required corrections.
-Ready for implementation; no implementation has started. Phase 1,
-coordinator-client, remains the next pending phase.
+Phases 1–3 are merged into develop. Phase 4 implementation and both required
+local gates pass; its independent PR review and delivery remain. The implementation
+manifest records revisions, evidence and live Codex/physical NAS limitations.
 
 Unify Python, CLI and MCP access to the coordinator through local Unix or
 authenticated HTTPS connections. Add coordinator-owned preparation that schedules

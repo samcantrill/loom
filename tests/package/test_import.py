@@ -147,7 +147,10 @@ def test_project_metadata_exposes_loom_console_script_entry_point() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["scripts"] == {"loom": "loom.cli.main:main"}
+    assert project["scripts"] == {
+        "loom": "loom.cli.main:main",
+        "loom-mcp": "loom.mcp:main",
+    }
     assert "gui-scripts" not in project
 
 

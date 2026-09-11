@@ -1,13 +1,14 @@
-.PHONY: test-help test test-no-extra test-config-extra test-package test-unit
+.PHONY: test-help test test-no-extra test-config-extra test-mcp-extra test-package test-unit
 .PHONY: test-contract test-integration test-e2e test-all
 .PHONY: test-package-summary test-unit-summary test-contract-summary
-.PHONY: test-integration-summary test-e2e-summary test-config-extra-summary
+.PHONY: test-integration-summary test-e2e-summary test-config-extra-summary test-mcp-extra-summary
 .PHONY: test-summary
 
 TEST_HARNESS := python -m tools.test_harness
 TEST_UV_RUN := uv run
 TEST_UV_DEV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --isolated --locked --group dev
 TEST_UV_DEV_CONFIG := UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --isolated --locked --group dev --extra config
+TEST_UV_DEV_MCP := UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --isolated --locked --group dev --extra config --extra mcp
 TEST_UV_LOCKED_DEV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked --group dev
 
 test-help:
@@ -17,6 +18,7 @@ test-help:
 	@printf '  make test                 Run the default no-extra test suite\n'
 	@printf '  make test-no-extra        Run baseline tests without optional extras\n'
 	@printf '  make test-config-extra    Run optional config dependency tests\n'
+	@printf '  make test-mcp-extra       Run isolated MCP SDK and daemon tests\n'
 	@printf '  make test-package         Run package/API tests\n'
 	@printf '  make test-unit            Run unit tests\n'
 	@printf '  make test-contract        Run contract tests\n'
@@ -32,6 +34,7 @@ test-help:
 	@printf '  make test-integration-summary     Write integration suite summary\n'
 	@printf '  make test-e2e-summary             Write end-to-end suite summary\n'
 	@printf '  make test-config-extra-summary    Write config-extra suite summary\n'
+	@printf '  make test-mcp-extra-summary       Write MCP-extra suite summary\n'
 
 test:
 	@$(MAKE) test-no-extra
@@ -41,6 +44,9 @@ test-no-extra:
 
 test-config-extra:
 	$(TEST_UV_DEV_CONFIG) $(TEST_HARNESS) run config-extra
+
+test-mcp-extra:
+	$(TEST_UV_DEV_MCP) $(TEST_HARNESS) run mcp-extra
 
 test-package:
 	$(TEST_UV_RUN) $(TEST_HARNESS) run package
@@ -77,6 +83,9 @@ test-e2e-summary:
 
 test-config-extra-summary:
 	$(TEST_UV_LOCKED_DEV) $(TEST_HARNESS) summary config-extra --output build/test-config-extra-summary.md
+
+test-mcp-extra-summary:
+	$(TEST_UV_LOCKED_DEV) $(TEST_HARNESS) summary mcp-extra --output build/test-mcp-extra-summary.md
 
 test-summary:
 	$(TEST_UV_LOCKED_DEV) $(TEST_HARNESS) summary
