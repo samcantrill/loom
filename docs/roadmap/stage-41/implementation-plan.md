@@ -224,7 +224,7 @@ and all approved validation commands remain binding.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | not started | Selected-authority/invocation integration evidence pending | not started |
+| 1 | pending | Implemented; both required gates and manager pre-submit review passed; evidence in Phase 1 card | Independent PR review and delivery pending; physical qualification remains with later owners | Replaced publication helper and consumers removed; branch retirement follows merge |
 | 2 | pending | not started | Persistent-service execution/cancellation evidence pending | not started |
 | 3 | pending | not started | Live fleet qualification and mixed-role process evidence pending | not started |
 | 4 | pending | not started | Real container/runtime qualification pending | not started |

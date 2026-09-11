@@ -288,7 +288,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Startup evidence: documentation and Git checks only; subsequent changes only
   record these startup facts. Keep this receipt with the future Phase 1 PR.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: in progress under the 2026-09-12 whole-stage execution request
+- Implementation: complete; PR review and delivery pending under the 2026-09-12 whole-stage execution request
 - Refiner: not used
 - Coverage selection: invocation request/capture/child/report/publication, selected
   authority identity and principal binding, retained Slurm profiles, native readiness,
@@ -303,7 +303,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   coordinator root 14 rejects old preparation intent before mutation. Shared/staged
   input receipts, result projection and worker-root formats remain unchanged.
 - Executor validation: complete; both required commands exited 0. This card stays
-  `in_progress` for the manager's independent review and delivery gates.
+  `in_progress` until PR creation and the independent phase review/delivery gates.
 - Validated implementation: `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree
   `5481f01c1efc95701bc4f7836a12627dae0ebb82`. The only subsequent change is this
   completion receipt.
@@ -340,7 +340,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   variants passed with bytes/mtime/ctime unchanged on retry; the isolated
   Slurm-example e2e passed; MCP contracts passed 21 tests. Post-correction
   Pyright reported zero errors; affected Ruff and `git diff --check` passed.
-- Pre-submit gate: executor evidence complete; manager delivery checks pending
+- Pre-submit gate: passed. Manager reviewed accepted scope, invocation and
+  publication/lifecycle boundaries, affected tests, current consumers, removal,
+  validation logs and summary/JUnit timing. Required results reconcile to
+  `767a139`; subsequent changes only record workflow evidence. No outstanding
+  product blocker or future-phase implementation was found.
 - Independent implementation review: required for selected-authority publication and lifecycle transitions
 - Blocker corrections: 1/3. Manager regression reproduced interrupted embedded
   authority publication repairing a partial local target. Embedded replay now
@@ -351,7 +355,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   still importing the removed initializer. Its script and invocation manifest now
   use selected embedded PLANNED publication; the isolated e2e passes. The initial
   `make validate-pr` failed (3330 passed, 2 skipped, 253 deselected, one failure).
-  The required command is rerun on the stable corrected tree.
+  The fresh required command passed on the corrected tree as qualified above.
 - PR and merge: not started
 
 ## Completion Record
@@ -364,4 +368,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | Only this completion receipt; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
 | Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored; independent manager review and delivery are pending. |
+| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored; independent phase review and delivery are pending. |
