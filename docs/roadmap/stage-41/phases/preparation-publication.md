@@ -321,6 +321,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   errors across package 127, unit 2329, contract 301, integration 508, e2e 70,
   config-extra 223 and MCP-extra 36. Report: `build/test-summary.md`; JUnit and
   coverage: `build/test-summary/`; log: `/tmp/loom-stage41-p1-test-summary.log`.
+  The summary and seven JUnit reports were preserved before successor validation
+  at `/tmp/loom-stage41-p1-summary-evidence/`; later phases reuse the build paths.
   Started after `d8be797` (tree `fb55c78626fd340438243620e13e4a6531093300`):
   package collection 07:56:30+10 followed that commit at 07:56:27; the corrected
   example at 08:10 preceded e2e collection at 08:22:38; rollout prose at 08:13
