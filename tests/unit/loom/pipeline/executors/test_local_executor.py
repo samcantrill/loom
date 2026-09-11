@@ -1,6 +1,8 @@
 """Unit tests for the local executor."""
 
 from pathlib import Path
+import json
+from dataclasses import replace
 from typing import cast
 
 from loom.pipeline import (
@@ -180,3 +182,33 @@ def test_local_executor_reports_reliability_timeout_as_unsupported(
 
 def test_local_executor_does_not_make_resume_decisions() -> None:
     assert PlanAction.REUSE.value == "REUSE"
+
+
+def test_local_stage_and_result_share_admitted_request_view_before_stage_work(
+    tmp_path: Path,
+) -> None:
+    seen = []
+
+    class InspectingStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            seen.append(context.metadata["execution_request"])
+            return {}
+
+    request = _request(tmp_path, InspectingStage())
+    runtime = ResolvedStageRuntimeOptions(
+        stage_id="build",
+        resources={"entries": {"cpu": {"kind": "cpu", "amount": 4}}},
+        resource_policy={"enforce": []},
+    )
+    request = replace(request, resolved_runtime=runtime)
+    result = LocalExecutor().execute(request)
+    assert result.status is StageStatus.SUCCEEDED
+    assert len(seen) == 1
+    assert seen[0]["resolved_runtime"]["resources"]["entries"]["cpu"]["amount"] == 4
+    public = result.to_safe_metadata()
+    assert public["executor_metadata"]["request"] == request.to_safe_metadata()
+    assert public["executor_metadata"]["execution_kind"] == "in_process"
+    assert public["executor_metadata"]["command"] is None
+    assert public["status"] == StageStatus.SUCCEEDED.value
+    assert str(tmp_path) not in json.dumps(public)
+    assert "execution_request" not in request.context.metadata

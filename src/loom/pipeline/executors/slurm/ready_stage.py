@@ -1729,7 +1729,7 @@ def _validate_ready_stage_container_delivery(
 ) -> None:
     """Require the selected SIF to retain the fixed bootstrap's inputs."""
 
-    environment = container.environment
+    environment = cast(ContainerEnvironment, container.environment)
     if _SLURM_BOOTSTRAP_CONFIG_ENV in environment.variables:
         raise SlurmPlanningError(
             "ready-stage container cannot persist the bootstrap config value"
@@ -1782,30 +1782,10 @@ def _ready_stage_requested_gpu_count(resources: ResourceRequest) -> int:
 def _redact_ready_container_metadata(
     metadata: Mapping[str, PlainData],
 ) -> dict[str, PlainData]:
-    """Keep durable ready receipts free of protected host path values."""
+    """Use the public execution view for durable ready container receipts."""
+    from loom.pipeline.execution.models import redact_executor_metadata
 
-    redacted = _redact_ready_metadata_value(metadata)
-    if not isinstance(redacted, dict):  # pragma: no cover - mapping input is fixed
-        raise SlurmPlanningError("ready-stage container metadata is invalid")
-    return redacted
-
-
-def _redact_ready_metadata_value(value: PlainData) -> PlainData:
-    """Recursively redact absolute paths from generic container metadata."""
-
-    if isinstance(value, str):
-        return _redact_ready_path_argument(value)
-    if isinstance(value, Mapping):
-        return {key: _redact_ready_metadata_value(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [_redact_ready_metadata_value(item) for item in value]
-    return value
-
-
-def _redact_ready_path_argument(value: str) -> str:
-    if value.startswith("/"):
-        return "[redacted-path]"
-    return value
+    return redact_executor_metadata(metadata, public=True)
 
 
 def _mount_exposes(mount: ContainerMount, path: Path) -> bool:

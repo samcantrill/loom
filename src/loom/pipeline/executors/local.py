@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import io
 import traceback
+from pathlib import Path
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
@@ -58,6 +60,25 @@ class LocalExecutor:
         if not isinstance(request.stage_object, Stage):
             raise LocalExecutorError("Stage object does not satisfy the Stage protocol")
 
+        request_metadata = request.to_safe_metadata()
+        context = replace(
+            request.context,
+            artifact_store=request.context._artifact_store,
+            output_specs=request.context._output_specs,
+            local_output_dir=request.context._local_output_dir,
+            local_workspace_dir=request.context._local_workspace_dir,
+            metadata={
+                **request.context.metadata,
+                "execution_request": request_metadata,
+            },
+        )
+        common_metadata = {
+            "capture_stdout_stderr": self.capture_stdout_stderr,
+            "request": request_metadata,
+            "execution_kind": "in_process",
+            "command": None,
+            "cwd": str(Path.cwd()),
+        }
         started_at = utc_timestamp()
         policy = timeout_policy_from_request(request)
         timeout = (
@@ -97,11 +118,9 @@ class LocalExecutor:
                     contextlib.redirect_stdout(stdout_buffer),
                     contextlib.redirect_stderr(stderr_buffer),
                 ):
-                    raw_outputs = request.stage_object.run(
-                        request.context, request.inputs
-                    )
+                    raw_outputs = request.stage_object.run(context, request.inputs)
             else:
-                raw_outputs = request.stage_object.run(request.context, request.inputs)
+                raw_outputs = request.stage_object.run(context, request.inputs)
         except EarlyStopSignal as exc:
             finished_at = utc_timestamp()
             if self.capture_stdout_stderr:
@@ -158,7 +177,7 @@ class LocalExecutor:
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
                 executor_metadata=metadata_with_timeout(
-                    {"capture_stdout_stderr": self.capture_stdout_stderr},
+                    common_metadata,
                     timeout,
                 ),
             )
@@ -199,7 +218,7 @@ class LocalExecutor:
                 stderr_path=str(request.stderr_path),
                 traceback_path=str(request.traceback_path),
                 executor_metadata=metadata_with_timeout(
-                    {"capture_stdout_stderr": self.capture_stdout_stderr},
+                    common_metadata,
                     timeout,
                 ),
             )
@@ -233,7 +252,7 @@ class LocalExecutor:
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
                 executor_metadata=metadata_with_timeout(
-                    {"capture_stdout_stderr": self.capture_stdout_stderr},
+                    common_metadata,
                     timeout,
                 ),
             )
@@ -249,7 +268,7 @@ class LocalExecutor:
             stdout_path=str(request.stdout_path),
             stderr_path=str(request.stderr_path),
             executor_metadata=metadata_with_timeout(
-                {"capture_stdout_stderr": self.capture_stdout_stderr},
+                common_metadata,
                 timeout,
             ),
         )

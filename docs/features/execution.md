@@ -44,6 +44,32 @@ controller and every incomplete active attempt. Recovery records
 The earlier incomplete attempt remains diagnostic history, while only the new
 successful attempt may publish reusable output and release downstream work.
 
+### Safe execution observations
+
+Execution and worker requests expose `to_safe_metadata()`. Execution, worker and
+stage-run results expose the same method for outcomes. These are observations:
+use the full private request and resolved runtime for execution and allocation.
+Safe views retain stage/attempt identity, requested resource quantities, typed
+failure codes, command switches and mount access modes. They hide absolute host
+paths, environment values, raw stdout/stderr, exception prose and URI credentials.
+They do not infer observed devices or verification from a resource request.
+
+`LocalExecutor` supplies the request view to stage code through
+`StageContext.metadata["execution_request"]` and retains it under the result's
+`executor_metadata["request"]`. The private `resolved_runtime` remains available
+for execution. In-process execution records `command=None`; resident execution
+records the actual supervisor command and working directory. Container executors
+add their existing selected image, command and mount facts. Use
+`redact_executor_metadata(metadata, public=True)` when exporting executor metadata;
+its default remains the private storage policy.
+
+Managed delivery carries these observations in remote execution report version 3
+and persists them in the existing worker result metadata. Version 1 and 2 reports
+retain their exact reader/writer shapes for replay; old reports do not acquire
+fabricated route evidence. Worker request/result versions and queue SQLite
+schemas are unchanged. Ready Slurm delivery adds the recorded job, readiness and
+request facts at the coordinator, which owns those scheduler observations.
+
 ### 1.1 Alignment With `loom.md`
 
 This document refines stage execution goals from [loom.md](../loom.md). It keeps

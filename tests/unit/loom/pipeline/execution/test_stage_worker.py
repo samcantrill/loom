@@ -199,7 +199,9 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
     assert result.status == StageStatus.SUCCEEDED
     assert result.attempt == 1
     assert result.executor_name == "local"
-    assert result.executor_metadata == {"fake": True}
+    assert result.executor_metadata["fake"] is True
+    assert result.executor_metadata["request"]["stage_name"] == "build"
+    assert result.executor_metadata["request"]["executor_name"] == "local"
     assert (
         store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
     )
@@ -442,6 +444,8 @@ def test_run_stage_worker_records_target_construction_failure(tmp_path: Path) ->
     assert result.status == StageStatus.FAILED
     failure = cast(ExecutionFailure, result.failure)
     assert failure.failure_type == "target_construction"
+    assert result.executor_metadata["request"]["stage_name"] == "build"
+    assert result.executor_metadata["request"]["executor_name"] == "local"
     assert result.exit_code == 1
     assert (
         store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()

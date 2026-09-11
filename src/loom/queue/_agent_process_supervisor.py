@@ -79,7 +79,11 @@ class ResidentWorkerLaunchProfile:
         ):
             raise AgentProcessSupervisorError("resident profile environment is invalid")
         object.__setattr__(self, "environment", environment)
-        object.__setattr__(self, "preparation_shared_roots", _preparation_root_bindings(self.preparation_shared_roots))
+        object.__setattr__(
+            self,
+            "preparation_shared_roots",
+            _preparation_root_bindings(self.preparation_shared_roots),
+        )
         if self.readiness_identity is not None and (
             not isinstance(self.readiness_identity, str)
             or len(self.readiness_identity) != 64
@@ -153,6 +157,17 @@ class ResidentWorkerLaunch:
     environment: Mapping[str, str]
     resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
     schema_version: int | None = 2
+
+    @property
+    def command_argv(self) -> tuple[str, ...]:
+        """Exact resident command shared by spawn and its retained receipt."""
+        return (
+            str(self.profile.python_executable),
+            "-m",
+            "loom.queue._resident_stage_worker",
+            "--workspace",
+            str(self.workspace_root),
+        )
 
     def __post_init__(self) -> None:
         for name in (
@@ -363,13 +378,7 @@ class AgentProcessSupervisor:
         gate.write_text("granted\n", encoding="utf-8")
         try:
             child = subprocess.Popen(
-                [
-                    str(launch.profile.python_executable),
-                    "-m",
-                    "loom.queue._resident_stage_worker",
-                    "--workspace",
-                    str(launch.workspace_root),
-                ],
+                launch.command_argv,
                 cwd=launch.profile.project_root,
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -612,8 +621,16 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "descriptor": profile.descriptor,
         "environment": dict(profile.environment),
         "readiness_identity": profile.readiness_identity,
-        **({"preparation_shared_roots": {key: str(path) for key, path in profile.preparation_shared_roots.items()}}
-           if profile.preparation_shared_roots else {}),
+        **(
+            {
+                "preparation_shared_roots": {
+                    key: str(path)
+                    for key, path in profile.preparation_shared_roots.items()
+                }
+            }
+            if profile.preparation_shared_roots
+            else {}
+        ),
     }
 
 
@@ -625,7 +642,11 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         "environment",
         "readiness_identity",
     }
-    if not isinstance(value, Mapping) or not required.issubset(value) or not set(value).issubset(required | {"preparation_shared_roots"}):
+    if (
+        not isinstance(value, Mapping)
+        or not required.issubset(value)
+        or not set(value).issubset(required | {"preparation_shared_roots"})
+    ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
         project_root=Path(cast(str, value["project_root"])),
@@ -633,7 +654,9 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),
         environment=cast(Mapping[str, str], value["environment"]),
         readiness_identity=cast(str | None, value["readiness_identity"]),
-        preparation_shared_roots=cast(Mapping[str, Path], value.get("preparation_shared_roots", {})),
+        preparation_shared_roots=cast(
+            Mapping[str, Path], value.get("preparation_shared_roots", {})
+        ),
     )
 
 
@@ -644,10 +667,14 @@ def _preparation_root_bindings(value: Mapping[str, Path]) -> Mapping[str, Path]:
     roots: dict[str, Path] = {}
     for alias, path in value.items():
         if not isinstance(alias, str) or not alias or not isinstance(path, (str, Path)):
-            raise AgentProcessSupervisorError("preparation shared root binding is invalid")
+            raise AgentProcessSupervisorError(
+                "preparation shared root binding is invalid"
+            )
         directory = Path(path)
         if not directory.is_absolute():
-            raise AgentProcessSupervisorError("preparation shared root must be absolute")
+            raise AgentProcessSupervisorError(
+                "preparation shared root must be absolute"
+            )
         roots[alias] = Path(os.path.normpath(directory))
     # Like the other copied profile mappings, this must cross process spawn.
     return roots

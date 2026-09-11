@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
+from urllib.parse import urlsplit, urlunsplit
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
@@ -508,6 +510,31 @@ class StageWorkerRequest:
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Describe this request without private paths, payloads or credentials.
+
+        This is an observation view, not an execution handoff or identity input.
+        Logical input names and requested resources remain visible; the existing
+        ``to_dict`` method alone retains the complete private request.
+        """
+        return redact_executor_metadata(
+            {
+                "run_uri": self.run_uri,
+                "stage_name": self.stage_name,
+                "attempt": self.attempt,
+                "prepared_at": self.prepared_at,
+                "executor_name": self.executor_name,
+                "inputs": cast(list[PlainData], sorted(self.inputs)),
+                "resolved_runtime": dict(self.resolved_runtime),
+                "stdout_path": self.stdout_path,
+                "stderr_path": self.stderr_path,
+                "traceback_path": self.traceback_path,
+                "result_path": self.result_path,
+                "executor_metadata": dict(self.executor_metadata),
+            },
+            public=True,
+        )
+
     @classmethod
     def from_dict(cls, data: object) -> "StageWorkerRequest":
         try:
@@ -753,6 +780,10 @@ class StageWorkerResult:
             ),
         }
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return route/outcome facts without private logs or artifact payloads."""
+        return _execution_result_safe_metadata(self)
+
     @classmethod
     def from_dict(cls, data: object) -> "StageWorkerResult":
         try:
@@ -878,6 +909,35 @@ class StageExecutionRequest:
             _coerce_resolved_runtime(self.resolved_runtime, stage_name=self.stage.name),
         )
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Describe the admitted request before invoking opaque stage code.
+
+        Resource demand and selection are requested/reserved facts, not measured
+        device visibility. Workspace/log locations are opaque in this public
+        view, while input names remain logical graph identities.
+        """
+        runtime = cast(ResolvedStageRuntimeOptions, self.resolved_runtime)
+        return redact_executor_metadata(
+            {
+                "run_uri": self.run_uri,
+                "stage_name": self.stage.name,
+                "attempt": self.attempt,
+                "executor_name": runtime.executor,
+                "resolved_runtime": runtime.to_safe_metadata(),
+                "inputs": cast(list[PlainData], sorted(self.inputs)),
+                "workspace": None
+                if self.context._local_workspace_dir is None
+                else str(self.context._local_workspace_dir),
+                "output_dir": None
+                if self.context._local_output_dir is None
+                else str(self.context._local_output_dir),
+                "stdout_path": str(self.stdout_path),
+                "stderr_path": str(self.stderr_path),
+                "traceback_path": str(self.traceback_path),
+            },
+            public=True,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class StageExecutionResult:
@@ -955,6 +1015,10 @@ class StageExecutionResult:
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return the existing execution outcome and redacted route metadata."""
+        return _execution_result_safe_metadata(self)
+
 
 @dataclass(frozen=True, slots=True)
 class StageRunResult:
@@ -996,6 +1060,10 @@ class StageRunResult:
             "executor_metadata",
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
+
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return the existing execution outcome and redacted route metadata."""
+        return _execution_result_safe_metadata(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1292,20 +1360,61 @@ _SENSITIVE_KEY_PARTS = (
 
 def redact_executor_metadata(
     metadata: Mapping[str, PlainData] | None,
+    *,
+    public: bool = False,
 ) -> dict[str, PlainData]:
-    """Return executor metadata safe for persisted worker records."""
+    """Redact execution metadata for private storage or public observation.
+
+    The default preserves the existing private worker-record shape. ``public``
+    additionally hides host paths, raw process output, arbitrary exception text,
+    URI credentials and resource-attribute values. Neither view is an execution
+    input or a replacement for a private request. Typed outcome codes, argument
+    switches, mount access modes and requested/observed numeric facts survive.
+    """
 
     return cast(
         dict[str, PlainData],
-        _redact_plain_value(dict(metadata or {}), key_path=()),
+        _redact_plain_value(dict(metadata or {}), key_path=(), public=public),
     )
 
 
-def _redact_plain_value(value: object, *, key_path: tuple[str, ...]) -> PlainData:
+def _redact_plain_value(
+    value: object, *, key_path: tuple[str, ...], public: bool = False
+) -> PlainData:
+    if (
+        public
+        and key_path
+        and key_path[-1].lower()
+        in {
+            "stdout",
+            "stderr",
+            "traceback",
+            "traceback_text",
+            "message",
+            "launch_error",
+            "error",
+            "setup_error",
+            "script_text",
+            "script",
+        }
+    ):
+        return None if value is None else "[redacted]"
+    if (
+        public
+        and key_path
+        and key_path[-1].lower() == "attributes"
+        and isinstance(value, Mapping)
+    ):
+        return "[redacted]"
     if key_path and _is_sensitive_key(key_path[-1]):
         return "[redacted]"
     if isinstance(value, Mapping):
         if key_path and key_path[-1].lower() in {"env", "environment"}:
+            if public and set(value) == {"key_count", "keys"}:
+                return {
+                    "key_count": cast(int, value["key_count"]),
+                    "keys": list(value["keys"]),
+                }
             return {
                 "key_count": len(value),
                 "keys": cast(list[PlainData], sorted(str(key) for key in value)),
@@ -1316,22 +1425,97 @@ def _redact_plain_value(value: object, *, key_path: tuple[str, ...]) -> PlainDat
             output[key_text] = _redact_plain_value(
                 item,
                 key_path=(*key_path, key_text),
+                public=public,
             )
         return output
     if isinstance(value, Sequence) and not isinstance(value, (bytes, str)):
         redacted_items: list[PlainData] = []
+        previous_argument = ""
         for item in value:
-            if isinstance(item, str) and _looks_like_secret_argument(item):
+            if public and (
+                previous_argument == "-c"
+                or (
+                    previous_argument.startswith("--")
+                    and "=" not in previous_argument
+                    and _is_sensitive_key(previous_argument)
+                )
+            ):
+                redacted_items.append("[redacted]")
+            elif (
+                not public
+                and isinstance(item, str)
+                and _looks_like_secret_argument(item)
+            ):
                 redacted_items.append("[redacted]")
             else:
-                redacted_items.append(_redact_plain_value(item, key_path=key_path))
+                redacted_items.append(
+                    _redact_plain_value(item, key_path=key_path, public=public)
+                )
+            previous_argument = item if isinstance(item, str) else ""
         return redacted_items
+    if public and isinstance(value, str):
+        return _public_execution_string(value)
     try:
         return ensure_plain_data(value, path="executor_metadata")
     except PlainDataError as exc:
         raise RunRequestError(
             f"executor_metadata must be plain-data-compatible: {exc}"
         ) from exc
+
+
+def _public_execution_string(value: str) -> str:
+    if value.startswith("file:"):
+        return "[redacted-path]"
+    if "://" in value:
+        try:
+            uri = urlsplit(value)
+            authority = uri.netloc.rsplit("@", 1)[-1]
+            return urlunsplit((uri.scheme, authority, uri.path, "", ""))
+        except ValueError:
+            return "[redacted]"
+    if _looks_like_secret_argument(value):
+        return "[redacted]"
+    if re.search(r"(?:^|[=:\s])/", value):
+        if value.startswith("--") and "=" in value:
+            return value.split("=", 1)[0] + "=[redacted-path]"
+        return "[redacted-path]"
+    return value
+
+
+def _execution_result_safe_metadata(
+    result: StageExecutionResult | StageWorkerResult | StageRunResult,
+) -> dict[str, PlainData]:
+    failure = cast(ExecutionFailure | None, result.failure)
+    metadata: dict[str, PlainData] = {
+        "stage_name": result.stage_name,
+        "attempt": result.attempt,
+        "status": None if result.status is None else result.status.value,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "outputs": cast(list[PlainData], sorted(result.outputs)),
+        "failure": None
+        if failure is None
+        else {
+            "executor": failure.executor,
+            "failure_type": failure.failure_type,
+            "exception_type": failure.exception_type,
+            "exit_code": failure.exit_code,
+            "signal": failure.signal,
+        },
+        "executor_metadata": dict(result.executor_metadata),
+    }
+    for name in (
+        "executor_name",
+        "run_uri",
+        "stdout_path",
+        "stderr_path",
+        "traceback_path",
+        "exit_code",
+        "signal",
+    ):
+        if hasattr(result, name):
+            metadata[name] = getattr(result, name)
+    return redact_executor_metadata(metadata, public=True)
 
 
 def _is_sensitive_key(key: str) -> bool:

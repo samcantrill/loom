@@ -35,6 +35,7 @@ from loom.pipeline.execution.models import (
     STAGE_WORKER_REQUEST_SCHEMA_VERSION,
     StageWorkerRequest,
     StageWorkerResult,
+    redact_executor_metadata,
 )
 from loom.pipeline.planning import StageFingerprintRecord
 from loom.pipeline.runtime._resource_controls import (
@@ -481,7 +482,11 @@ class ResidentExecutionProfile:
         ):
             raise QueueServiceError("resident execution environment is invalid")
         object.__setattr__(self, "environment", environment)
-        object.__setattr__(self, "preparation_shared_roots", _preparation_root_bindings(self.preparation_shared_roots))
+        object.__setattr__(
+            self,
+            "preparation_shared_roots",
+            _preparation_root_bindings(self.preparation_shared_roots),
+        )
         from .resident_readiness import ResidentReadinessRequirements
 
         if not isinstance(self.readiness_requirements, ResidentReadinessRequirements):
@@ -794,8 +799,13 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
         preparation = _preparation_input_from_fingerprint(fingerprint)
-        if preparation is not None and dict(preparation.profile_descriptor) != self.profile.to_dict():
-            raise QueueConflictError("preparation assignment does not use the selected resident profile")
+        if (
+            preparation is not None
+            and dict(preparation.profile_descriptor) != self.profile.to_dict()
+        ):
+            raise QueueConflictError(
+                "preparation assignment does not use the selected resident profile"
+            )
         inputs = tuple(self.inputs)
         outputs = tuple(
             _identifier(name, "declared output") for name in self.declared_outputs
@@ -1130,10 +1140,11 @@ class _RemoteExecutionReport:
     failure: ExecutionFailure | None = None
     resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
     process_created: bool | None = None
+    executor_metadata: Mapping[str, PlainData] | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1209,6 +1220,21 @@ class _RemoteExecutionReport:
             isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int)
         ):
             raise QueueServiceError("remote result exit code is invalid")
+        if self.schema_version < 3 and self.executor_metadata is not None:
+            raise QueueServiceError(
+                "retained remote result cannot carry route metadata"
+            )
+        if self.schema_version == 3:
+            if not isinstance(self.executor_metadata, Mapping):
+                raise QueueServiceError("remote result route metadata is invalid")
+            object.__setattr__(
+                self,
+                "executor_metadata",
+                freeze_plain_data(
+                    redact_executor_metadata(self.executor_metadata, public=True),
+                    path="remote route metadata",
+                ),
+            )
         if self.schema_version == 1:
             if any(
                 value is not None
@@ -1262,7 +1288,7 @@ class _RemoteExecutionReport:
             "exception_type": self.exception_type,
             "exit_code": self.exit_code,
         }
-        if self.schema_version == 2:
+        if self.schema_version >= 2:
             result.update(
                 {
                     "failure": None if self.failure is None else self.failure.to_dict(),
@@ -1273,6 +1299,10 @@ class _RemoteExecutionReport:
                     ),
                     "process_created": self.process_created,
                 }
+            )
+        if self.schema_version == 3:
+            result["executor_metadata"] = thaw_plain_data(
+                self.executor_metadata, path="remote route metadata"
             )
         return result
 
@@ -1294,8 +1324,11 @@ class _RemoteExecutionReport:
             "exit_code",
         }
         current = legacy | {"failure", "resource_controls", "process_created"}
-        if not isinstance(value, Mapping) or (
-            set(value) != legacy and set(value) != current
+        with_routes = current | {"executor_metadata"}
+        if not isinstance(value, Mapping) or set(value) not in (
+            legacy,
+            current,
+            with_routes,
         ):
             raise QueueServiceError("remote execution report is invalid")
         schema_version = value.get("schema_version")
@@ -1303,6 +1336,8 @@ class _RemoteExecutionReport:
             raise QueueServiceError("legacy remote execution report shape is invalid")
         if schema_version == 2 and set(value) != current:
             raise QueueServiceError("remote execution report shape is invalid")
+        if schema_version == 3 and set(value) != with_routes:
+            raise QueueServiceError("remote route report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
             raise QueueServiceError("remote execution report is invalid")
@@ -1332,6 +1367,9 @@ class _RemoteExecutionReport:
                 )
             ),
             process_created=cast(bool | None, value.get("process_created")),
+            executor_metadata=cast(
+                Mapping[str, PlainData] | None, value.get("executor_metadata")
+            ),
             schema_version=cast(int, schema_version),
         )
 
@@ -1672,12 +1710,20 @@ class _ResidentAssignmentWorkspace:
             return None
         retained = self.supervisor_launch_json()
         if retained is None:
-            raise QueueConflictError("preparation input requires a retained supervisor launch")
+            raise QueueConflictError(
+                "preparation input requires a retained supervisor launch"
+            )
         launch = _launch_from_value(json.loads(retained))
-        if (launch.assignment_id != request.assignment_id or launch.workspace_root != self.root
-            or launch.bundle_digest != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
-            or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)):
-            raise QueueConflictError("preparation input conflicts with the retained launch")
+        if (
+            launch.assignment_id != request.assignment_id
+            or launch.workspace_root != self.root
+            or launch.bundle_digest
+            != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+            or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)
+        ):
+            raise QueueConflictError(
+                "preparation input conflicts with the retained launch"
+            )
         alias = preparation.input_receipt.root
         path = launch.profile.preparation_shared_roots.get(alias)
         return {
@@ -1940,6 +1986,18 @@ class _ResidentAssignmentWorkspace:
             # A retained supervisor request without a process receipt is not a
             # proof either way; do not manufacture a no-start conclusion.
             process_created = None
+        route_metadata = dict(result.executor_metadata)
+        if process_row["supervisor_launch_json"] is not None:
+            launch = _launch_from_value(
+                json.loads(str(process_row["supervisor_launch_json"]))
+            )
+            route_metadata.update(
+                {
+                    "execution_kind": "resident_stage_worker",
+                    "command": list(launch.command_argv),
+                    "cwd": str(launch.profile.project_root),
+                }
+            )
         return _RemoteExecutionReport(
             assignment_id=request.assignment_id,
             stage_name=request.stage_name,
@@ -1961,7 +2019,8 @@ class _ResidentAssignmentWorkspace:
                 else None,
             ),
             process_created=process_created,
-            schema_version=2,
+            executor_metadata=redact_executor_metadata(route_metadata, public=True),
+            schema_version=3,
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:
@@ -2125,19 +2184,30 @@ def _validate_remote_semantic_data(
         from loom.fingerprints import hash_mapping
 
         payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-        fingerprint = {**fingerprint, "payload": {
-            **payload, "stage_config": {"preparation_input_digest": hash_mapping(preparation.to_dict())},
-        }}
+        fingerprint = {
+            **fingerprint,
+            "payload": {
+                **payload,
+                "stage_config": {
+                    "preparation_input_digest": hash_mapping(preparation.to_dict())
+                },
+            },
+        }
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")
 
 
-def _preparation_input_from_fingerprint(fingerprint: Mapping[str, PlainData]) -> "PreparationChildInput | None":
+def _preparation_input_from_fingerprint(
+    fingerprint: Mapping[str, PlainData],
+) -> "PreparationChildInput | None":
     from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
 
     payload = fingerprint.get("payload")
-    if not isinstance(payload, Mapping) or payload.get("factory_target") != PREPARATION_STAGE_TARGET:
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("factory_target") != PREPARATION_STAGE_TARGET
+    ):
         return None
     return PreparationChildInput.from_dict(payload.get("stage_config"))
 

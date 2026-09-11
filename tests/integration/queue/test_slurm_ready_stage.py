@@ -819,7 +819,7 @@ def _exercise_mixed_route_run(
             process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
         )
         report = workspace.retain_result(worker_result)
-        assert report.schema_version == 2
+        assert report.schema_version == 3
         assert report.process_created is True
         assert report.resource_controls is not None
         assert {
@@ -919,7 +919,7 @@ def _exercise_mixed_route_run(
             completed = client.wait("mixed-route", timeout_seconds=10)
             if native_failure:
                 assert completed.state is LocalDaemonAdmissionState.FAILED
-                assert report.schema_version == 2
+                assert report.schema_version == 3
                 assert report.failure is not None
                 saved_failure = run_store.read_stage_failure(run_uri, "train")
                 assert saved_failure is not None
@@ -965,6 +965,15 @@ def _exercise_mixed_route_run(
                 )
                 assert saved_result is not None
                 metadata = cast(Mapping[str, object], saved_result["executor_metadata"])
+                assert metadata["request"]["executor_name"] == "local"
+                scheduler = cast(Mapping[str, object], metadata["scheduler"])
+                assert scheduler["mode"] == "ready"
+                assert scheduler["job_id"] == record.job_id
+                assert scheduler["input_ready"] is True
+                assert (
+                    execution.slurm_assignments.read(assignment_id).input_ready is True
+                )
+                assert str(tmp_path) not in json.dumps(metadata)
                 container = cast(Mapping[str, object], metadata["container"])
                 assert container["container_runtime"] == "apptainer"
                 assert "/fixture/bootstrap.json" not in json.dumps(container)

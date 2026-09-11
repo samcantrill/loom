@@ -111,8 +111,13 @@ from ._agent_process_supervisor import (
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from ._coordinator_control import (
-    CONTROL_CAPABILITY, WAIT_OPERATIONS, CoordinatorClientError,
-    control_error, decode_wire, dispatch_control, error_envelope,
+    CONTROL_CAPABILITY,
+    WAIT_OPERATIONS,
+    CoordinatorClientError,
+    control_error,
+    decode_wire,
+    dispatch_control,
+    error_envelope,
 )
 from ._coordinator_transport import https_connection
 from .local_daemon import (
@@ -4777,8 +4782,10 @@ class LocalDaemonAgentHttpClient:
         connection = self._connection
         if connection is None:
             connection = https_connection(
-                self._config.url, self._config.server_ca_path,
-                self._config.certificate_path, self._config.private_key_path,
+                self._config.url,
+                self._config.server_ca_path,
+                self._config.certificate_path,
+                self._config.private_key_path,
                 timeout=_HTTP_TIMEOUT_SECONDS,
             )
             self._connection = connection
@@ -4913,7 +4920,10 @@ class _Handler(BaseHTTPRequestHandler):
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
         payload: dict[str, object] = {}
-        new_client = self.path.startswith("/v1/client/") and self.headers.get("X-Loom-Client") == CONTROL_CAPABILITY
+        new_client = (
+            self.path.startswith("/v1/client/")
+            and self.headers.get("X-Loom-Client") == CONTROL_CAPABILITY
+        )
         operation = self.path.rsplit("/", 1)[-1] or "unknown"
         authenticated = dispatched = False
         client_acquired = wait_acquired = False
@@ -4950,12 +4960,23 @@ class _Handler(BaseHTTPRequestHandler):
             authenticated = True
             if role_name == "client":
                 if operation in WAIT_OPERATIONS:
-                    wait_acquired = self._daemon_server.client_wait_slots.acquire(blocking=False)
+                    wait_acquired = self._daemon_server.client_wait_slots.acquire(
+                        blocking=False
+                    )
                     if not wait_acquired:
-                        raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
-                client_acquired = self._daemon_server.client_slots.acquire(blocking=False)
+                        raise control_error(
+                            "capacity_exhausted",
+                            operation,
+                            payload,
+                            boundary="coordinator",
+                        )
+                client_acquired = self._daemon_server.client_slots.acquire(
+                    blocking=False
+                )
                 if not client_acquired:
-                    raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
+                    raise control_error(
+                        "capacity_exhausted", operation, payload, boundary="coordinator"
+                    )
             if self.headers.get("Content-Type") != "application/json":
                 raise QueueServiceError("agent protocol content type is invalid")
             lengths = self.headers.get_all("Content-Length", [])
@@ -4972,7 +4993,9 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     payload = dict(decode_wire(raw))
                 except (ValueError, TypeError, RecursionError) as exc:
-                    raise control_error("invalid_request", operation, {}, boundary="client_protocol") from exc
+                    raise control_error(
+                        "invalid_request", operation, {}, boundary="client_protocol"
+                    ) from exc
             else:
                 payload = dict(
                     _decode(raw, failure_report=True)
@@ -5043,18 +5066,32 @@ class _Handler(BaseHTTPRequestHandler):
             )
         except CoordinatorClientError as exc:
             if new_client:
-                status = {"unauthorized": 403, "conflict": 409, "capacity_exhausted": 429,
-                          "not_found": 404, "unavailable": 503, "internal_error": 500}.get(exc.code, 400)
+                status = {
+                    "unauthorized": 403,
+                    "conflict": 409,
+                    "capacity_exhausted": 429,
+                    "not_found": 404,
+                    "unavailable": 503,
+                    "internal_error": 500,
+                }.get(exc.code, 400)
                 self._reply(status, error_envelope(exc))
             else:
-                self._reply(409 if exc.code == "conflict" else 403, {"ok": False, "error": "agent_protocol_rejected"})
+                self._reply(
+                    409 if exc.code == "conflict" else 403,
+                    {"ok": False, "error": "agent_protocol_rejected"},
+                )
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError:
             if new_client:
                 code = "invalid_request" if authenticated else "unauthorized"
-                error = control_error(code, operation, payload,
-                    boundary="client_protocol" if authenticated else "authentication", dispatched=dispatched)
+                error = control_error(
+                    code,
+                    operation,
+                    payload,
+                    boundary="client_protocol" if authenticated else "authentication",
+                    dispatched=dispatched,
+                )
                 self._reply(400 if authenticated else 403, error_envelope(error))
             elif query_path or query_credential:
                 code = "invalid_request" if query_credential else "unauthorized"
@@ -5063,9 +5100,18 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
         except Exception:
             if new_client:
-                self._reply(500, error_envelope(control_error(
-                    "internal_error", operation, payload, boundary="coordinator", dispatched=dispatched,
-                )))
+                self._reply(
+                    500,
+                    error_envelope(
+                        control_error(
+                            "internal_error",
+                            operation,
+                            payload,
+                            boundary="coordinator",
+                            dispatched=dispatched,
+                        )
+                    ),
+                )
             elif query_path:
                 self._reply_query_failure("unavailable", 503)
             else:
@@ -5380,13 +5426,24 @@ def _dispatch_application(
     daemon_control: bool = False,
 ) -> Mapping[str, PlainData]:
     if role == "client":
-        result = dict(dispatch_control(
-            daemon, principal, operation, value, transport="https", wait_slice=5.0,
-            inspect_run=inspect_run, legacy=not daemon_control,
-        ))
+        result = dict(
+            dispatch_control(
+                daemon,
+                principal,
+                operation,
+                value,
+                transport="https",
+                wait_slice=5.0,
+                inspect_run=inspect_run,
+                legacy=not daemon_control,
+            )
+        )
         if operation == "handshake":
             result["role"] = role
-            result["capabilities"] = ["authenticated-application-v1", CONTROL_CAPABILITY]
+            result["capabilities"] = [
+                "authenticated-application-v1",
+                CONTROL_CAPABILITY,
+            ]
         return result
     if operation == "handshake":
         _exact(value, set())
@@ -5802,7 +5859,7 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
     if (
         isinstance(report, Mapping)
         and type(report.get("schema_version")) is int
-        and report["schema_version"] == 2
+        and report["schema_version"] in {2, 3}
         and "failure" in report
     ):
         _bounded_failure_json(report["failure"])
