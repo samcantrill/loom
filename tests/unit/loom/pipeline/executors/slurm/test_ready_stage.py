@@ -3,14 +3,17 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import hashlib
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 from threading import Event
 from typing import cast
 
 import pytest
 
+from loom.pipeline.executors.containers import ContainerOptions
 from loom.pipeline.executors.slurm.commands import (
     FakeSlurmCommandRunner,
     SlurmCommandResult,
@@ -37,6 +40,7 @@ from loom.pipeline.runtime import (
     StagePlacementPolicy,
     resolve_stage_placement,
 )
+from loom.serialization import stable_json_dumps
 
 _TEST_HELPER = (
     sys.executable,
@@ -161,6 +165,44 @@ def test_ready_stage_script_is_fixed_safe_and_deterministic() -> None:
         )
 
 
+def test_retained_native_profile_uses_the_prior_identity_payload() -> None:
+    profile = _profile(FakeSlurmCommandRunner())
+    provider = profile.job_private_file_provider
+    legacy_payload = {
+        "profile_id": profile.profile_id,
+        "partition": profile.partition,
+        "account": profile.account,
+        "qos": profile.qos,
+        "cluster": profile.cluster,
+        "max_outstanding": profile.max_outstanding,
+        "bootstrap_argv": list(profile.bootstrap_argv),
+        "command_adapter_fingerprint": profile.command_adapter_fingerprint,
+        "bootstrap_principal_id": profile.bootstrap_principal_id,
+        "credential_reference_digest": hashlib.sha256(
+            profile.credential_reference.encode("utf-8")
+        ).hexdigest(),
+        "coordinator_endpoint_digest": hashlib.sha256(
+            profile.coordinator_endpoint.encode("utf-8")
+        ).hexdigest(),
+        "project_fingerprint": profile.project_fingerprint,
+        "environment_fingerprint": profile.environment_fingerprint,
+        "executor_fingerprint": profile.executor_fingerprint,
+        "executor_name": profile.executor_name,
+        "credential_policy_revision": profile.credential_policy_revision,
+        "capability_delivery_kind": provider.delivery_kind,
+        "capability_descriptor": provider.descriptor,
+        "capability_path": provider.fixed_path,
+        "containment_helper_descriptor": None,
+        "containment_helper_argv": None,
+        "containment_helper_timeout_seconds": None,
+    }
+
+    assert (
+        profile.configuration_fingerprint
+        == hashlib.sha256(stable_json_dumps(legacy_payload).encode("utf-8")).hexdigest()
+    )
+
+
 def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receipt(
     tmp_path: Path,
 ) -> None:
@@ -174,8 +216,14 @@ def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receip
     assert request.container_metadata is not None
     assert "exec 'apptainer' 'exec' '--cleanenv'" in request.script
     assert "'analysis.sif' 'loom' 'slurm-bootstrap'" in request.script
-    assert '"${LOOM_SLURM_BOOTSTRAP_CONFIG:?ready-stage container bootstrap config is unavailable}"' in request.script
-    assert "export APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG" in request.script
+    assert (
+        '"${LOOM_SLURM_BOOTSTRAP_CONFIG:?ready-stage container bootstrap config is unavailable}"'
+        in request.script
+    )
+    assert (
+        'export APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG="${LOOM_SLURM_BOOTSTRAP_CONFIG}"'
+        in request.script
+    )
     assert "/tmp/loom-unit-capability" not in repr(request.container_metadata)
     assert request.container_metadata["container_runtime"] == "apptainer"
     assert request.container_metadata["bootstrap_environment"] == (
@@ -193,11 +241,109 @@ def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receip
     assert changed.configuration_fingerprint != profile.configuration_fingerprint
     assert _request(changed).digest != request.digest
 
+    changed_environment = _profile(
+        FakeSlurmCommandRunner(),
+        container_options={
+            **_ready_container_options(),
+            "environment": {
+                "variables": {"ANALYSIS_MODE": "replay"},
+                "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"],
+            },
+        },
+    )
+    assert (
+        changed_environment.configuration_fingerprint
+        != profile.configuration_fingerprint
+    )
+
     accepted = SQLiteReadyStageSubmissions(tmp_path / "submissions.sqlite").submit(
         request, profile, _script(tmp_path, request)
     )
     assert accepted.state is ReadyStageState.ACCEPTED
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+def test_ready_stage_container_bootstrap_env_reaches_rendered_runtime(
+    tmp_path: Path,
+) -> None:
+    request = _request(
+        _profile(FakeSlurmCommandRunner(), container_options=_ready_container_options())
+    )
+    script = _script(tmp_path, request)
+    capture = tmp_path / "bootstrap-env"
+    runtime = tmp_path / "apptainer"
+    runtime.write_text(
+        '#!/bin/sh\nprintf \'%s\' "$APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG" > "$LOOM_TEST_CAPTURE"\n',
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+
+    subprocess.run(
+        ["bash", str(script)],
+        check=True,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "LOOM_SLURM_BOOTSTRAP_CONFIG": "/fixture/bootstrap.json",
+            "LOOM_TEST_CAPTURE": str(capture),
+        },
+    )
+
+    assert capture.read_text(encoding="utf-8") == "/fixture/bootstrap.json"
+
+
+def test_ready_stage_container_receipt_redacts_absolute_owner_paths() -> None:
+    provider = SlurmJobPrivateFileProvider(
+        fixed_path="/private/owner/capability",
+        descriptor="fake-prolog-v1",
+        helper_argv=_TEST_HELPER,
+    )
+    profile = replace(
+        _profile(
+            FakeSlurmCommandRunner(),
+            provider=provider,
+            container_options={
+                "image": {"reference": "/private/owner/image.sif"},
+                "workdir": "/private/owner/workdir",
+                "mounts": [
+                    {
+                        "source": "/private/owner/capability",
+                        "target": "/private/owner/capability",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]
+                },
+            },
+        ),
+        apptainer_options={"command": "/private/owner/apptainer"},
+    )
+    request = _request(profile)
+
+    assert request.container_metadata is not None
+    receipt = stable_json_dumps(request.container_metadata)
+    assert "/private/owner" not in receipt
+    command = request.container_metadata["container_command"]
+    assert command["command"] == "[redacted-path]"
+    container = command["container"]
+    assert container["image"] == "[redacted-path]"
+    assert container["workdir"] == "[redacted-path]"
+    assert container["mounts"] == [
+        {"source": "[redacted-path]", "target": "[redacted-path]", "mode": "rw"}
+    ]
+
+
+def test_ready_stage_profile_accepts_typed_container_options_after_replace() -> None:
+    profile = _profile(
+        FakeSlurmCommandRunner(), container_options=_ready_container_options()
+    )
+    assert isinstance(profile.container_options, ContainerOptions)
+
+    replaced = replace(profile)
+
+    assert isinstance(replaced.container_options, ContainerOptions)
+    assert replaced.configuration_fingerprint == profile.configuration_fingerprint
 
 
 @pytest.mark.parametrize(

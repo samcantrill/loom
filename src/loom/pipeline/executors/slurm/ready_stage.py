@@ -395,7 +395,11 @@ class SlurmReadyStageProfile:
         container = (
             None
             if self.container_options is None
-            else parse_container_options(self.container_options)
+            else (
+                self.container_options
+                if isinstance(self.container_options, ContainerOptions)
+                else parse_container_options(self.container_options)
+            )
         )
         apptainer = (
             None
@@ -438,10 +442,6 @@ class SlurmReadyStageProfile:
             "environment_fingerprint": self.environment_fingerprint,
             "executor_fingerprint": self.executor_fingerprint,
             "executor_name": self.executor_name,
-            "container": (
-                None if container is None else container.to_redacted_metadata()
-            ),
-            "apptainer": None if apptainer is None else apptainer.to_dict(),
             "credential_policy_revision": self.credential_policy_revision,
             "capability_delivery_kind": self.job_private_file_provider.delivery_kind,
             "capability_descriptor": self.job_private_file_provider.descriptor,
@@ -462,6 +462,11 @@ class SlurmReadyStageProfile:
                 else float(self.containment_helper.timeout_seconds)
             ),
         }
+        if container is not None:
+            # The protected profile fingerprint binds every selected container
+            # value, while the request receipt below exposes only redacted data.
+            payload["container"] = container.to_dict()
+            payload["apptainer"] = cast(ApptainerExecOptions, apptainer).to_dict()
         object.__setattr__(
             self,
             "descriptor",
@@ -738,7 +743,7 @@ def map_ready_stage(
         *(
             [
                 f': "${{{_SLURM_BOOTSTRAP_CONFIG_ENV}:?ready-stage container bootstrap config is unavailable}}"',
-                f"export APPTAINERENV_{_SLURM_BOOTSTRAP_CONFIG_ENV}",
+                f'export APPTAINERENV_{_SLURM_BOOTSTRAP_CONFIG_ENV}="${{{_SLURM_BOOTSTRAP_CONFIG_ENV}}}"',
             ]
             if container_metadata is not None
             else []
@@ -1752,43 +1757,22 @@ def _redact_ready_container_metadata(
 ) -> dict[str, PlainData]:
     """Keep durable ready receipts free of protected host path values."""
 
-    receipt = dict(metadata)
-    redacted_argv = receipt.get("redacted_argv")
-    if isinstance(redacted_argv, Sequence) and not isinstance(
-        redacted_argv, (str, bytes)
-    ):
-        receipt["redacted_argv"] = [
-            _redact_ready_path_argument(cast(str, value)) for value in redacted_argv
-        ]
-    command = receipt.get("container_command")
-    if not isinstance(command, Mapping):
-        return receipt
-    command_receipt = dict(cast(Mapping[str, PlainData], command))
-    argv = command_receipt.get("argv")
-    if isinstance(argv, Sequence) and not isinstance(argv, (str, bytes)):
-        command_receipt["argv"] = [
-            _redact_ready_path_argument(cast(str, value)) for value in argv
-        ]
-    container = command_receipt.get("container")
-    if isinstance(container, Mapping):
-        container_receipt = dict(cast(Mapping[str, PlainData], container))
-        workdir = container_receipt.get("workdir")
-        if isinstance(workdir, str) and Path(workdir).is_absolute():
-            container_receipt["workdir"] = "[redacted-path]"
-        mounts = container_receipt.get("mounts")
-        if isinstance(mounts, Sequence) and not isinstance(mounts, (str, bytes)):
-            container_receipt["mounts"] = [
-                {
-                    "source": "[redacted-path]",
-                    "target": "[redacted-path]",
-                    "mode": cast(Mapping[str, PlainData], mount).get("mode"),
-                }
-                for mount in mounts
-                if isinstance(mount, Mapping)
-            ]
-        command_receipt["container"] = container_receipt
-    receipt["container_command"] = command_receipt
-    return receipt
+    redacted = _redact_ready_metadata_value(metadata)
+    if not isinstance(redacted, dict):  # pragma: no cover - mapping input is fixed
+        raise SlurmPlanningError("ready-stage container metadata is invalid")
+    return redacted
+
+
+def _redact_ready_metadata_value(value: PlainData) -> PlainData:
+    """Recursively redact absolute paths from generic container metadata."""
+
+    if isinstance(value, str):
+        return _redact_ready_path_argument(value)
+    if isinstance(value, Mapping):
+        return {key: _redact_ready_metadata_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_redact_ready_metadata_value(item) for item in value]
+    return value
 
 
 def _redact_ready_path_argument(value: str) -> str:
