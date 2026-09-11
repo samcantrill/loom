@@ -557,6 +557,7 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     from threading import Event
 
     from loom.diagnostics.run_inspection import projection_callable
+    from loom.preparation import CoordinatorPreparation
     from loom.pipeline.stores import LocalRunStore
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
@@ -569,13 +570,16 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
+    active_service = service
     pending_service = None
     agent_server = None
 
     def load_replacement():  # type: ignore[no-untyped-def]
         nonlocal pending_service
         pending_service = load_coordinator_service_config(
-            service.source_path, env_file=service.environment_path
+            service.source_path,
+            env_file=service.environment_path,
+            current=active_service,
         )
         return pending_service.daemon
 
@@ -589,7 +593,8 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
                 raise QueueServiceError("agent TLS listener cannot be added by reload")
 
             def install_absent() -> None:
-                nonlocal pending_service
+                nonlocal active_service, pending_service
+                active_service = prepared
                 pending_service = None
 
             return install_absent
@@ -598,8 +603,9 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
         install_server = agent_server.prepare_reload(prepared.agent_server)
 
         def install() -> None:
-            nonlocal pending_service
+            nonlocal active_service, pending_service
             install_server()
+            active_service = prepared
             pending_service = None
 
         return install
@@ -608,6 +614,7 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
         config,
         trusted_scheduling_loader=load_replacement,
         prepare_role_reload=prepare_role_reload,
+        preparation=CoordinatorPreparation(service),
     )
     server = LocalDaemonSocketServer(
         daemon,
@@ -794,11 +801,17 @@ def handle_daemon_upgrade(namespace: argparse.Namespace) -> int:
     from loom.queue.deployment import load_coordinator_service_config
 
     try:
-        service = load_coordinator_service_config(namespace.config, env_file=namespace.env_file, _allow_unready=True)
-        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(service.daemon)
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file, _allow_unready=True
+        )
+        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(
+            service.daemon
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version})
+    return _emit_daemon_payload(
+        namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version}
+    )
 
 
 def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
@@ -810,7 +823,9 @@ def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
             raise QueueServiceError("prepare request must be a JSON object")
         result = _daemon_client(namespace).prepare_run(PrepareRunRequest.from_dict(raw))
     except (OSError, json.JSONDecodeError) as exc:
-        raise _queue_cli_error(QueueServiceError("prepare request file is unavailable or invalid JSON")) from exc
+        raise _queue_cli_error(
+            QueueServiceError("prepare request file is unavailable or invalid JSON")
+        ) from exc
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -830,10 +845,12 @@ def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
 
     if namespace.connection is not None:
         return CoordinatorClient.from_connection_file(
-            namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id,
+            namespace.connection,
+            expected_coordinator_id=namespace.expected_coordinator_id,
         )
     return CoordinatorClient.from_unix_socket(
-        namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id,
+        namespace.endpoint,
+        expected_coordinator_id=namespace.expected_coordinator_id,
     )
 
 
@@ -857,9 +874,7 @@ def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_admission(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).admission(
-            namespace.admission_id
-        )
+        result = _daemon_client(namespace).admission(namespace.admission_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_admission_payload(namespace, result.to_dict())
@@ -885,9 +900,7 @@ def handle_daemon_agent(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).operation(
-            namespace.operation_id
-        )
+        result = _daemon_client(namespace).operation(namespace.operation_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -895,14 +908,26 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
     try:
-        if namespace.timeout is not None and (not math.isfinite(namespace.timeout) or namespace.timeout < 0):
+        if namespace.timeout is not None and (
+            not math.isfinite(namespace.timeout) or namespace.timeout < 0
+        ):
             raise QueueServiceError("operation wait timeout is invalid")
         client = _daemon_client(namespace)
-        deadline = None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        deadline = (
+            None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        )
         while True:
-            duration = 25.0 if deadline is None else max(0.0, min(25.0, deadline - time.monotonic()))
-            result = client.wait_operation(namespace.operation_id, timeout_seconds=duration)
-            if result.kind.value != "TIMEOUT" or (deadline is not None and time.monotonic() >= deadline):
+            duration = (
+                25.0
+                if deadline is None
+                else max(0.0, min(25.0, deadline - time.monotonic()))
+            )
+            result = client.wait_operation(
+                namespace.operation_id, timeout_seconds=duration
+            )
+            if result.kind.value != "TIMEOUT" or (
+                deadline is not None and time.monotonic() >= deadline
+            ):
                 break
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -921,9 +946,7 @@ def handle_daemon_wait(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).cancel(
-            namespace.queue_item_id
-        )
+        result = _daemon_client(namespace).cancel(namespace.queue_item_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())

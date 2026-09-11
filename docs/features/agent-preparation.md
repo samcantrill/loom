@@ -198,6 +198,13 @@ while the operation is retained. Cleanup refuses to remove evidence needed for
 replay. Automatic expiration and operation deletion are not provided; failed and
 cancelled operations can also retain captured bytes.
 
+Retention pins live in a protected `.loom-preparation-pins` directory beside the
+capture or run. They identify its coordinator and operation without modifying a
+complete prepared run. Cleanup rejects a pinned directory, its descendants, and
+an ancestor whose deletion would remove those pins, with
+`retained_preparation_evidence`. Cleanup checks this again when executing a
+previously approved preview. There is no supported manual unpin procedure.
+
 Stable operation codes identify the failing boundary: `source_unavailable` and
 `source_changed` describe capture, `input_limit_exceeded` describes the finite
 selection bounds, `installation_mismatch` identifies incompatible worker software,
@@ -206,6 +213,12 @@ preserves native child failure evidence, and `publication_conflict` leaves the
 conflicting target inspectable. `result_too_large` prevents an unreadable required
 projection. These codes complement the native report/admission evidence; they
 do not replace [client connection and mutation errors](coordinator-client.md#reconnect-and-reconcile).
+
+`preparation_unavailable` on a pending or applying operation means reconciliation
+will retry from its retained state. In particular, a missing reply or temporarily
+unavailable report after the publication claim cannot establish that publication
+failed: the target may already exist. Keep observing that same operation instead
+of submitting a replacement request with another ID.
 
 ## Retry And Cancel
 
@@ -219,6 +232,15 @@ The coordinator retains one child identity and target reservation. Restart
 rejoins that child and its authoritative capture/report. A durable publication
 claim is replayed through the same native publisher. A matching complete target
 is read-only replay; a partial or changed target stays an inspectable conflict.
+If a child admission reply was lost, the durable dispatch claim lets recovery
+rejoin the same admission even if that child has already finished. Recovery does
+not prepare or execute a second child.
+After a capture receipt has been recorded, editing the authored files does not
+change that operation's input. Interrupted temporary captures are scoped to both
+the coordinator and operation, so recovery does not remove another coordinator's
+in-progress copy on shared storage. Protected configuration changes still use
+the existing coordinator reload procedure before restart; accepted operations
+retain the selection made before that reload.
 
 ```sh
 loom queue daemon-cancel-preparation --connection client.yaml prepare-demo-001 --format json

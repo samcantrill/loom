@@ -45,6 +45,15 @@ class ManagedLocalPreparationReceipt:
     runtime_digest: str
     stage_names: tuple[str, ...]
 
+    def to_dict(self) -> dict[str, PlainData]:
+        """Serialize the complete native identity without changing its fields."""
+        return {
+            "run_uri": self.run_uri,
+            "plan_digest": self.plan_digest,
+            "runtime_digest": self.runtime_digest,
+            "stage_names": list(self.stage_names),
+        }
+
 
 def prepare_managed_local_run(
     coordinator_config: str | Path,

@@ -36,12 +36,22 @@ PREPARATION_INPUT_CONTEXT_ENV = "LOOM_PREPARATION_INPUT_CONTEXT"
 
 def _relative(value: object, field: str, *, dot: bool = False) -> str:
     if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
-        raise QueueServiceError(f"preparation {field} must be a non-empty relative path")
+        raise QueueServiceError(
+            f"preparation {field} must be a non-empty relative path"
+        )
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or (path == PurePosixPath(".") and not dot):
-        raise QueueServiceError(f"preparation {field} must be a contained relative path")
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or (path == PurePosixPath(".") and not dot)
+    ):
+        raise QueueServiceError(
+            f"preparation {field} must be a contained relative path"
+        )
     if field == "include" and any(char in value for char in "*?[]"):
-        raise QueueServiceError("preparation includes must be explicit paths, not glob expressions")
+        raise QueueServiceError(
+            "preparation includes must be explicit paths, not glob expressions"
+        )
     return str(path)
 
 
@@ -66,20 +76,36 @@ class PreparationSource:
             raise QueueServiceError("preparation includes must contain 1..100 paths")
         # Repeated and nested selections describe the same closure and intent.
         unique = sorted(set(values))
-        normalized = tuple(item for item in unique if not any(
-            parent != item and (parent == "." or item.startswith(parent + "/"))
-            for parent in unique
-        ))
+        normalized = tuple(
+            item
+            for item in unique
+            if not any(
+                parent != item and (parent == "." or item.startswith(parent + "/"))
+                for parent in unique
+            )
+        )
         object.__setattr__(self, "include", normalized)
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"mode": self.mode, "root": self.root, "path": self.path, "include": list(self.include)}
+        return {
+            "mode": self.mode,
+            "root": self.root,
+            "path": self.path,
+            "include": list(self.include),
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PreparationSource":
-        if set(data) != {"mode", "root", "path", "include"} or not isinstance(data.get("include"), list):
+        if set(data) != {"mode", "root", "path", "include"} or not isinstance(
+            data.get("include"), list
+        ):
             raise QueueServiceError("preparation source is invalid")
-        return cls(cast(str, data["mode"]), cast(str, data["root"]), cast(str, data["path"]), tuple(cast(list[str], data["include"])))
+        return cls(
+            cast(str, data["mode"]),
+            cast(str, data["root"]),
+            cast(str, data["path"]),
+            tuple(cast(list[str], data["include"])),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,16 +126,36 @@ class PrepareRunRequest:
         _validate_run_name(self.run_name)
         if not isinstance(self.source, PreparationSource):
             raise QueueServiceError("preparation source is invalid")
-        object.__setattr__(self, "config_path", _relative(self.config_path, "config_path"))
+        object.__setattr__(
+            self, "config_path", _relative(self.config_path, "config_path")
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"operation_id": self.operation_id, "run_name": self.run_name, "source": self.source.to_dict(), "config_path": self.config_path, "preparation_profile": self.preparation_profile}
+        return {
+            "operation_id": self.operation_id,
+            "run_name": self.run_name,
+            "source": self.source.to_dict(),
+            "config_path": self.config_path,
+            "preparation_profile": self.preparation_profile,
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
-        if set(data) != {"operation_id", "run_name", "source", "config_path", "preparation_profile"} or not isinstance(data.get("source"), Mapping):
+        if set(data) != {
+            "operation_id",
+            "run_name",
+            "source",
+            "config_path",
+            "preparation_profile",
+        } or not isinstance(data.get("source"), Mapping):
             raise QueueServiceError("prepare request is invalid")
-        return cls(cast(str, data["operation_id"]), cast(str, data["run_name"]), PreparationSource.from_dict(cast(Mapping[str, object], data["source"])), cast(str, data["config_path"]), cast(str, data["preparation_profile"]))
+        return cls(
+            cast(str, data["operation_id"]),
+            cast(str, data["run_name"]),
+            PreparationSource.from_dict(cast(Mapping[str, object], data["source"])),
+            cast(str, data["config_path"]),
+            cast(str, data["preparation_profile"]),
+        )
 
     def intent_digest(self, principal_id: str) -> str:
         if not isinstance(principal_id, str) or not principal_id:
@@ -132,20 +178,35 @@ class SharedInputReceipt:
         object.__setattr__(self, "path", _relative(self.path, "snapshot path"))
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"mode": "shared", "manifest_digest": self.manifest_digest, "reference": {"schema_version": 1, "kind": "loom.shared-preparation-input", "root": self.root, "path": self.path}}
+        return {
+            "mode": "shared",
+            "manifest_digest": self.manifest_digest,
+            "reference": {
+                "schema_version": 1,
+                "kind": "loom.shared-preparation-input",
+                "root": self.root,
+                "path": self.path,
+            },
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "SharedInputReceipt":
         reference = data.get("reference")
-        if (set(data) != {"mode", "manifest_digest", "reference"}
+        if (
+            set(data) != {"mode", "manifest_digest", "reference"}
             or data.get("mode") != "shared"
             or not isinstance(reference, Mapping)
             or set(reference) != {"schema_version", "kind", "root", "path"}
             or type(reference.get("schema_version")) is not int
             or reference.get("schema_version") != 1
-            or reference.get("kind") != "loom.shared-preparation-input"):
+            or reference.get("kind") != "loom.shared-preparation-input"
+        ):
             raise QueueServiceError("preparation shared input receipt is invalid")
-        return cls(cast(str, data["manifest_digest"]), cast(str, reference["root"]), cast(str, reference["path"]))
+        return cls(
+            cast(str, data["manifest_digest"]),
+            cast(str, reference["root"]),
+            cast(str, reference["path"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,11 +225,15 @@ class PreparationChildInput:
 
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
-        object.__setattr__(self, "config_path", _relative(self.config_path, "config_path"))
+        object.__setattr__(
+            self, "config_path", _relative(self.config_path, "config_path")
+        )
         if not isinstance(self.input_receipt, SharedInputReceipt):
             raise QueueServiceError("preparation child input receipt is invalid")
         descriptor = ResidentProfileDescriptor.from_dict(self.profile_descriptor)
-        object.__setattr__(self, "profile_descriptor", MappingProxyType(descriptor.to_dict()))
+        object.__setattr__(
+            self, "profile_descriptor", MappingProxyType(descriptor.to_dict())
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -182,19 +247,38 @@ class PreparationChildInput:
 
     @classmethod
     def from_dict(cls, value: object) -> "PreparationChildInput":
-        if (not isinstance(value, Mapping)
-            or set(value) != {"schema_version", "operation_id", "preparation_profile", "config_path", "input_receipt", "profile_descriptor"}
-            or type(value.get("schema_version")) is not int or value.get("schema_version") != 1
-            or not isinstance(value.get("input_receipt"), Mapping)):
+        if (
+            not isinstance(value, Mapping)
+            or set(value)
+            != {
+                "schema_version",
+                "operation_id",
+                "preparation_profile",
+                "config_path",
+                "input_receipt",
+                "profile_descriptor",
+            }
+            or type(value.get("schema_version")) is not int
+            or value.get("schema_version") != 1
+            or not isinstance(value.get("input_receipt"), Mapping)
+        ):
             raise QueueServiceError("preparation child input is invalid")
         return cls(
-            cast(str, value["operation_id"]), cast(str, value["preparation_profile"]),
-            cast(str, value["config_path"]), SharedInputReceipt.from_dict(value["input_receipt"]),
+            cast(str, value["operation_id"]),
+            cast(str, value["preparation_profile"]),
+            cast(str, value["config_path"]),
+            SharedInputReceipt.from_dict(value["input_receipt"]),
             cast(Mapping[str, PlainData], value["profile_descriptor"]),
         )
 
 
-def capture_shared_input(request: PrepareRunRequest, *, source_root: Path, snapshot_root: Path) -> SharedInputReceipt:
+def capture_shared_input(
+    request: PrepareRunRequest,
+    *,
+    source_root: Path,
+    snapshot_root: Path,
+    owner_id: str | None = None,
+) -> SharedInputReceipt:
     """Publish a bounded, verified capture before returning its shared reference.
 
     Captured files live in ``files/`` alongside ``manifest.json``. This keeps an
@@ -216,14 +300,22 @@ def capture_shared_input(request: PrepareRunRequest, *, source_root: Path, snaps
         contents: dict[str, bytes] = {}
         total = 0
         for rel, details in sorted(files.items()):
-            data = _read_regular_file(project, rel, _MAX_BYTES - total, expected=details)
+            data = _read_regular_file(
+                project, rel, _MAX_BYTES - total, expected=details
+            )
             total += len(data)
             contents[rel] = data
-            manifest.append({"path": rel, "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+            manifest.append(
+                {
+                    "path": rel,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
         encoded: dict[str, PlainData] = {"schema_version": 1, "files": manifest}
         digest = hash_mapping(encoded)
         # IDs keep their native syntax; directory names are bounded independently.
-        operation_key = hashlib.sha256(request.operation_id.encode()).hexdigest()
+        operation_key = _capture_operation_key(request.operation_id, owner_id)
         relative = f"{operation_key}-{digest.removeprefix('sha256:')}"
         snapshot_root = snapshot_root.absolute()
         snapshot_root.mkdir(parents=True, exist_ok=True)
@@ -243,10 +335,15 @@ def capture_shared_input(request: PrepareRunRequest, *, source_root: Path, snaps
         # Re-enumeration detects added/removed files as well as replaced/edited
         # members, including changes to files read earlier in the capture.
         try:
-            if _file_identities(_selected_files(project, request.source.include)) != _file_identities(files):
+            if _file_identities(
+                _selected_files(project, request.source.include)
+            ) != _file_identities(files):
                 raise QueueServiceError("preparation source_changed")
             for rel, original in contents.items():
-                if _read_regular_file(project, rel, len(original), expected=files[rel]) != original:
+                if (
+                    _read_regular_file(project, rel, len(original), expected=files[rel])
+                    != original
+                ):
                     raise QueueServiceError("preparation source_changed")
         except (OSError, QueueServiceError) as exc:
             raise QueueServiceError("preparation source_changed") from exc
@@ -270,7 +367,34 @@ def capture_shared_input(request: PrepareRunRequest, *, source_root: Path, snaps
             shutil.rmtree(staging, ignore_errors=True)
 
 
-def resolve_shared_input(receipt: SharedInputReceipt, *, shared_roots: Mapping[str, Path]) -> Path:
+def discard_shared_input_temporaries(
+    request: PrepareRunRequest, *, snapshot_root: Path, owner_id: str
+) -> None:
+    """Recover only this coordinator operation's interrupted private copies."""
+    if not snapshot_root.exists():
+        return
+    _require_directory(snapshot_root)
+    prefix = f".{_capture_operation_key(request.operation_id, owner_id)}.tmp-"
+    for candidate in snapshot_root.iterdir():
+        suffix = candidate.name.removeprefix(prefix)
+        if (
+            candidate.name.startswith(prefix)
+            and len(suffix) == 32
+            and all(char in "0123456789abcdef" for char in suffix)
+        ):
+            _require_directory(candidate)
+            shutil.rmtree(candidate)
+    _sync_directory(snapshot_root)
+
+
+def _capture_operation_key(operation_id: str, owner_id: str | None) -> str:
+    identity = operation_id if owner_id is None else owner_id + "\0" + operation_id
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def resolve_shared_input(
+    receipt: SharedInputReceipt, *, shared_roots: Mapping[str, Path]
+) -> Path:
     """Verify an input using the worker's retained private root mapping.
 
     The returned directory contains only the selected authored files. Different
@@ -280,12 +404,16 @@ def resolve_shared_input(receipt: SharedInputReceipt, *, shared_roots: Mapping[s
     """
     root = shared_roots.get(receipt.root)
     if root is None:
-        raise QueueServiceError("preparation source_unavailable: shared root is not mapped")
+        raise QueueServiceError(
+            "preparation source_unavailable: shared root is not mapped"
+        )
     try:
         directory = _contained_path(root.absolute(), receipt.path)
         return _verify_capture(directory, receipt.manifest_digest)
     except OSError as exc:
-        raise QueueServiceError("preparation source_unavailable: shared capture cannot be read") from exc
+        raise QueueServiceError(
+            "preparation source_unavailable: shared capture cannot be read"
+        ) from exc
 
 
 def _require_directory(path: Path) -> None:
@@ -309,7 +437,9 @@ def _contained_path(root: Path, relative: str) -> Path:
     return current
 
 
-def _selected_files(project: Path, includes: tuple[str, ...]) -> dict[str, os.stat_result]:
+def _selected_files(
+    project: Path, includes: tuple[str, ...]
+) -> dict[str, os.stat_result]:
     files: dict[str, os.stat_result] = {}
     pending = [_contained_path(project, include) for include in includes]
     while pending:
@@ -323,7 +453,12 @@ def _selected_files(project: Path, includes: tuple[str, ...]) -> dict[str, os.st
                     if entry.is_dir(follow_symlinks=False):
                         pending.append(Path(entry.path))
                     else:
-                        _select_file(project, Path(entry.path), entry.stat(follow_symlinks=False), files)
+                        _select_file(
+                            project,
+                            Path(entry.path),
+                            entry.stat(follow_symlinks=False),
+                            files,
+                        )
         else:
             _select_file(project, path, details, files)
     if sum(item.st_size for item in files.values()) > _MAX_BYTES:
@@ -331,7 +466,9 @@ def _selected_files(project: Path, includes: tuple[str, ...]) -> dict[str, os.st
     return files
 
 
-def _select_file(project: Path, path: Path, details: os.stat_result, files: dict[str, os.stat_result]) -> None:
+def _select_file(
+    project: Path, path: Path, details: os.stat_result, files: dict[str, os.stat_result]
+) -> None:
     if stat.S_ISLNK(details.st_mode):
         raise QueueServiceError("preparation source contains symbolic link")
     if not stat.S_ISREG(details.st_mode):
@@ -343,14 +480,22 @@ def _select_file(project: Path, path: Path, details: os.stat_result, files: dict
 
 
 def _identity(details: os.stat_result) -> tuple[int, ...]:
-    return details.st_dev, details.st_ino, details.st_size, details.st_mtime_ns, details.st_ctime_ns
+    return (
+        details.st_dev,
+        details.st_ino,
+        details.st_size,
+        details.st_mtime_ns,
+        details.st_ctime_ns,
+    )
 
 
 def _file_identities(files: Mapping[str, os.stat_result]) -> dict[str, tuple[int, ...]]:
     return {name: _identity(details) for name, details in files.items()}
 
 
-def _read_regular_file(root: Path, relative: str, limit: int, *, expected: os.stat_result | None = None) -> bytes:
+def _read_regular_file(
+    root: Path, relative: str, limit: int, *, expected: os.stat_result | None = None
+) -> bytes:
     try:
         # Open each component relative to an already-open directory. A concurrent
         # authoring edit cannot redirect a later open through a symbolic link.
@@ -358,10 +503,14 @@ def _read_regular_file(root: Path, relative: str, limit: int, *, expected: os.st
         try:
             parts = PurePosixPath(relative).parts
             for part in parts[:-1]:
-                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory
+                )
                 os.close(directory)
                 directory = child
-            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            descriptor = os.open(
+                parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+            )
         finally:
             os.close(directory)
         with os.fdopen(descriptor, "rb") as stream:
@@ -378,7 +527,11 @@ def _read_regular_file(root: Path, relative: str, limit: int, *, expected: os.st
                 raise QueueServiceError("preparation source_changed")
             return data
     except OSError as exc:
-        if expected is not None and exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+        if expected is not None and exc.errno in {
+            errno.ENOENT,
+            errno.ENOTDIR,
+            errno.ELOOP,
+        }:
             raise QueueServiceError("preparation source_changed") from exc
         raise
 
@@ -405,9 +558,13 @@ def _verify_capture(directory: Path, digest: str) -> Path:
         actual = json.loads(_read_regular_file(directory, "manifest.json", _MAX_BYTES))
     except (OSError, ValueError) as exc:
         raise QueueServiceError("preparation capture is incomplete or invalid") from exc
-    if (not isinstance(actual, Mapping) or set(actual) != {"schema_version", "files"}
-        or type(actual.get("schema_version")) is not int or actual.get("schema_version") != 1
-        or hash_mapping(actual) != digest):
+    if (
+        not isinstance(actual, Mapping)
+        or set(actual) != {"schema_version", "files"}
+        or type(actual.get("schema_version")) is not int
+        or actual.get("schema_version") != 1
+        or hash_mapping(actual) != digest
+    ):
         raise QueueServiceError("preparation capture is invalid")
     entries = actual.get("files")
     if not isinstance(entries, list) or not 1 <= len(entries) <= _MAX_FILES:
@@ -417,9 +574,13 @@ def _verify_capture(directory: Path, digest: str) -> Path:
     expected: list[str] = []
     total = 0
     for entry in entries:
-        if (not isinstance(entry, Mapping) or set(entry) != {"path", "size_bytes", "sha256"}
-            or not isinstance(entry.get("path"), str) or type(entry.get("size_bytes")) is not int
-            or not isinstance(entry.get("sha256"), str)):
+        if (
+            not isinstance(entry, Mapping)
+            or set(entry) != {"path", "size_bytes", "sha256"}
+            or not isinstance(entry.get("path"), str)
+            or type(entry.get("size_bytes")) is not int
+            or not isinstance(entry.get("sha256"), str)
+        ):
             raise QueueServiceError("preparation capture is invalid")
         relative = _relative(entry["path"], "captured path")
         size = cast(int, entry["size_bytes"])
@@ -433,9 +594,17 @@ def _verify_capture(directory: Path, digest: str) -> Path:
         if len(data) != size or hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise QueueServiceError("preparation capture is invalid")
         expected.append(relative)
-    if expected != sorted(set(expected)) or set(_selected_files(captured, (".",))) != set(expected):
+    if expected != sorted(set(expected)) or set(
+        _selected_files(captured, (".",))
+    ) != set(expected):
         raise QueueServiceError("preparation capture is invalid")
     return captured
 
 
-__all__ = ["PrepareRunRequest", "PreparationSource", "SharedInputReceipt", "capture_shared_input", "resolve_shared_input"]
+__all__ = [
+    "PrepareRunRequest",
+    "PreparationSource",
+    "SharedInputReceipt",
+    "capture_shared_input",
+    "resolve_shared_input",
+]

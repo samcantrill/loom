@@ -8,7 +8,7 @@ or call the composer on the coordinator.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -25,23 +25,32 @@ from loom.diagnostics.models import (
 from loom.diagnostics.preflight import run_preflight_composed
 from loom.pipeline.context import StageContext
 from loom.pipeline.orchestration import ExecutionRequirement
+from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime.options import RunOptions
+from loom.pipeline.status import StageStatus
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.queue._preparation_operations import PreparationReport
 from loom.queue._remote_stage_execution import (
     ResidentProfileDescriptor,
     _reject_path_bearing_data,
 )
 from loom.queue.deployment import CoordinatorServiceConfig
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonConfig
+from loom.queue.local_daemon_execution import load_managed_local_intent
 from loom.queue.managed_local_preparation import (
     ManagedLocalPreparationReceipt,
     _pipeline_from_resolved,
     _recipe_manifest_data,
+    _runtime_for_service,
+    _validate_preparation_service,
     prepare_managed_run,
 )
 from loom.queue.preparation import (
     PREPARATION_INPUT_CONTEXT_ENV,
     PREPARATION_STAGE_TARGET,
     PreparationChildInput,
+    PrepareRunRequest,
     resolve_shared_input,
 )
 from loom.serialization import PlainData, ensure_plain_data
@@ -329,3 +338,142 @@ def _plain_mapping(value: object) -> dict[str, PlainData]:
     if not isinstance(plain, dict):
         raise QueueServiceError("preparation report value must be a mapping")
     return plain
+
+
+class CoordinatorPreparation:
+    """Application callbacks installed alongside the native coordinator daemon.
+
+    The daemon owns intent, cancellation and claims. These callbacks publish the
+    fixed child, join its authoritative report, and publish the checked target
+    using the daemon's retained service settings. They never compose project code.
+    """
+
+    def __init__(self, service: CoordinatorServiceConfig) -> None:
+        self.service = service
+
+    def _service(self, config: LocalDaemonConfig) -> CoordinatorServiceConfig:
+        return replace(self.service, daemon=config)
+
+    def validate_config(self, config: LocalDaemonConfig) -> None:
+        _validate_preparation_service(self._service(config))
+
+    def prepare_child(
+        self,
+        config: LocalDaemonConfig,
+        binding: PreparationChildInput,
+        run_name: str,
+        options: RunOptions,
+    ) -> ManagedLocalPreparationReceipt:
+        return prepare_child_run(
+            self._service(config), binding, run_name, runtime_options=options
+        )
+
+    def read_report(
+        self,
+        config: LocalDaemonConfig,
+        admission: LocalDaemonAdmission,
+        request: PrepareRunRequest,
+        binding: PreparationChildInput,
+    ) -> PreparationReport:
+        intent = load_managed_local_intent(config, admission.run_uri)
+        if intent.digest != admission.intent_digest or intent.pipeline.stage_names != (
+            "prepare",
+        ):
+            raise QueueConflictError("preparation child admission intent conflicts")
+        stage = intent.pipeline.get_stage("prepare")
+        if (
+            stage.factory.target_path != PREPARATION_STAGE_TARGET
+            or PreparationChildInput.from_dict(stage.stage_config) != binding
+        ):
+            raise QueueConflictError("preparation child input binding conflicts")
+        factory = config.coordinator_authority_factory
+        if factory is None:
+            raise QueueServiceError("preparation authority is unavailable")
+        snapshot = factory(admission.run_uri).open_run(admission.run_uri)
+        if snapshot.run_uri != admission.run_uri or len(snapshot.stages) != 1:
+            raise QueueConflictError("preparation child authority identity conflicts")
+        observed = snapshot.stages[0]
+        commit = observed.latest_commit
+        if (
+            observed.stage_name != "prepare"
+            or observed.status is not StageStatus.SUCCEEDED
+            or commit is None
+            or commit.run_uri != admission.run_uri
+            or commit.stage_name != "prepare"
+            or not observed.attempts
+            or observed.attempts[-1].attempt_id != commit.attempt_id
+        ):
+            raise QueueServiceError(
+                "preparation report has no matching committed child attempt"
+            )
+        facts = [
+            fact
+            for fact in observed.artifact_facts
+            if fact.artifact_name == "report" and fact.commit_id == commit.commit_id
+        ]
+        if len(facts) != 1 or commit.output_names != ("report",):
+            raise QueueConflictError("preparation report commit identity conflicts")
+        reference = facts[0].artifact
+        store = LocalRunStore(config.run_store_root)
+        result_data = store.read_stage_worker_result(
+            admission.run_uri, "prepare", attempt=observed.attempts[-1].attempt
+        )
+        if result_data is None:
+            raise QueueServiceError("preparation child result is unavailable")
+        result = StageWorkerResult.from_dict(result_data)
+        if (
+            result.run_uri != admission.run_uri
+            or result.stage_name != "prepare"
+            or result.attempt != observed.attempts[-1].attempt
+            or result.status is not StageStatus.SUCCEEDED
+            or result.outputs.get("report") != reference
+        ):
+            raise QueueConflictError(
+                "preparation report does not match the committed worker result"
+            )
+        value = LocalArtifactStore(store.local_artifact_root(admission.run_uri)).load(
+            reference
+        )
+        composed, requirements, preflight = decode_preparation_report(
+            value, expected=binding
+        )
+        allowed = preparation_checks_allow_publication(preflight)
+        prospective = None
+        if allowed:
+            resolved = cast(_ReceivedComposition, composed).resolved
+            pipeline = _pipeline_from_resolved(resolved)
+            run_uri, _options = _runtime_for_service(
+                self._service(config), resolved, pipeline, request.run_name
+            )
+            prospective = ManagedLocalPreparationReceipt(
+                run_uri, "f" * 64, "f" * 64, pipeline.stage_names
+            )
+        return PreparationReport(
+            reference,
+            preflight.to_dict(),
+            preflight.status.value,
+            allowed,
+            prospective,
+            (composed, requirements),
+        )
+
+    def publish_target(
+        self,
+        config: LocalDaemonConfig,
+        request: PrepareRunRequest,
+        report: PreparationReport,
+    ) -> ManagedLocalPreparationReceipt:
+        composed, requirements = cast(
+            tuple[object, Mapping[str, ExecutionRequirement]], report.publication_data
+        )
+        try:
+            return prepare_managed_run(
+                self._service(config),
+                composed,
+                request.run_name,
+                execution_requirements=requirements,
+            )
+        except QueueServiceError as exc:
+            # Native publisher rejects existing changed/partial targets. Keep
+            # that conflict inspectable; do not repair or overwrite its files.
+            raise QueueConflictError("preparation publication_conflict") from exc

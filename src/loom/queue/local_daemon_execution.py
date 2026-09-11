@@ -3574,6 +3574,25 @@ class LocalDaemonExecution:
             item.key: item
             for item in self.coordinator.retained_scheduling_descriptors()
         }
+        # Accepted preparation may not have published its child/runtime record
+        # yet. Its frozen publisher composition still pins these native owners.
+        with self._daemon_owner()._connection() as conn:
+            preparations = tuple(
+                conn.execute(
+                    "SELECT selected_json FROM preparation_operations WHERE state IN ('pending', 'applying')"
+                )
+            )
+        for row in preparations:
+            selected = json.loads(str(row["selected_json"]))
+            scheduling = selected["scheduling"]
+            for data in (
+                *scheduling["planners"],
+                *scheduling["hard_evaluators"],
+                *scheduling["preference_scorers"],
+                scheduling["policy"],
+            ):
+                descriptor = SchedulingComponentDescriptor.from_dict(data)
+                references[descriptor.key] = descriptor
         for placement in runtime_placements:
             for descriptor in placement.planner_descriptors.values():
                 references[descriptor.key] = descriptor
@@ -4262,6 +4281,41 @@ class LocalDaemonExecution:
             inventory,
             availability,
         )
+
+    def preparation_scheduling_components(
+        self, snapshot: Mapping[str, PlainData]
+    ) -> LocalDaemonSchedulingComponents:
+        """Resolve the accepted inert snapshot through the existing retained registry."""
+        from loom.scheduling import SchedulingError
+        from ._preparation_operations import PreparationConfigurationUnavailable
+
+        def components(name: str) -> tuple[Any, ...]:
+            values = snapshot[name]
+            if not isinstance(values, (list, tuple)):
+                raise QueueServiceError("preparation scheduling snapshot is invalid")
+            return tuple(
+                self._scheduling.registry.retained(
+                    SchedulingComponentDescriptor.from_dict(item)
+                )
+                for item in values
+            )
+
+        try:
+            return LocalDaemonSchedulingComponents(
+                planners=components("planners"),
+                hard_evaluators=components("hard_evaluators"),
+                preference_scorers=components("preference_scorers"),
+                policy=cast(
+                    SchedulingPolicy,
+                    self._scheduling.registry.retained(
+                        SchedulingComponentDescriptor.from_dict(snapshot["policy"])
+                    ),
+                ),
+            )
+        except SchedulingError as exc:
+            raise PreparationConfigurationUnavailable(
+                "accepted preparation scheduling implementation is unavailable"
+            ) from exc
 
     def _remote_candidates(
         self,

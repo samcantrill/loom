@@ -39,6 +39,7 @@ from .local_daemon import (
     OperationWaitResult,
 )
 from .preparation import PrepareRunRequest
+from ._preparation_operations import PreparationNotAccepted
 
 
 CONTROL_CAPABILITY = "daemon-control-v1"
@@ -64,7 +65,9 @@ CONTROL_OPERATIONS = frozenset(
     }
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
-MUTATION_OPERATIONS = frozenset({"submit", "cancel", "prepare_run", "cancel_preparation"})
+MUTATION_OPERATIONS = frozenset(
+    {"submit", "cancel", "prepare_run", "cancel_preparation"}
+)
 
 
 class CoordinatorClientError(QueueServiceError):
@@ -503,13 +506,24 @@ def dispatch_control(
         result: Any
         if operation == "handshake":
             status = view.status()
-            preparation = daemon.config.preparation_policy
+            preparation = (
+                daemon.config.preparation_policy
+                if daemon.preparation_available
+                else None
+            )
             result = CoordinatorConnectionDescription(
                 "1",
                 transport,
                 status.coordinator_id,
                 status.coordinator_epoch,
-                (CONTROL_CAPABILITY, *( ("agent-preparation-v1",) if daemon.config.preparation_enabled else () )),
+                (
+                    CONTROL_CAPABILITY,
+                    *(
+                        ("agent-preparation-v1",)
+                        if daemon.preparation_available
+                        else ()
+                    ),
+                ),
                 (() if preparation is None else preparation.effective_modes),
                 (() if preparation is None else preparation.effective_profiles),
                 (() if preparation is None else preparation.effective_roots),
@@ -562,10 +576,25 @@ def dispatch_control(
             applied = True
         elif operation == "prepare_run":
             request = cast(PrepareRunRequest, value["request"])
-            if not daemon.config.preparation_enabled or request.source.mode != "shared":
-                raise control_error("unsupported", operation, payload, boundary="coordinator")
+            if request.source.mode != "shared" or (
+                not daemon.preparation_available
+                and not daemon._preparations.contains(request.operation_id)
+            ):
+                raise control_error(
+                    "unsupported", operation, payload, boundary="coordinator"
+                )
             dispatched = True
-            result = view.prepare_run(request)
+            try:
+                result = view.prepare_run(request)
+            except QueueConflictError as exc:
+                raise control_error(
+                    "conflict",
+                    operation,
+                    payload,
+                    boundary="coordinator",
+                    dispatched=False,
+                    applied=False,
+                ) from exc
             applied = True
         elif operation == "cancel_preparation":
             dispatched = True
@@ -590,6 +619,15 @@ def dispatch_control(
                 applied=applied,
             )
         return cast(Mapping[str, PlainData], plain)
+    except PreparationNotAccepted as exc:
+        raise control_error(
+            exc.code,
+            operation,
+            payload,
+            boundary="coordinator",
+            dispatched=False,
+            applied=False,
+        ) from exc
     except CoordinatorClientError:
         raise
     except Exception as exc:
@@ -601,6 +639,7 @@ def dispatch_control(
             in {
                 "managed agent was not found",
                 "managed operation was not found",
+                "managed preparation operation was not found",
             }
         ):
             code = "not_found"

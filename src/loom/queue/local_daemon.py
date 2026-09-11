@@ -68,6 +68,7 @@ from ._preparation_policy import PreparationPolicy
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
+    from ._preparation_operations import PreparationCallbacks
     from .coordinator_authority import CoordinatorAuthorityFactory
     from .local_daemon_execution import (
         LocalDaemonExecution,
@@ -670,11 +671,15 @@ class LocalDaemonConfig:
 
     @property
     def preparation_enabled(self) -> bool:
-        return self.preparation_policy is not None and bool(self.preparation_policy.effective_modes)
+        return self.preparation_policy is not None and bool(
+            self.preparation_policy.effective_modes
+        )
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
-        if self.preparation_policy is not None and not isinstance(self.preparation_policy, PreparationPolicy):
+        if self.preparation_policy is not None and not isinstance(
+            self.preparation_policy, PreparationPolicy
+        ):
             raise QueueServiceError("preparation policy is invalid")
         agent = None if self.agent_root is None else Path(self.agent_root)
         run_store = Path(self.run_store_root)
@@ -1500,6 +1505,7 @@ class LocalDaemon:
         prepare_role_reload: (
             Callable[[LocalDaemonConfig], Callable[[], None]] | None
         ) = None,
+        preparation: PreparationCallbacks | None = None,
     ) -> None:
         self.config = config
         self._clock = clock
@@ -1520,6 +1526,13 @@ class LocalDaemon:
         self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
+        from ._preparation_operations import CoordinatorPreparations
+
+        self._preparations = CoordinatorPreparations(self, preparation)
+
+    @property
+    def preparation_available(self) -> bool:
+        return self._preparations.available
 
     @classmethod
     def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
@@ -2258,67 +2271,15 @@ class LocalDaemon:
     def prepare_run(
         self, request: "PrepareRunRequest", *, principal_id: str
     ) -> LocalDaemonOperation:
-        """Durably accept one preparation intent before any capture or dispatch.
+        """Accept one durable intent; capture and publication reconcile separately."""
+        return self._preparations.accept(request, principal_id)
 
-        Capture and child reconciliation are deliberately separate from this
-        transaction.  This makes same-ID recovery unambiguous if a client loses
-        the response immediately after acceptance.
-        """
-        from .preparation import PrepareRunRequest
-
-        if not self.config.preparation_enabled:
-            raise QueueServiceError("preparation is unsupported")
-        if not isinstance(request, PrepareRunRequest):
-            raise QueueServiceError("prepare request is invalid")
-        if request.source.mode != "shared":
-            raise QueueServiceError("staged preparation input is unsupported")
-        coordinator_id = self._require_started()
-        intent = request.intent_digest(principal_id)
-        result: dict[str, PlainData] = {
-            "schema_version": 1,
-            "coordinator_id": coordinator_id,
-            "input_receipt": None,
-            "preparation_admission_id": None,
-            "preflight_status": None,
-            "preflight": None,
-            "report_ref": None,
-            "prepared_run": None,
-            "evidence_refs": [],
-        }
-        with self._connection() as conn:
-            existing = conn.execute(
-                "SELECT principal_id, intent_digest, state, result_code, result_json "
-                "FROM preparation_operations WHERE operation_id = ?", (request.operation_id,)
-            ).fetchone()
-            if existing is not None:
-                if str(existing["principal_id"]) != principal_id or str(existing["intent_digest"]) != intent:
-                    raise QueueConflictError("preparation operation intent conflicts")
-                return LocalDaemonOperation(request.operation_id, "prepare_run", str(existing["state"]), None if existing["result_code"] is None else str(existing["result_code"]), freeze_plain_data(json.loads(str(existing["result_json"])), path="preparation result"))
-            if _operation_projection(conn, request.operation_id) is not None:
-                raise QueueConflictError("managed operation identity is ambiguous")
-            conn.execute(
-                "INSERT INTO preparation_operations(operation_id, principal_id, intent_digest, request_json, state, result_code, result_json, cancellation_requested) VALUES (?, ?, ?, ?, 'pending', NULL, ?, 0)",
-                (request.operation_id, principal_id, intent, json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":")), json.dumps(result, sort_keys=True, separators=(",", ":"))),
-            )
-            conn.commit()
-        return LocalDaemonOperation(request.operation_id, "prepare_run", "pending", None, freeze_plain_data(result, path="preparation result"))
-
-    def cancel_preparation(self, operation_id: str, *, principal_id: str) -> LocalDaemonOperation:
+    def cancel_preparation(
+        self, operation_id: str, *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Request cancellation; terminal state requires native no-work/release proof."""
         _required_string({"operation_id": operation_id}, "operation_id")
-        with self._connection() as conn:
-            row = conn.execute("SELECT principal_id, state, result_code, result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
-            if row is None:
-                raise QueueServiceError("managed preparation operation was not found")
-            if str(row["principal_id"]) != principal_id:
-                raise QueueConflictError("preparation operation belongs to another principal")
-            state = str(row["state"])
-            if state in {"pending", "applying"}:
-                # There is no child to release before the runtime has admitted it;
-                # cancellation is therefore terminal proof, rather than an ACK.
-                state = "cancelled"
-                conn.execute("UPDATE preparation_operations SET state = ?, cancellation_requested = 1 WHERE operation_id = ?", (state, operation_id))
-                conn.commit()
-            return LocalDaemonOperation(operation_id, "prepare_run", state, None if row["result_code"] is None else str(row["result_code"]), freeze_plain_data(json.loads(str(row["result_json"])), path="preparation result"))
+        return self._preparations.cancel(operation_id, principal_id)
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
@@ -2422,6 +2383,7 @@ class LocalDaemon:
         """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
+        self._preparations.reconcile()
         for provider in self._local_resource_providers():
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
@@ -2538,11 +2500,58 @@ class LocalDaemon:
                 self._service_error = None
             self._wake.wait(self.config.poll_interval_seconds)
 
-    def _submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
+    def _submit(
+        self,
+        request: LocalDaemonAdmissionRequest,
+        *,
+        preparation_operation_id: str | None = None,
+    ) -> LocalDaemonAdmission:
         coordinator_id = self._require_started()
         from .local_daemon_execution import load_managed_local_intent
 
         with self._cycle_lock:
+            from ._preparation_operations import PREPARATION_RUN_PREFIX
+            from loom.pipeline.stores import run_uri_to_path
+
+            if preparation_operation_id is None:
+                try:
+                    run_name = run_uri_to_path(request.run_uri).name
+                except ValueError:
+                    run_name = ""
+                if run_name.startswith(PREPARATION_RUN_PREFIX):
+                    raise QueueConflictError(
+                        "preparation child run identity is reserved"
+                    )
+
+            with self._connection() as conn:
+                reserved = conn.execute(
+                    "SELECT operation_id, child_name, selected_json FROM preparation_operations WHERE child_name = ?",
+                    (request.queue_item_id,),
+                ).fetchone()
+                if preparation_operation_id is not None:
+                    if (
+                        reserved is None
+                        or reserved["operation_id"] != preparation_operation_id
+                    ):
+                        raise QueueConflictError(
+                            "preparation child admission ownership conflicts"
+                        )
+                    selected = json.loads(str(reserved["selected_json"]))
+                    from loom.pipeline.stores import path_to_run_uri
+
+                    if request.run_uri != path_to_run_uri(
+                        Path(selected["run_store_root"]) / str(reserved["child_name"])
+                    ):
+                        raise QueueConflictError(
+                            "preparation child run identity conflicts"
+                        )
+                elif (
+                    request.queue_item_id.startswith(PREPARATION_RUN_PREFIX)
+                    or reserved is not None
+                ):
+                    raise QueueConflictError(
+                        "preparation child queue identity is reserved"
+                    )
             execution = self._execution
             if execution is None:
                 raise QueueServiceError("coordinator execution is unavailable")
@@ -3897,7 +3906,9 @@ class LocalDaemonClientView:
 
     def cancel_preparation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon.cancel_preparation(operation_id, principal_id=self._principal.subject)
+        return self._daemon.cancel_preparation(
+            operation_id, principal_id=self._principal.subject
+        )
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
@@ -4168,7 +4179,9 @@ def _initialize_root(path: Path, *, role: str) -> None:
             "INSERT INTO root_metadata (key, value) VALUES ('stable_id', ?)",
             (f"{role}-{uuid4()}",),
         )
-        conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION if role == 'coordinator' else _AGENT_SCHEMA_VERSION}")
+        conn.execute(
+            f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION if role == 'coordinator' else _AGENT_SCHEMA_VERSION}"
+        )
         if role == "coordinator":
             _initialize_coordinator_schema(conn)
         initialize_agent_session_schema(conn, coordinator=role == "coordinator")
@@ -4180,8 +4193,7 @@ def _initialize_coordinator_schema(
     conn: sqlite3.Connection, *, preparation: bool = True
 ) -> None:
     conn.execute(
-        "CREATE TABLE daemon_metadata "
-        "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
     conn.executemany(
         "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
@@ -4254,6 +4266,9 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
         "CREATE TABLE preparation_operations ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
         "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+        "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
+        "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
+        "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
         "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
         "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
     )
@@ -4263,35 +4278,55 @@ def _validate_coordinator_schema(
     conn: sqlite3.Connection, *, preparation: bool
 ) -> None:
     """Validate durable table/identity constraints against the initialization owner."""
+
     def shape(database: sqlite3.Connection, table: str) -> tuple[object, ...]:
-        columns = tuple(tuple(row) for row in database.execute(f'PRAGMA table_info("{table}")'))
+        columns = tuple(
+            tuple(row) for row in database.execute(f'PRAGMA table_info("{table}")')
+        )
         indexes = []
         for index in database.execute(f'PRAGMA index_list("{table}")'):
             if index[2]:
                 name = str(index[1]).replace('"', '""')
-                indexes.append(tuple(row[2] for row in database.execute(f'PRAGMA index_info("{name}")')))
-        foreign_keys = tuple(tuple(row) for row in database.execute(f'PRAGMA foreign_key_list("{table}")'))
+                indexes.append(
+                    tuple(
+                        row[2]
+                        for row in database.execute(f'PRAGMA index_info("{name}")')
+                    )
+                )
+        foreign_keys = tuple(
+            tuple(row)
+            for row in database.execute(f'PRAGMA foreign_key_list("{table}")')
+        )
         return columns, tuple(sorted(indexes)), foreign_keys
 
     try:
         with sqlite3.connect(":memory:") as expected:
             _initialize_coordinator_schema(expected, preparation=preparation)
-            tables = tuple(row[0] for row in expected.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ))
+            tables = tuple(
+                row[0]
+                for row in expected.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            )
             if any(shape(conn, table) != shape(expected, table) for table in tables):
-                raise QueueStorageError("coordinator control schema is incomplete or incompatible")
-        if not preparation and conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_operations'"
-        ).fetchone() is not None:
-            raise QueueStorageError("coordinator predecessor contains partial preparation state")
+                raise QueueStorageError(
+                    "coordinator control schema is incomplete or incompatible"
+                )
+        if (
+            not preparation
+            and conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_operations'"
+            ).fetchone()
+            is not None
+        ):
+            raise QueueStorageError(
+                "coordinator predecessor contains partial preparation state"
+            )
     except sqlite3.Error as exc:
         raise QueueStorageError("coordinator control schema is invalid") from exc
 
 
-def _open_root(
-    path: Path, *, role: str, schema_version: int | None = None
-) -> str:
+def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> str:
     _validate_private_directory(path)
     database = path / "control.sqlite"
     if not database.is_file():
@@ -4301,8 +4336,14 @@ def _open_root(
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        expected_version = schema_version if schema_version is not None else (
-            _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
+        expected_version = (
+            schema_version
+            if schema_version is not None
+            else (
+                _COORDINATOR_SCHEMA_VERSION
+                if role == "coordinator"
+                else _AGENT_SCHEMA_VERSION
+            )
         )
         if version != expected_version:
             if role == "coordinator" and version == 12:
@@ -4314,7 +4355,9 @@ def _open_root(
             )
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
         if role == "coordinator":
-            _validate_coordinator_schema(conn, preparation=version == _COORDINATOR_SCHEMA_VERSION)
+            _validate_coordinator_schema(
+                conn, preparation=version == _COORDINATOR_SCHEMA_VERSION
+            )
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")
@@ -4347,9 +4390,9 @@ def _validate_deployment_binding(
         "role_kind": "coordinator"
         if config.agent_root is None
         else "coordinator-bundle",
-        "coordinator_id": coordinator_id if coordinator_id is not None else _open_root(
-            config.coordinator_root, role="coordinator"
-        ),
+        "coordinator_id": coordinator_id
+        if coordinator_id is not None
+        else _open_root(config.coordinator_root, role="coordinator"),
         "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
     if config.agent_root is not None:

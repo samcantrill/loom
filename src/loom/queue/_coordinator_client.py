@@ -346,6 +346,8 @@ class NativeCoordinatorClient:
         """Durably accept shared preparation; completion is observed separately."""
         if not isinstance(request, PrepareRunRequest):
             raise control_error("invalid_request", "prepare_run", {})
+        if request.source.mode != "shared":
+            raise control_error("unsupported", "prepare_run", {"request": request.to_dict()})
         return cast(
             LocalDaemonOperation,
             self._native_call(
