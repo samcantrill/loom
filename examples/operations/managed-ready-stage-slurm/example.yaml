@@ -32,7 +32,7 @@ surface_invocations:
   - python:LocalDaemonSocketServer.stop
   - python:SlurmBootstrapWorkspace
   - python:execute_resident_stage_worker_request
-  - python:initialize_embedded_coordinator_authority
+  - python:publish_prepared_run
   - python:prepare_managed_local_runtime_record
 owner_docs: [examples/operations/README.md, docs/features/queue.md]
 owner_stages: [v29]

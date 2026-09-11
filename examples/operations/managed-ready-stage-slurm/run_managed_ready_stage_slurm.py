@@ -40,7 +40,8 @@ from loom.pipeline.stores import (  # noqa: E402
     path_to_run_uri,
 )
 from loom.pipeline.stores.coordinator_authority import (  # noqa: E402
-    initialize_embedded_coordinator_authority,
+    embedded_coordinator_authority,
+    publish_prepared_run,
 )
 from loom.queue import (  # noqa: E402
     ExecutionRequirement,
@@ -389,7 +390,7 @@ def _prepare_run(
     store.write_config_snapshot(
         run_uri, "resolved", json_dumps_pretty({"pipeline": config})
     )
-    recorder.python(
+    runtime_digest = recorder.python(
         "prepare_managed_local_runtime_record",
         lambda: prepare_managed_local_runtime_record(
             store=store,
@@ -405,8 +406,8 @@ def _prepare_run(
         ),
     )
     recorder.python(
-        "initialize_embedded_coordinator_authority",
-        lambda: initialize_embedded_coordinator_authority(run_uri),
+        "publish_prepared_run",
+        lambda: publish_prepared_run(embedded_coordinator_authority, run_uri, runtime_digest),
     )
     return run_uri
 

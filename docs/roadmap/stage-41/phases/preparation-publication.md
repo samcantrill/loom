@@ -309,6 +309,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   opens only completed publication; missing or CREATED-only authority remains a
   non-mutating conflict. Authenticated lost-response reconciliation is retained.
   Both local fault variants and selected-authority publisher coverage pass.
+- Full-gate correction: the baseline found the executable fake-Slurm example
+  still importing the removed initializer. Its script and invocation manifest now
+  use selected embedded PLANNED publication; the isolated e2e passes. The initial
+  `make validate-pr` failed (3330 passed, 2 skipped, 253 deselected, one failure).
+  The required command is rerun on the stable corrected tree.
 - PR and merge: not started
 
 ## Completion Record
