@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import fcntl
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -99,6 +100,7 @@ def prepare_managed_run(
     local installation nor discovers a live agent offer. This function never
     reads or recomposes either supplied input.
 
+    Same-URI calls serialize across local processes through completion or failure.
     A matching complete run is an immutable replay. Any other existing path is
     deliberately left untouched so an operator can inspect or remove it.
     """
@@ -111,48 +113,57 @@ def prepare_managed_run(
     run_uri, options = _runtime_for_service(service, resolved, pipeline, run_name_text)
     store = LocalRunStore(service.daemon.run_store_root)
 
-    if store.run_uri_exists(run_uri):
-        return _replay_receipt(
-            store=store,
-            run_uri=run_uri,
-            composed=composed,
-            pipeline=pipeline,
-            options=options,
-            requirements=requirements,
-            service=service,
-        )
+    # Keep the lock outside the target: creating the lock must not manufacture a
+    # partial run. Retain its inode so queued callers always share the same lock.
+    lock_path = (
+        store.local_run_dir(run_uri).parent / ".loom" / "preparation-locks"
+        / f"{run_name_text}.lock"
+    )
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if store.run_uri_exists(run_uri):
+            return _replay_receipt(
+                store=store,
+                run_uri=run_uri,
+                composed=composed,
+                pipeline=pipeline,
+                options=options,
+                requirements=requirements,
+                service=service,
+            )
 
-    store.create_run(run_uri)
-    try:
-        _persist_composed_config(store, run_uri, composed)
-        plan = plan_pipeline(
-            pipeline,
-            run_uri=run_uri,
-            run_store=store,
-            artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
-            selectors=options.to_plan_selectors(),
-            resume=options.to_resume_options(),
-            persist=True,
-        )
-        store.write_runtime_metadata(
-            run_uri,
-            build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict(),
-        )
-        runtime_digest = prepare_managed_local_runtime_record(
-            store=store,
-            run_uri=run_uri,
-            plan=plan,
-            pipeline=pipeline,
-            execution_requirements=requirements,
-            options=options,
-            scheduling_components=service.daemon.scheduling_components,
-        )
-        initialize_embedded_coordinator_authority(run_uri)
-    except Exception:
-        # A partial directory is intentionally a durable conflict, not a repair
-        # opportunity for a subsequent preparation call.
-        raise
-    return _receipt(run_uri, plan, runtime_digest)
+        store.create_run(run_uri)
+        try:
+            _persist_composed_config(store, run_uri, composed)
+            plan = plan_pipeline(
+                pipeline,
+                run_uri=run_uri,
+                run_store=store,
+                artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+                selectors=options.to_plan_selectors(),
+                resume=options.to_resume_options(),
+                persist=True,
+            )
+            store.write_runtime_metadata(
+                run_uri,
+                build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict(),
+            )
+            runtime_digest = prepare_managed_local_runtime_record(
+                store=store,
+                run_uri=run_uri,
+                plan=plan,
+                pipeline=pipeline,
+                execution_requirements=requirements,
+                options=options,
+                scheduling_components=service.daemon.scheduling_components,
+            )
+            initialize_embedded_coordinator_authority(run_uri)
+        except Exception:
+            # A partial directory is intentionally a durable conflict, not a repair
+            # opportunity for a subsequent preparation call.
+            raise
+        return _receipt(run_uri, plan, runtime_digest)
 
 
 def _compose_pipeline_config(path: str | Path) -> object:
