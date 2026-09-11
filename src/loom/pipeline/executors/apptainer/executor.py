@@ -206,6 +206,7 @@ class ApptainerExecutor:
                 if isinstance(exc, UnsupportedTimeoutError):
                     launch_error = str(exc)
             metadata = _process_metadata(
+                request=request,
                 executor_name=self.name,
                 command=prepared.command,
                 worker_command=prepared.worker_command,
@@ -252,6 +253,7 @@ class ApptainerExecutor:
         finished_at = self.clock()
         if not isinstance(process, ApptainerCommandResult):
             metadata = _process_metadata(
+                request=request,
                 executor_name=self.name,
                 command=prepared.command,
                 worker_command=prepared.worker_command,
@@ -283,6 +285,7 @@ class ApptainerExecutor:
             )
 
         metadata = _process_metadata(
+            request=request,
             executor_name=self.name,
             command=prepared.command,
             worker_command=prepared.worker_command,
@@ -404,6 +407,7 @@ class ApptainerExecutor:
                 executor_metadata={
                     **metadata,
                     **dict(worker_result.executor_metadata),
+                    "request": metadata["request"],
                 },
             )
 
@@ -923,6 +927,7 @@ def _setup_metadata(
     runtime = cast(ResolvedStageRuntimeOptions, request.resolved_runtime)
     metadata: dict[str, PlainData] = {
         "executor": executor_name,
+        "request": request.to_safe_metadata(),
         "started_at": started_at,
         "finished_at": finished_at,
         "adapter_namespaces": cast(list[PlainData], sorted(runtime.adapter_options)),
@@ -934,6 +939,7 @@ def _setup_metadata(
 
 def _process_metadata(
     *,
+    request: StageExecutionRequest,
     executor_name: str,
     command: ApptainerExecCommand,
     worker_command: Sequence[str],
@@ -947,6 +953,7 @@ def _process_metadata(
 ) -> dict[str, PlainData]:
     metadata: dict[str, PlainData] = {
         "executor": executor_name,
+        "request": request.to_safe_metadata(),
         "command": cast(list[PlainData], list(_redacted_argv(command))),
         "selected_command": command.argv[0],
         "apptainer_options": command.metadata["apptainer_options"],

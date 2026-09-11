@@ -5043,6 +5043,7 @@ def _start_failed_worker_result(
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
         executor_metadata={
+            "request": request.to_safe_metadata(),
             "process_created": False,
             **(
                 {"resource_controls": [dict(item) for item in controls]}
@@ -5067,7 +5068,10 @@ def _cancelled_worker_result(request: StageWorkerRequest) -> StageWorkerResult:
         stdout_path=request.stdout_path,
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
-        executor_metadata={"cancellation_epoch_effective": True},
+        executor_metadata={
+            "request": request.to_safe_metadata(),
+            "cancellation_epoch_effective": True,
+        },
     )
 
 
@@ -5116,7 +5120,11 @@ def _managed_root_failed_worker_result(
         traceback_path=request.traceback_path,
         exit_code=exit_code,
         signal=process_signal,
-        executor_metadata={"process_created": True, "worker_result": "missing"},
+        executor_metadata={
+            "request": request.to_safe_metadata(),
+            "process_created": True,
+            "worker_result": "missing",
+        },
     )
 
 

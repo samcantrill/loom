@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 import inspect
+import json
 from typing import Any, cast
 
 import pytest
@@ -549,3 +550,102 @@ def test_executor_metadata_redaction_removes_secrets_and_environment_values() ->
 def test_config_snapshot_inputs_validate_strings() -> None:
     with pytest.raises(RunRequestError):
         ConfigSnapshotInputs(raw=object())  # type: ignore[arg-type]
+
+
+def test_public_worker_request_hides_execution_paths_without_changing_private_handoff() -> (
+    None
+):
+    request = _worker_request()
+    private = request.to_dict()
+    public = request.to_safe_metadata()
+    assert "/tmp/run" in json.dumps(private)
+    assert "/tmp/run" not in json.dumps(public)
+    assert public["executor_name"] == "local"
+    assert public["stage_name"] == "build"
+    assert public["executor_metadata"]["command"] == ["python", "-m", "loom"]
+    assert request.to_dict() == private
+    assert StageWorkerRequest.from_dict(private).to_dict() == private
+
+
+def test_public_executor_view_preserves_route_facts_but_not_raw_process_channels() -> (
+    None
+):
+    metadata = {
+        "command": [
+            "singularity",
+            "exec",
+            "--cleanenv",
+            "--bind=/private/data:/private/data:ro",
+            "image.sif",
+            "--token",
+            "plain-value",
+        ],
+        "container": {
+            "image": {
+                "reference": "oras://user:password@registry.example/image?key=value"
+            },
+            "mounts": [
+                {"source": "/private/data", "target": "/private/data", "mode": "ro"}
+            ],
+            "environment": {"variables": {"CUSTOM_VALUE": "private-value"}},
+        },
+        "gpu_visibility": {"requested_gpu_count": 2, "visible_gpu_count": None},
+        "scheduler": {"mode": "afterok", "job_id": "42", "dependencies": ["41"]},
+        "stdout": "unstructured private output",
+        "stderr": "a private credential without a recognizable key",
+    }
+    safe = redact_executor_metadata(metadata, public=True)
+    encoded = json.dumps(safe)
+    for private in (
+        "/private/data",
+        "plain-value",
+        "private-value",
+        "user:password",
+        "key=value",
+        "unstructured private output",
+        "private credential",
+    ):
+        assert private not in encoded
+    assert safe["command"][:3] == ["singularity", "exec", "--cleanenv"]
+    assert safe["command"][3] == "--bind=[redacted-path]"
+    assert safe["container"]["mounts"][0]["mode"] == "ro"
+    assert safe["container"]["image"]["reference"] == "oras://registry.example/image"
+    assert safe["scheduler"] == metadata["scheduler"]
+    assert safe["gpu_visibility"] == {
+        "requested_gpu_count": 2,
+        "visible_gpu_count": None,
+    }
+    assert metadata["command"][-1] == "plain-value"
+
+
+def test_public_worker_failure_keeps_typed_outcome_without_exception_text() -> None:
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri="file:///private/run",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="start",
+        finished_at="finish",
+        executor_name="local",
+        failure=ExecutionFailure(
+            schema_version=1,
+            run_uri="file:///private/run",
+            stage_name="build",
+            attempt=1,
+            failed_at="finish",
+            executor="local",
+            failure_type="stage_exception",
+            message="private value printed by user stage",
+            exception_type="builtins.ValueError",
+            exit_code=7,
+        ),
+        exit_code=7,
+    )
+    safe = result.to_safe_metadata()
+    assert safe["status"] == StageStatus.FAILED.value
+    assert safe["failure"]["failure_type"] == "stage_exception"
+    assert safe["failure"]["exception_type"] == "builtins.ValueError"
+    assert safe["exit_code"] == 7
+    assert "private" not in json.dumps(safe)
+    assert "private value" in result.to_dict()["failure"]["message"]
