@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p1-preparation-publication
@@ -288,7 +288,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Startup evidence: documentation and Git checks only; subsequent changes only
   record these startup facts. Keep this receipt with the future Phase 1 PR.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: in progress under the 2026-09-12 whole-stage execution request
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for selected-authority publication and lifecycle transitions

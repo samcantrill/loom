@@ -22,7 +22,7 @@ new APIs and behavior below are planned, not available runtime functionality.
 | Functionality/design | Agreed behavior; independent design pass | None |
 | Validation/phases | Nine bounded cards; contracts and validation owners retained | None |
 | Plan quality | Original review retained; current amendment review owned by the manifest | [Quality Gate](implementation-plan.md#quality-gate) |
-| Approval/execution | Maintainer requested these refinements; runtime work not started | Startup facts at [Phase 1 Workflow State](phases/preparation-publication.md#workflow-state); implementation awaits request |
+| Approval/execution | Maintainer requested whole-stage implementation on 2026-09-12 | Execution state and evidence at the [implementation manifest](implementation-plan.md) |
 
 ## Evidence And Scope
 
