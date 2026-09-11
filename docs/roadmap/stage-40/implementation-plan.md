@@ -8,7 +8,7 @@ Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 1 - coordinator-client (in_progress)
+Current phase: 1 - coordinator-client (pr_open)
 Next phase: 2 - agent-preparation (after Phase 1 delivery and synchronization)
 Blockers: none
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
@@ -122,7 +122,7 @@ rewrite existing run/admission identities to make a migration easier.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | coordinator-client | in_progress | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | pending | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
+| 1 | coordinator-client | pr_open | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | [#298](https://github.com/samcantrill/loom/pull/298) | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
 | 2 | agent-preparation | pending | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | pending | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
 | 3 | staged-preparation-inputs | pending | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | pending | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
 | 4 | mcp-skills | pending | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | pending | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |

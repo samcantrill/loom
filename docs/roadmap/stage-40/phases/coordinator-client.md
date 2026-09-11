@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 40 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p1-coordinator-client
@@ -497,7 +497,7 @@ remains required.
 - Pre-submit gate: passed; phase scope, native/legacy contracts, required evidence, docs and bounded post-validation delta accepted
 - Independent review: required on the actual PR head before implementation merge
 - Blocker corrections: 1/3 completed; native control boundary completion
-- PR and merge: not created
+- PR and merge: [PR #298](https://github.com/samcantrill/loom/pull/298) open against develop; independent review pending
 
 ## Completion Record
 
@@ -508,5 +508,5 @@ remains required.
 | Validated revision/tree state and evidence | `make validate-pr` passed at `a1f86df5f18b67490ecea8a9e251de540a26ff88`: Ruff and Pyright passed; isolated baseline 3195 passed, 2 skipped, 156 deselected; isolated config-extra 162 passed, 18 skipped, 3200 deselected; wheel and sdist built. `/tmp/loom-stage40-a1f86df-validate.log` and `.exit` record exit 0 |
 | Required summary run | `make test-summary` passed at the same runtime checkpoint: package 125, unit 2209, contract 301, integration 492, e2e 70 and config-extra 162 passed; 3359 passed overall, 18 config-extra skips, no failures/errors. `build/test-summary.md` and `/tmp/loom-stage40-a1f86df-summary.log` inspected; `.exit` records 0 |
 | Validation-relevant changes after evidence | Post-checkpoint runtime delta restores worker idle keepalive after bounded TLS negotiation, with a real TLS regression test. Fresh `uv run --locked --group dev pytest tests/integration/queue/test_agent_session_transport.py -k 'native or tls_rotation or loopback_mtls or loopback_rejects or loopback_exposes or worker_keepalive or coordinator_cli_submit' -q`: 18 passed, 78 deselected. Ruff and Pyright passed. Removing incidental whole-file formatting preserved identical Python syntax trees; Ruff and diff checks passed afterward. Broader evidence remains applicable to unchanged native schemas, CLI, persistence and import contracts |
-| PR, review, and merge | Pending |
-| Residual risk and cleanup | Independent PR review remains before merge. Container/physical deployment acceptance is not claimed by skipped tests. Persistent stage worktree retained; no PR or root migration |
+| PR, review, and merge | [PR #298](https://github.com/samcantrill/loom/pull/298) open with the canonical title, develop base and expected phase branch; actual-head independent review pending |
+| Residual risk and cleanup | Independent PR review remains before merge. Container/physical deployment acceptance is not claimed by skipped tests. Persistent stage worktree retained; no root migration |
