@@ -29,6 +29,9 @@ from .models import validate_queue_id
 _MAX_INCLUDES = 100
 _MAX_FILES = 4096
 _MAX_BYTES = 64 * 1024 * 1024
+PREPARATION_STAGE_TARGET = "loom.preparation.PreparationStage"
+PREPARATION_INPUT_CAPABILITY = "preparation-input-v1"
+PREPARATION_INPUT_CONTEXT_ENV = "LOOM_PREPARATION_INPUT_CONTEXT"
 
 
 def _relative(value: object, field: str, *, dot: bool = False) -> str:
@@ -143,6 +146,52 @@ class SharedInputReceipt:
             or reference.get("kind") != "loom.shared-preparation-input"):
             raise QueueServiceError("preparation shared input receipt is invalid")
         return cls(cast(str, data["manifest_digest"]), cast(str, reference["root"]), cast(str, reference["path"]))
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationChildInput:
+    """Finite shared input for the fixed preparation stage, never a generic path binding."""
+
+    operation_id: str
+    preparation_profile: str
+    config_path: str
+    input_receipt: SharedInputReceipt
+    profile_descriptor: Mapping[str, PlainData]
+
+    def __post_init__(self) -> None:
+        from types import MappingProxyType
+        from ._remote_stage_execution import ResidentProfileDescriptor
+
+        validate_queue_id(self.operation_id, "preparation operation_id")
+        validate_queue_id(self.preparation_profile, "preparation_profile")
+        object.__setattr__(self, "config_path", _relative(self.config_path, "config_path"))
+        if not isinstance(self.input_receipt, SharedInputReceipt):
+            raise QueueServiceError("preparation child input receipt is invalid")
+        descriptor = ResidentProfileDescriptor.from_dict(self.profile_descriptor)
+        object.__setattr__(self, "profile_descriptor", MappingProxyType(descriptor.to_dict()))
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": 1,
+            "operation_id": self.operation_id,
+            "preparation_profile": self.preparation_profile,
+            "config_path": self.config_path,
+            "input_receipt": self.input_receipt.to_dict(),
+            "profile_descriptor": dict(self.profile_descriptor),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "PreparationChildInput":
+        if (not isinstance(value, Mapping)
+            or set(value) != {"schema_version", "operation_id", "preparation_profile", "config_path", "input_receipt", "profile_descriptor"}
+            or type(value.get("schema_version")) is not int or value.get("schema_version") != 1
+            or not isinstance(value.get("input_receipt"), Mapping)):
+            raise QueueServiceError("preparation child input is invalid")
+        return cls(
+            cast(str, value["operation_id"]), cast(str, value["preparation_profile"]),
+            cast(str, value["config_path"]), SharedInputReceipt.from_dict(value["input_receipt"]),
+            cast(Mapping[str, PlainData], value["profile_descriptor"]),
+        )
 
 
 def capture_shared_input(request: PrepareRunRequest, *, source_root: Path, snapshot_root: Path) -> SharedInputReceipt:

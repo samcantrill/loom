@@ -192,6 +192,16 @@ class PreflightCheckResult:
             "details": dict(self.details),
         }
 
+    @classmethod
+    def from_dict(cls, value: object) -> "PreflightCheckResult":
+        if not isinstance(value, Mapping) or set(value) != {"check_id", "group", "status", "severity", "message", "details"}:
+            raise PreflightError("preflight check fields are invalid")
+        return cls(
+            check_id=cast(str, value["check_id"]), group=cast(PreflightGroup, value["group"]),
+            status=cast(PreflightCheckStatus, value["status"]), severity=cast(PreflightSeverity, value["severity"]),
+            message=cast(str, value["message"]), details=cast(Mapping[str, PlainData], value["details"]),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PreflightResult:
@@ -215,6 +225,21 @@ class PreflightResult:
             "groups": [group.value for group in self.groups],
             "checks": [check.to_dict() for check in self.checks],
         }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "PreflightResult":
+        """Decode native evidence and verify the reported aggregate status."""
+        if (not isinstance(value, Mapping) or set(value) != {"status", "groups", "checks"}
+            or not isinstance(value["groups"], (list, tuple))
+            or not isinstance(value["checks"], (list, tuple))):
+            raise PreflightError("preflight result fields are invalid")
+        result = cls(
+            checks=tuple(PreflightCheckResult.from_dict(check) for check in value["checks"]),
+            groups=cast(tuple[PreflightGroup, ...], tuple(value["groups"])),
+        )
+        if result.status != value["status"]:
+            raise PreflightError("preflight aggregate status conflicts with its checks")
+        return result
 
 
 @dataclass(frozen=True, slots=True)

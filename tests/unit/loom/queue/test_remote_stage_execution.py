@@ -54,6 +54,9 @@ from loom.queue._remote_stage_execution import (
     _RemoteOutputArtifact,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.preparation import (
+    PREPARATION_STAGE_TARGET, PreparationChildInput, SharedInputReceipt,
+)
 from loom.scheduling import (
     CapacityAtom,
     ExactQuantity,
@@ -283,6 +286,34 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
             portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
+
+
+def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(tmp_path: Path) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    binding = PreparationChildInput(
+        "prepare-1", "existing", "configs/pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+        profile.descriptor.to_dict(),
+    )
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    prepared_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, factory_target=PREPARATION_STAGE_TARGET, stage_config=binding.to_dict()),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    preparation = replace(request, fingerprint=prepared_fingerprint.to_dict())
+    assert _ResidentAssignmentBundle.from_remote_dict(preparation.to_dict()) == preparation
+    assert preparation.preparation_input == binding
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(preparation, resolved_runtime={**preparation.resolved_runtime, "scratch_path": "/worker/private"}).validate_remote_transport()
+    ordinary_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(prepared_fingerprint.payload, factory_target="pkg.Stage"),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(request, fingerprint=ordinary_fingerprint.to_dict()).validate_remote_transport()
 
 
 def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:

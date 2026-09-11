@@ -146,8 +146,12 @@ bindings. A scratch path on B is not implicitly delivered to C.
 
 ## What Is Checked And Retained
 
-The ordinary managed child uses the selected worker's actual Python. It composes
-the configuration once, then checks that same object with
+The ordinary managed child uses the selected worker's actual Python. It explicitly
+loads the installation's `loom.recipes` entry points into a fresh recipe catalog,
+using Loom's strict plugin loader. Missing recipes, duplicate registrations or
+plugin import failures remain native child failures; the coordinator does not
+install or import these plugins. It composes the configuration once, then checks
+that same object with
 `run_preflight_composed`. Its configuration, pipeline, selector and runtime
 checks do not execute scientific workloads. Installation readiness stays with
 the existing resident profile checks; coordinator store/authority checks do not
