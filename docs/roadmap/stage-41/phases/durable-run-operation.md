@@ -28,7 +28,7 @@ Validation ownership: VAL-41-01 (persistent run), VAL-41-05 (run cancellation).
 ## Current Source And Harness
 
 - Published Stage 40 `src/loom/coordinator.py`, PrepareRunRequest, LocalDaemonOperation, Unix/HTTPS codecs and expected-coordinator guard.
-- `src/loom/queue/local_daemon.py`: operation acceptance/replay, target admission and native cancellation; existing preparation engine and child linkage.
+- `src/loom/queue/_preparation_operations.py`, `local_daemon.py`: dedicated preparation table, reconciliation, operation projection and target admission. Published submit also accepts an explicit `retry_failed_revision`; default replay cannot retry failed work.
 - `src/loom/diagnostics/run_inspection.py`: native execution/settlement observation, bounded evidence and failure projection.
 - Existing agent-session transport, managed preparation, daemon production and CLI/native receipt tests; proposed `tests/contracts/test_unified_run_contract.py` covers the new operation.
 
@@ -48,7 +48,7 @@ An accepted request to prepare and run an experiment must proceed even if its
 client disappears during preparation. The coordinator therefore retains both
 preparation intent and the continuation into target admission. The client can
 observe this process, but is no longer the only component remembering the next
-step. Reuse the operation store, preparation engine and admission replay.
+step. Extend the dedicated preparation lifecycle persistence and native operation projection, and reuse admission replay.
 
 This planned public-interface sketch assumes an already-connected Stage 40
 client and an unsubmitted preparation value such as the one in
@@ -131,7 +131,7 @@ identifier/receipt models rather than duplicate job records:
 | Shape | Required meaning |
 | --- | --- |
 | RunRequest | `preparation`: Stage 40 PrepareRunRequest; `queue_item_id`: stable native target-admission identity |
-| CoordinatorClient.start_run(request) | Durably accepts kind `run` in the existing operation store, using preparation.operation_id as its operation ID; returns LocalDaemonOperation |
+| CoordinatorClient.start_run(request) | Durably accepts kind `run` by extending native preparation persistence, using preparation.operation_id as its operation ID; returns LocalDaemonOperation |
 | Run result projection | Existing preparation result, plus requested `queue_item_id`, nullable native target `admission` and nullable cancellation-operation reference; coordinator_id and operation_id available from acceptance |
 | CoordinatorClient.cancel_run_operation(operation_id) | Returns a native kind `cancel_run` control operation with a stable ID derived from the target operation ID; atomically suppresses an unadmitted continuation or links cancellation of its exact admission |
 | High-level return | Native operation/reference and latest native run/admission inspection when available, safe deployment binding and per-service cleanup outcome; no embedded credentials/configuration or new lifecycle status enum |
@@ -175,6 +175,44 @@ or linked native cancellation settles. Cancelling an already admitted run does n
 rewrite the original run operation's `applied` admission fact. Existing terminal-run
 cancellation behavior remains with the native owner. CLI/MCP wait on the returned
 cancellation operation, not the original admission operation's state.
+
+### Durable facts and recovery order
+
+The predecessor has a dedicated `preparation_operations` table and hard-coded
+prepare projections, not a generic run-operation engine. Extend that native owner
+and its projection/dispatch readers. Durably retain kind, exact target queue ID,
+publication receipt, admission linkage and cancellation-control linkage. A separate
+native cancellation control record is required by its independently observable
+settlement; it does not introduce a second run database. SQL layout and private
+helper names remain discretionary. Changed-kind or changed-intent reuse conflicts.
+Preserve preparation principal ownership for replay/cancellation and existing
+query/client/operator authorization; another connection does not change ownership.
+
+Retain the exact published receipt before the first target admission call. Recovery
+with that receipt reopens the fixed admission identity and resumes admission only
+if necessary; it does not call the publisher's planning-based replay check after
+the target may have executed. Reconcile lost admission replies from native durable
+admission state before deciding cancellation won. Original accepted run intent
+never requests `retry_failed_revision`, including after terminal failure. Explicit
+retry remains a separate prepared-admission request, with its existing authority
+capability and one-continuation-per-failed-revision semantics. The old in-process
+`pipeline.execution.models.RunRequest` is a different model: expose the new plain
+request as `loom.coordinator.RunRequest` and remove old public owners in P9.
+
+Publication can already be claimed when run cancellation arrives. It may finish
+and retain its receipt, but cancellation must still serialize against target
+admission. Do not inherit prepare-only's publication-wins cancellation endpoint
+as the run cancellation implementation. Preserve `cancel_preparation` for kind
+`prepare_run`; refuse it for kind `run` and route that caller to `cancel_run_operation`.
+Its stable control ID and target references survive restart and lost replies.
+
+The 64 KiB operation budget covers all mandatory run and cancel references,
+including requested queue identity and the complete retained admission receipt.
+Check the prospective required projection before target publication/admission;
+omit only optional complete preflight detail via its pinned report. Retain the
+acceptance receipt rather than embedding a growing admission-detail read model.
+Current execution/diagnostic inspection remains separately queried. Never accept
+work that can only be projected by silently truncating a mandatory receipt.
 
 ### Delivery boundary
 
@@ -228,6 +266,17 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     uv run --extra config pytest tests/integration/queue/test_local_daemon_production.py tests/integration/queue/test_agent_session_transport.py tests/unit/loom/queue/test_managed_local_preparation.py
 
+Add targeted cases to the existing preparation/native transport fixtures: crash
+after publication but before receipt persistence; crash after retained receipt but
+before admission; lost admission reply followed by actual target execution; and
+cancellation before/after admission while publication was already claimed. Assert
+one admission, no post-admission replanning and settlement of the returned cancel
+control. Also prove same-ID replay of FAILED never retries, explicit native retry
+retains its revision/capability rules, cross-principal mutation conflicts and the
+required run/cancel projections fit or refuse before target effects.
+
+    uv run --extra config pytest tests/integration/queue/test_preparation_operations.py tests/unit/loom/test_coordinator.py tests/unit/loom/queue/test_local_daemon.py
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -253,7 +302,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

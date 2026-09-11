@@ -111,6 +111,13 @@ does not own workers or replace coordinator readiness. Persist/reuse each trial'
 IDs through existing sweep state; interruption/retry cannot duplicate admitted
 trials. Do not add a general sweep job database.
 
+Trial operation replay observes its current admission, including terminal
+failure, without requesting a new attempt. Preserve an explicitly requested
+failed-admission retry through the native `retry_failed_revision` contract and
+its supported authority capability; sweep resume/observer reconnect alone does
+not supply that authorization. Retain the same trial scientific intent and the
+native retry reference in existing sweep state when such a retry is requested.
+
 ### Delivery boundary
 
 A selected sweep can prepare/admit/observe trials through the delivered native path. Pure sweep planning remains side-effect-free. Removed execution inputs fail explicitly; importable/serializable project definitions replace unsupported in-process factories without silently changing trials.
@@ -187,7 +194,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

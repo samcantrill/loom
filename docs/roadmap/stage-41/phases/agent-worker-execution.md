@@ -30,7 +30,7 @@ Validation ownership: VAL-41-06, VAL-41-05 (containment), VAL-41-03 (authorized 
 - `src/loom/queue/_remote_stage_execution.py`: ResidentExecutionProfile and execution-only stage requests/results.
 - `src/loom/queue/_agent_process_supervisor.py`, `agent_sessions.py`, `local_daemon_execution.py`: durable supervision, authorized offers and release evidence.
 - `src/loom/pipeline/executors/containers.py`, `_container_resources.py` and Slurm container launch primitives only where reused by actual consumers.
-- Stage 39 resource contracts, worker/supervisor tests, container executor contracts and opt-in Docker/Apptainer hooks.
+- Published resource contracts, worker/supervisor tests, container executor contracts and opt-in Docker/Apptainer hooks. Include #301 report metadata and #306 supervisor schema 3/native terminal qualification, not only the original Stage 39 evidence.
 
 ## Scope
 
@@ -120,6 +120,24 @@ co-hosting when permitted and backend object layout remain private discretion.
 
 Native and container profiles preserve input/output and scientific meaning. Project code is importable and values serializable; live closures are not persisted inputs. Workers execute only their assigned attempt and never invoke public run. Preserve authorized capacity, selected devices, installed code, failure/reliability provenance and output commit fencing.
 
+### Preserve published completion and execution evidence
+
+Native worker success requires the supervisor's verified successful completion,
+including zero unreaped-root exit and no other owned process-group members before
+containment signals. Preserve parent-owned `managed_successful_exit` in durable
+result/replay; child-supplied metadata, root exit alone or a legacy unqualified
+receipt cannot authorize success. Keep process observation failure, containment
+and the scientific result distinct. Reuse the current supervisor's schema and
+qualification owner rather than a new success predicate in the public facade.
+
+Preserve report-v3 executor metadata and its public redaction policy through
+native/container delivery, failure, cancellation and replay. Retain the native
+parent's exact `managed_output_predecessor` from the admitted worker request when
+calling the authority commit owner; a lost response must not replace it with the
+latest observed output head. Slurm has separate backend completion/containment
+evidence; P5/P6 must not fabricate a local successful-exit qualification from a
+scheduler state. Existing scope-qualified worker proofs stay at their owners.
+
 ### Delivery boundary
 
 Native and explicitly configured container workers now exercise the complete public run journey. Qualification applies to the selected runtime/environment; this phase does not promise container operation under Slurm or within an allocation.
@@ -175,6 +193,14 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     LOOM_RUN_APPTAINER_ACCEPTANCE=1 uv run pytest tests/container_acceptance
 
+Preserve the published supervisor qualification, late-result and output-predecessor
+regressions while converting launch owners. Cover root-first exit with surviving
+work, an unavailable process observation, a child-forged success marker, and
+replay after supervisor continuity rotation/lost commit reply. Report metadata
+must retain its native safe view without fabricating facts for older reports.
+
+    uv run --extra config pytest tests/integration/pipeline/test_managed_local_execution.py tests/unit/loom/queue/test_agent_process_supervisor.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -200,7 +226,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

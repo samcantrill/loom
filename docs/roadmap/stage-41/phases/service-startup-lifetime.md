@@ -163,6 +163,27 @@ configured local roles. An unavailable remote endpoint never creates a substitut
 Protected credentials/policy authorize agent registration and profiles independently
 of its self-reported offer. Reuse existing initialization/role locks and stores.
 
+### Configuration paths and bounded startup
+
+CLI CONFIG and overlay arguments name contained relative paths within the
+deployment's selected preparation project (`source.root` plus `source.path`),
+not arbitrary paths on the client host. The source closure must include them.
+Paths selecting the deployment file resolve from caller cwd; role/client config
+references and the creation binding resolve from the deployment file, preserving
+each role's explicit env-file behavior. Absolute/out-of-closure experiment paths
+fail before acceptance. Remote staged preparation still requires source files
+visible to the coordinator; no implicit upload or path rewriting is introduced.
+
+Startup policy bounds creation/connection separately from post-acceptance run
+observation. Availability composes bounded native calls and preserves their
+expected-coordinator guard and uncertain-mutation references. A passed caller
+deadline bounds startup/dispatch, including MCP's request budget; expiry before
+dispatch cannot cause a delayed new submission. Once dispatch may have happened,
+retain original IDs and reconcile uncertainty. Detached wait does not wait for
+compute capacity, preparation completion or target admission after durable run
+acceptance. Missing eligible workers is accepted waiting work, not an instruction
+to create unconfigured agents or installations.
+
 ### Lifetime and shutdown
 
 Each role persists its configured lifetime and startup attachment. Coordinator
@@ -185,6 +206,27 @@ return. A blocked stop never rewrites the scientific result or escalates to an
 unrequested kill. Pre-acceptance failure releases startup holds and stops only
 otherwise idle run-owned roles. Restart preserves lifetime and same state; shutdown
 does not delete binding, role stores, authority, results or receipts.
+
+### Coordinator-authorized retirement
+
+`local_daemon_owner_work_is_retained` only proves local execution retention and
+returns false when no local agent exists; `LocalDaemon.stop()` is not an atomic
+global-idle check. Keep those low-level owners and add the accepted-work decision
+at coordinator/application scope. Before starting a clean stop, serialize new
+acceptance, startup holds and the quiescence decision under the coordinator owner.
+A racing request either transfers its hold into accepted work or receives the
+retryable reconnect outcome before acceptance; never acknowledge work into a
+retiring owner. Pending explicit admission-retry journals also retain services.
+
+Independent run-owned agents consume a coordinator-authorized retirement decision
+bound to the service identity and current process/session generation. Stale,
+unavailable or restarted-coordinator evidence cannot authorize retirement. The
+decision closes that agent's assignment eligibility before agent shutdown and
+still requires its local containment/result-delivery checks. For shared run-owned
+roles, unresolved accepted work keeps the deployment available even while no
+worker is assigned; idle connections and retained historical pins do not.
+Use existing role/application stores and transport to retain/reconcile these
+facts. No new client job store or PID-count proxy owns this lifecycle.
 
 ### Delivery boundary
 
@@ -238,6 +280,14 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     uv run --extra config pytest tests/integration/queue/test_local_daemon_production.py tests/integration/queue/test_agent_service_lifecycle.py tests/integration/queue/test_agent_session_transport.py tests/e2e/test_cli_runs_e2e.py tests/package/test_import_boundaries.py
 
+Add deterministic acceptance/retirement barriers to the existing service tests:
+coordinator-only deployment with accepted preparation but no eligible worker;
+publication completed but continuation still pending; pending explicit retry;
+independent agent receiving stale or unavailable retirement evidence; and a new
+request racing the final stop decision. Confirm real role-process outcomes and
+that completed history/preparation pins alone do not retain idle services. Cover
+the same configured source path through local and remote client invocation.
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -263,7 +313,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

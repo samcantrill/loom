@@ -8,8 +8,10 @@ Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: none; implementation not started
-Blockers: published Stage 40 required before execution
-Maintainer approval: agreed behavior and nine-phase structure approved on 2026-09-10.
+Next phase: Phase 1, preparation-publication, after amended readiness and landing
+Blockers: amended packet readiness review and landing pending; Stage 40 delivered
+Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
+published-source refinements and startup review requested on 2026-09-12.
 
 ## Summary
 
@@ -39,10 +41,18 @@ Maintainer approval: agreed behavior and nine-phase structure approved on 2026-0
   diagnostics; native owners below CLI/MCP. Every accepted execution goes through
   coordinator assignment, agent backend and authority finalization. Workers never
   recursively invoke public run. Base imports remain cheap and optional extras inert.
-- Stage 40 is approved but unimplemented at this plan's evidence revision.
-  Reconcile its published client, preparation, root version and MCP source before
-  Phase 1. Its preserve/limited-preparation decisions end at its delivery boundary;
-  Stage 41 explicitly extends or replaces them. Do not rewrite its phase gates.
+- Stage 40 is published. The [published baseline and amendment ownership](planning.md#published-baseline-and-amendment-ownership)
+  records the inspected source at `25d97f50d66f44273bf979a5488a312e7f1a15d2`,
+  including subsequent publication/retry and worker-completion fixes. Reconcile
+  later relevant drift before each phase; reuse unchanged owners and evidence.
+  Stage 41 extends Stage 40's preparation family and replaces old execution APIs.
+- P1 owns selected-authority/profile recovery and complete invocation propagation;
+  P2 owns durable publication/admission/cancellation linkage; P3 owns current
+  coordinator-authorized role retirement; P8 binds all tools to one deployment.
+  Explicit failed-admission retry remains separate from same-ID run replay and
+  retains its existing embedded-only authority capability. P4/P6 preserve verified
+  native completion, exact output predecessor and report metadata. No larger
+  artifact transfer or general source upload is introduced.
 - Keep operation, run, admission, attempt, assignment and scheduler identities
   distinct. Same-ID retries reconcile unchanged accepted intent; changed intent
   conflicts. Restart reopens exact owners; unknown execution never authorizes a
@@ -72,8 +82,9 @@ Maintainer approval: agreed behavior and nine-phase structure approved on 2026-0
 ## Execution Context
 
 - Execution worktree root: `/nas/home/can134/work/loom-worktrees`.
-- Clean control checkout: `control` under that root; verify or create a clean
-  linked checkout on develop without repurposing unrelated work.
+- Clean control checkout: `control-stage-40` under that root, on develop.
+  The `control` checkout remains occupied by unrelated settings work; preserve it.
+  Verify this selected checkout remains clean and fast-forwardable at startup.
 - Persistent stage worktree: `stage-41` under that root; bootstrap before
   startup review or writes and retain through final synchronized closeout.
 - Coordination branch: `agent/stage-41` for metadata and closeout.
@@ -156,17 +167,35 @@ and all approved validation commands remain binding.
   pass resolved service ownership, sole submitter and one finalizer.
 - Independent plan review: completed before this decomposition; its run-operation
   terminal/cancel blocker was corrected. Phase 2 retains that complete correction;
-  Phase 8 delegates it. No additional review pass or budget reset is claimed.
+  Phase 8 delegates it. That correction remains binding; the requested source
+  amendment review is recorded separately below.
 - Maintainer approval: behavior and the nine-phase split approved on 2026-09-10.
 - Manager decomposition review: contract preservation, phase handoffs, invariant/
   validation/removal ownership and one-to-one manifest/card mapping checked.
-- Documentation checks: links/anchors, stale-reference audit and diff checks pass.
-  All nine walkthroughs preserve the approved card text outside their explanatory
-  additions; Python snippets pass syntax checks without execution. These checks
-  are documentation evidence, not runtime implementation or another review pass.
-- Planning quality: pass; no unresolved planning blocker.
-- Execution readiness: approved baseline; Phase 1 awaits published Stage 40.
+- Original documentation checks: links/anchors, stale-reference audit, snippet
+  syntax and diff checks passed. Current amendment checks are recorded below;
+  neither receipt establishes runtime implementation or physical qualification.
+- Original planning quality: pass; the approved behavior and nine-phase shape
+  remain the baseline. The current published-source amendment is reviewed below.
+- Execution readiness: amended packet awaiting independent review and landing.
   All phase execution statuses remain pending. No runtime work started.
+
+### Published-source startup readiness review
+
+- Status: pending independent review of the amended packet.
+- Source assumptions: published develop `25d97f50d66f44273bf979a5488a312e7f1a15d2`;
+  [baseline contract inventory](planning.md#published-baseline-and-amendment-ownership).
+- Reviewed packet revision/tree and paths: pending; roadmap Stage 41 entry,
+  lifecycle brief, planning.md, this manifest and all nine linked phase cards.
+- Scope: the maintainer-requested predecessor reconciliation; preserve unaffected
+  original reviews, accepted outcomes, phase order and all required phase gates.
+- Independent result, findings and correction disposition: pending.
+- Documentation validation and post-review changes: pending.
+- Landing/startup handoff: pending review and publication. After landing, bootstrap
+  `stage-41` with `tools/phase_workflow.py` before implementation startup review
+  or writes, verify the exact packet/source, and reuse this receipt if unchanged.
+  Startup-only scope does not authorize implementing Phase 1.
+
 - Accepted risks: breaking APIs; original owner loss/accounting delay can leave
   work unresolved; live fleet/container/HPC/MCP qualification remains explicit.
 - Revisit only for a changed predecessor contract, demonstrated supported-path
@@ -176,7 +205,7 @@ and all approved validation commands remain binding.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | not started | Published Stage 40 and authority integration evidence pending | not started |
+| 1 | pending | not started | Selected-authority/invocation integration evidence pending | not started |
 | 2 | pending | not started | Persistent-service execution/cancellation evidence pending | not started |
 | 3 | pending | not started | Live fleet qualification and mixed-role process evidence pending | not started |
 | 4 | pending | not started | Real container/runtime qualification pending | not started |
