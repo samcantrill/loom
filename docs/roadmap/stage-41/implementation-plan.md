@@ -127,7 +127,7 @@ links directly to all nine walkthroughs.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | preparation-publication | in_progress | [Phase 1](phases/preparation-publication.md) | agent/stage-41-p1-preparation-publication | pending | Managed preparation publisher and selected authority | Prepare exact invocation intent and publish a truthful, replayable target through the selected authority. |
+| 1 | preparation-publication | pr_open | [Phase 1](phases/preparation-publication.md) | agent/stage-41-p1-preparation-publication | [308](https://github.com/samcantrill/loom/pull/308) | Managed preparation publisher and selected authority | Prepare exact invocation intent and publish a truthful, replayable target through the selected authority. |
 | 2 | durable-run-operation | pending | [Phase 2](phases/durable-run-operation.md) | agent/stage-41-p2-durable-run-operation | pending | Native run operation, coordinator continuation and cancellation | An accepted run reaches its exact admission after client loss and supports race-safe cancellation and observation against existing services. |
 | 3 | service-startup-lifetime | pending | [Phase 3](phases/service-startup-lifetime.md) | agent/stage-41-p3-service-startup-lifetime | pending | Deployment initializer, per-service lifetime and public run composition | The ordinary run command connects or safely starts configured services, then cleans only the roles whose lifetime permits it. |
 | 4 | agent-worker-execution | pending | [Phase 4](phases/agent-worker-execution.md) | agent/stage-41-p4-agent-worker-execution | pending | Agent resident execution, process supervisor and native/container executors | Native and configured container attempts use the same agent-owned worker and result boundary with correct resource and containment evidence. |
@@ -224,7 +224,7 @@ and all approved validation commands remain binding.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Implemented; both required gates and manager pre-submit review passed; evidence in Phase 1 card | Independent PR review and delivery pending; physical qualification remains with later owners | Replaced publication helper and consumers removed; branch retirement follows merge |
+| 1 | [308](https://github.com/samcantrill/loom/pull/308), open | Implemented; both required gates and manager pre-submit review passed; evidence in Phase 1 card | Independent PR review and delivery pending; physical qualification remains with later owners | Replaced publication helper and consumers removed; branch retirement follows merge |
 | 2 | pending | not started | Persistent-service execution/cancellation evidence pending | not started |
 | 3 | pending | not started | Live fleet qualification and mixed-role process evidence pending | not started |
 | 4 | pending | not started | Real container/runtime qualification pending | not started |

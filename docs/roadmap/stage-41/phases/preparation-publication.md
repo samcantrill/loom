@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p1-preparation-publication
@@ -302,11 +302,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Format decision: child input/report version 2 and `preparation-input-v2`;
   coordinator root 14 rejects old preparation intent before mutation. Shared/staged
   input receipts, result projection and worker-root formats remain unchanged.
-- Executor validation: complete; both required commands exited 0. This card stays
-  `in_progress` until PR creation and the independent phase review/delivery gates.
+- Executor validation: complete; both required commands exited 0. This card is
+  `pr_open` while independent phase review and delivery remain pending.
 - Validated implementation: `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree
-  `5481f01c1efc95701bc4f7836a12627dae0ebb82`. The only subsequent change is this
-  completion receipt.
+  `5481f01c1efc95701bc4f7836a12627dae0ebb82`. Subsequent changes record workflow
+  evidence and PR identity only.
 - Required `make validate-pr`: final run exited 0; Ruff and Pyright passed;
   baseline 3333 passed, 2 skipped, 253 deselected; config-extra 223 passed,
   18 skipped, 3374 deselected; MCP-extra 36 passed, 3552 deselected; wheel and
@@ -345,7 +345,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   validation logs and summary/JUnit timing. Required results reconcile to
   `767a139`; subsequent changes only record workflow evidence. No outstanding
   product blocker or future-phase implementation was found.
-- Independent implementation review: required for selected-authority publication and lifecycle transitions
+- Independent implementation review: pending on actual PR 308; required for selected-authority publication and lifecycle transitions
 - Blocker corrections: 1/3. Manager regression reproduced interrupted embedded
   authority publication repairing a partial local target. Embedded replay now
   opens only completed publication; missing or CREATED-only authority remains a
@@ -356,7 +356,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   use selected embedded PLANNED publication; the isolated e2e passes. The initial
   `make validate-pr` failed (3330 passed, 2 skipped, 253 deselected, one failure).
   The fresh required command passed on the corrected tree as qualified above.
-- PR and merge: not started
+- PR: [308](https://github.com/samcantrill/loom/pull/308), open and non-draft;
+  canonical title, `develop` base and this phase branch verified after creation.
+  Merge remains pending independent review.
 
 ## Completion Record
 
@@ -365,7 +367,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Implementation and changed paths | Implemented invocation request/child/report propagation; selected-authority publication/principal binding and retained profile recovery; truthful lifecycle/retry transitions; current preparation/operations docs. Source and related tests are in this phase branch. |
 | Tests added, updated or intentionally removed | Added ordered/sparse immutable invocation and closure checks, checked/published resource separation, embedded/authenticated state and lost-response/partial-authority replay, authenticated Slurm-profile restart recovery, and worker-free skip/reuse completion. Updated existing metadata, format and retry assertions. |
 | Validated revision/tree and evidence | `767a139f47b5c181ba92c761b9e49b07fb6f45ce`, tree `5481f01c1efc95701bc4f7836a12627dae0ebb82`; both required full commands exited 0 with exact timing and totals above. |
-| Validation-relevant changes after evidence | Only this completion receipt; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
+| Validation-relevant changes after evidence | Workflow evidence and PR identity only; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
 | Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
-| PR, review and merge | Pending |
+| PR, review and merge | [PR 308](https://github.com/samcantrill/loom/pull/308) open; independent review and merge pending. |
 | Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored; independent phase review and delivery are pending. |
