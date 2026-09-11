@@ -2,18 +2,46 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 40 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p2-agent-preparation
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 1 merges; recheck the root schema predecessor then.
+- Base revision: `5fe1b3750a387b80aea8b84df521c08e25e42b21`, published and synchronized after Phase 1 merge and metadata.
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 2: Durable Preparation On Shared Storage
-- Dependencies: Phase 1 remotely merged; stage plan approved on 2026-09-10
+- Dependencies: Phase 1 PR #298 remotely merged as `3b3942a88ee0729612f02fe3d7dbda3164c762d4`; stage plan approved on 2026-09-10
 - Workflow path: expanded for durable operations, filesystem/process handoffs, migration and cancellation
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: none
+
+### Execution startup
+
+On 2026-09-11 the shared transition/publication/synchronization gates verified
+Phase 1 delivery, then retired its exact merged local and remote phase branches.
+The start gate created this phase branch in the retained Stage 40 worktree at
+the published base above; control remains clean on develop. No implementation
+work uses the control checkout.
+
+The existing approved readiness receipt remains applicable. Current source still
+uses coordinator/worker root schema 12, the publisher accepts explicit stage
+requirements, and its fresh/replay recipe handling has the recorded mapping
+mismatch. Phase 1 supplies the accepted shared client/transport boundary. No
+intervening product drift or missing contract requires planning refinement.
+
+One optional executor owns Phase 2 runtime and its tests because durable
+orchestration, protected input binding and the ordinary managed child cross
+several existing owners. The manager owns product documentation, the manifest,
+acceptance, final full validation and delivery. The executor may update this
+card's implementation/evidence sections and returns ownership before final gates;
+it does not open a PR, review, merge or delegate.
+
+Validation retains every obligation in Test And Validation Plan. Start with
+source-mirrored checks of composition/publisher, configuration/capture, actual
+child execution, durable lifecycle/migration and public control. Broaden when
+shared assignment, root, admission, diagnostics or serialization changes affect
+existing consumers. Both approved full commands remain final gates; local
+fixtures do not claim physical fleet/NAS or live Codex qualification.
 
 ## Objective And Context
 
@@ -754,9 +782,9 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 ## Workflow State
 
-- Manager preparation: shared-storage delivery boundary approved on 2026-09-10
+- Manager preparation: startup verified on 2026-09-11; approved boundaries and current owners reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: executor runtime/test pass starting; manager owns product docs and final validation
 - Refiner: not needed
 - Pre-submit gate: not run
 - Independent review: required before implementation merge
@@ -772,4 +800,4 @@ The manager owns startup reconciliation and any changed public/durable decision.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created; no real roots upgraded |
+| Residual risk and cleanup | Persistent Stage 40 worktree retained and correct phase branch verified; no real roots upgraded |
