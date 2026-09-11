@@ -1,5 +1,11 @@
 # loom.queue Specification
 
+For Python and CLI access to an existing coordinator over Unix or authenticated
+HTTPS, use the [native coordinator client](coordinator-client.md). That guide
+owns connection selection, common control methods, identity guards and bounded
+observation/error behavior. Queue service, scheduling and execution ownership
+remain described here.
+
 ## Purpose
 
 `loom.queue` is the first built-in queue service for whole-run Loom work. It is
@@ -1235,7 +1241,8 @@ loom queue daemon-operation --endpoint COORDINATOR_SOCKET OPERATION_ID --format 
 loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --timeout 30 --format json
 ```
 
-Each admission carries its own monotonic `revision`. A Python client can wait
+Each admission carries its own monotonic `revision`. The native coordinator
+client can wait
 against that exact value; changes to another admission and no-op reconciliation
 do not complete the wait. Nonterminal admission and legacy queue-item waits are
 passive observations: they retain their polling cadence and result semantics but
@@ -1247,7 +1254,7 @@ admission = client.admission(admission_id).admission
 changed = client.wait_admission(
     admission_id,
     expected_revision=admission.revision,
-    timeout=30,
+    timeout_seconds=25,
 )
 ```
 

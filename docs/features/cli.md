@@ -30,8 +30,19 @@ and `daemon-serve CONFIG` own one coordinator/embedded-agent deployment bundle;
 `loom queue agent-init CONFIG` and `agent-serve CONFIG` own one outbound-agent
 root. The same explicit owner-protected versioned YAML is required for init and
 serve, with no discovery or environment override. Former daemon root/profile
-setup flags are a hard cut. Existing client and operator commands retain their
-endpoint-based surface, including the guarded `daemon-time-recover` operation.
+setup flags are a hard cut. Operator commands retain their endpoint-based
+surface, including the guarded `daemon-time-recover` operation.
+
+Coordinator client commands (`daemon-submit`, `daemon-status`,
+`daemon-admissions`, `daemon-admission`, `daemon-agents`, `daemon-agent`,
+`daemon-operation`, `daemon-operation-wait`, `daemon-wait` and `daemon-cancel`)
+use the native `CoordinatorClient`. Select exactly one of `--endpoint PATH`
+for the Unix socket or `--connection PATH` for a protected HTTPS client file.
+Optional `--expected-coordinator-id ID` guards every request at the coordinator
+before lookup or mutation. Existing positional arguments, output fields, exits,
+page defaults and legacy overall wait durations remain supported. The
+[native client guide](coordinator-client.md) documents the connection schema,
+bounded calls, native results and reconciliation after an uncertain mutation.
 
 V12 adds portable run exchange commands under the existing `loom runs` group:
 `loom runs export`, `loom runs inspect`, and `loom runs import`. These commands
@@ -65,7 +76,10 @@ For a managed local deployment, use `--endpoint` on the coordinator host or
 `--remote-config` from a host that can reach that coordinator and its TLS name.
 The remote credential must be a distinct protected `query` certificate mapped
 by the coordinator's current policy; `client`, `operator`, and `agent`
-credentials cannot inspect runs, and a query credential cannot mutate. The
+credentials cannot use that query route, and a query credential cannot mutate.
+The separate native coordinator client's `inspect_run()` uses client
+authorization and the same managed-admission restriction over Unix and HTTPS;
+it does not change this query command's credential policy. The
 observation is a non-atomic owner join: `as_of`, per-axis revisions, and
 freshness describe what was observed, not one global instant. A returned
 `file://` location can be coordinator-local, shared-but-unknown, or external;

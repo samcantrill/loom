@@ -18,6 +18,8 @@ research workflow evidence:
 - local in-process, subprocess, fake-Docker, and SLURM dry-run execution paths
 - offline-first evidence import, run bundles/catalogs, resource diagnostics, and
   structured failure records
+- [native coordinator control](docs/features/coordinator-client.md) from Python
+  and CLI over the local Unix socket or authenticated HTTPS
 - import-safe boundaries between config, pipeline, execution, stores, authority,
   plugins, and CLI modules
 

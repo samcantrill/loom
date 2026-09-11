@@ -15,6 +15,7 @@ import stat
 from threading import Event
 from types import MappingProxyType
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, thaw_plain_data
 
@@ -59,6 +60,63 @@ from .resident_readiness import (
     qualified_resident_profile,
 )
 from .gpu.occupancy import GpuOccupancyPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinatorConnectionFile:
+    """Protected connection settings for a client with no worker identity."""
+
+    url: str
+    server_ca_path: Path
+    certificate_path: Path
+    private_key_path: Path
+    expected_coordinator_id: str | None
+
+
+def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionFile:
+    """Load the strict protected ``loom.coordinator-client`` v1 file."""
+    source, _environment, payload, _fingerprint = _load_protected_config(path)
+    allowed = {"schema_version", "kind", "transport", "expected_coordinator_id"}
+    if not {"schema_version", "kind", "transport"}.issubset(payload) or not set(payload).issubset(allowed) or type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1 or payload.get("kind") != "loom.coordinator-client":
+        raise QueueConfigError("coordinator client config is invalid")
+    expected = payload.get("expected_coordinator_id")
+    if expected is not None and (not isinstance(expected, str) or not expected):
+        raise QueueConfigError("coordinator client expected coordinator ID is invalid")
+    transport = payload["transport"]
+    if not isinstance(transport, Mapping) or set(transport) != {"kind", "url", "server_ca_path", "certificate_path", "private_key_path"} or transport.get("kind") != "https":
+        raise QueueConfigError("coordinator client transport is invalid")
+    base = source.parent
+    try:
+        values = {key: transport[key] for key in ("url", "server_ca_path", "certificate_path", "private_key_path")}
+        if not all(isinstance(value, str) and value for value in values.values()):
+            raise ValueError
+        server_ca_path = Path(cast(str, values["server_ca_path"]))
+        certificate_path = Path(cast(str, values["certificate_path"]))
+        private_key_path = Path(cast(str, values["private_key_path"]))
+        result = CoordinatorConnectionFile(
+            cast(str, values["url"]),
+            server_ca_path if server_ca_path.is_absolute() else base / server_ca_path,
+            certificate_path if certificate_path.is_absolute() else base / certificate_path,
+            private_key_path if private_key_path.is_absolute() else base / private_key_path,
+            cast(str | None, expected),
+        )
+        parsed = urlsplit(result.url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/") or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError
+        if parsed.port is not None and not 1 <= parsed.port <= 65535:
+            raise ValueError
+        for label, candidate in (
+            ("coordinator CA", result.server_ca_path),
+            ("coordinator certificate", result.certificate_path),
+            ("coordinator private key", result.private_key_path),
+        ):
+            _protected_input_path(candidate, label=label, require_owner_only=label.endswith("key"))
+        return result
+    except QueueConfigError:
+        raise
+    except (TypeError, ValueError):
+        raise QueueConfigError("coordinator client transport is invalid") from None
+
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3

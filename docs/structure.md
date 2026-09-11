@@ -1081,6 +1081,24 @@ The CLI must not duplicate config, pipeline, store, or resume logic.
 
 ---
 
+### 6.14 Coordinator Client
+
+Detailed specification: [coordinator-client.md](features/coordinator-client.md)
+
+`loom.coordinator` is the public integration layer for direct Python/CLI control
+of an existing coordinator. It composes native queue values and transport
+mechanics with the existing diagnostic inspection decoder. It owns connection
+selection and the typed facade, while coordinator application views retain
+authorization, admission and durable state.
+
+Shared control validation, dispatch and codecs belong below this facade in the
+queue infrastructure so Unix, HTTPS and the legacy socket adapter reuse the
+same behavior. Queue, scheduling and execution modules must not import
+`loom.coordinator` or diagnostics to share that behavior. Transport owners retain
+authentication, framing and bounded I/O; the worker transport retains its
+journal, polling, process supervision and worker-specific errors. The facade
+imports no MCP SDK, starts no service and owns no job lifetime.
+
 ## 7. Documentation Map
 
 Use the docs this way:

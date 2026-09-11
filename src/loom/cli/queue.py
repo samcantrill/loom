@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 import json
+import math
 import signal
 import sys
 import time
@@ -31,6 +32,7 @@ from loom.serialization import PlainData
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from loom.coordinator import CoordinatorClient
     from loom.pipeline.stores import AuthorityConfig
     from loom.queue import QueueDrainResult, QueueForegroundDriveResult, QueueService
     from loom.queue.controller import (
@@ -249,7 +251,7 @@ def register_subparser(
         ("daemon-cancel", "cancel one admitted run", handle_daemon_cancel),
     ):
         daemon_client = queue_subparsers.add_parser(command, help=help_text)
-        daemon_client.add_argument("--endpoint", required=True, type=Path)
+        _add_client_connection_arguments(daemon_client)
         if command != "daemon-status":
             daemon_client.add_argument("queue_item_id", metavar="QUEUE_ITEM_ID")
         if command == "daemon-submit":
@@ -262,7 +264,7 @@ def register_subparser(
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
     )
-    admissions.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(admissions)
     admissions.add_argument("--limit", type=int, default=100)
     admissions.add_argument("--cursor")
     admissions.set_defaults(handler=handle_daemon_admissions)
@@ -271,13 +273,13 @@ def register_subparser(
     admission = queue_subparsers.add_parser(
         "daemon-admission", help="inspect one managed admission"
     )
-    admission.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(admission)
     admission.add_argument("admission_id")
     admission.set_defaults(handler=handle_daemon_admission)
     _add_output_options(admission)
 
     agents = queue_subparsers.add_parser("daemon-agents", help="list bounded agents")
-    agents.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(agents)
     agents.add_argument("--limit", type=int, default=100)
     agents.add_argument("--cursor")
     agents.set_defaults(handler=handle_daemon_agents)
@@ -286,7 +288,7 @@ def register_subparser(
     agent = queue_subparsers.add_parser(
         "daemon-agent", help="inspect one managed agent"
     )
-    agent.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(agent)
     agent.add_argument("agent_id")
     agent.set_defaults(handler=handle_daemon_agent)
     _add_output_options(agent)
@@ -294,7 +296,7 @@ def register_subparser(
     operation = queue_subparsers.add_parser(
         "daemon-operation", help="inspect one durable operation"
     )
-    operation.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(operation)
     operation.add_argument("operation_id")
     operation.set_defaults(handler=handle_daemon_operation)
     _add_output_options(operation)
@@ -302,7 +304,7 @@ def register_subparser(
     operation_wait = queue_subparsers.add_parser(
         "daemon-operation-wait", help="wait for one durable operation"
     )
-    operation_wait.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(operation_wait)
     operation_wait.add_argument("operation_id")
     operation_wait.add_argument("--timeout", type=float, default=None)
     operation_wait.set_defaults(handler=handle_daemon_operation_wait)
@@ -753,10 +755,10 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_submit(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonAdmissionRequest, LocalDaemonSocketClient
+    from loom.queue import LocalDaemonAdmissionRequest
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).submit(
+        result = _daemon_client(namespace).submit(
             LocalDaemonAdmissionRequest(namespace.queue_item_id, namespace.run_uri)
         )
     except QueueError as exc:
@@ -764,21 +766,30 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
-def handle_daemon_status(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
+def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
+    """Select the unified native client for every coordinator client command."""
+    from loom.coordinator import CoordinatorClient
 
+    if namespace.connection is not None:
+        return CoordinatorClient.from_connection_file(
+            namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id,
+        )
+    return CoordinatorClient.from_unix_socket(
+        namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id,
+    )
+
+
+def handle_daemon_status(namespace: argparse.Namespace) -> int:
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).status()
+        result = _daemon_client(namespace).status()
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).admissions(
+        result = _daemon_client(namespace).admissions(
             limit=namespace.limit, cursor=namespace.cursor
         )
     except QueueError as exc:
@@ -787,10 +798,8 @@ def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_admission(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).admission(
+        result = _daemon_client(namespace).admission(
             namespace.admission_id
         )
     except QueueError as exc:
@@ -799,10 +808,8 @@ def handle_daemon_admission(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_agents(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).agents(
+        result = _daemon_client(namespace).agents(
             limit=namespace.limit, cursor=namespace.cursor
         )
     except QueueError as exc:
@@ -811,20 +818,16 @@ def handle_daemon_agents(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_agent(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).agent(namespace.agent_id)
+        result = _daemon_client(namespace).agent(namespace.agent_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_operation(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).operation(
+        result = _daemon_client(namespace).operation(
             namespace.operation_id
         )
     except QueueError as exc:
@@ -833,22 +836,24 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).wait_operation(
-            namespace.operation_id, timeout_seconds=namespace.timeout
-        )
+        if namespace.timeout is not None and (not math.isfinite(namespace.timeout) or namespace.timeout < 0):
+            raise QueueServiceError("operation wait timeout is invalid")
+        client = _daemon_client(namespace)
+        deadline = None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        while True:
+            duration = 25.0 if deadline is None else max(0.0, min(25.0, deadline - time.monotonic()))
+            result = client.wait_operation(namespace.operation_id, timeout_seconds=duration)
+            if result.kind.value != "TIMEOUT" or (deadline is not None and time.monotonic() >= deadline):
+                break
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_wait(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).wait(
+        result = _daemon_client(namespace).wait(
             namespace.queue_item_id, timeout_seconds=namespace.timeout
         )
     except QueueError as exc:
@@ -857,10 +862,8 @@ def handle_daemon_wait(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).cancel(
+        result = _daemon_client(namespace).cancel(
             namespace.queue_item_id
         )
     except QueueError as exc:
@@ -1350,6 +1353,13 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
         default=argparse.SUPPRESS,
         help="show traceback details for errors",
     )
+
+
+def _add_client_connection_arguments(parser: argparse.ArgumentParser) -> None:
+    connection = parser.add_mutually_exclusive_group(required=True)
+    connection.add_argument("--endpoint", type=Path)
+    connection.add_argument("--connection", type=Path)
+    parser.add_argument("--expected-coordinator-id")
 
 
 __all__ = [

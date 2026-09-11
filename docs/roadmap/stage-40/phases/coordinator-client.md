@@ -2,18 +2,49 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 40 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p1-coordinator-client
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: current published develop at startup; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
+- Base revision: `1a21a78df89f766ef5c19eb6607512a41866ea17`; planning evidence is `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`.
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 1: Direct Coordinator Control
 - Dependencies: stage plan approved on 2026-09-10; no earlier phase
 - Workflow path: expanded for public API, authentication, failure and concurrency boundaries
-- Blockers: none; implementation not started
+- Blockers: none
+
+### Execution startup
+
+The manager bootstrapped the manifest's persistent stage worktree on 2026-09-11
+before startup review or edits. The shared setup/preflight gates verified
+`/nas/home/can134/work/loom-worktrees/stage-40`, branch
+`agent/stage-40-p1-coordinator-client`, coordination branch `agent/stage-40`,
+and the clean published base above. The control checkout is the manifest's
+`/nas/home/can134/work/loom-worktrees/control`.
+
+The approved packet is published by PR #295. The existing independent readiness
+receipt is reused: changes since its evidence revision concern explicit GPU
+process coexistence and repository workflow tooling. The GPU policy changes in
+deployment/loading and the transport test remain compatible with this phase;
+they do not change native client, authentication, inspection or wait contracts.
+Current client and transport definitions still match the owner map below.
+No refinement or new product-plan review is needed.
+
+An optional executor authored the initial draft because the four implementation
+steps span native dispatch, two transports, compatibility adapters, CLI and
+concurrency tests. That handoff is complete. The manager now owns source, tests,
+product documentation, acceptance correction and delivery. The delegation did
+not change accepted scope or gates.
+
+Validation selection starts with the owner map in Test And Validation Plan and
+adds source-mirrored facade/config tests, real Unix/mTLS parity and fault/progress
+tests. Read the assertions before selecting. Shared codec and dispatch changes
+affect public Python, legacy socket and CLI consumers, so both approved full
+commands remain required. New protocol consumers, changed worker/query behavior,
+or failed legacy assertions trigger affected-suite expansion; no physical fleet
+or scientific workload is authorized by these local validation commands.
 
 ## Objective And Context
 
@@ -238,7 +269,8 @@ general call-any-method API is authorized.
 
 This section explains how the fixed contracts fit together. Public examples use
 the proposed API; internal helper names below are pseudocode, not additional
-interfaces or a required module layout. Runtime implementation has not started.
+interfaces or a required module layout. The implementation below now supplies
+the public behavior; private helper names in examples remain illustrative.
 
 ### Core changes and why they belong here
 
@@ -415,24 +447,66 @@ Read this card in full and the manifest's Shared Constraints. Implement the four
 slices above. Do not reopen direct coordinator topology or the ownership split.
 The manager reconciles new published upstream changes before branch creation.
 
+## Manager Acceptance Correction
+
+One scoped correction completes the native control boundaries missing from the
+initial draft at `49295a67c2ea0d5eaef728e82dee2d918624f2b2`. The manager owns
+this correction; accepted behavior and phase scope remain unchanged.
+
+The implementation now shares request validation, dispatch, native result
+codecs and client observation behavior below the public facade. Unix and HTTPS
+use that dispatcher; the legacy socket adapter delegates to the same client
+owner with its original defaults, timeout conventions and inspection scope.
+The public facade keeps diagnostic decoding above queue. Deployment owns the
+protected connection loader; the worker and native clients share the compatible
+HTTPS connection factory. CLI client commands always select the unified client.
+
+Finite I/O uses cumulative budgets and bounded concurrent exchanges, including
+capacity admission and stalled connection setup. HTTP waits reserve ordinary
+capacity independently of worker requests. Client request decoding accepts native
+fractional wait durations without widening worker-message decoding. HTTP response
+reading preserves structured errors when the completed response closes its
+connection. Capability negotiation rejects an older application service before
+any dependent mutation. Server identity checks precede lookup and mutation on
+each request. Error outcomes preserve original IDs and distinguish known refusal
+from an unknown outcome after possible commitment.
+
+Causal coverage includes real Unix/HTTPS lost-reply recovery with same-ID replay,
+per-request guards bypassing negotiation, new-versus-legacy inspection scope,
+revocation and wrong CA/role, post-commit receipt failure, slow Unix replies and
+HTTP headers/bodies, independent HTTP observers with ordinary/worker progress,
+stalled setup capacity, native nested failure evidence and response size limits,
+portable imports, and native/legacy page and CLI timeout compatibility. The CLI
+submit/status/lookup/cancel/wait journey runs over both connection options.
+
+Both required full commands passed at the runtime checkpoint recorded below.
+A subsequent real-TLS reproducer identified an idle worker keepalive regression:
+the new accept deadline leaked past TLS negotiation into the worker protocol.
+Resetting the authenticated socket timeout preserves the established idle behavior
+while native control keeps its own cumulative deadline. The regression and
+affected TLS/native-control cases passed fresh validation; no wider
+codec, dispatch, persistence or CLI behavior changed. Independent PR review
+remains required.
+
 ## Workflow State
 
-- Manager preparation: phase contract approved with the stage plan on 2026-09-10
+- Manager preparation: startup verified on 2026-09-11; approved contracts and current source reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: shared native boundaries implemented; manager correction and validation complete
 - Refiner: not needed
-- Pre-submit gate: not run
-- Independent review: required before implementation merge
-- Blocker corrections: 0/3
-- PR and merge: not created
+- Pre-submit gate: passed; phase scope, native/legacy contracts, required evidence, docs and bounded post-validation delta accepted
+- Independent review: required on the actual PR head before implementation merge
+- Blocker corrections: 1/3 completed; native control boundary completion
+- PR and merge: [PR #298](https://github.com/samcantrill/loom/pull/298) open against develop; independent review pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
-| PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created |
+| Implementation and changed paths | Public coordinator facade; private queue control/client/transport owners; Unix/HTTPS adapters; deployment connection loader; queue CLI; native client product docs |
+| Tests added or updated | Native client unit tests, import boundary, CLI compatibility, real Unix/mTLS control recovery/guards, native error and size bounds, and HTTP deadline/capacity/authentication fixtures |
+| Validated revision/tree state and evidence | `make validate-pr` passed at `a1f86df5f18b67490ecea8a9e251de540a26ff88`: Ruff and Pyright passed; isolated baseline 3195 passed, 2 skipped, 156 deselected; isolated config-extra 162 passed, 18 skipped, 3200 deselected; wheel and sdist built. `/tmp/loom-stage40-a1f86df-validate.log` and `.exit` record exit 0 |
+| Required summary run | `make test-summary` passed at the same runtime checkpoint: package 125, unit 2209, contract 301, integration 492, e2e 70 and config-extra 162 passed; 3359 passed overall, 18 config-extra skips, no failures/errors. `build/test-summary.md` and `/tmp/loom-stage40-a1f86df-summary.log` inspected; `.exit` records 0 |
+| Validation-relevant changes after evidence | Post-checkpoint runtime delta restores worker idle keepalive after bounded TLS negotiation, with a real TLS regression test. Fresh `uv run --locked --group dev pytest tests/integration/queue/test_agent_session_transport.py -k 'native or tls_rotation or loopback_mtls or loopback_rejects or loopback_exposes or worker_keepalive or coordinator_cli_submit' -q`: 18 passed, 78 deselected. Ruff and Pyright passed. Removing incidental whole-file formatting preserved identical Python syntax trees; Ruff and diff checks passed afterward. Broader evidence remains applicable to unchanged native schemas, CLI, persistence and import contracts |
+| PR, review, and merge | [PR #298](https://github.com/samcantrill/loom/pull/298) open with the canonical title, develop base and expected phase branch; actual-head independent review pending |
+| Residual risk and cleanup | Independent PR review remains before merge. Container/physical deployment acceptance is not claimed by skipped tests. Persistent stage worktree retained; no root migration |

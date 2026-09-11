@@ -56,6 +56,35 @@ def test_execution_failure_capture_does_not_import_diagnostics() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp() -> None:
+    script = dedent(
+        """
+        import sys
+        import socket
+        import subprocess
+        import threading
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("import or factory attempted service activity")
+
+        socket.create_connection = unexpected
+        threading.Thread.start = unexpected
+        subprocess.Popen = unexpected
+        from loom.coordinator import CoordinatorClient, CoordinatorClientError
+        from loom.queue import LocalDaemonSocketClient, QueueServiceError
+        with CoordinatorClient.from_unix_socket('/nonexistent/loom.sock'):
+            pass
+        LocalDaemonSocketClient('/nonexistent/legacy.sock')
+        assert issubclass(CoordinatorClientError, QueueServiceError)
+        for forbidden in ('mcp', 'torch', 'numpy', 'pandas', 'tests.support'):
+            assert not any(name == forbidden or name.startswith(forbidden + '.')
+                           for name in sys.modules), forbidden
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_import_serialization_does_not_import_io() -> None:
     script = dedent(
         """

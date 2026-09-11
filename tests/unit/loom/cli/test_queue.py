@@ -320,10 +320,63 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
     assert payload["result"]["service_health"] == "healthy"
 
 
+def test_daemon_client_connection_options_are_mutually_exclusive(tmp_path: Path) -> None:
+    stderr = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-status",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--connection",
+            str(tmp_path / "client.yaml"),
+        ],
+        stdout=io.StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "not allowed with argument" in stderr.getvalue()
+
+
+def test_daemon_operation_wait_renews_native_windows_for_legacy_cli_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from loom.coordinator import CoordinatorClient
+    import loom.cli.queue as queue_cli
+    from loom.queue.local_daemon import LocalDaemonOperation, OperationWaitKind, OperationWaitResult
+
+    now = [0.0]
+    windows: list[float] = []
+    monkeypatch.setattr(queue_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def observe(_client: CoordinatorClient, operation_id: str, *, timeout_seconds: float) -> OperationWaitResult:
+        windows.append(timeout_seconds)
+        now[0] += timeout_seconds
+        return OperationWaitResult(OperationWaitKind.TIMEOUT, LocalDaemonOperation(
+            operation_id, "agent_control", "pending", None, None,
+        ))
+
+    monkeypatch.setattr(CoordinatorClient, "wait_operation", observe)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main([
+        "queue", "daemon-operation-wait", "--endpoint", str(tmp_path / "lazy.sock"),
+        "operation-a", "--timeout", "60", "--format", "json",
+    ], stdout=stdout, stderr=stderr)
+    assert code == 0 and stderr.getvalue() == ""
+    assert windows == [25.0, 25.0, 10.0]
+    result = json.loads(stdout.getvalue())["result"]
+    assert result["kind"] == "TIMEOUT"
+    assert result["operation"]["operation_id"] == "operation-a"
+
+
 def test_queue_daemon_admission_renders_private_diagnostic_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorClient
 
     payload = {
         "admission": {"admission_id": "admission"},
@@ -355,7 +408,7 @@ def test_queue_daemon_admission_renders_private_diagnostic_failure(
             return payload
 
     monkeypatch.setattr(
-        LocalDaemonSocketClient, "admission", lambda _self, _admission_id: Result()
+        CoordinatorClient, "admission", lambda _self, _admission_id: Result()
     )
     text_stdout = io.StringIO()
 
@@ -403,7 +456,7 @@ def test_admission_text_and_json_preserve_portable_worker_failure_chain(
 ) -> None:
     from loom.diagnostics.diagnostic_failure import _capture_exception_details
     from loom.pipeline.execution.models import ExecutionFailure
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorClient
 
     cause = FileNotFoundError("missing /worker/data/product.json")
     cause.add_note("Prepare the product on the worker first.")
@@ -447,7 +500,7 @@ def test_admission_text_and_json_preserve_portable_worker_failure_chain(
         def to_dict(self) -> dict[str, object]:
             return payload
 
-    monkeypatch.setattr(LocalDaemonSocketClient, "admission", lambda *_args: Result())
+    monkeypatch.setattr(CoordinatorClient, "admission", lambda *_args: Result())
     command = [
         "queue",
         "daemon-admission",
