@@ -41,6 +41,7 @@ from .local_daemon import (
     OperationWaitResult,
 )
 from .preparation import PrepareRunRequest
+from .run import RunRequest
 
 
 class NativeCoordinatorClient:
@@ -193,9 +194,14 @@ class NativeCoordinatorClient:
         if not self._legacy and operation != "handshake" and negotiate:
             try:
                 # Separate connections renegotiate within this request's budget.
-                self._native_call(
+                description = self._native_call(
                     "handshake", {}, guard, deadline=bound, waiting=waiting
                 )
+                if operation == "start_run":
+                    # Retain the owner learned before mutation even if the
+                    # acceptance response disappears. Later calls stay bound.
+                    self._expected_coordinator_id = description.coordinator_id
+                    envelope["expected_coordinator_id"] = description.coordinator_id
             except CoordinatorClientError as exc:
                 raise CoordinatorClientError(
                     exc.code,
@@ -356,6 +362,28 @@ class NativeCoordinatorClient:
                 "prepare_run", {"request": request.to_dict()}, expected_coordinator_id
             ),
         )
+
+    def start_run(
+        self, request: RunRequest, *, expected_coordinator_id: str | None = None
+    ) -> LocalDaemonOperation:
+        """Durably accept preparation plus admission; returning detaches observation.
+
+        Supply the same operation and queue IDs to recover an uncertain reply.
+        Acceptance does not mean publication, admission, or execution has finished.
+        """
+        if not isinstance(request, RunRequest):
+            raise control_error("invalid_request", "start_run", {})
+        return cast(LocalDaemonOperation, self._native_call(
+            "start_run", {"request": request.to_dict()}, expected_coordinator_id
+        ))
+
+    def cancel_run_operation(
+        self, operation_id: str, *, expected_coordinator_id: str | None = None
+    ) -> LocalDaemonOperation:
+        """Explicitly cancel a run; wait on the returned independent control ID."""
+        return cast(LocalDaemonOperation, self._native_call(
+            "cancel_run_operation", {"operation_id": operation_id}, expected_coordinator_id
+        ))
 
     def cancel_preparation(
         self,

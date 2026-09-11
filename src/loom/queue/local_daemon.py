@@ -14,6 +14,7 @@ from ._managed_local import (
     GpuResourceProvider,
     _CompositeAgentResourceProvider,
 )
+from .run import _public_operation_id
 
 from collections import deque
 from collections.abc import Callable, Mapping
@@ -75,9 +76,10 @@ if TYPE_CHECKING:
         LocalDaemonExecutionOutcome,
     )
     from .preparation import PrepareRunRequest
+    from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 14
+_COORDINATOR_SCHEMA_VERSION = 15
 _AGENT_SCHEMA_VERSION = 12
 # Kept for the outbound-session transport, whose retained worker journal stays
 # at schema 12 through the coordinator-only migration.
@@ -2306,6 +2308,14 @@ class LocalDaemon:
         """Accept one durable intent; capture and publication reconcile separately."""
         return self._preparations.accept(request, principal_id)
 
+    def start_run(self, request: "RunRequest", *, principal_id: str) -> LocalDaemonOperation:
+        """Retain preparation and its exact admission continuation atomically."""
+        return self._preparations.accept_run(request, principal_id)
+
+    def cancel_run_operation(self, operation_id: str, *, principal_id: str) -> LocalDaemonOperation:
+        """Retain independent cancellation, serialized against target admission."""
+        return self._preparations.cancel_run(operation_id, principal_id)
+
     def cancel_preparation(
         self, operation_id: str, *, principal_id: str
     ) -> LocalDaemonOperation:
@@ -2538,6 +2548,7 @@ class LocalDaemon:
         request: LocalDaemonAdmissionRequest,
         *,
         preparation_operation_id: str | None = None,
+        run_operation_id: str | None = None,
     ) -> LocalDaemonAdmission:
         coordinator_id = self._require_started()
         from .local_daemon_execution import load_managed_local_intent
@@ -2588,6 +2599,7 @@ class LocalDaemon:
                     raise PreparationChildReserved(
                         "preparation child queue identity is reserved"
                     )
+            self._preparations.check_target_submission(request, run_operation_id)
             execution = self._execution
             if execution is None:
                 raise QueueServiceError("coordinator execution is unavailable")
@@ -2657,6 +2669,10 @@ class LocalDaemon:
                         self._next_enqueue_sequence(conn),
                     ),
                 )
+                if run_operation_id is not None:
+                    admitted = conn.execute("SELECT * FROM managed_admissions WHERE admission_id = ?", (admission_id,)).fetchone()
+                    assert admitted is not None
+                    self._preparations.retain_admission(conn, run_operation_id, _admission_from_row(admitted))
                 conn.commit()
         self._wake.set()
         return self._admission(admission_id)
@@ -2839,6 +2855,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
+        _public_operation_id(control.operation_id)
         authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
@@ -2978,6 +2995,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Install one complete protected coordinator scheduling epoch."""
 
+        _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._cycle_lock:
@@ -3135,6 +3153,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
+        _public_operation_id(request.recovery_id)
         authorizer = self._authorizer()
         authorizer.require_operator(principal, "recover_unknown")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -3206,6 +3225,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Fence one completely classified old session before successor bind."""
 
+        _public_operation_id(request.operation_id)
         execution = self._execution
         if execution is None:
             raise QueueServiceError("replacement coordinator execution is unavailable")
@@ -3754,6 +3774,7 @@ class LocalDaemon:
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
     ) -> TimeRecoveryReceipt:
+        _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "recover_time")
         encoded = json.dumps(
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -4041,6 +4062,14 @@ class LocalDaemonClientView:
     def prepare_run(self, request: "PrepareRunRequest") -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.prepare_run(request, principal_id=self._principal.subject)
+
+    def start_run(self, request: "RunRequest") -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.start_run(request, principal_id=self._principal.subject)
+
+    def cancel_run_operation(self, operation_id: str) -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.cancel_run_operation(operation_id, principal_id=self._principal.subject)
 
     def cancel_preparation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
@@ -4378,6 +4407,7 @@ def _initialize_coordinator_schema(
     conn.execute(
         "CREATE TABLE scheduling_reloads ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
         "request_json TEXT NOT NULL, state TEXT NOT NULL, "
         "result_code TEXT, scheduling_epoch TEXT, "
         "configuration_revision INTEGER, replacement_fingerprint TEXT)"
@@ -4392,6 +4422,7 @@ def _initialize_coordinator_schema(
     conn.execute(
         "CREATE TABLE time_recoveries ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
         "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
         "result_json TEXT NOT NULL)"
     )
@@ -4403,12 +4434,20 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE preparation_operations ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
         "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
         "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
         "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
         "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
         "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
         "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
+    )
+
+    conn.execute(
+        "CREATE TABLE preparation_cancellations ("
+        "operation_id TEXT PRIMARY KEY, target_operation_id TEXT NOT NULL UNIQUE "
+        "REFERENCES preparation_operations(operation_id), state TEXT NOT NULL, "
+        "result_code TEXT, result_json TEXT NOT NULL)"
     )
 
 
@@ -4453,7 +4492,7 @@ def _validate_coordinator_schema(
         if (
             not preparation
             and conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_operations'"
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('preparation_operations', 'preparation_cancellations')"
             ).fetchone()
             is not None
         ):
@@ -4771,7 +4810,11 @@ def _operation_projection(
         ),
         (
             "prepare_run",
-            "SELECT state, result_code, result_json AS effect_json FROM preparation_operations WHERE operation_id = ?",
+            "SELECT kind, state, result_code, result_json AS effect_json FROM preparation_operations WHERE operation_id = ?",
+        ),
+        (
+            "cancel_run",
+            "SELECT state, result_code, result_json AS effect_json FROM preparation_cancellations WHERE operation_id = ?",
         ),
     )
     matches: list[LocalDaemonOperation] = []
@@ -4790,7 +4833,7 @@ def _operation_projection(
         matches.append(
             LocalDaemonOperation(
                 operation_id=operation_id,
-                kind=kind,
+                kind=str(row["kind"]) if "kind" in row.keys() else kind,
                 state=str(row["state"]),
                 code=(None if row["result_code"] is None else str(row["result_code"])),
                 result=result,

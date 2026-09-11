@@ -331,21 +331,40 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   The manager retains pre-submit acceptance, PR/review/delivery and manifest
   ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: in progress under the approved whole-stage execution request
+- Implementation: native run acceptance/continuation, independent cancellation,
+  bounded projections and existing-service observation are implemented. Final
+  owner-level checks passed; the two required full commands remain pending.
+- Durable ownership: schema 15 extends preparation rows with kind and exact queue
+  identity; the native cancellation table holds independent control progress.
+  Publication is retained before admission, and the immutable admission receipt
+  and applied run fact commit in the native admission transaction. The existing
+  cycle lock serializes suppression and admission. Preparation-only remains
+  publication-terminal. Cancellation paging reuses the bounded in-memory rowid
+  cursor pattern so unsettled earlier controls cannot starve later controls.
+- Native surfaces: `loom.coordinator.RunRequest`, `start_run`,
+  `cancel_run_operation` and `observe_run`; existing Unix/HTTPS codecs and role
+  dispatch own transport parity. One cumulative observation deadline covers reads
+  and waits; timeout/Ctrl-C/EOF preserve references and never cancel. Raw CLI
+  start/cancel controls issue one native mutation using request-file IDs. No
+  startup, deployment creation, ordinary run facade or temporary CLI orchestrator
+  was introduced.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable continuation and cancellation boundary
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3. Manager reproduced caller preparation stealing the
+  stable `cancel-run-` identity after run acceptance. Reserve that native control
+  namespace at public preparation and management-operation acceptance boundaries;
+  cover both creation orderings and retain ordinary query/cancellation access.
 - PR and merge: not started
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Implementation and changed paths | Coordinator facade; native request/client/control and preparation/admission owners; raw queue CLI; downstream operations documentation. Schema 15 refuses incompatible schema-14 roots without mutation. |
+| Tests added, updated or intentionally removed | New unified-run contract and durable run integration suites; native observation/CLI/import tests; preparation child-release and projection-budget cases extended to run intent; root/upgrade checks updated for schema 15. No accepted predecessor coverage removed. |
+| Validated revision/tree and evidence | Interim isolated Python 3.12/config selection: 38 passed (`/tmp/loom-stage41-p2-run-tests.log`); Pyright and Ruff passed before final owner edits. Final revision/tree and both required commands pending. |
+| Validation-relevant changes after evidence | Added cancellation paging and its 33-control regression; bounded target-reservation lookup; preparation run/cancel projection/release cases and schema-14 refusal coverage await final validation. |
+| Replaced-code removal / retained primitive consumers | Existing coordinator facade and raw CLI contained no production prepare/wait/submit orchestration chain to remove. Preparation-only and explicit prepared submission/retry remain separate native primitives and retain their tests. The old in-process execution RunRequest remains with its Phase 9 removal owner. |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Persistent-service execution/cancellation evidence pending |
+| Residual risk and cleanup | Tests use local synthetic services and mutual TLS fixtures; no physical container/fleet/HPC qualification is claimed. No services, external workloads or deployment roots were created outside test fixtures. Final full-gate results and process cleanup pending. |

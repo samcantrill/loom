@@ -250,7 +250,7 @@ Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
 are rejected. Initialization never overwrites a populated root. The narrow
 [coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
-schema-12 root when moving to schema 14; it does not reinterpret profiles or
+schema-12 root when moving to schema 15; it does not reinterpret profiles or
 provide a migration for other historical root versions.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
@@ -310,7 +310,7 @@ store tools; no automatic expiry or preparation-delete command is provided.
 
 ## Upgrade A Retained Coordinator Root
 
-Coordinator control roots use schema 14; worker roots and journals remain at
+Coordinator control roots use schema 15; worker roots and journals remain at
 schema 12. Schema-13 preparation roots are incompatible with the current child
 input/report contracts and are rejected without mutation; settle their work with
 the original installation before service replacement. For a valid existing schema-12 coordinator, stop its foreground service
@@ -326,18 +326,87 @@ The upgrade takes the existing exclusive coordinator lock, checks ownership,
 private permissions, deployment binding and stable identity, and creates a
 protected pre-upgrade backup through SQLite's backup API. It will not overwrite
 an existing backup. One transaction adds preparation storage and changes the
-coordinator marker from 12 to 14. Stable coordinator IDs, admissions and other
+coordinator marker from 12 to 15. Stable coordinator IDs, admissions and other
 existing durable identities remain intact; worker databases are not changed.
 A running coordinator is rejected without mutation. Workers do not need a
 fresh root or an inferred shutdown for this coordinator-only migration.
 
-A crash before commit leaves schema 12; after commit the root reopens at 14.
+A crash before commit leaves schema 12; after commit the root reopens at 15.
 Repeating the command on a structurally valid current root reports its current
 identity/version without rewriting retained state. Unsupported versions and
 malformed partial schemas are rejected, rather than automatically repaired.
 
-Keep the backup as operational evidence. Old binaries cannot open schema 14,
+Keep the backup as operational evidence. Old binaries cannot open schema 15,
 and no automatic downgrade is provided. Restoring an older backup after further
 work has been accepted can lose that work; recovery then needs a separately
 assessed procedure. Never replace a retained coordinator or worker root merely
 to get preparation to start.
+
+
+### Durable run intent on existing services
+
+`loom.coordinator.RunRequest` carries a `PrepareRunRequest` and the exact target
+`queue_item_id`. Connect to an already-running coordinator and generate both IDs
+once before the first mutation:
+
+```python
+from loom.coordinator import CoordinatorClient, RunRequest
+
+request = RunRequest(preparation=preparation, queue_item_id="admit-demo-001")
+with CoordinatorClient.from_unix_socket(socket_path) as client:
+    binding = client.describe_connection()
+    operation = client.start_run(request, expected_coordinator_id=binding.coordinator_id)
+    # Persist/print operation.operation_id and binding.coordinator_id for recovery.
+    result = client.observe_run(operation.operation_id, timeout_seconds=300,
+                                expected_coordinator_id=binding.coordinator_id)
+```
+
+`start_run` returns at durable acceptance; the coordinator owns capture,
+publication and admission even after client loss. `prepare_run` still applies at
+publication. A `run` operation applies only when its exact admission is accepted;
+`observe_run` then follows native execution settlement. It returns operation,
+admission and inspection evidence separately, plus the safe connection binding
+and this observer's borrowed-coordinator cleanup decision. A BLOCKED admission
+retains its diagnostic meaning and does not establish successful containment.
+This API starts no services. Configured startup and the ordinary `loom run`
+facade are separate delivery work.
+
+Closing the client, `wait=False`, observation timeout, Ctrl-C and EOF detach;
+they never request cancellation. Reconnect with the same coordinator and operation
+IDs. An uncertain acceptance error retains the original operation and queue IDs;
+replay exactly that `RunRequest`. Same-ID replay observes a failed admission and
+never retries execution. The native explicit failed-revision retry remains a
+separate `submit` request with its existing authority restrictions.
+
+For explicit cancellation, call `client.cancel_run_operation(operation_id)` and
+wait on the returned **cancellation** operation ID with `wait_operation` until
+terminal. Cancellation either suppresses the unadmitted continuation and settles
+its preparation child, or delegates to its exact admitted run. A publication
+already in flight may finish and retain its receipt while admission stays
+suppressed. Cancelling an admitted run preserves its original applied admission
+fact; cancellation has independent durable progress. `cancel_preparation`
+accepts only preparation-only operations.
+
+Run results retain the requested queue identity, exact publication receipt,
+immutable admission acceptance receipt and cancellation reference. Growing
+admission detail/diagnostics are read separately. Both run and cancellation
+projections retain all mandatory references within 64 KiB; only optional full
+preflight detail may be omitted in favor of its pinned report. Prospective
+mandatory overflow is refused before target publication/admission.
+
+Coordinator schema 15 retains these facts in the preparation owner and a native
+cancellation control table. Existing schema-14 roots are incompatible: settle
+work under its original version before replacement. Do not reset old roots or
+delete outputs. The explicit older schema-12 upgrade remains available only for
+its already-supported predecessor contract.
+
+The raw native CLI controls are `loom queue daemon-start-run --request PATH`
+(the JSON `RunRequest` includes both caller-chosen IDs) and
+`loom queue daemon-cancel-run OPERATION_ID`. Both accept the existing protected
+connection options and emit native operation receipts. They perform one native
+mutation; use the existing operation wait control with the returned cancellation
+ID. They do not launch services or implement the ordinary run facade.
+
+Caller-chosen operation IDs cannot use the `cancel-run-` namespace: it is reserved
+for the coordinator's stable run cancellation controls. This prevents a later
+preparation or operator request from taking an accepted run's cancellation ID.

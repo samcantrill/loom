@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from loom.coordinator import CoordinatorClient, CoordinatorClientError
+from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest
 from loom.artifacts import ArtifactRef
 from loom.serialization import ensure_plain_data, stable_json_bytes
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
@@ -393,7 +393,7 @@ def _cli_result(*arguments: str, expected_exit: int = 0):
 
 
 def _result(operation: LocalDaemonOperation) -> Mapping[str, Any]:
-    assert operation.kind == "prepare_run"
+    assert operation.kind in {"prepare_run", "run"}
     assert isinstance(operation.result, Mapping)
     return operation.result
 
@@ -1074,9 +1074,11 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
         daemon.stop()
 
 
+@pytest.mark.parametrize("run_intent", [False, True])
 def test_running_preparation_cancellation_waits_for_native_resource_release(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    run_intent: bool,
 ) -> None:
     _service(tmp_path)
     installed = tmp_path / "existing-installation"
@@ -1130,7 +1132,10 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
     connection = None
     try:
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
-            client.prepare_run(_request())
+            if run_intent:
+                client.start_run(RunRequest(_request(), "target-admission"))
+            else:
+                client.prepare_run(_request())
             connection, _ = listener.accept()
             assert connection.recv(5) == b"ready"
             operation = client.operation("prepare-1")
@@ -1138,10 +1143,12 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
                 _result(operation)["preparation_admission_id"]
             ).admission
             assert child.state.value == "ACTIVE"
-            assert client.cancel_preparation("prepare-1").state == "pending"
+            cancellation = client.cancel_run_operation("prepare-1") if run_intent else client.cancel_preparation("prepare-1")
+            assert cancellation.state == "pending"
             assert release_entered.wait(25)
             observation = client.wait_operation("prepare-1", timeout_seconds=0)
             assert observation.operation.state == "pending"
+            assert client.operation(cancellation.operation_id).state == "pending"
             with sqlite3.connect(service.daemon.execution_database) as conn:
                 assert (
                     conn.execute(
@@ -1154,7 +1161,11 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             allow_release.set()
             cancelled = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert cancelled.state == "cancelled"
-            assert client.cancel_preparation("prepare-1") == cancelled
+            if run_intent:
+                control = client.wait_operation(cancellation.operation_id, timeout_seconds=25).operation
+                assert control.kind == "cancel_run" and control.state == "applied"
+            else:
+                assert client.cancel_preparation("prepare-1") == cancelled
             assert (
                 client.admission(child.admission_id).admission.state.value
                 == "CANCELLED"
@@ -1264,6 +1275,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             conn.execute("SELECT COUNT(*) FROM preparation_operations").fetchone()[0]
             == 0
         )
+        conn.execute("DROP TABLE preparation_cancellations")
         conn.execute("DROP TABLE preparation_operations")
         conn.execute("PRAGMA user_version = 12")
         before = {
@@ -1273,7 +1285,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 14}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 15}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1285,7 +1297,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 14)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 15)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1487,7 +1499,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1842,9 +1854,10 @@ def test_cancel_and_publication_race_uses_the_durable_claim(
         daemon.stop()
 
 
+@pytest.mark.parametrize("run_intent", [False, True])
 @pytest.mark.parametrize("large", ("preflight", "receipt"))
 def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_before_publication(
-    tmp_path: Path, large: str
+    tmp_path: Path, large: str, run_intent: bool
 ) -> None:
     service = _service(tmp_path)
     config_path = tmp_path / "projects" / "pipeline.yaml"
@@ -1862,7 +1875,10 @@ def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
     try:
-        daemon.prepare_run(_request(), principal_id="caller")
+        if run_intent:
+            daemon.start_run(RunRequest(_request(), "target-admission"), principal_id="caller")
+        else:
+            daemon.prepare_run(_request(), principal_id="caller")
         completed = daemon.wait_operation("prepare-1", timeout=25).operation
         assert completed.state == ("applied" if large == "preflight" else "failed"), (
             completed

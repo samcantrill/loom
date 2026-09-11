@@ -39,6 +39,7 @@ from .local_daemon import (
     OperationWaitResult,
 )
 from .preparation import PrepareRunRequest
+from .run import RunRequest
 from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
 
@@ -58,6 +59,8 @@ CONTROL_OPERATIONS = frozenset(
         "operation",
         "wait_operation",
         "prepare_run",
+        "start_run",
+        "cancel_run_operation",
         "cancel_preparation",
         "submit",
         "wait_admission",
@@ -66,7 +69,7 @@ CONTROL_OPERATIONS = frozenset(
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
 MUTATION_OPERATIONS = frozenset(
-    {"submit", "cancel", "prepare_run", "cancel_preparation"}
+    {"submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation"}
 )
 
 
@@ -117,6 +120,9 @@ def request_ids(payload: Mapping[str, object]) -> dict[str, PlainData]:
         value = payload.get(key)
         if isinstance(value, str):
             ids[key] = value
+    preparation = payload.get("preparation")
+    if isinstance(preparation, Mapping):
+        ids.update(request_ids(preparation))
     request = payload.get("request")
     if isinstance(request, Mapping):
         ids.update(request_ids(request))
@@ -350,7 +356,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return AgentPage.from_dict(value)
     if operation == "agent":
         return AgentProjection.from_dict(value)
-    if operation in {"operation", "prepare_run", "cancel_preparation"}:
+    if operation in {"operation", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation"}:
         return LocalDaemonOperation.from_dict(value)
     if operation == "wait_operation":
         return OperationWaitResult.from_dict(value)
@@ -405,6 +411,8 @@ def validate_request(
         "submit": {"request"},
         "cancel": {"queue_item_id"},
         "prepare_run": {"request"},
+        "start_run": {"request"},
+        "cancel_run_operation": {"operation_id"},
         "cancel_preparation": {"operation_id"},
         "admissions": {"limit", "cursor"},
         "agents": {"limit", "cursor"},
@@ -447,11 +455,11 @@ def validate_request(
         if not isinstance(request, Mapping):
             raise ValueError("admission request must be an object")
         value["request"] = LocalDaemonAdmissionRequest.from_dict(request)
-    if operation == "prepare_run":
+    if operation in {"prepare_run", "start_run"}:
         request = value["request"]
         if not isinstance(request, Mapping):
             raise ValueError("prepare request must be an object")
-        value["request"] = PrepareRunRequest.from_dict(request)
+        value["request"] = RunRequest.from_dict(request) if operation == "start_run" else PrepareRunRequest.from_dict(request)
     return value
 
 
@@ -574,8 +582,9 @@ def dispatch_control(
             dispatched = True
             result = view.submit(cast(LocalDaemonAdmissionRequest, value["request"]))
             applied = True
-        elif operation == "prepare_run":
-            request = cast(PrepareRunRequest, value["request"])
+        elif operation in {"prepare_run", "start_run"}:
+            run_request = cast(RunRequest, value["request"]) if operation == "start_run" else None
+            request = run_request.preparation if run_request is not None else cast(PrepareRunRequest, value["request"])
             if (
                 not daemon.preparation_available
                 and not daemon._preparations.contains(request.operation_id)
@@ -585,7 +594,7 @@ def dispatch_control(
                 )
             dispatched = True
             try:
-                result = view.prepare_run(request)
+                result = view.start_run(run_request) if run_request is not None else view.prepare_run(request)
             except QueueConflictError as exc:
                 raise control_error(
                     "conflict",
@@ -595,6 +604,10 @@ def dispatch_control(
                     dispatched=False,
                     applied=False,
                 ) from exc
+            applied = True
+        elif operation == "cancel_run_operation":
+            dispatched = True
+            result = view.cancel_run_operation(cast(str, value["operation_id"]))
             applied = True
         elif operation == "cancel_preparation":
             dispatched = True

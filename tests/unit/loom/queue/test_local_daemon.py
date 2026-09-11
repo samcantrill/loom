@@ -2296,16 +2296,19 @@ def test_live_owner_loss_degrades_service_and_blocks_scheduling(
         daemon.stop()
 
 
+@pytest.mark.parametrize("version", [0, 14])
 def test_schema_mismatch_requires_fresh_root_without_migration(
-    tmp_path: Path,
+    tmp_path: Path, version: int,
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     with sqlite3.connect(config.control_database) as conn:
-        conn.execute("PRAGMA user_version = 0")
+        conn.execute(f"PRAGMA user_version = {version}")
 
+    before = config.control_database.read_bytes()
     with pytest.raises(QueueStorageError, match="fresh roots"):
         LocalDaemon(config).start()
+    assert config.control_database.read_bytes() == before
 
 
 def test_scoped_view_rejects_client_principal_for_operator_action(
