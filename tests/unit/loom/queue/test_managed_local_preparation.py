@@ -289,6 +289,34 @@ def test_preparation_persists_existing_owners_and_exact_replay_is_read_only(
     assert (run_dir / ".loom" / "authority.sqlite3").is_file()
 
 
+@pytest.mark.parametrize("authority_created", [False, True])
+def test_interrupted_local_authority_publication_remains_non_mutating_conflict(
+    tmp_path: Path, authority_created: bool,
+) -> None:
+    from loom.queue import managed_local_preparation as preparation
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    run_dir = tmp_path / "runs" / "interrupted"
+    def interrupted_publish(service: object, run_uri: str, digest: str) -> None:
+        if authority_created:
+            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+            SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, idempotency_key=digest)
+        raise OSError("interrupted")
+
+    with patch.object(preparation, "_publish_authority", interrupted_publish):
+        with pytest.raises(OSError, match="interrupted"):
+            prepare_managed_local_run(coordinator, pipeline, "interrupted")
+    before = _run_files(run_dir)
+    assert (run_dir / "config" / "managed_local_runtime.json").is_file()
+    assert (run_dir / ".loom" / "authority.sqlite3").exists() is authority_created
+
+    with pytest.raises(QueueConflictError, match="existing partial, corrupt, or changed"):
+        prepare_managed_local_run(coordinator, pipeline, "interrupted")
+    assert _run_files(run_dir) == before
+
+
 def test_preparation_rejects_changed_or_partial_existing_state(tmp_path: Path) -> None:
     coordinator = _coordinator_config(tmp_path)
     pipeline = _pipeline_config(tmp_path)

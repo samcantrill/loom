@@ -12,6 +12,7 @@ from typing import Any, cast
 from loom.pipeline import PipelineSpec
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.planning import ExecutionPlan, plan_pipeline
+from loom.pipeline.status import RunStatus
 from loom.pipeline.runtime import (
     RunOptions,
     RunStoreOptions,
@@ -405,6 +406,12 @@ def _replay_receipt(
         _replay_matches(
             store, run_uri, composed, pipeline, options, requirements, service
         )
+        if service.daemon.coordinator_authority_factory is embedded_coordinator_authority:
+            # Local publication failures leave an inspectable conflict. Only the
+            # authenticated owner reconciles uncertain remote publication.
+            authority = embedded_coordinator_authority(run_uri)
+            if authority.open_run(run_uri).status is RunStatus.CREATED:
+                raise QueueServiceError("local authority publication is incomplete")
         record = load_managed_local_runtime_record(store, run_uri)
         plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
         runtime_digest = record["digest"]
@@ -417,7 +424,8 @@ def _replay_receipt(
             "managed-local preparation conflicts with existing partial, corrupt, or changed state"
         ) from exc
 
-    _publish_authority(service, run_uri, runtime_digest)
+    if service.daemon.coordinator_authority_factory is not embedded_coordinator_authority:
+        _publish_authority(service, run_uri, runtime_digest)
     return _receipt(run_uri, plan, runtime_digest)
 
 

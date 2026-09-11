@@ -304,7 +304,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   input receipts, result projection and worker-root formats remain unchanged.
 - Pre-submit gate: not run
 - Independent implementation review: required for selected-authority publication and lifecycle transitions
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3. Manager regression reproduced interrupted embedded
+  authority publication repairing a partial local target. Embedded replay now
+  opens only completed publication; missing or CREATED-only authority remains a
+  non-mutating conflict. Authenticated lost-response reconciliation is retained.
+  Both local fault variants and selected-authority publisher coverage pass.
 - PR and merge: not started
 
 ## Completion Record
