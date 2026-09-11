@@ -60,11 +60,28 @@ explicitly. Wait for `input_receipt` before editing the selected files again,
 or provide a stable source directory. Once capture is recorded, retries and
 restart use those bytes even if the authored project changes.
 
-Shared is the supported source mode in this release. A well-formed `staged`
-request receives `unsupported` with `mutation_outcome: not_applied` before any
-operation reservation, capture, child dispatch or target creation. Enabling a
-mode in configuration cannot install its implementation, and Loom never silently
-falls back between modes.
+Staged mode supports workers without access to that shared directory. Change
+`source.mode` to `staged` and use a new operation/run ID. The coordinator packs
+only the explicit captured selection and its manifest into a regular tar archive,
+commits it before recording the ready input receipt, and delivers it using Loom's
+existing artifact relay. The worker verifies and extracts it beneath its own
+assignment workspace before accepting the input. Shared storage mappings are
+unnecessary for this mode; the original authoring directory must still be visible
+to the coordinator. This does not upload a laptop checkout.
+
+The archive and all other assignment inputs must together fit the existing
+64 MiB transfer ceiling. Tar headers and padding count, so a selection near the
+64 MiB content ceiling can fail with `input_limit_exceeded` when packed. Extraction
+also enforces the captured file count/content bounds, safe unique destinations,
+regular files and manifest hashes. Absolute paths, traversal, links and special
+members cannot become ready inputs. The installed child uses the verified files
+for composition; they do not deploy code or data to later target workers.
+
+Protected policy and qualified worker installations must support the chosen mode.
+A disallowed mode receives `unsupported` with `mutation_outcome: not_applied`
+before operation reservation or capture. Earlier shared-only coordinators still
+reject staged requests. Enabling a mode in configuration cannot install its
+implementation, and Loom never silently falls back between modes.
 
 ## Request, Observe, Then Submit
 
@@ -177,7 +194,7 @@ and `result`. For `kind: prepare_run`, the result fields are:
 | --- | --- |
 | `schema_version` | Integer `1`. |
 | `coordinator_id` | Stable coordinator identity for reconnect guards. |
-| `input_receipt` | Null before capture; then mode, manifest digest and shared input reference. |
+| `input_receipt` | Null before capture; then mode, manifest digest and either a shared input reference or the staged archive's native ArtifactRef. |
 | `preparation_admission_id` | Null before the internal child is admitted; otherwise its native admission ID. |
 | `preflight_status` | Null before a report exists; otherwise its native aggregate check status. |
 | `preflight` | A complete native result when it fits, otherwise null. |
@@ -207,7 +224,7 @@ previously approved preview. There is no supported manual unpin procedure.
 
 Stable operation codes identify the failing boundary: `source_unavailable` and
 `source_changed` describe capture, `input_limit_exceeded` describes the finite
-selection bounds, `installation_mismatch` identifies incompatible worker software,
+selection or packed transfer bounds, `installation_mismatch` identifies incompatible worker software,
 `preflight_failed` preserves a failed check report, `preparation_child_failed`
 preserves native child failure evidence, and `publication_conflict` leaves the
 conflicting target inspectable. `result_too_large` prevents an unreadable required
@@ -217,7 +234,7 @@ do not replace [client connection and mutation errors](coordinator-client.md#rec
 The coordinator reports `installation_mismatch` when the report's profile or
 per-stage software requirements differ from the accepted installation. Missing
 stage requirements, a mismatched committed worker result, corrupted report bytes,
-and nonportable target paths produce `invalid_preparation_report` before
+malformed native report/check/runtime values, and nonportable target paths produce `invalid_preparation_report` before
 publication. The linked child admission retains the original execution evidence.
 An unavailable required check also prevents publication, even when other passing
 checks keep the native aggregate status at `PASS`; inspect the individual check's
@@ -252,6 +269,12 @@ in-progress copy on shared storage. Protected configuration changes still use
 the existing coordinator reload procedure before restart; accepted operations
 retain the selection made before that reload.
 
+A staged transfer or extraction interruption also retains the same operation,
+child identity and ready archive. Native transfer replay resumes the same bytes;
+partial extraction never becomes ready. Restart does not recapture a recorded
+archive after author edits. The operation pins the committed archive and report;
+assignment scratch remains owned by the worker's terminal/release lifecycle.
+
 ```sh
 loom queue daemon-cancel-preparation --connection client.yaml prepare-demo-001 --format json
 loom queue daemon-operation-wait --connection client.yaml prepare-demo-001 --timeout 25 --format json
@@ -281,6 +304,7 @@ preparation without changing existing deployment identity.
 | `profiles.<alias>.allowed_source_roots` | Explicit allowed root aliases. |
 | `profiles.<alias>.source_modes` | Allowed modes, intersected with installed implementation support. |
 | `profiles.<alias>.runtime_options` | Existing native resource/placement options for the managed child. |
+| Resident `readiness.preparation_staged` | Require the selected Python to support the preparation stage, configuration loader and staged input handler. |
 | Resident `preparation_shared_roots` | Root alias to worker-visible snapshot directory, retained with the private launch binding. |
 
 For example, merge this section into the protected coordinator file, replacing
@@ -312,6 +336,12 @@ file, alongside its existing descriptor, Python, project and readiness settings:
 preparation_shared_roots:
   projects: /mounted/nas/loom-preparation
 ```
+
+For a staged-only deployment, set the coordinator profile's `source_modes` to
+`[staged]`; its source root needs only `path`. The worker profile needs
+`readiness.preparation_staged: true` and no `preparation_shared_roots` mapping.
+To offer both modes, use `[shared, staged]`, retain the shared mapping and enable
+the staged readiness check. The request still chooses a mode explicitly.
 
 The two snapshot paths must expose the same shared directory. Protect and reload
 these role inputs through the existing deployment workflow; do not copy private
@@ -354,6 +384,15 @@ Registration refuses the capability if any of those environments lacks successfu
 qualification. Declare compatible existing installations before enabling it;
 the request itself never installs missing modules.
 
+For staged input, additionally allow and declare `preparation-staged-input-v1`
+in the coordinator agent policy and outbound registration. Its qualification
+imports `loom.queue.preparation.resolve_staged_input` in the actual selected
+Python, as well as the ordinary preparation entrypoints, and reports
+`packages.preparation_staged_imports`. It does not change portable software
+fingerprint meaning. A shared-only installation advertising `preparation-input-v1`
+cannot receive staged preparation work. Each advertised resident environment must
+qualify the declared modes before registration.
+
 The preparation child's native placement includes the selected profile's full
 descriptor fingerprint and preparation capability as hard constraints. A different
 profile with the same software fingerprints cannot take that child. A worker
@@ -364,7 +403,9 @@ inherit the child's preparation-only constraints.
 
 For an existing coordinator root at schema 12, follow the explicit
 [offline upgrade procedure](../downstream-operations.md#upgrade-a-retained-coordinator-root)
-before restarting with schema 13. Worker roots and journals stay at schema 12.
+before restarting with schema 13. Worker roots and journals stay at schema 12. A schema-13 coordinator already
+running shared preparation needs no second migration to enable staged input;
+its existing shared operations and receipts retain their identities and replay.
 Then qualify participating installations, configure the allowed sources/profiles
 and worker mappings, and enable preparation through the protected role settings.
 Existing accepted operations retain their selected configuration after reload.

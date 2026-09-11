@@ -25,13 +25,14 @@ from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credent
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("transport", ("unix", "https"))
+@pytest.mark.parametrize("transport,mode", (("unix", "shared"), ("https", "shared"), ("unix", "staged"), ("https", "staged")))
 def test_cli_prepare_observe_guard_submit_and_cancel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     transport: str,
+    mode: str,
 ) -> None:
-    service = _service(tmp_path)
+    service = _service(tmp_path, mode=mode)
     credentials = None
     if transport == "https":
         credentials = mutual_tls_credentials(tmp_path / "tls")
@@ -96,7 +97,7 @@ def test_cli_prepare_observe_guard_submit_and_cancel(
         path.chmod(0o600)
         connection = ("--connection", str(path))
     request_path = tmp_path / "request.json"
-    request_path.write_text(json.dumps(_request().to_dict()))
+    request_path.write_text(json.dumps(_request(mode).to_dict()))
     try:
         accepted = _cli_result(
             "daemon-prepare", *connection, "--request", str(request_path)
@@ -150,7 +151,7 @@ def test_cli_prepare_observe_guard_submit_and_cancel(
         request_path.write_text(
             json.dumps(
                 replace(
-                    _request(),
+                    _request(mode),
                     operation_id="cancel-prepare",
                     run_name="cancel-target",
                 ).to_dict()
@@ -172,8 +173,8 @@ def test_cli_prepare_observe_guard_submit_and_cancel(
         assert cancelled["result"]["preparation_admission_id"] is None
         assert not (service.daemon.run_store_root / "cancel-target").exists()
         staged = replace(
-            _request(),
-            source=replace(_request().source, mode="staged"),
+            _request(mode),
+            source=replace(_request(mode).source, mode="staged" if mode == "shared" else "shared"),
             operation_id="staged-prepare",
             run_name="staged-target",
         )

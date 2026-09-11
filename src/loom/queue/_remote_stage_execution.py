@@ -813,9 +813,20 @@ class _ResidentAssignmentBundle:
             )
         if len(outputs) > 32 or len(set(outputs)) != len(outputs):
             raise QueueServiceError("resident output names must be unique")
-        if set(item.logical_name for item in inputs) != set(
-            fingerprint_record.payload.declared_inputs
-        ) or set(outputs) != set(fingerprint_record.payload.declared_outputs):
+        expected_inputs = set(fingerprint_record.payload.declared_inputs)
+        archive = _preparation_archive(fingerprint)
+        if archive is not None:
+            if _PREPARATION_ARCHIVE_INPUT in expected_inputs:
+                raise QueueConflictError("preparation archive input name is reserved")
+            expected_inputs.add(_PREPARATION_ARCHIVE_INPUT)
+            transferred = next(
+                (item for item in inputs if item.logical_name == _PREPARATION_ARCHIVE_INPUT),
+                None,
+            )
+            if (transferred is None or transferred.artifact_id != archive.artifact_id
+                or f"sha256:{transferred.digest}" != archive.checksum):
+                raise QueueConflictError("preparation archive conflicts with its retained input")
+        if set(item.logical_name for item in inputs) != expected_inputs or set(outputs) != set(fingerprint_record.payload.declared_outputs):
             raise QueueConflictError(
                 "resident stage interface conflicts with its fingerprint"
             )
@@ -1561,6 +1572,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError("resident inputs are not durable")
             if str(row[0]) not in {"DELIVERED", "ACCEPTED"}:
                 raise QueueConflictError("resident assignment cannot be accepted")
+            self._prepare_staged_input()
             conn.execute("UPDATE request SET state = 'ACCEPTED' WHERE singleton = 1")
 
     def grant(self, fence: str) -> None:
@@ -1644,6 +1656,7 @@ class _ResidentAssignmentWorkspace:
         inputs = {
             item.logical_name: item.local_ref(self.input_path(item.logical_name))
             for item in request.inputs
+            if item.logical_name in fingerprint.payload.declared_inputs
         }
         logs = self.root / "logs"
         local_run_uri = f"loom-agent:{request.assignment_id}"
@@ -1678,6 +1691,16 @@ class _ResidentAssignmentWorkspace:
             or launch.bundle_digest != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
             or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)):
             raise QueueConflictError("preparation input conflicts with the retained launch")
+        from .preparation import SharedInputReceipt
+
+        if not isinstance(preparation.input_receipt, SharedInputReceipt):
+            directory = self._prepare_staged_input()
+            assert directory is not None
+            return {
+                "schema_version": 1,
+                "profile_descriptor": dict(launch.profile.descriptor),
+                "staged_directory": str(directory),
+            }
         alias = preparation.input_receipt.root
         path = launch.profile.preparation_shared_roots.get(alias)
         return {
@@ -1685,6 +1708,18 @@ class _ResidentAssignmentWorkspace:
             "profile_descriptor": dict(launch.profile.descriptor),
             "shared_roots": {} if path is None else {alias: str(path)},
         }
+
+    def _prepare_staged_input(self) -> Path | None:
+        from .preparation import StagedInputReceipt, resolve_staged_input
+
+        preparation = self.request().preparation_input
+        if preparation is None or not isinstance(preparation.input_receipt, StagedInputReceipt):
+            return None
+        return resolve_staged_input(
+            preparation.input_receipt,
+            archive_path=self.input_path(_PREPARATION_ARCHIVE_INPUT),
+            workspace_root=self.root,
+        )
 
     def persist_worker_result(self, result: StageWorkerResult) -> None:
         request = self.request()
@@ -2131,6 +2166,31 @@ def _validate_remote_semantic_data(
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")
+
+
+_PREPARATION_ARCHIVE_INPUT = "preparation_archive"
+
+
+def _preparation_archive(fingerprint: Mapping[str, PlainData]) -> ArtifactRef | None:
+    from .preparation import StagedInputReceipt
+
+    preparation = _preparation_input_from_fingerprint(fingerprint)
+    if preparation is not None and isinstance(preparation.input_receipt, StagedInputReceipt):
+        return preparation.input_receipt.reference
+    return None
+
+
+def _resident_input_refs(
+    inputs: Mapping[str, ArtifactRef], fingerprint: Mapping[str, PlainData]
+) -> dict[str, ArtifactRef]:
+    """Join the fixed child's archive to native transfer without a pipeline input."""
+    result = dict(inputs)
+    archive = _preparation_archive(fingerprint)
+    if archive is not None:
+        if _PREPARATION_ARCHIVE_INPUT in result:
+            raise QueueConflictError("preparation archive input name is reserved")
+        result[_PREPARATION_ARCHIVE_INPUT] = archive
+    return result
 
 
 def _preparation_input_from_fingerprint(fingerprint: Mapping[str, PlainData]) -> "PreparationChildInput | None":

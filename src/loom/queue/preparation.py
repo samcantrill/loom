@@ -1,4 +1,4 @@
-"""Finite, durable-value models and shared-storage capture for preparation.
+"""Finite preparation inputs, durable receipts and shared or staged capture.
 
 This module deliberately contains no composition or worker imports.  It is the
 native boundary between an authored project tree and the coordinator's managed
@@ -62,7 +62,7 @@ def _relative(value: object, field: str, *, dot: bool = False) -> str:
 
 @dataclass(frozen=True, slots=True)
 class PreparationSource:
-    """One protected-root project selection; only ``shared`` is executable here."""
+    """One protected-root project selection and explicit delivery mode."""
 
     mode: str
     root: str
@@ -572,10 +572,6 @@ def _staged_archive_receipt(
             artifact_type="bytes",
             codec_key="bytes.v1",
             checksum=_file_checksum(path),
-            metadata={
-                "manifest_digest": manifest_digest,
-                "size_bytes": path.stat().st_size,
-            },
         ),
     )
 

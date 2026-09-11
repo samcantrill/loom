@@ -57,6 +57,7 @@ from loom.queue.preparation import (
     PREPARATION_STAGE_TARGET,
     PreparationChildInput,
     PrepareRunRequest,
+    SharedInputReceipt,
     resolve_shared_input,
 )
 from loom.serialization import PlainData, ensure_plain_data
@@ -92,11 +93,16 @@ class PreparationStage:
         profile = ResidentProfileDescriptor.from_dict(private["profile_descriptor"])
         if profile.to_dict() != dict(binding.profile_descriptor):
             raise QueueConflictError("preparation installation_mismatch")
-        roots = cast(Mapping[str, str], private["shared_roots"])
-        captured = resolve_shared_input(
-            binding.input_receipt,
-            shared_roots={alias: Path(path) for alias, path in roots.items()},
-        )
+        if isinstance(binding.input_receipt, SharedInputReceipt):
+            roots = cast(Mapping[str, str], private["shared_roots"])
+            captured = resolve_shared_input(
+                binding.input_receipt,
+                shared_roots={alias: Path(path) for alias, path in roots.items()},
+            )
+        else:
+            # The native workspace verifies extraction before acceptance and
+            # again while binding this child to its retained supervisor launch.
+            captured = Path(cast(str, private["staged_directory"]))
         config_path = captured / binding.config_path
         # The capture manifest is authoritative. A different readable file in the
         # directory must not become an implicit configuration input.
@@ -159,15 +165,23 @@ def _worker_context() -> Mapping[str, PlainData]:
         value = json.loads(encoded)
         if (
             not isinstance(value, dict)
-            or set(value) != {"schema_version", "profile_descriptor", "shared_roots"}
+            or set(value) not in (
+                {"schema_version", "profile_descriptor", "shared_roots"},
+                {"schema_version", "profile_descriptor", "staged_directory"},
+            )
             or type(value["schema_version"]) is not int
             or value["schema_version"] != 1
-            or not isinstance(value["shared_roots"], dict)
+            or not isinstance(value.get("shared_roots", {}), dict)
             or any(
                 not isinstance(alias, str)
                 or not isinstance(path, str)
                 or not Path(path).is_absolute()
-                for alias, path in value["shared_roots"].items()
+                for alias, path in value.get("shared_roots", {}).items()
+            )
+            or (
+                "staged_directory" in value
+                and (not isinstance(value["staged_directory"], str)
+                     or not Path(value["staged_directory"]).is_absolute())
             )
         ):
             raise ValueError

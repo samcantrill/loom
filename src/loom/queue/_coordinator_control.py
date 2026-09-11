@@ -576,7 +576,7 @@ def dispatch_control(
             applied = True
         elif operation == "prepare_run":
             request = cast(PrepareRunRequest, value["request"])
-            if request.source.mode != "shared" or (
+            if (
                 not daemon.preparation_available
                 and not daemon._preparations.contains(request.operation_id)
             ):

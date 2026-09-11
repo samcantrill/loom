@@ -2424,18 +2424,20 @@ class LocalDaemonAgentHttpClient:
         return result
 
     def register(self, request: AgentRegistration) -> AgentSession:
-        from .preparation import PREPARATION_INPUT_CAPABILITY
+        from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
 
-        if PREPARATION_INPUT_CAPABILITY in request.declared_capabilities and (
+        staged = PREPARATION_STAGED_INPUT_CAPABILITY in request.declared_capabilities
+        if (PREPARATION_INPUT_CAPABILITY in request.declared_capabilities or staged) and (
             not self._profiles
             or any(
                 profile.readiness_result is None
                 or not profile.readiness_result.preparation_ready
+                or (staged and not profile.readiness_result.preparation_staged_ready)
                 for profile in self._profiles.values()
             )
         ):
             raise QueueServiceError(
-                "preparation-input-v1 requires preparation qualification in each advertised resident environment"
+                "preparation input capabilities require preparation qualification for their modes in each advertised resident environment"
             )
         journal = self._require_journal()
         persisted = journal.persist_registration_intent(request)
@@ -3564,6 +3566,18 @@ class LocalDaemonAgentHttpClient:
         request = _ResidentAssignmentBundle.from_remote_dict(
             thaw_plain_data(raw_request, path="remote delivered request")
         )
+        return self._execute_delivered_assignment(
+            session_id, request, suspend_requested=suspend_requested
+        )
+
+    def _execute_delivered_assignment(
+        self,
+        session_id: str,
+        request: _ResidentAssignmentBundle,
+        *,
+        suspend_requested: Callable[[], bool] | None = None,
+    ) -> Mapping[str, PlainData]:
+        """Drive one already durable delivery through the native input/grant path."""
         profile = self._profile_for_descriptor(request.profile)
         if profile is None:
             raise QueueConflictError(
@@ -3978,8 +3992,22 @@ class LocalDaemonAgentHttpClient:
                 claim_id=request.claim_id,
             )
             providers, _ = self._runtime_owners(session)
-            commands = execution_journal.assignment_claim_commands(assignment_id)
             launch_json = workspace.supervisor_launch_json()
+            if (launch_json is None
+                and execution_journal.read_grant_fence(assignment_id) is None
+                and execution_journal.read_state(assignment_id) in {
+                    AssignmentState.REQUEST_DURABLE,
+                    AssignmentState.PREPARED,
+                    AssignmentState.ACCEPTED,
+                }):
+                # Continue this exact delivery; startup still forbids a new
+                # poll or offer while retained work is unresolved. Commands
+                # may not yet exist when the interruption was during input.
+                completed.append(self._execute_delivered_assignment(
+                    session_id, request, suspend_requested=suspend_requested
+                ))
+                continue
+            commands = execution_journal.assignment_claim_commands(assignment_id)
             if launch_json is None:
                 retained_fence = execution_journal.read_grant_fence(assignment_id)
                 retained_result = (

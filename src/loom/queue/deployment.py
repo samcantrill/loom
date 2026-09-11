@@ -61,7 +61,7 @@ from .resident_readiness import (
 )
 from .gpu.occupancy import GpuOccupancyPolicy
 from ._preparation_policy import PreparationPolicy, load_preparation_policy
-from .preparation import PREPARATION_INPUT_CAPABILITY
+from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +355,11 @@ def load_coordinator_service_config(
             and local_agent.profile.readiness_result is not None
             and local_agent.profile.readiness_result.preparation_ready
         ),
+        resident_preparation_staged_ready=(
+            local_agent is not None
+            and local_agent.profile.readiness_result is not None
+            and local_agent.profile.readiness_result.preparation_staged_ready
+        ),
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -403,9 +408,11 @@ def load_outbound_agent_service_config(
     _header(payload, "loom.outbound-agent-service")
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
-    preparation = PREPARATION_INPUT_CAPABILITY in _strings(
+    capabilities = _strings(
         _mapping(payload, "registration"), "capabilities", non_empty=True
     )
+    preparation_staged = PREPARATION_STAGED_INPUT_CAPABILITY in capabilities
+    preparation = PREPARATION_INPUT_CAPABILITY in capabilities or preparation_staged
     profiles = tuple(
         _resident_profile(
             _mapping_value(value, f"resident_profiles[{index}]"),
@@ -413,6 +420,7 @@ def load_outbound_agent_service_config(
             f"resident_profiles[{index}]",
             allow_unready=_allow_unready,
             preparation=preparation,
+            preparation_staged=preparation_staged,
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
@@ -1475,6 +1483,7 @@ def _resident_profile(
     *,
     allow_unready: bool = False,
     preparation: bool = False,
+    preparation_staged: bool = False,
 ) -> ResidentExecutionProfile:
     _required_allowed(
         value,
@@ -1510,6 +1519,8 @@ def _resident_profile(
     requirements = _resident_readiness_requirements(value.get("readiness"))
     if preparation:
         requirements = replace(requirements, preparation=True)
+    if preparation_staged:
+        requirements = replace(requirements, preparation_staged=True)
     profile = ResidentExecutionProfile(
         _resident_descriptor_declaration(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
@@ -1561,7 +1572,7 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
         sequence_fields
         | mapping_fields
         | string_fields
-        | {"timeout_seconds", "preparation"},
+        | {"timeout_seconds", "preparation", "preparation_staged"},
         "resident readiness",
     )
     fields: dict[str, Any] = {}
@@ -1580,6 +1591,8 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
         fields["timeout_seconds"] = _positive_number(readiness, "timeout_seconds")
     if "preparation" in readiness:
         fields["preparation"] = readiness["preparation"]
+    if "preparation_staged" in readiness:
+        fields["preparation_staged"] = readiness["preparation_staged"]
     try:
         return ResidentReadinessRequirements(**fields)
     except ValueError as exc:

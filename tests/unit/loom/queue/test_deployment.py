@@ -2169,7 +2169,7 @@ def test_preparation_policy_selects_existing_descriptor_and_changes_only_active_
     assert configured.daemon.preparation_enabled
     policy = configured.daemon.preparation_policy
     assert policy is not None
-    assert policy.effective_modes == ("shared",)
+    assert policy.effective_modes == ("shared", "staged")
     assert policy.effective_profiles == ("example-cpu",)
     assert policy.effective_roots == ("projects",)
     assert configured.local_agent is not None
@@ -2202,7 +2202,7 @@ def test_preparation_policy_selects_existing_descriptor_and_changes_only_active_
     assert policy.select(request) == selected
 
 
-def test_future_staged_permission_does_not_enable_unimplemented_preparation(
+def test_staged_permission_enables_only_the_allowed_mode(
     tmp_path: Path,
 ) -> None:
     source = _coordinator_config(tmp_path)
@@ -2210,11 +2210,11 @@ def test_future_staged_permission_does_not_enable_unimplemented_preparation(
     payload["preparation"] = _preparation_policy_payload(modes=("staged",))
     _write_protected(source, payload)
     service = load_coordinator_service_config(source)
-    assert not service.daemon.preparation_enabled
+    assert service.daemon.preparation_enabled
     assert service.daemon.preparation_policy is not None
-    assert service.daemon.preparation_policy.effective_profiles == ()
-    assert service.daemon.preparation_policy.effective_roots == ()
-    assert service.daemon.preparation_policy.effective_modes == ()
+    assert service.daemon.preparation_policy.effective_profiles == ("example-cpu",)
+    assert service.daemon.preparation_policy.effective_roots == ("projects",)
+    assert service.daemon.preparation_policy.effective_modes == ("staged",)
 
 
 @pytest.mark.parametrize(

@@ -76,7 +76,6 @@ def test_staged_capture_commits_a_native_receipt_and_child_union(
     assert receipt.reference.artifact_type == "bytes"
     assert receipt.reference.codec_key == "bytes.v1"
     assert receipt.reference.checksum == inputs._file_checksum(archive)
-    assert receipt.reference.metadata["size_bytes"] == archive.stat().st_size
     assert input_receipt_from_dict(receipt.to_dict()) == receipt
 
     binding = PreparationChildInput(

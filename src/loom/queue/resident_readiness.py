@@ -43,6 +43,13 @@ if request.get("preparation", False):
         result["preparation_available"] = callable(PreparationStage) and callable(compose_config)
     except Exception:
         result["preparation_available"] = False
+if request.get("preparation_staged", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.queue.preparation import resolve_staged_input
+        result["preparation_staged_available"] = callable(resolve_staged_input)
+    except Exception:
+        result["preparation_staged_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -170,10 +177,13 @@ class ResidentReadinessRequirements:
     required_programs: tuple[str, ...] = ()
     lockfile: str = "uv.lock"
     preparation: bool = False
+    preparation_staged: bool = False
 
     def __post_init__(self) -> None:
         if type(self.preparation) is not bool:
             raise ValueError("resident preparation requirement must be boolean")
+        if type(self.preparation_staged) is not bool:
+            raise ValueError("resident staged preparation requirement must be boolean")
         for values in (
             self.imports,
             self.distributions,
@@ -261,6 +271,15 @@ class ResidentReadinessResult:
             for check in self.checks
         )
 
+    @property
+    def preparation_staged_ready(self) -> bool:
+        """Whether the selected installation also qualified staged input handling."""
+        return self.preparation_ready and any(
+            check.check_id == "packages.preparation_staged_imports"
+            and check.status is PreflightCheckStatus.PASS
+            for check in self.checks
+        )
+
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "ok": self.ok,
@@ -289,7 +308,11 @@ def qualify_resident_profile(
     """
 
     requirements = profile.readiness_requirements
-    preparation = requirements.preparation or bool(profile.preparation_shared_roots)
+    preparation = (
+        requirements.preparation
+        or requirements.preparation_staged
+        or bool(profile.preparation_shared_roots)
+    )
     checks: list[PreflightCheckResult] = []
 
     def add(
@@ -414,6 +437,8 @@ def qualify_resident_profile(
     }
     if preparation:
         request["preparation"] = True
+    if requirements.preparation_staged:
+        request["preparation_staged"] = True
     response = run_resident_probe(
         profile.launch_profile,
         _INSTALLATION,
@@ -450,6 +475,17 @@ def qualify_resident_profile(
             if available
             else "The preparation stage or config loader is unavailable in the selected Python.",
             "Install compatible Loom with its config extra in the existing environment before enabling preparation.",
+        )
+    if requirements.preparation_staged:
+        available = observed.get("preparation_staged_available") is True
+        add(
+            "packages.preparation_staged_imports",
+            PreflightGroup.PACKAGES,
+            available,
+            "Selected Python imports the installed staged preparation input handler."
+            if available
+            else "Staged preparation input handling is unavailable in the selected Python.",
+            "Use an existing Loom installation supporting staged preparation before enabling it.",
         )
     imports = cast(Mapping[str, Mapping[str, object]], observed["imports"])
     distributions = cast(

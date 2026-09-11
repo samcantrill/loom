@@ -258,8 +258,10 @@ def _preparation_constraints(
 ) -> tuple[HardConstraintSpec, ...]:
     from .preparation import (
         PREPARATION_INPUT_CAPABILITY,
+        PREPARATION_STAGED_INPUT_CAPABILITY,
         PREPARATION_STAGE_TARGET,
         PreparationChildInput,
+        StagedInputReceipt,
     )
     from ._remote_stage_execution import ResidentProfileDescriptor
 
@@ -280,6 +282,11 @@ def _preparation_constraints(
                 "attributes": {
                     "resident_profile_fingerprint": profile.fingerprint,
                     "preparation_input_capability": PREPARATION_INPUT_CAPABILITY,
+                    **(
+                        {"preparation_staged_capability": PREPARATION_STAGED_INPUT_CAPABILITY}
+                        if isinstance(binding.input_receipt, StagedInputReceipt)
+                        else {}
+                    ),
                 }
             },
             evaluator.descriptor,

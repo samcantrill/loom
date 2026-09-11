@@ -18,6 +18,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Protocol, cast
 
 from loom.artifacts import ArtifactRef
+from loom.io.uris import uri_to_path
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
 from loom.serialization import PlainData, stable_json_bytes
@@ -26,9 +27,11 @@ from .errors import QueueConflictError, QueueServiceError
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
-    SharedInputReceipt,
     capture_shared_input,
+    capture_staged_input,
     discard_shared_input_temporaries,
+    discard_staged_input_temporaries,
+    input_receipt_from_dict,
 )
 
 if TYPE_CHECKING:
@@ -248,8 +251,6 @@ class CoordinatorPreparations:
                 return self._projection(row)
             if not self.available or self.callbacks is None:
                 raise QueueServiceError("preparation is unsupported")
-            if request.source.mode != "shared":
-                raise QueueServiceError("staged preparation input is unsupported")
             if request.run_name.startswith(PREPARATION_RUN_PREFIX):
                 raise QueueServiceError("preparation target uses a reserved child name")
             policy = self.daemon.config.preparation_policy
@@ -480,7 +481,13 @@ class CoordinatorPreparations:
             and row["state"] == "pending"
             and not row["dispatch_claimed"]
         ):
-            if result["input_receipt"] is None and request.source.mode == "shared":
+            if result["input_receipt"] is None and request.source.mode == "staged":
+                discard_staged_input_temporaries(
+                    request,
+                    artifact_root=self.daemon.config.coordinator_root / "preparation-inputs",
+                    owner_id=self.daemon._require_started(),
+                )
+            elif result["input_receipt"] is None:
                 root = _mapping(selected["source_root"])
                 discard_shared_input_temporaries(
                     request,
@@ -495,19 +502,33 @@ class CoordinatorPreparations:
         if receipt_data is None:
             root = _mapping(selected["source_root"])
             try:
-                snapshot_root = Path(cast(str, root["shared_snapshot_root"]))
                 owner_id = self.daemon._require_started()
-                discard_shared_input_temporaries(
-                    request, snapshot_root=snapshot_root, owner_id=owner_id
-                )
-                receipt = capture_shared_input(
-                    request,
-                    source_root=Path(cast(str, root["path"])),
-                    snapshot_root=snapshot_root,
-                    owner_id=owner_id,
-                )
+                if request.source.mode == "staged":
+                    artifact_root = config.coordinator_root / "preparation-inputs"
+                    discard_staged_input_temporaries(
+                        request, artifact_root=artifact_root, owner_id=owner_id
+                    )
+                    receipt = capture_staged_input(
+                        request,
+                        source_root=Path(cast(str, root["path"])),
+                        artifact_root=artifact_root,
+                        owner_id=owner_id,
+                    )
+                    captured_path = uri_to_path(receipt.reference.uri)
+                else:
+                    snapshot_root = Path(cast(str, root["shared_snapshot_root"]))
+                    discard_shared_input_temporaries(
+                        request, snapshot_root=snapshot_root, owner_id=owner_id
+                    )
+                    receipt = capture_shared_input(
+                        request,
+                        source_root=Path(cast(str, root["path"])),
+                        snapshot_root=snapshot_root,
+                        owner_id=owner_id,
+                    )
+                    captured_path = snapshot_root / receipt.path
                 retain_preparation_path(
-                    snapshot_root / receipt.path,
+                    captured_path,
                     coordinator_id=owner_id,
                     operation_id=operation_id,
                 )
@@ -531,7 +552,7 @@ class CoordinatorPreparations:
                 return
             row = self._read(operation_id)
         else:
-            receipt = SharedInputReceipt.from_dict(_mapping(receipt_data))
+            receipt = input_receipt_from_dict(_mapping(receipt_data))
         binding = PreparationChildInput(
             request.operation_id,
             request.preparation_profile,

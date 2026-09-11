@@ -88,6 +88,7 @@ from ._remote_stage_execution import (
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
     _read_regular_file_bytes,
+    _resident_input_refs,
 )
 
 
@@ -3448,7 +3449,10 @@ def run_managed_local_assignment(
     input_paths: dict[str, Path] = {}
     input_refs: dict[str, ArtifactRef] = {}
     total_input_bytes = 0
-    for logical_name, ref in sorted(worker_request.inputs.items()):
+    transfer_refs = _resident_input_refs(
+        worker_request.inputs, cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
+    )
+    for logical_name, ref in sorted(transfer_refs.items()):
         transfer_id = (
             "input-"
             + hashlib.sha256(
