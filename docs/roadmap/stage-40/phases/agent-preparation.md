@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 40 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p2-agent-preparation
@@ -10,6 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: `5fe1b3750a387b80aea8b84df521c08e25e42b21`, published and synchronized after Phase 1 merge and metadata.
 - PR target: develop
+- PR: [#300](https://github.com/samcantrill/loom/pull/300)
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 2: Durable Preparation On Shared Storage
 - Dependencies: Phase 1 PR #298 remotely merged as `3b3942a88ee0729612f02fe3d7dbda3164c762d4`; stage plan approved on 2026-09-10
 - Workflow path: expanded for durable operations, filesystem/process handoffs, migration and cancellation
@@ -840,7 +841,7 @@ The manager owns startup reconciliation and any changed public/durable decision.
 - Pre-submit gate: passed; accepted scope, source boundaries, current full/affected evidence, documentation and residual limitations agree
 - Independent review: required before implementation merge
 - Blocker corrections: 2/3; profile process-spawn compatibility and two summary-run test synchronization assumptions corrected
-- PR and merge: not created
+- PR and merge: #300 open against develop; independent review and delivery pending
 
 ## Completion Record
 
@@ -859,6 +860,6 @@ The manager owns startup reconciliation and any changed public/durable decision.
 | Required full PR gate | `make validate-pr` passed at the validated tree: Ruff passed; Pyright reported zero errors; isolated locked baseline had 3,250 passed, 2 skipped and 193 deselected; isolated locked config-extra had 199 passed, 18 skipped and 3,255 deselected; source and wheel builds passed. Evidence: `/tmp/loom-stage40-p2-process-compatible-validate.log`. |
 | Required summary gate | Corrected `make test-summary` passed at `533919291759df738e3432164e465aa17dc44162`: 125 package, 2,263 unit, 301 contract, 493 integration, 70 E2E and 199 config-extra tests passed; 3,451 passed overall, zero failures/errors and 18 skipped. Evidence: `/tmp/loom-stage40-p2-synchronized-summary.log` and `build/test-summary.md` (generated 2026-09-11T07:20:56Z). The complete result supersedes the initial summary failures. Its test-only corrections put a direct reconciliation call under the native daemon lock and use durable no-assignment evidence across ordinary execution rather than requiring one intermediate admission projection. Runtime source remains unchanged from the passed PR gate. |
 | Documentation checks | All 23 added relative file links resolve; previously checked anchors are unchanged. The feature guide and two operation examples contain 24 shell/Python blocks that parse. Both example requests and the guide request round-trip through the native request model. Both YAML blocks parse, and the guide policy passes the native loader with its documented observed-profile placeholder. The CLI fixtures exercise the documented lifecycle. One unchanged link in `docs/loom.md` points to absent historical migration notes; this phase does not alter it. |
-| Pre-submit, PR and independent review | Pre-submit passed: the phase implements its accepted common lifecycle and shared-only boundary, reuses native authority/scheduling/publication, preserves ordinary protocols and import boundaries, and carries complete local evidence and accurate deployment limitations. PR creation and independent actual-PR-head review are next. |
+| Pre-submit, PR and independent review | Pre-submit passed: the phase implements its accepted common lifecycle and shared-only boundary, reuses native authority/scheduling/publication, preserves ordinary protocols and import boundaries, and carries complete local evidence and accurate deployment limitations. [PR #300](https://github.com/samcantrill/loom/pull/300) is open, non-draft and mergeable against develop with the canonical title and phase branch. The required independent review consumes its current head; no review approval is claimed yet. |
 | Residual limitations | Shared mode only; staged mode belongs to Phase 3. Finite capture, one existing qualified preparation environment, embedded authority with no configured SLURM preparation, no code/environment installation, retained evidence without automatic expiration, and preserved partial-target conflicts remain accepted limits. The 18 summary skips are opt-in Docker/Apptainer acceptance cases. Physical fleet/NAS/Codex acceptance is assigned to Phase 4. No real roots were upgraded. |
 | Delivery and cleanup | Phase 2 remains in progress until independent review, remote merge, metadata publication and synchronization complete. Persistent Stage 40 worktree retained; Phase 3 has not started. |
