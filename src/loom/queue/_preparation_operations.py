@@ -133,6 +133,10 @@ def scheduling_snapshot(config: LocalDaemonConfig) -> dict[str, PlainData]:
     }
 
 
+def _cancel_id(operation_id: str) -> str:
+    return "cancel-run-" + hashlib.sha256(operation_id.encode()).hexdigest()
+
+
 def _operation(
     operation_id: str, state: str, code: str | None, result: Mapping[str, PlainData]
 ) -> LocalDaemonOperation:
@@ -164,8 +168,11 @@ def _with_report(
     preflight: Mapping[str, PlainData] | None,
 ) -> LocalDaemonOperation:
     required = {**result, "preflight": None}
-    if state in {"pending", "applying"}:
-        _operation(operation_id, "cancelled", "invalid_preparation_report", required)
+    reserved = required
+    if "queue_item_id" in required:
+        reserved = {**required, "cancellation_operation_id": _cancel_id(operation_id)}
+    if state in {"pending", "applying"} or "queue_item_id" in required:
+        _operation(operation_id, "cancelled", "invalid_preparation_report", reserved)
     value = _operation(operation_id, state, code, required)
     if preflight is not None:
         try:
@@ -889,10 +896,6 @@ class CoordinatorPreparations:
         if row["kind"] == "run":
             self._continue_run(self._read(operation_id))
 
-    @staticmethod
-    def _cancel_id(operation_id: str) -> str:
-        return "cancel-run-" + hashlib.sha256(operation_id.encode()).hexdigest()
-
     def _check_run_budget(
         self, operation_id: str, result: Mapping[str, PlainData]
     ) -> None:
@@ -921,7 +924,7 @@ class CoordinatorPreparations:
             "cancellation_principal_id": None,
             "blocked_reason": None,
         }
-        cancel_id = self._cancel_id(operation_id)
+        cancel_id = _cancel_id(operation_id)
         _with_report(
             operation_id,
             "applied",
@@ -1061,7 +1064,7 @@ class CoordinatorPreparations:
     def cancel_run(self, operation_id: str, principal_id: str) -> LocalDaemonOperation:
         from .local_daemon import _operation_projection
 
-        cancel_id = self._cancel_id(operation_id)
+        cancel_id = _cancel_id(operation_id)
         with self.daemon._cycle_lock, self.daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -1084,7 +1087,8 @@ class CoordinatorPreparations:
             ):
                 raise QueueConflictError("cancellation operation identity is ambiguous")
             result = _mapping(json.loads(str(row["result_json"])))
-            self._check_run_budget(operation_id, result)
+            # Suppression retains actual references; it must not require space
+            # for an admission which was refused or will never be created.
             cancel_result: dict[str, PlainData] = {
                 "coordinator_id": result["coordinator_id"],
                 "target_operation_id": operation_id,

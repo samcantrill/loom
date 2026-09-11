@@ -351,10 +351,32 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable continuation and cancellation boundary
-- Blocker corrections: 1/3. Manager reproduced caller preparation stealing the
+- Blocker corrections: 2/3. Manager reproduced caller preparation stealing the
   stable `cancel-run-` identity after run acceptance. Reserve that native control
   namespace at public preparation and management-operation acceptance boundaries;
   cover both creation orderings and retain ordinary query/cancellation access.
+  The second manager correction restores the unrelated scheduling/time-control
+  schemas after accidental insertion of run-specific columns. Those fields remain
+  only on preparation operations; existing operator tests cover the restoration.
+- Additional boundary probe: a 31,900-character queue ID can be accepted but its
+  full publication/admission projection refused. Cancellation now validates its
+  actual retained references rather than requiring the refused hypothetical
+  admission. Every run projection reserves its mandatory cancellation link.
+- First final-gate attempt: `make validate-pr` on `a650b51733a91a229303685b06b27c3c323f63f6`
+  (tree `cf27b5a52d6e4ce157885a7aa0abaa9a725e2634`) exited 2 after a deliberate
+  SIGINT to its verified pytest process once the schema regression was confirmed.
+  Ruff/Pyright had passed; interrupted baseline evidence was 629 passed, 2 skipped,
+  269 deselected in 410.08 seconds. This is incomplete evidence, not a gate pass;
+  `/tmp/loom-stage41-p2-validate-pr.log` retains the actual outcome. Its owned
+  fixture supervisors exited during pytest cleanup. The required full command
+  will be repeated on the corrected tree.
+- Correction checks: isolated locked Python 3.12/config pytest selected
+  `test_run_operations.py::test_publication_budget_refusal_still_allows_bounded_cancellation`,
+  `test_local_daemon.py::test_forward_clock_jump_degrades_without_advancing_and_requires_recovery`
+  and `test_local_daemon.py::test_scheduling_reload_is_local_atomic_and_durable`:
+  3 passed; `/tmp/loom-stage41-p2-corrections.log`. The earlier owner selection
+  (cancellation paging, native child release, bounded publication, root/upgrade
+  checks) passed 17 cases; `/tmp/loom-stage41-p2-owner-checks.log`.
 - PR and merge: not started
 
 ## Completion Record

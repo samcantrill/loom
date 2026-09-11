@@ -4407,7 +4407,6 @@ def _initialize_coordinator_schema(
     conn.execute(
         "CREATE TABLE scheduling_reloads ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
         "request_json TEXT NOT NULL, state TEXT NOT NULL, "
         "result_code TEXT, scheduling_epoch TEXT, "
         "configuration_revision INTEGER, replacement_fingerprint TEXT)"
@@ -4422,7 +4421,6 @@ def _initialize_coordinator_schema(
     conn.execute(
         "CREATE TABLE time_recoveries ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
         "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
         "result_json TEXT NOT NULL)"
     )

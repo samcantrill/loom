@@ -563,3 +563,32 @@ def test_pending_cancellations_do_not_starve_a_settled_control_after_first_page(
     finally:
         daemon.stop()
         daemon._preparations._reconcile_lock.release()
+
+
+def test_publication_budget_refusal_still_allows_bounded_cancellation(tmp_path):
+    service = _service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        request = RunRequest(_request(), "q" * 31900)
+        accepted = daemon.start_run(request, principal_id="caller")
+        refused = daemon.wait_operation(accepted.operation_id, timeout=25).operation
+        assert refused.state == "failed" and refused.code == "result_too_large"
+        assert _result(refused)["prepared_run"] is None
+        assert _result(refused)["admission"] is None
+        assert not (service.daemon.run_store_root / "target-1").exists()
+        control = daemon.cancel_run_operation(
+            accepted.operation_id, principal_id="caller"
+        )
+        settled = daemon.wait_operation(control.operation_id, timeout=10).operation
+        assert settled.state == "applied"
+        assert _result(settled)["admission"] is None
+        assert _result(settled)["queue_item_id"] == request.queue_item_id
+        assert len(stable_json_bytes(settled.to_dict())) <= 64 * 1024
+        original = daemon.operation(accepted.operation_id)
+        assert original.state == "failed"
+        assert _result(original)["cancellation_operation_id"] == control.operation_id
+        assert len(stable_json_bytes(original.to_dict())) <= 64 * 1024
+    finally:
+        daemon.stop()
