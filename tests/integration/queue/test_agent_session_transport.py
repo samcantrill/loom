@@ -2867,9 +2867,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 assert runs.read_stage_failure(run_uri, "build") is None
                 assert agent._execution_journal is not None
                 assert agent._execution_journal.retained_claim_commands()
-                reconciled = execution_owner.reconcile_admission(
-                    daemon.admission_for_run_uri(run_uri)
-                )
+                # This direct owner call shares the daemon's mutation boundary.
+                with daemon._cycle_lock:
+                    reconciled = execution_owner.reconcile_admission(
+                        daemon.admission_for_run_uri(run_uri)
+                    )
                 assert reconciled.state is LocalDaemonAdmissionState.ACTIVE
                 monkeypatch.setattr(
                     execution_owner.run_store,

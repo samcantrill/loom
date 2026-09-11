@@ -3574,6 +3574,25 @@ class LocalDaemonExecution:
             item.key: item
             for item in self.coordinator.retained_scheduling_descriptors()
         }
+        # Accepted preparation may not have published its child/runtime record
+        # yet. Its frozen publisher composition still pins these native owners.
+        with self._daemon_owner()._connection() as conn:
+            preparations = tuple(
+                conn.execute(
+                    "SELECT selected_json FROM preparation_operations WHERE state IN ('pending', 'applying')"
+                )
+            )
+        for row in preparations:
+            selected = json.loads(str(row["selected_json"]))
+            scheduling = selected["scheduling"]
+            for data in (
+                *scheduling["planners"],
+                *scheduling["hard_evaluators"],
+                *scheduling["preference_scorers"],
+                scheduling["policy"],
+            ):
+                descriptor = SchedulingComponentDescriptor.from_dict(data)
+                references[descriptor.key] = descriptor
         for placement in runtime_placements:
             for descriptor in placement.planner_descriptors.values():
                 references[descriptor.key] = descriptor
@@ -4213,6 +4232,8 @@ class LocalDaemonExecution:
         return settling
 
     def _candidate(self) -> Candidate:
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
         inventory: dict[str, ResourceInventoryEnvelope] = {}
         availability: dict[str, ResourceAvailabilityEnvelope] = {}
         for kind, provider in self.providers.items():
@@ -4257,15 +4278,63 @@ class LocalDaemonExecution:
                 data=data,
                 atoms=observed.atoms,
             )
+        profile = self.config.resident_worker_launch_profile
+        attributes: dict[str, PlainData] = {}
+        if profile is not None:
+            attributes["resident_profile_fingerprint"] = (
+                ResidentProfileDescriptor.from_dict(profile.descriptor).fingerprint
+            )
+            if self.config.resident_preparation_ready:
+                attributes["preparation_input_capability"] = (
+                    PREPARATION_INPUT_CAPABILITY
+                )
         return Candidate(
             self.config.machine_id,
             inventory,
             availability,
+            attributes=attributes,
         )
+
+    def preparation_scheduling_components(
+        self, snapshot: Mapping[str, PlainData]
+    ) -> LocalDaemonSchedulingComponents:
+        """Resolve the accepted inert snapshot through the existing retained registry."""
+        from loom.scheduling import SchedulingError
+        from ._preparation_operations import PreparationConfigurationUnavailable
+
+        def components(name: str) -> tuple[Any, ...]:
+            values = snapshot[name]
+            if not isinstance(values, (list, tuple)):
+                raise QueueServiceError("preparation scheduling snapshot is invalid")
+            return tuple(
+                self._scheduling.registry.retained(
+                    SchedulingComponentDescriptor.from_dict(item)
+                )
+                for item in values
+            )
+
+        try:
+            return LocalDaemonSchedulingComponents(
+                planners=components("planners"),
+                hard_evaluators=components("hard_evaluators"),
+                preference_scorers=components("preference_scorers"),
+                policy=cast(
+                    SchedulingPolicy,
+                    self._scheduling.registry.retained(
+                        SchedulingComponentDescriptor.from_dict(snapshot["policy"])
+                    ),
+                ),
+            )
+        except SchedulingError as exc:
+            raise PreparationConfigurationUnavailable(
+                "accepted preparation scheduling implementation is unavailable"
+            ) from exc
 
     def _remote_candidates(
         self,
     ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
         if not self.config.remote_profiles:
             return {}
         accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
@@ -4277,7 +4346,7 @@ class LocalDaemonExecution:
             rows = tuple(
                 conn.execute(
                     "SELECT o.offer_id, o.offer_json, o.expires_at, "
-                    "s.agent_id, s.session_id, r.observed_claim_ids_json "
+                    "s.agent_id, s.session_id, s.capabilities_json, r.observed_claim_ids_json "
                     "FROM agent_offers o "
                     "JOIN agent_sessions s ON s.session_id = o.session_id "
                     "LEFT JOIN session_replacements r "
@@ -4455,6 +4524,14 @@ class LocalDaemonExecution:
                         "resident_environment_fingerprint": profile.environment_fingerprint,
                         "resident_executor_fingerprint": profile.executor_fingerprint,
                         "artifact_capability": "regular-file-relay-v1",
+                        **(
+                            {
+                                "preparation_input_capability": PREPARATION_INPUT_CAPABILITY
+                            }
+                            if PREPARATION_INPUT_CAPABILITY
+                            in json.loads(str(row["capabilities_json"]))
+                            else {}
+                        ),
                     },
                     pool_names=offer.pools,
                 )

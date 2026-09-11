@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         prepare_managed_run,
         prepare_managed_local_run,
     )
+    from .preparation import PrepareRunRequest, PreparationSource, SharedInputReceipt
     from .agent_sessions import LocalOwnerOperatorPolicy
     from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
@@ -237,6 +238,10 @@ def __getattr__(name: str) -> object:
         from . import managed_local_preparation
 
         return getattr(managed_local_preparation, name)
+    if name in {"PrepareRunRequest", "PreparationSource", "SharedInputReceipt"}:
+        from . import preparation
+
+        return getattr(preparation, name)
     if name == "ExecutionRequirement":
         from loom.pipeline.orchestration import ExecutionRequirement
 
@@ -302,6 +307,9 @@ __all__ = [
     "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
     "ManagedLocalPreparationReceipt",
+    "PrepareRunRequest",
+    "PreparationSource",
+    "SharedInputReceipt",
     "prepare_managed_run",
     "prepare_managed_local_run",
     "LaunchEnvironmentBindings",

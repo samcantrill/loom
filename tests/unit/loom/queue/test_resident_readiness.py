@@ -51,6 +51,55 @@ def test_profile_probe_uses_selected_python_and_reports_missing_import(
     assert check.status == "FAIL"
 
 
+@pytest.mark.optional_dependency
+def test_preparation_qualification_does_not_change_portable_software_identity(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("weave")
+    ordinary = qualified_resident_profile(_profile(tmp_path))
+    preparation = qualified_resident_profile(
+        _profile(tmp_path, ResidentReadinessRequirements(preparation=True))
+    )
+    assert ordinary.readiness_result is not None
+    assert not ordinary.readiness_result.preparation_ready
+    assert preparation.readiness_result is not None
+    assert preparation.readiness_result.preparation_ready
+    assert preparation.readiness_identity == ordinary.readiness_identity
+    assert preparation.descriptor == ordinary.descriptor
+
+
+def test_preparation_qualification_checks_the_actual_selected_environment(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "sitecustomize.py").write_text(
+        "import importlib.abc, sys\n"
+        "class MissingConfigLoader(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'weave':\n"
+        "            raise ModuleNotFoundError('config loader unavailable in this environment')\n"
+        "sys.meta_path.insert(0, MissingConfigLoader())\n"
+    )
+    profile = replace(_profile(tmp_path), environment={"PYTHONPATH": str(tmp_path)})
+    ordinary = qualify_resident_profile(profile)
+    assert ordinary.ok
+    preparation = qualify_resident_profile(
+        replace(
+            profile,
+            readiness_requirements=ResidentReadinessRequirements(preparation=True),
+        )
+    )
+    assert not preparation.ok
+    assert not preparation.preparation_ready
+    assert (
+        next(
+            check
+            for check in preparation.checks
+            if check.check_id == "packages.preparation_imports"
+        ).status
+        == "FAIL"
+    )
+
+
 def test_identity_tracks_declared_source_not_path_or_unrelated_files(
     tmp_path: Path,
 ) -> None:

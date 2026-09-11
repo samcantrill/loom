@@ -125,6 +125,31 @@ def test_execute_cleanup_deletes_selected_target_records_result_then_event(
     assert store.events[0].payload["result_id"] == "result-1"
 
 
+def test_cleanup_rechecks_a_preparation_pin_added_after_dry_run(tmp_path: Path) -> None:
+    from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
+
+    run_root = tmp_path / "run"
+    target = run_root / "tmp" / "report.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("retained report")
+    report = _report(run_root, target)
+    retain_preparation_path(
+        run_root, coordinator_id="coordinator-1", operation_id="prepare-1"
+    )
+    fact = execute_cleanup(
+        cast(PerRunAuthorityStore, ExecutionStore()),
+        path_to_run_uri(run_root),
+        report,
+        _intent(candidate_ids=("candidate-1",)),
+        managed_roots=(_managed_root(run_root),),
+        result_id="result-1",
+        created_at="2020-01-01T00:00:05Z",
+    )
+    assert fact.result.entries[0].outcome is CleanupResultOutcome.REJECTED
+    assert fact.result.entries[0].reason_code == "retained_preparation_evidence"
+    assert target.read_text() == "retained report"
+
+
 def test_execute_cleanup_requires_structured_delete_intent(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     target = run_root / "tmp" / "payload.txt"

@@ -98,6 +98,7 @@ class _ApptainerPreflightTarget:
 @dataclass
 class _Context:
     request: PreflightRequest
+    composed: object | None = None
     _config: object | None = None
     _config_error: BaseException | None = None
     _pipeline: object | None = None
@@ -116,6 +117,8 @@ class _Context:
         return self.request.authority_mode
 
     def config(self) -> object:
+        if self.composed is not None:
+            return self.composed
         if self._config is not None:
             return self._config
         if self._config_error is not None:
@@ -221,8 +224,28 @@ def run_preflight(request: PreflightRequest) -> PreflightResult:
 
     if not isinstance(request, PreflightRequest):
         raise TypeError("request must be a PreflightRequest")
-    selected_groups = normalize_groups(request.groups)
-    context = _Context(request=request)
+    return _run_checks(_Context(request=request))
+
+
+def run_preflight_composed(composed: object, request: PreflightRequest) -> PreflightResult:
+    """Run ordinary checks over one already composed configuration.
+
+    Preparation workers call this entrypoint after composing their captured
+    input.  It deliberately rejects a second overlay or override pass: the
+    checks and the later publisher must observe the same object.
+    """
+
+    if not isinstance(request, PreflightRequest):
+        raise TypeError("request must be a PreflightRequest")
+    if request.overlays or request.overrides:
+        raise ValueError("supplied composition preflight does not accept overlays or overrides")
+    if composed is None:
+        raise TypeError("supplied composition must not be None")
+    return _run_checks(_Context(request=request, composed=composed))
+
+
+def _run_checks(context: _Context) -> PreflightResult:
+    selected_groups = normalize_groups(context.request.groups)
     checks: list[PreflightCheckResult] = []
     for group in selected_groups:
         checks.extend(_CHECKS[group](context))

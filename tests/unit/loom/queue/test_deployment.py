@@ -69,6 +69,29 @@ def test_coordinator_config_is_protected_exact_and_path_bound(tmp_path: Path) ->
         load_coordinator_service_config(source)
 
 
+def test_reload_reuses_unchanged_scheduling_without_skipping_changed_declarations(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    current = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    payload["poll_interval_seconds"] = 0.125
+    _write_protected(source, payload)
+    replacement = load_coordinator_service_config(source, current=current)
+    assert replacement.daemon.poll_interval_seconds == 0.125
+    assert (
+        replacement.daemon.scheduling_components is current.daemon.scheduling_components
+    )
+    assert (
+        replacement.daemon.admission_priority_resolver
+        is current.daemon.admission_priority_resolver
+    )
+    payload["scheduling"] = {"unsupported": "changed declaration"}
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="scheduling"):
+        load_coordinator_service_config(source, current=replacement)
+
+
 def test_resident_profile_requires_observed_imports_before_role_use(
     tmp_path: Path,
 ) -> None:
@@ -878,7 +901,9 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     payload = json.loads(first_source.read_text(encoding="utf-8"))
     payload["deployment_root"] = "different-deployment"
     payload["run_store_root"] = "different-runs"
-    (second_root / "environment").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    (second_root / "environment").symlink_to(
+        Path(sys.executable).parent.parent, target_is_directory=True
+    )
     alternate_python = second_root / "environment" / "bin" / Path(sys.executable).name
     agent_payload = _local_agent_payload(first_source)
     profiles = agent_payload["resident_profiles"]
@@ -965,7 +990,9 @@ def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     )
     alternate_project = tmp_path / "alternate-project"
     alternate_project.mkdir()
-    (tmp_path / "environment").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    (tmp_path / "environment").symlink_to(
+        Path(sys.executable).parent.parent, target_is_directory=True
+    )
     alternate_python = tmp_path / "environment" / "bin" / Path(sys.executable).name
     payload["resident_profiles"][0]["project_root"] = str(alternate_project)
     payload["resident_profiles"][0]["python_executable"] = str(alternate_python)
@@ -1337,9 +1364,9 @@ def _gpu_probe_configuration(
         "PROBE_FAIL": "1" if failed_compute else "0",
     }
     if external_process_policy is not None:
-        payload["resources"]["gpu"]["occupancy"][
-            "external_process_policy"
-        ] = external_process_policy
+        payload["resources"]["gpu"]["occupancy"]["external_process_policy"] = (
+            external_process_policy
+        )
     _write_protected(agent_path, payload)
     if role == "coordinator":
         config = load_coordinator_service_config(source)
@@ -1415,9 +1442,7 @@ def test_gpu_probe_allows_external_processes_only_when_configured(
 
     def observe(observer):
         return {
-            uuid: GpuProcessObservation(
-                uuid, True, True, "external_process_detected"
-            )
+            uuid: GpuProcessObservation(uuid, True, True, "external_process_detected")
             for uuid in observer.selected_uuids
         }
 
@@ -2049,13 +2074,19 @@ def test_nvidia_occupancy_defaults_normalize_and_custom_composition_rejects(
         == first.active_configuration_fingerprint
     )
     gpu["occupancy"] = {"external_process_policy": "block"}
-    assert load().active_configuration_fingerprint == first.active_configuration_fingerprint
+    assert (
+        load().active_configuration_fingerprint
+        == first.active_configuration_fingerprint
+    )
     gpu["occupancy"] = {"external_process_policy": "allow"}
     allowed = load()
     assert allowed.gpu_occupancy_policy == GpuOccupancyPolicy(
         external_process_policy="allow"
     )
-    assert allowed.active_configuration_fingerprint != first.active_configuration_fingerprint
+    assert (
+        allowed.active_configuration_fingerprint
+        != first.active_configuration_fingerprint
+    )
     gpu["occupancy"] = {"poll_interval_seconds": 3}
     assert (
         load().active_configuration_fingerprint
@@ -2075,3 +2106,250 @@ def test_nvidia_occupancy_defaults_normalize_and_custom_composition_rejects(
     )
     with pytest.raises(QueueConfigError, match="cannot be bypassed"):
         load()
+
+
+def _preparation_policy_payload(
+    *, modes: tuple[str, ...] = ("shared", "staged")
+) -> dict[str, object]:
+    return {
+        "source_roots": {
+            "projects": {"path": "projects", "shared_snapshot_root": "snapshots"}
+        },
+        "profiles": {
+            "example-cpu": {
+                "resident_profile_id": "local-profile",
+                "allowed_source_roots": ["projects"],
+                "source_modes": list(modes),
+                "runtime_options": {"executor": "local"},
+            }
+        },
+    }
+
+
+def test_absent_and_empty_preparation_preserve_the_published_active_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    service = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    # This is the published pre-preparation active projection, whose shape is a
+    # retained deployment contract. Neither an absent nor an empty opt-in adds a key.
+    published = {
+        "coordinator": {
+            "poll_interval_seconds": 0.01,
+            "max_accepted_time_step_seconds": 60.0,
+            "agent_policy": payload["agent_policy"],
+            "agent_server_credentials": None,
+            "remote_profiles": [],
+            "scheduling": None,
+            "slurm_profiles": None,
+        },
+        "local_agent": {
+            "cpu_capacity": 1,
+            "memory_capacity_bytes": 0,
+            "gpu_devices": [],
+            "providers": None,
+        },
+    }
+    assert (
+        service.active_fingerprint
+        == hashlib.sha256(
+            json.dumps(
+                published, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+    )
+    assert not service.daemon.preparation_enabled
+    payload["preparation"] = {}
+    _write_protected(source, payload)
+    empty = load_coordinator_service_config(source)
+    assert empty.active_fingerprint == service.active_fingerprint
+    assert empty.immutable_fingerprint == service.immutable_fingerprint
+    assert empty.daemon.preparation_policy is None
+
+
+def test_preparation_policy_selects_existing_descriptor_and_changes_only_active_identity(
+    tmp_path: Path,
+) -> None:
+    from loom.queue.preparation import PrepareRunRequest, PreparationSource
+
+    source = _coordinator_config(tmp_path)
+    original = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    _write_protected(source, payload)
+    configured = load_coordinator_service_config(source)
+    assert configured.immutable_fingerprint == original.immutable_fingerprint
+    assert configured.active_fingerprint != original.active_fingerprint
+    assert configured.daemon.preparation_enabled
+    policy = configured.daemon.preparation_policy
+    assert policy is not None
+    assert policy.effective_modes == ("shared",)
+    assert policy.effective_profiles == ("example-cpu",)
+    assert policy.effective_roots == ("projects",)
+    assert configured.local_agent is not None
+    assert (
+        policy.profiles["example-cpu"].descriptor
+        == configured.local_agent.profile.descriptor
+    )
+    request = PrepareRunRequest(
+        "prepare-1",
+        "run-1",
+        PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
+        "pipeline.yaml",
+        "example-cpu",
+    )
+    selected = policy.select(request)
+    assert selected["source_root"] == {
+        "path": str(tmp_path / "projects"),
+        "shared_snapshot_root": str(tmp_path / "snapshots"),
+    }
+    assert str(tmp_path) not in json.dumps(policy.safe_identity())
+    payload["preparation"]["source_roots"]["projects"]["path"] = "other-projects"
+    _write_protected(source, payload)
+    reloaded = load_coordinator_service_config(source)
+    assert reloaded.immutable_fingerprint == configured.immutable_fingerprint
+    assert reloaded.active_fingerprint != configured.active_fingerprint
+    assert reloaded.daemon.preparation_policy is not None
+    assert reloaded.daemon.preparation_policy.select(request) != selected
+    # Selection was copied from the original protected configuration. The durable
+    # operation owner must persist this value instead of resolving it on retry.
+    assert policy.select(request) == selected
+
+
+def test_future_staged_permission_does_not_enable_unimplemented_preparation(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload(modes=("staged",))
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    assert not service.daemon.preparation_enabled
+    assert service.daemon.preparation_policy is not None
+    assert service.daemon.preparation_policy.effective_profiles == ()
+    assert service.daemon.preparation_policy.effective_roots == ()
+    assert service.daemon.preparation_policy.effective_modes == ()
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        "missing-profile",
+        "missing-root",
+        "missing-snapshot",
+        "wrong-executor",
+        "unknown-mode",
+        "missing-environment-selection",
+    ),
+)
+def test_preparation_policy_refuses_invalid_protected_selection(
+    tmp_path: Path, invalid: str
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    selected = payload["preparation"]["profiles"]["example-cpu"]
+    if invalid == "missing-profile":
+        selected["resident_profile_id"] = "unconfigured"
+    elif invalid == "missing-root":
+        selected["allowed_source_roots"] = ["unconfigured"]
+    elif invalid == "missing-snapshot":
+        del payload["preparation"]["source_roots"]["projects"]["shared_snapshot_root"]
+    elif invalid == "wrong-executor":
+        selected["runtime_options"]["executor"] = "slurm"
+    elif invalid == "unknown-mode":
+        selected["source_modes"] = ["arbitrary-upload"]
+    else:
+        del selected["resident_profile_id"]
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="preparation"):
+        load_coordinator_service_config(source)
+    assert not (tmp_path / "deployment").exists()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.optional_dependency
+def test_preparation_worker_mapping_preserves_software_identity_and_binds_private_launch(
+    tmp_path: Path, role: str
+) -> None:
+    pytest.importorskip("weave")
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    load = (
+        load_coordinator_service_config
+        if role == "coordinator"
+        else load_outbound_agent_service_config
+    )
+    original = load(source)
+    agent_source = source.parent / "agent.yaml"
+    agent = json.loads(agent_source.read_text())
+    profile = agent["resident_profiles"][0]
+    profile["preparation_shared_roots"] = {}
+    _write_protected(agent_source, agent)
+    empty = load(source)
+    assert empty.immutable_fingerprint == original.immutable_fingerprint
+    assert empty.active_fingerprint == original.active_fingerprint
+    profile["preparation_shared_roots"] = {"environment": "worker-mount"}
+    _write_protected(agent_source, agent)
+    configured = load(source)
+    assert configured.immutable_fingerprint == original.immutable_fingerprint
+    assert configured.active_fingerprint != original.active_fingerprint
+    if role == "coordinator":
+        assert isinstance(configured, CoordinatorServiceConfig)
+        assert isinstance(original, CoordinatorServiceConfig)
+        assert configured.local_agent is not None and original.local_agent is not None
+        current_profile = configured.local_agent.profile
+        old_profile = original.local_agent.profile
+    else:
+        from loom.queue.deployment import OutboundAgentServiceConfig
+
+        assert isinstance(configured, OutboundAgentServiceConfig)
+        assert isinstance(original, OutboundAgentServiceConfig)
+        current_profile = configured.client.resident_profiles[0]
+        old_profile = original.client.resident_profiles[0]
+    assert current_profile.descriptor == old_profile.descriptor
+    assert current_profile.readiness_result is not None
+    assert current_profile.readiness_result.preparation_ready
+    assert (
+        current_profile.launch_profile.fingerprint
+        != old_profile.launch_profile.fingerprint
+    )
+    assert current_profile.launch_profile.preparation_shared_roots == {
+        "environment": tmp_path / "worker-mount"
+    }
+    profile["preparation_shared_roots"]["environment"] = str(tmp_path / "worker-mount")
+    _write_protected(agent_source, agent)
+    assert load(source).active_fingerprint == configured.active_fingerprint
+    profile["preparation_shared_roots"]["environment"] = "different-worker-mount"
+    _write_protected(agent_source, agent)
+    assert load(source).active_fingerprint != configured.active_fingerprint
+
+
+def test_preparation_aliases_are_data_in_active_policy_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    policy = _preparation_policy_payload()
+    payload["preparation"] = policy
+    policy["source_roots"] = {
+        "private_key": {"path": "projects", "shared_snapshot_root": "snapshots"}
+    }
+    policy["profiles"] = {
+        "environment": {
+            "resident_profile_id": "local-profile",
+            "allowed_source_roots": ["private_key"],
+            "source_modes": ["shared"],
+            "runtime_options": {"executor": "local"},
+        }
+    }
+    _write_protected(source, payload)
+    first = load_coordinator_service_config(source)
+    payload["preparation"]["source_roots"]["private_key"]["path"] = "other-projects"
+    _write_protected(source, payload)
+    assert (
+        load_coordinator_service_config(source).active_fingerprint
+        != first.active_fingerprint
+    )

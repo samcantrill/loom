@@ -50,6 +50,13 @@ def run_preflight(request: PreflightRequest) -> PreflightResult:
     return _run_preflight(request)
 
 
+def run_preflight_composed(composed: object, request: PreflightRequest) -> PreflightResult:
+    """Run preflight checks over one supplied, already-composed configuration."""
+    from .preflight import run_preflight_composed as _run_preflight_composed
+
+    return _run_preflight_composed(composed, request)
+
+
 def inspect_run(run_uri: str, **kwargs: object) -> "RunInspectionResponse":
     """Lazily inspect one run through the schema-v1 projection."""
     from .run_inspection import inspect_run as _inspect_run
@@ -133,6 +140,7 @@ __all__ = [
     "inspect_backend_capabilities",
     "parse_projection_revision",
     "run_preflight",
+    "run_preflight_composed",
     "RunInspectionAxis",
     "RunInspectionAxisName",
     "RunInspectionFailure",

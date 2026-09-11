@@ -22,6 +22,7 @@ import tempfile
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from .preparation import PreparationChildInput
     from .resident_readiness import (
         ResidentReadinessRequirements,
         ResidentReadinessResult,
@@ -58,6 +59,7 @@ from loom.serialization import (
 from ._agent_process_supervisor import (
     ResidentWorkerLaunchProfile,
     _launch_from_value,
+    _preparation_root_bindings,
 )
 from .errors import QueueConflictError, QueueServiceError
 
@@ -441,6 +443,7 @@ class ResidentExecutionProfile:
     )
     readiness_identity: str | None = None
     readiness_result: "ResidentReadinessResult | None" = None
+    preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -478,6 +481,7 @@ class ResidentExecutionProfile:
         ):
             raise QueueServiceError("resident execution environment is invalid")
         object.__setattr__(self, "environment", environment)
+        object.__setattr__(self, "preparation_shared_roots", _preparation_root_bindings(self.preparation_shared_roots))
         from .resident_readiness import ResidentReadinessRequirements
 
         if not isinstance(self.readiness_requirements, ResidentReadinessRequirements):
@@ -508,6 +512,7 @@ class ResidentExecutionProfile:
             descriptor=self.descriptor.to_dict(),
             environment=self.environment,
             readiness_identity=self.readiness_identity,
+            preparation_shared_roots=self.preparation_shared_roots,
         )
 
 
@@ -788,6 +793,9 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
+        preparation = _preparation_input_from_fingerprint(fingerprint)
+        if preparation is not None and dict(preparation.profile_descriptor) != self.profile.to_dict():
+            raise QueueConflictError("preparation assignment does not use the selected resident profile")
         inputs = tuple(self.inputs)
         outputs = tuple(
             _identifier(name, "declared output") for name in self.declared_outputs
@@ -849,6 +857,10 @@ class _ResidentAssignmentBundle:
             resolved_runtime=self.resolved_runtime,
             worker_metadata=self.worker_metadata,
         )
+
+    @property
+    def preparation_input(self) -> "PreparationChildInput | None":
+        return _preparation_input_from_fingerprint(self.fingerprint)
 
     @classmethod
     def from_worker_request(
@@ -1652,6 +1664,28 @@ class _ResidentAssignmentWorkspace:
             metadata=request.worker_metadata,
         )
 
+    def preparation_context(self) -> Mapping[str, PlainData] | None:
+        """Bind only the fixed child's selected alias to its retained launch profile."""
+        request = self.request()
+        preparation = request.preparation_input
+        if preparation is None:
+            return None
+        retained = self.supervisor_launch_json()
+        if retained is None:
+            raise QueueConflictError("preparation input requires a retained supervisor launch")
+        launch = _launch_from_value(json.loads(retained))
+        if (launch.assignment_id != request.assignment_id or launch.workspace_root != self.root
+            or launch.bundle_digest != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+            or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)):
+            raise QueueConflictError("preparation input conflicts with the retained launch")
+        alias = preparation.input_receipt.root
+        path = launch.profile.preparation_shared_roots.get(alias)
+        return {
+            "schema_version": 1,
+            "profile_descriptor": dict(launch.profile.descriptor),
+            "shared_roots": {} if path is None else {alias: str(path)},
+        }
+
     def persist_worker_result(self, result: StageWorkerResult) -> None:
         request = self.request()
         if (
@@ -2084,9 +2118,28 @@ def _validate_remote_semantic_data(
     worker_metadata: Mapping[str, PlainData],
 ) -> None:
     """Reject coordinator-local locations from the semantic wire request."""
+    preparation = _preparation_input_from_fingerprint(fingerprint)
+    if preparation is not None:
+        # The fixed stage's only location-bearing data is a validated finite
+        # preparation reference. Every other semantic field keeps the same guard.
+        from loom.fingerprints import hash_mapping
+
+        payload = cast(Mapping[str, PlainData], fingerprint["payload"])
+        fingerprint = {**fingerprint, "payload": {
+            **payload, "stage_config": {"preparation_input_digest": hash_mapping(preparation.to_dict())},
+        }}
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")
+
+
+def _preparation_input_from_fingerprint(fingerprint: Mapping[str, PlainData]) -> "PreparationChildInput | None":
+    from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
+
+    payload = fingerprint.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("factory_target") != PREPARATION_STAGE_TARGET:
+        return None
+    return PreparationChildInput.from_dict(payload.get("stage_config"))
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:

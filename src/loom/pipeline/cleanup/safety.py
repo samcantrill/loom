@@ -41,6 +41,7 @@ class CleanupSafetyReason(StrEnum):
     MISSING_OWNERSHIP_EVIDENCE = "missing_ownership_evidence"
     TARGET_IS_SYMLINK = "target_is_symlink"
     SYMLINK_COMPONENT_NOT_ALLOWED = "symlink_component_not_allowed"
+    RETAINED_PREPARATION_EVIDENCE = "retained_preparation_evidence"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +169,16 @@ def assess_local_target_safety(
             managed_root_id=root.root_id,
             detail={"path": str(target_path)},
         )
+    from .preparation_pins import preparation_path_is_retained
+
+    if preparation_path_is_retained(target_path):
+        return _decision(
+            target,
+            CleanupSafetyStatus.REJECTED,
+            CleanupSafetyReason.RETAINED_PREPARATION_EVIDENCE,
+            "target is retained by a preparation operation",
+            managed_root_id=root.root_id,
+        )
     return _decision(
         target,
         CleanupSafetyStatus.APPROVED,
@@ -238,9 +249,7 @@ def _root_path(root: CleanupManagedRoot) -> Path | None:
     return Path(os.path.abspath(raw_path))
 
 
-def _has_ownership_evidence(
-    target: CleanupTargetRef, root: CleanupManagedRoot
-) -> bool:
+def _has_ownership_evidence(target: CleanupTargetRef, root: CleanupManagedRoot) -> bool:
     if target.ownership_key is not None and target.ownership_key == root.ownership_key:
         return True
     for mapping in (target.metadata, root.metadata):

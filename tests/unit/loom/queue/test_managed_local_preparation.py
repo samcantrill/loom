@@ -21,10 +21,74 @@ from loom.queue.deployment import load_coordinator_service_config
 from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.pipeline.runtime import CpuResourcePlanner
-from weave import compose_config
+from weave import RecipeCatalog, compose_config, compose_config_with_catalog
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_checked_stateful_recipe_is_published_and_replayed_without_recomposition(
+    tmp_path: Path,
+) -> None:
+    from loom.diagnostics import PreflightRequest, PreflightStatus, run_preflight_composed
+
+    coordinator = _coordinator_config(tmp_path)
+    role = json.loads(coordinator.read_text())
+    role["local_agent"] = None
+    coordinator.write_text(json.dumps(role))
+    service = load_coordinator_service_config(coordinator)
+    path = _pipeline_config(tmp_path)
+    authored = json.loads(path.read_text())
+    authored["pipeline"]["stages"][0]["config"] = {"_recipe_": "stateful-value"}
+    path.write_text(json.dumps(authored))
+    calls = 0
+
+    def stateful_value() -> dict[str, int]:
+        nonlocal calls
+        calls += 1
+        return {"value": 40 + calls}
+
+    catalog = RecipeCatalog()
+    catalog.register("stateful-value", stateful_value)
+    composed = compose_config_with_catalog(path, recipe_catalog=catalog)
+    assert calls == 1 and composed.recipe_manifest
+    path.unlink()
+    checked = run_preflight_composed(
+        composed,
+        PreflightRequest(
+            config_path=path, groups=("config", "pipeline", "selectors", "runtime")
+        ),
+    )
+    assert checked.status is PreflightStatus.PASS
+    requirements = {
+        "produce": ExecutionRequirement("project-1", "environment-1", "executor-1")
+    }
+    receipt = prepare_managed_run(
+        service, composed, "checked-recipe", execution_requirements=requirements
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    assert store.read_recipe_manifest(receipt.run_uri) == composed.recipe_manifest
+    assert store.read_composition_manifest(receipt.run_uri) == composed.manifest.to_dict()
+    assert store.read_run_user_metadata(receipt.run_uri) == {
+        "config_provenance": composed.provenance.to_dict()
+    }
+    snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
+    assert snapshot is not None
+    resolved = json.loads(snapshot)
+    assert resolved["pipeline"]["stages"][0]["config"] == {"value": 41}
+    run_dir = store.local_run_dir(receipt.run_uri)
+    before = {
+        item.relative_to(run_dir): (item.read_bytes(), item.stat().st_mtime_ns)
+        for item in run_dir.rglob("*") if item.is_file()
+    }
+    assert prepare_managed_run(
+        service, composed, "checked-recipe", execution_requirements=requirements
+    ) == receipt
+    assert {
+        item.relative_to(run_dir): (item.read_bytes(), item.stat().st_mtime_ns)
+        for item in run_dir.rglob("*") if item.is_file()
+    } == before
+    assert calls == 1
 
 
 def test_preparation_persists_existing_owners_and_exact_replay_is_read_only(
