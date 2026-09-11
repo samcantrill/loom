@@ -329,7 +329,9 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
             child = client.admission(
                 _result(operation)["preparation_admission_id"]
             ).admission
-            assert child.state.value == "WAITING", child
+            # Admission projection can be ACTIVE between scheduling passes;
+            # native assignments establish whether an ineligible worker ran it.
+            assert child.state.value in {"ACTIVE", "WAITING"}, child
             with sqlite3.connect(service.daemon.execution_database) as conn:
                 assert (
                     conn.execute(
@@ -343,6 +345,14 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
                 client.wait("ordinary", timeout_seconds=25).state.value == "SUCCEEDED"
             )
             assert client.operation("prepare-1").state == "pending"
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?",
+                        (child.run_uri,),
+                    ).fetchone()[0]
+                    == 0
+                )
             client.cancel_preparation("prepare-1")
             assert (
                 client.wait_operation("prepare-1", timeout_seconds=25).operation.state
