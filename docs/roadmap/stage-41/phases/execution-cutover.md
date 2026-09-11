@@ -164,6 +164,19 @@ this phase does not authorize deleting/resetting state or migrating live work.
 
 Stage 41 completes only when every production execution path satisfies the unified contract and required local gates pass, with live claims explicitly qualified. No phase is marked complete merely because old APIs remain unused by one example.
 
+Preserve native prepared-receipt submission and explicit failed-admission retry
+while deleting the old whole-run queue surface. Same-ID run/sweep/MCP replay must
+still observe a terminal failure rather than silently retry it; the current
+embedded-only retry capability remains documented. Preserve the shared publication
+lock, report-v3 evidence, native completion qualification and exact predecessor
+commit/replay invariants when removing the final legacy consumers.
+
+Audit every changed durable/wire owner against the baseline inventory and the
+earlier cards' version/refusal decisions. Existing compatible report/root shapes
+need no gratuitous replacement; incompatible roots/peers fail before mutation.
+Keep retained outputs and evidence inspectable under their qualified version.
+Do not turn hard cutover into an implicit root reset or erase preparation pins.
+
 ### Cross-phase handoff
 
 Final completion records link predecessor evidence and each remaining primitive to an actual consumer. Operators settle old-version work before switching incompatible roots; no live migration, artifact deletion or root reset is authorized.
@@ -239,7 +252,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

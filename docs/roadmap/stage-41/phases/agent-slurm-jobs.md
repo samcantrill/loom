@@ -27,7 +27,7 @@ Validation ownership: VAL-41-08/09.
 
 ## Current Source And Harness
 
-- `src/loom/pipeline/executors/slurm/ready_stage.py`: SQLiteReadyStageSubmissions, SlurmReadyStageProfile, exact operation markers/handles and uncertain-call discovery.
+- `src/loom/pipeline/executors/slurm/ready_stage.py`: SQLiteReadyStageSubmissions, SlurmReadyStageProfile, exact operation markers/handles and uncertain-call discovery; published container options, request version 4 and retained-native version 3 are part of this baseline.
 - `src/loom/queue/slurm_ready_stage.py`, `slurm_bootstrap.py`: assignment/grant/start, native report relay and current bound workspace.
 - `src/loom/queue/agent_sessions.py`, `agent_session_transport.py`, `local_daemon_runtime.py`, `deployment.py`: authorized offers, placement and role transport.
 - `src/loom/queue/local_daemon_execution.py`: former coordinator submission owner and retained-work checks.
@@ -208,6 +208,24 @@ do not claim local measured isolation. Late wrapper/accounting status cannot
 overwrite an already committed output; reconcile discrepancies at the native
 failure/settlement owner. Unresolved work prevents run-owned service retirement.
 
+### Preserve the delivered container and reporting path
+
+Move the complete protected ready-stage profile, including container/Apptainer
+options, bootstrap environment/capability delivery, GPU visibility rules and exact
+configuration fingerprint. Do not narrow the moved backend to native-only because
+containers were absent from the original planning evidence. Keep the fixed
+bootstrap, accepted software requirements and scheduler-owned allocation meaning.
+The current container receipt is publicly redacted; credentials and private paths
+remain protected, while execution/recovery uses the full private binding.
+
+Retain report-v3 execution metadata and exact scheduler request/job observations.
+After moving scheduler calls, their authoritative observations come from the
+assigned agent's acknowledged evidence; the coordinator projects them rather than
+re-observing or inventing a second command owner. Preserve current format readers
+where meanings match and version incompatible assignment changes with both ends.
+P4's local supervisor success proof is not a substitute for this backend's
+job/result/containment evidence. Physical container qualification remains separate.
+
 ### Delivery boundary
 
 This phase proves the connected Slurm execution/control journey using existing typed bootstrap result delivery. Reconcile coordinator-only, agent-only and joint restarts around job-handle ownership while result delivery remains available. Do not claim results can be recovered after their current storage disappears; Phase 6 supplies durable shared retention and completed-job recovery. These limits describe development delivery, not the final Stage 41 Slurm promise.
@@ -260,6 +278,13 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     uv run --extra config pytest tests/unit/loom/queue/test_slurm_ready_stage.py tests/integration/queue/test_slurm_ready_stage.py tests/integration/queue/test_agent_session_transport.py
 
+Retain the existing ready-stage container script, bootstrap-environment, GPU
+visibility and redacted-receipt assertions while moving ownership. Add agent
+restart/replay assertions that preserve that same profile fingerprint and report
+metadata with no coordinator sbatch call or inferred local-GPU reservation.
+
+    uv run --extra config pytest tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -285,7 +310,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

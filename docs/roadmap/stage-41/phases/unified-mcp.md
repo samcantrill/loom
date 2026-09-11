@@ -27,7 +27,7 @@ Validation ownership: VAL-41-12 (MCP/skills/imports).
 
 ## Current Source And Harness
 
-- Published Stage 40 MCP adapter, registered tool schema, optional dependency lane and skills/loom-prepare, loom-run, loom-monitor, loom-diagnose; reconcile exact paths.
+- Delivered `src/loom/mcp/{__init__,_server}.py`, thirteen registered tools and `skills/{loom-prepare,loom-run,loom-monitor,loom-diagnose}`. `loom_submit_run` exists; high-level `loom_run` and `loom_cancel_run_operation` are new consumers. Tests live in `tests/{unit/loom/mcp,contracts/test_mcp_tools.py,integration/mcp}`.
 - Phase 2 run/cancel operation contract and Phase 3 deployment availability/public facade.
 - Existing native operation/report size limits, coordinator identity guard, typed errors, read/operator policy and diagnostic models.
 - Stage 40 tool parity/process disconnect and isolated MCP import tests; reuse its actual real-session qualification hook.
@@ -45,14 +45,14 @@ removal. Preserve unrelated work and current scientific/resource meaning.
 ### Make tools call the delivered native lifecycle
 
 The Stage 40 adapter already translates tool calls into native client calls.
-This phase changes its high-level run tool to use the durable prepare/admit
+This phase adds the high-level run tool using the durable prepare/admit
 operation and the explicit deployment availability behavior delivered by
 Phases 2–3. It must not implement a separate sequence of prepare, wait and
 submit calls whose continuation disappears when the assistant disconnects.
 
 This sketch shows delegation only. `request` is decoded through the native
-request model, `deployment` is an explicitly authorized selection, and `client`
-is the configured coordinator client with its normal identity/policy guards.
+request model, `server_deployment` is the server's protected startup selection,
+and `client` resolves that same deployment with its normal identity/policy guards.
 Tool decorators, transport serialization and result bounding remain with the
 existing adapter; these functions are not a complete server implementation.
 
@@ -60,8 +60,8 @@ existing adapter; these functions are not a complete server implementation.
 import loom
 
 
-def loom_run(request, deployment):
-    return loom.run(request, deployment=deployment, wait=False)
+def loom_run(request):
+    return loom.run(request, deployment=server_deployment, wait=False)
 
 
 def loom_cancel_run_operation(operation_id):
@@ -115,9 +115,15 @@ is recorded separately from local adapter evidence.
 
 ## Fixed Contracts And Private Discretion
 
-MCP delegates to the same native availability/run operation. Update the Stage 40
-stdio adapter to accept an explicit protected deployment selection, keeping
-constructors/server startup inert until a tool explicitly ensures/runs services.
+MCP delegates to the same native availability/run operation. Select one protected
+deployment at stdio-server startup with `loom-mcp --deployment PATH`; resolve that
+path from the server process cwd, and its references relative to the deployment.
+Run, prepare, submit, query, wait and cancel all resolve the same bound coordinator
+identity. Tool calls cannot supply an arbitrary deployment/connection override.
+This replaces the adapter's endpoint/connection startup selectors; the native
+client constructors remain useful. Constructors/server startup stay inert until
+an explicit run ensures configured services. Existing preparation/query tools
+connect and report availability; they do not implicitly create services.
 Add a high-level `loom_run` tool over the Phase 2 run contract; keep useful native
 prepare, submit, inspect, wait and cancel tools as thin calls to the same owners.
 Expose run-operation cancellation through `loom_cancel_run_operation`, delegating
@@ -132,6 +138,31 @@ Update four existing skills in place: prepare-only stops at its receipt; run use
 the unified accepted operation; monitor reconnects/queries; diagnose distinguishes
 run result, scheduler evidence and service cleanup. Tools do not install code,
 write service secrets or provision workers. MCP remains optional and stdio only.
+
+### One binding, native deadlines and explicit retry
+
+The deployment resolver must work before first local creation and after restart:
+all tools use its resulting expected coordinator identity, never a stale client
+captured before binding. Discovery remains available while services are offline.
+Keep read-only tool annotations truthful; use `loom_run` as the startup-capable
+mutation rather than adding a separate ensure tool without a current consumer.
+
+Run returns after durable run-operation acceptance (`wait=False`). Pass the
+adapter's existing absolute request deadline through the native availability/run
+composition, including capacity acquisition and startup; each native wait remains
+bounded at 25 seconds within the current 30-second request budget. Startup timeout
+before dispatch yields a native not-applied outcome and releases startup holds;
+possible dispatch retains unknown-outcome IDs for reconciliation. SDK cancellation
+or EOF does not translate into cancellation of accepted work. In-progress native
+calls retain adapter capacity until their bounded completion, preserving ordinary
+query/cancel capacity while waits are active.
+
+Update `loom_prepare_run` to expose P1's ordered invocation controls through native
+decoders. Retain `loom_submit_run` for exact prepared receipts and expose the
+native optional `retry_failed_revision` for explicitly requested retry. Run replay
+never invents that revision, and an unsupported authority capability remains an
+explicit refusal. Update the four skills and relocated behavior trials together;
+reconnect retains the same deployment/coordinator and original request identities.
 
 ### Delivery boundary
 
@@ -182,7 +213,18 @@ contract requires them. Resolve predecessor-renamed test paths at preparation.
 Run optional-runtime commands only with their qualified environment. A local
 fixture is not live-site evidence; record missing qualification explicitly.
 
-Use the exact isolated MCP package/SDK and process-test commands published by Stage 40; its modules and make lane are not implemented at this evidence revision. Record resolved commands in this card at execution preparation.
+Use the delivered isolated SDK/config lane, including schema, native delegation,
+stdio EOF/cancellation, wrong-owner guards, near-limit reports and relocated skill
+trials. Extend it with cold startup, all tools using one creation/restart binding,
+no per-call deployment override, startup deadline/unknown-response behavior,
+explicit retry forwarding and preserved read-only discovery. P2 owns the causal
+run/admission cancellation races; these adapter checks prove delegation.
+
+    make test-mcp-extra
+
+`make validate-pr` and `make test-summary` already include this lane. A standalone
+run is useful while iterating; do not add another summary run just to render the
+same evidence. Preserve all approved final gates below.
 
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
@@ -209,7 +251,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run

@@ -14,7 +14,7 @@
 - Dependencies: Published Stage 40; Stage 41 plan and nine-phase split approved on 2026-09-10
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none in the reviewed packet; landing and stage-worktree verification pending
 
 ## Objective And Context
 
@@ -27,11 +27,11 @@ Validation ownership: VAL-41-01 (state/reuse), VAL-41-07.
 
 ## Current Source And Harness
 
-- Published Stage 40 PrepareRunRequest and assigned preparation; reconcile actual source and schema versions before implementation.
+- Published `queue/preparation.py::{PrepareRunRequest,PreparationChildInput}`, `loom/preparation.py::{PreparationStage,CoordinatorPreparation}` and `queue/_preparation_operations.py::{CoordinatorPreparations,_configuration}`: strict invocation/report boundaries and retained selection.
 - `src/loom/queue/managed_local_preparation.py`, `local_daemon_runtime.py`: exact composed publication, runtime requirements and current Slurm/authority exclusions.
 - `src/loom/pipeline/stores/coordinator_authority.py`, `src/loom/queue/coordinator_authority.py`, authority repositories/routes: creation, transitions and authenticated access.
 - `src/loom/pipeline/runtime/options.py`, `pipeline/status.py`, scheduler/readiness consumers and `cli/options.py`: invocation semantics and lifecycle transitions.
-- Existing managed preparation, runtime options, coordinator authority and all-reuse/planner tests; Stage 40 source/report limits remain authoritative.
+- Existing managed preparation, runtime options, coordinator authority and all-reuse/planner tests; source/report limits remain authoritative. Published #305 adds the same-URI publication lock and explicit admission retry; preserve its supported behavior and update retry pre-start status with this phase.
 
 ## Scope
 
@@ -58,24 +58,26 @@ against the current checkout; profile/root aliases require protected deployment
 configuration. Constructors and internal helpers are not newly fixed by examples.
 
 ```python
-preparation = PrepareRunRequest(
-    operation_id="run-demo-001",
-    run_name="demo-001",
-    source={
+from loom.coordinator import PrepareRunRequest
+
+preparation = PrepareRunRequest.from_dict({
+    "operation_id": "run-demo-001",
+    "run_name": "demo-001",
+    "source": {
         "mode": "shared",
         "root": "projects",
         "path": "demo",
         "include": ["configs"],
     },
-    config_path="configs/experiment.yaml",
-    preparation_profile="project-python",
-    overlays=["configs/site.yaml"],
-    overrides=["model.width=64"],
-    run_options={
+    "config_path": "configs/experiment.yaml",
+    "preparation_profile": "project-python",
+    "overlays": ["configs/site.yaml"],
+    "overrides": ["model.width=64"],
+    "run_options": {
         "selectors": {"force_stages": ["train"]},
         "tags": {"experiment": "demo"},
     },
-)
+})
 ```
 
 This only constructs intent. It does not call prepare-only and then reuse that
@@ -143,6 +145,49 @@ first confirmed executing-stage evidence. Queued/admitted is not RUNNING. A
 reuse/skip-only plan can reach terminal status without a worker. Update authority
 transition/readiness consumers together, preserving expected revisions/fences.
 
+### Invocation and retained publication bindings
+
+Extend the native request and `PreparationChildInput` together. Keep ordered
+overlays relative to the selected captured project and require every overlay and
+composition dependency inside the explicit source closure. Overrides keep their
+order; sparse run options retain omission versus explicit values through durable
+encoding. Use the existing config/runtime merge precedence in the qualified
+preparation environment before preflight. The report and publisher consume that
+same effective intent and its provenance; a coordinator-side merge after checks
+must not change the checked experiment. Update exact-field decoders and version
+decisions at the affected boundaries, including shared and staged inputs.
+
+Preparation-profile runtime options govern only the internal child. Target
+resource/reliability/selectors/tags/notes come from the target's effective options.
+Keep the current single qualified preparation installation contract; target
+execution profiles must satisfy its checked software requirements. Selecting a
+Slurm target route does not move the preparation child into Slurm. Capture fixes
+file bytes when `input_receipt` is recorded; acceptance alone is not an atomic
+snapshot of a mutable directory. Captured inputs do not deploy code or datasets.
+
+Retain selected authority identity and target profile descriptors/revisions with
+accepted preparation alongside the existing source/profile/scheduling snapshot.
+Resolve protected implementations with matching identities on replay; never store
+live factories or credentials in public results. Replace `_configuration`'s forced
+embedded authority and empty Slurm profiles. Route both child and target creation,
+report lookup, fresh publication and replay through the selected authority.
+Unavailable or changed owners leave explicit retained uncertainty/conflict; they
+cannot substitute embedded storage or current mutable profile settings.
+
+Preserve the publisher's existing per-run POSIX lock, retained lock inode and
+partial/corrupt-target conflict behavior. Qualified storage must support that
+cross-process advisory lock. Add idempotent selected-authority creation/publication
+at its narrow coordinator interface, including exact lost-response replay. A
+partially written local target remains an inspectable conflict; an unknown reply
+from an idempotent authority operation is reconciled with the original identity.
+
+The pre-start status rule also covers #305 explicit failed-admission continuation:
+return released failed work to PLANNED under the existing RESUME intent and move
+it to RUNNING only on confirmed new execution. Update the lifecycle transition
+owner with the embedded retry authority. Preserve the exact failed-revision guard,
+attempt history, cancellation/fence checks and retry receipt; ordinary replay
+does not authorize retry. Authenticated-authority retry remains unsupported.
+
 ### Delivery boundary
 
 A prepared receipt is the complete outcome here. Preparation-only remains terminal at publication. Slurm-targeted plans can be validated/published, but this phase does not enable a new dispatch route or claim the later agent-owned Slurm journey. Unsupported source/environment combinations still fail explicitly.
@@ -194,6 +239,16 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     uv run --extra config pytest tests/unit/loom/queue/test_managed_local_preparation.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_local_daemon_authority_contract.py tests/integration/authority/test_coordinator_authority_api.py
 
+Extend the existing preparation operation/shared/staged fixtures with these
+discriminating cases: ordered overlay/override and sparse-option precedence reaches
+both preflight and the published target; child resource settings do not replace
+target settings; restart preserves authenticated-authority and Slurm profile
+bindings; identical concurrent publication produces one receipt; changed/partial
+targets still conflict; queued and explicitly retried work remains PLANNED until
+confirmed execution. Reuse existing child, report-bound and installation checks.
+
+    uv run --extra config pytest tests/integration/queue/test_preparation_operations.py tests/integration/queue/test_staged_preparation_lifecycle.py tests/integration/queue/test_preparation_child.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -219,7 +274,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run
@@ -237,4 +292,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | None |
 | Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Published Stage 40 and authority integration evidence pending |
+| Residual risk and cleanup | Selected-authority/invocation integration evidence pending |

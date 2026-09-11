@@ -6,8 +6,9 @@ Status: explanatory overview of the Stage 41 baseline approved on 2026-09-10. Th
 phase plans own requirements, contracts, validation and approval state. This is
 planned behavior; documenting it does not make it available in the runtime.
 
-Stage 41 builds on the approved [Stage 40 client/preparation/MCP plan](../roadmap/stage-40/implementation-plan.md).
-Stage 40 delivers its narrower boundary first. Stage 41 then extends preparation
+Stage 41 builds on the delivered [Stage 40 client/preparation/MCP implementation](../roadmap/stage-40/implementation-plan.md).
+The [published-source refinement](../roadmap/stage-41/planning.md#published-baseline-and-amendment-ownership)
+records current contracts and the requested startup-readiness review. Stage 41 extends preparation
 and deliberately removes its preserved historical execution surfaces. Existing
 outputs are retained; compatibility adapters and live-state migration are not
 part of the agreed cutover.
@@ -15,6 +16,12 @@ part of the agreed cutover.
 One run selects a configured deployment, starts or reuses its required services,
 prepares and admits work, executes stages through agents, exposes status/results,
 and settles the services it owns. CLI, Python, sweeps and MCP use that lifecycle.
+
+MCP selects one protected deployment at server startup; its run, query and
+cancellation tools share that binding. The ordinary CLI's config/overlay paths
+refer to the deployment's selected coordinator-readable project. Staged preparation
+does not upload client files. Existing artifact transfer bounds still apply to
+shared Slurm results; larger checkpoints require separately accepted support.
 
 ```mermaid
 flowchart TD

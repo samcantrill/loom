@@ -2,15 +2,14 @@
 
 Status: approved; nine-phase implementation baseline
 Roadmap stage: 41
-Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-85-control` at
-`382065646608f4f19fed17a6fc0ecc9fce4a6e3f`, branch `agent/loom-mcp-plan`.
-Relevant dirty paths on entry: README, roadmap, the two lifecycle/MCP briefs,
-and Stage 40 planning artifacts. Preserve that work.
-Planning route: expanded for public execution removal, durable service lifetime,
-agent-owned external submission and disconnected result publication.
-Current gate: planning complete; await published Stage 40 before execution
-Blockers: no planning blocker; published Stage 40 is the execution prerequisite.
-Maintainer approval: agreed behavior and nine-phase structure approved on 2026-09-10.
+Evidence base: published develop `25d97f50d66f44273bf979a5488a312e7f1a15d2`.
+Authoring tree: `/nas/home/can134/work/loom-worktrees/stage-41-startup-plan`,
+branch `agent/stage-41-startup-plan`; clean on entry. Preserve unrelated worktrees.
+Planning route: published-source refinement and requested startup-readiness review.
+Current gate: reviewed amended packet ready for landing and stage-worktree verification
+Blockers: none in the published prerequisite or reviewed packet; see the manifest receipt.
+Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
+the maintainer requested the reviewed refinements and startup review on 2026-09-12.
 
 This is the authoritative behavior/design plan for this stage. The discussion
 brief is an explanatory entrypoint. Source/test evidence describes the baseline;
@@ -21,13 +20,14 @@ new APIs and behavior below are planned, not available runtime functionality.
 | Gate | Result | Remaining action |
 | --- | --- | --- |
 | Functionality/design | Agreed behavior; independent design pass | None |
-| Validation/phases | Nine bounded cards; contracts and validation owners retained | Execute after published Stage 40 |
-| Plan quality | Independent review/correction retained; decomposition checked locally | None |
-| Approval/execution | Maintainer approved the nine-phase baseline; runtime work not started | Published Stage 40 |
+| Validation/phases | Nine bounded cards; contracts and validation owners retained | None |
+| Plan quality | Original review retained; current amendment review owned by the manifest | [Quality Gate](implementation-plan.md#quality-gate) |
+| Approval/execution | Maintainer requested these refinements; runtime work not started | Land reviewed packet, then verify stage-worktree startup |
 
 ## Evidence And Scope
 
-Paths are repository-relative; directly inspected source outranks historical docs.
+Source paths may omit `src/loom/`; other paths are repository-relative.
+Directly inspected source outranks historical docs.
 
 | Source / area | Current finding | Related requirements |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ Paths are repository-relative; directly inspected source outranks historical doc
 | `pipeline/executors/slurm/ready_stage.py`, `queue/slurm_ready_stage.py`, `slurm_bootstrap.py` | Coordinator-side exact submission owner, marker reconciliation, restricted grant/start bootstrap and result relay exist | FR-41-10..12 |
 | `diagnostics/run_inspection.py`, native inspection contracts | Owner-labelled state, freshness, bounded diagnostics and terminal settlement | FR-41-09/12 |
 | `queue/{client,service,controller,local,slurm}.py`, `pipeline/execution/{continuation,slurm_controller,offline_adapter}.py`, `pipeline/sweep/dispatch.py` | Separate historical whole-run/Slurm/offline/sweep dispatch consumers need conversion/removal | FR-41-01/13/14 |
-| [Stage 40](../stage-40/implementation-plan.md) | Approved shared `loom.coordinator.CoordinatorClient`, assigned preparation and optional MCP plan; not implemented at evidence revision | FR-41-01/07/14 dependency |
+| [Stage 40](../stage-40/implementation-plan.md) | Delivered native client, shared/staged preparation, thirteen MCP tools and four operational skills; closeout published at `39a48b0` | FR-41-01/07/14 dependency |
 | [Test harness](../../../tests/README.md), package, daemon, agent, authority, Slurm and sweep tests | Existing invariant owners and real-process/fake-scheduler seams | All validation |
 
 Outcome: one configured `run` starts/reuses the required services, prepares and
@@ -47,13 +47,37 @@ admits work, executes stages through agents, answers queries, survives observer
 loss, reconciles restart, then stops only services whose lifetime it owns.
 Cold local, persistent local, fleet and connected Slurm share those meanings.
 
-Stage 40 lands first. Its compatibility and limited preparation family describe
-its delivery boundary, not permanent requirements on Stage 41. Stage 41 extends
-that publisher, updates its MCP/skill consumers and removes old execution APIs.
-Reconcile the actual published predecessor before implementing; do not infer
-proposed modules are already present. No requirement to redo Stage 40 transport
-or preparation schemas when their existing contracts fit.
+Stage 40 is delivered. Its compatibility and limited preparation family describe
+its delivery boundary. Stage 41 extends that publisher, updates its MCP/skill
+consumers and removes old execution APIs. Preserve existing transport, capture,
+report and finalization owners where their contracts fit.
 
+### Published baseline and amendment ownership
+
+The source base includes Stage 40 plus ready-stage containers (#299), safe
+execution observations (#301), serialized publication and explicit failed-admission
+retry (#305), and verified native worker completion/output replay (#306). These
+are source assumptions for the requested readiness review, not new runtime test
+receipts. Stage 40's live Codex and physical NAS limitations remain unqualified.
+
+| Published contract / evidence owner | Observed baseline | Amendment owner |
+| --- | --- | --- |
+| `queue/preparation.py`, `src/loom/preparation.py` | Five-field request, version 1 child input/report, shared and staged capture; one qualified preparation installation | P1 extends invocation controls through child/check/report/publication |
+| `queue/_preparation_operations.py`, `managed_local_preparation.py` | Dedicated preparation table; recovery forces embedded authority and clears Slurm profiles; same-URI publication is process-serialized | P1 retains selected publication bindings; P2 adds continuation and separate cancellation facts |
+| `queue/local_daemon.py`, `queue/coordinator_authority.py`, `pipeline/stores/sqlite_authority.py` | Explicit `retry_failed_revision` is distinct from submit replay; retry authority capability is currently embedded-only | P1 keeps truthful pre-start state on explicit retry; P2/P7/P8/P9 preserve explicit retry and its capability boundary |
+| `queue/local_daemon.py`, `_coordinator_control.py`, `_coordinator_transport.py` | Coordinator root 13; agent root 12; `daemon-control-v1`; 64 KiB preparation projection, 1 MiB control response, 30-second request budget and 25-second observation bound | P1/P2/P3 own changed formats and bounded native composition; P8 consumes them |
+| `_remote_stage_execution.py`, `queue/slurm_ready_stage.py`, `pipeline/executors/slurm/ready_stage.py` | Resident bundle 4; Slurm delivery 4; ready-stage request 4 (retained native 3); remote report 3 preserves execution metadata; aggregate artifact transfer bound 64 MiB | P4/P5/P6 retain execution evidence and existing transport bounds |
+| `_agent_process_supervisor.py`, `_managed_local.py`, `local_daemon_execution.py` | Supervisor schema 3 qualifies successful completion; native parent owns `managed_successful_exit` and exact `managed_output_predecessor` | P4 preserves native success proof; P6 preserves normal fenced commit/replay and separate scheduler containment |
+| `mcp/__init__.py`, `mcp/_server.py`, `skills/loom-*`, `tests/README.md` | One selected client, thirteen tools, submit-only run skill; isolated `test-mcp-extra` lane is delivered | P8 binds one protected deployment per server and adds native run/cancel delegation |
+
+Phase cards own the detailed amended contracts and discriminating checks. Their
+existing FR/DQ/VAL allocations and nine merge boundaries remain unchanged. The
+format numbers above are observed source facts, not proposed new version numbers.
+Each phase changing a public/durable shape records its version decision with the
+producer and reader. Incompatible interpretations fail before mutation; preserve
+unchanged compatible shapes. No stage-wide migration, new job database, larger
+artifact transport or authenticated-authority retry capability is added by this
+refinement. Operators settle old-version work before incompatible replacement.
 Non-goals: compatibility adapters or old-root migration, offline queued starts,
 automatic remote provisioning/SSH, environment installation, scientific choices,
 multi-agent distributed stages, automatic allocation acquisition, standalone
@@ -142,8 +166,11 @@ decision completes this caller's cleanup responsibility without stopping it.
 
 ### Preparation and execution
 
-Stage 40 assigned preparation returns checked composition; coordinator publishes
-it without recomposition. Extend creation/publication through the selected
+Assigned preparation returns checked composition; the coordinator publishes it
+without recomposition. P1 carries sparse invocation controls through the same
+child/check/report boundary and retains the selected authority/profile bindings
+for restart. Preparation still uses a qualified resident worker independently of
+the target's resident or Slurm route. Extend creation/publication through the selected
 authority and route; preserve snapshots, requirements, resource semantics,
 selectors, reuse, retry, logs/events and provenance. Run starts CREATED and is
 PLANNED after publication; the first confirmed executing stage moves it RUNNING.
@@ -209,8 +236,8 @@ is required before claiming this deployment works.
 Reuse Stage 40's high-level `loom.coordinator` client. Add native deployment/run
 composition above queue and diagnostics, exposed by `loom run CONFIG --deployment
 PATH` and a lazy `loom.run` Python facade. Detailed request/receipt fields live
-in the durable-run-operation phase card. MCP delegates to the same composition; constructors
-remain inert. Client/run facade -> native application/transports -> coordinator
+in the durable-run-operation phase card. MCP delegates to the same composition with one protected deployment selected at
+server startup; run/query/cancel share its coordinator binding. Constructors remain inert. Client/run facade -> native application/transports -> coordinator
 and agent owners -> authority/execution. Low-level owners never import CLI,
 MCP, diagnostics or project code for orchestration.
 
@@ -328,7 +355,9 @@ compatibility mode. Stage completion requires all nine outcomes.
 Planning complete. Original design/plan review passes and their one correction
 remain the review evidence; no additional independent review of the nine-card
 layout is claimed. The manager verified this approved decomposition locally.
-Execution awaits published Stage 40. No runtime tests were run during planning.
+Stage 40 is published. The current amendment/readiness receipt and landing
+status are owned by the [manifest Quality Gate](implementation-plan.md#quality-gate).
+No runtime tests are claimed by this planning refinement.
 Accepted risks remain breaking interfaces, accounting delays, qualified shared
 storage and unresolved work retaining services. Revisit only for changed
 predecessor contracts, demonstrated supported-path blockers or explicitly requested

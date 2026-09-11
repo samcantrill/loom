@@ -157,6 +157,25 @@ recovery reauthenticates delivery through its original submit agent.
 This is one new transport into the current finalizer. It adds no filesystem-success
 authority, independent completion database or offline start capability.
 
+### Existing bounds and finalizer evidence
+
+At the inspected base, the native report/transfer contract caps aggregate artifact
+bytes at 64 MiB. Shared result storage does not bypass that transfer ceiling or
+the existing report decoder bounds. Preserve them and refuse oversized delivery
+with retained diagnostic evidence; larger checkpoints/artifacts require separate
+accepted work. Site retention quota covers retained attempts and must not erase
+unacknowledged bytes to manufacture availability. Do not claim arbitrary-size HPC
+outputs in examples or qualification.
+
+Use remote report version 3's executor metadata and the existing public redaction
+owner. Preserve actual container/worker and agent-owned scheduler observations
+through recovered delivery. Do not upgrade older reports by fabricating missing
+execution evidence. Native successful-exit qualification stays with its supervisor;
+Slurm completion and containment remain separately evidenced by the batch backend.
+Where the current finalizer uses a retained output predecessor, initial delivery
+and lost-ack replay must supply that same admitted predecessor; neither a shared
+manifest nor a newer output head can substitute authorization for a commit.
+
 ### HPC deployment boundary
 
 The supported first journey uses a site-permitted service/submit host and a
@@ -227,6 +246,12 @@ fixture is not live-site evidence; record missing qualification explicitly.
 
     LOOM_RUN_SLURM_ACCEPTANCE=1 LOOM_SLURM_ACCEPTANCE_ROOT=/qualified/shared/path uv run pytest tests/slurm_acceptance
 
+Extend the outage/manifest cases with preserved version-3 container/execution
+metadata, aggregate artifact bytes at/over the native bound, and lost commit
+acknowledgement replay against the exact retained predecessor. A well-formed
+report or scheduler COMPLETED must not substitute for required backend success
+or containment evidence. Reuse P4's native supervisor proof tests unchanged.
+
 Final implementation gate; reuse a fresh receipt only while relevant code,
 tests, dependency/build and validation configuration remain unchanged:
 
@@ -252,7 +277,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 ## Workflow State
 
 - Manager preparation: approved card; execution revision/worktree pending
-- Planning review: original design review and corrected run/cancel contracts retained; nine-phase mapping checked locally
+- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
 - Pre-submit gate: not run
