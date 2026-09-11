@@ -1,3 +1,10 @@
+model = "gpt-6-astra"
+# Specialist defaults live in agents/*.toml. Use high for coordination.
+# Escalate medium tasks to high for difficult debugging or unresolved reasoning.
+# Reserve xhigh for difficult scientific reasoning, ambiguous cross-component
+# contracts, or problems unresolved at high; max is not a workflow default.
+# Escalation requires a runtime/configuration change, not just a prompt request.
+model_reasoning_effort = "high"
 web_search = "live"
 tool_output_token_limit = 8000
 
