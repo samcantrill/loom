@@ -1232,6 +1232,8 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
         "job_private_file_provider",
     }
     optional = {
+        "container_options",
+        "apptainer_options",
         "executor_name",
         "credential_policy_revision",
         "account",

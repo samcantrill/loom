@@ -1112,11 +1112,17 @@ submission operation and `SUBMITTING`, then invokes `sbatch` at most once. An
 ambiguous operation stays bound and is reconciled by exact scheduler-visible
 identity rather than resubmitted.
 
-The SLURM job starts a restricted Loom bootstrap. Only an authority grant/fence
-allows one authored root, and only a fenced Loom result with accessible outputs
-commits stage terminal truth. SLURM status and cancellation stay separate owner
-axes: `COMPLETED` is not Loom success and `scancel` success is not containment.
-See [slurm.md](slurm.md#02-stage-29-managed-scheduler-boundary) for the full
+The SLURM job starts a restricted Loom bootstrap. A protected profile may select
+one Apptainer/Singularity container for that fixed bootstrap. Its image, mounts,
+resource projection, redacted command, and bootstrap-config environment name
+are bound into the ready request; the config value is supplied only by the job
+environment, and the bootstrap capability path must remain writable inside the
+container. Missing delivery fails before the bootstrap can start and never falls
+back to host execution. Only an authority grant/fence allows one authored root,
+and only a fenced Loom result with accessible outputs commits stage terminal
+truth. SLURM status and cancellation stay separate owner axes: `COMPLETED` is
+not Loom success and `scancel` success is not containment. See
+[slurm.md](slurm.md#02-stage-29-managed-scheduler-boundary) for the full
 submission/bootstrap contract.
 
 Allocation-fed agents remain a later distinct integration. Such an agent would
