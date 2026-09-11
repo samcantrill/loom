@@ -1030,7 +1030,14 @@ class AuthorityRepository:
             else _non_empty(service_principal, "service_principal")
         )
         with self.transaction() as conn:
-            _require_run_row(conn, run_uri)
+            run = _require_run_row(conn, run_uri)
+            prepared_principal = _json_loads(cast(str, run["metadata_json"])).get(
+                "preparation_principal"
+            )
+            if prepared_principal is not None and prepared_principal != principal:
+                raise AuthorityRepositoryError(
+                    "coordinator principal conflicts with preparation"
+                )
             row = conn.execute(
                 "SELECT service_principal, request_json, receipt_json "
                 "FROM coordinator_admission_receipts "
@@ -1097,7 +1104,7 @@ class AuthorityRepository:
             return receipt
 
     def require_coordinator_principal(
-        self, run_uri: str, service_principal: str
+        self, run_uri: str, service_principal: str, *, allow_prepared: bool = False
     ) -> None:
         """Require the authenticated service that first bound this run."""
 
@@ -1109,6 +1116,11 @@ class AuthorityRepository:
                 "WHERE run_uri = ? LIMIT 1",
                 (run_uri,),
             ).fetchone()
+            if row is None and allow_prepared:
+                run = _require_run_row(conn, run_uri)
+                metadata = _json_loads(cast(str, run["metadata_json"]))
+                if metadata.get("preparation_principal") == principal:
+                    return
         if row is None:
             raise AuthorityRepositoryError(
                 "coordinator operation requires a coordinator admission"
@@ -1681,6 +1693,17 @@ class AuthorityRepository:
                 revision=revision,
                 reason=None,
             )
+            current = RunStatus(
+                conn.execute(
+                    "SELECT status FROM authority_runs WHERE run_uri = ?", (run_uri,)
+                ).fetchone()["status"]
+            )
+            if current is RunStatus.PLANNED:
+                ensure_run_transition(current, RunStatus.RUNNING)
+                conn.execute(
+                    "UPDATE authority_runs SET status = ? WHERE run_uri = ?",
+                    (RunStatus.RUNNING.value, run_uri),
+                )
             _touch_run(conn, run_uri=run_uri, revision=revision)
 
     def record_managed_attempt_terminal(

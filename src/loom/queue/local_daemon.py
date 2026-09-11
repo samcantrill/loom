@@ -77,7 +77,7 @@ if TYPE_CHECKING:
     from .preparation import PrepareRunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 13
+_COORDINATOR_SCHEMA_VERSION = 14
 _AGENT_SCHEMA_VERSION = 12
 # Kept for the outbound-session transport, whose retained worker journal stays
 # at schema 12 through the coordinator-only migration.
@@ -1685,7 +1685,7 @@ class LocalDaemon:
 
     @classmethod
     def upgrade_coordinator_root(cls, config: LocalDaemonConfig) -> tuple[str, int]:
-        """Upgrade a stopped, protected deployment's coordinator from 12 to 13.
+        """Upgrade a stopped, protected deployment's coordinator from 12 to the current version.
 
         The native owner checks the role lock, deployment binding and database
         structure, retains a private SQLite backup and commits the schema change

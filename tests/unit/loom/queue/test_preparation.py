@@ -12,6 +12,7 @@ import shutil
 import pytest
 
 from loom.fingerprints import hash_mapping
+from loom.errors import SerializationError
 from loom.queue import preparation as inputs
 from loom.queue.errors import QueueServiceError
 from loom.queue.local_daemon import (
@@ -462,3 +463,58 @@ def test_source_removed_between_selection_and_open_is_a_detected_change(
             _request(), source_root=root, snapshot_root=tmp_path / "snapshots"
         )
     assert not (tmp_path / "snapshots").exists()
+
+
+@pytest.mark.parametrize("mode", ("shared", "staged"))
+def test_invocation_is_sparse_immutable_and_ordered(mode: str) -> None:
+    options = {"tags": {"trial": "first"}, "selectors": {"force_stages": ["train"]}}
+    request = replace(
+        _request(mode=mode),
+        overlays=("configs/a.yaml", "configs/b.yaml"),
+        overrides=("x=1", "x=2"),
+        run_options=options,
+    )
+    encoded = request.to_dict()
+    options["tags"]["trial"] = "mutated"
+    assert request.to_dict() == encoded
+    assert PrepareRunRequest.from_dict(encoded) == request
+    assert encoded["run_options"] == {
+        "tags": {"trial": "first"},
+        "selectors": {"force_stages": ["train"]},
+    }
+    assert replace(request, overlays=tuple(reversed(request.overlays))).intent_digest(
+        "owner"
+    ) != request.intent_digest("owner")
+    assert replace(request, overrides=tuple(reversed(request.overrides))).intent_digest(
+        "owner"
+    ) != request.intent_digest("owner")
+    assert replace(request, run_options={"dry_run": False}).intent_digest(
+        "owner"
+    ) != replace(request, run_options={}).intent_digest("owner")
+
+
+@pytest.mark.parametrize(
+    "options",
+    (
+        {"executor": "local"},
+        {"adapter_options": {}},
+        {"stage_options": {"train": {"adapter_options": {}}}},
+        {"validator_registry": object()},
+    ),
+)
+def test_preparation_rejects_obsolete_or_live_invocation_options(options) -> None:
+    with pytest.raises((QueueServiceError, ValueError, SerializationError)):
+        replace(_request(), run_options=options)
+
+
+def test_overlay_must_belong_to_explicit_capture(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    config = root / "example-project" / "configs" / "experiment.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("pipeline: {}")
+    (config.parents[1] / "outside.yaml").write_text("runtime: {}")
+    request = replace(_request(), overlays=("outside.yaml",))
+    with pytest.raises(QueueServiceError, match="overlay is not included"):
+        capture_shared_input(
+            request, source_root=root, snapshot_root=tmp_path / "snapshots"
+        )

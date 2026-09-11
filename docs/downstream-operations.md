@@ -250,7 +250,7 @@ Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
 are rejected. Initialization never overwrites a populated root. The narrow
 [coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
-schema-12 root when moving to schema 13; it does not reinterpret profiles or
+schema-12 root when moving to schema 14; it does not reinterpret profiles or
 provide a migration for other historical root versions.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
@@ -310,8 +310,10 @@ store tools; no automatic expiry or preparation-delete command is provided.
 
 ## Upgrade A Retained Coordinator Root
 
-Coordinator control roots use schema 13; worker roots and journals remain at
-schema 12. For a valid existing schema-12 coordinator, stop its foreground service
+Coordinator control roots use schema 14; worker roots and journals remain at
+schema 12. Schema-13 preparation roots are incompatible with the current child
+input/report contracts and are rejected without mutation; settle their work with
+the original installation before service replacement. For a valid existing schema-12 coordinator, stop its foreground service
 and retain the same protected role configuration and deployment binding. Run the
 local administrative command on the coordinator host:
 
@@ -324,17 +326,17 @@ The upgrade takes the existing exclusive coordinator lock, checks ownership,
 private permissions, deployment binding and stable identity, and creates a
 protected pre-upgrade backup through SQLite's backup API. It will not overwrite
 an existing backup. One transaction adds preparation storage and changes the
-coordinator marker from 12 to 13. Stable coordinator IDs, admissions and other
+coordinator marker from 12 to 14. Stable coordinator IDs, admissions and other
 existing durable identities remain intact; worker databases are not changed.
 A running coordinator is rejected without mutation. Workers do not need a
 fresh root or an inferred shutdown for this coordinator-only migration.
 
-A crash before commit leaves schema 12; after commit the root reopens at 13.
+A crash before commit leaves schema 12; after commit the root reopens at 14.
 Repeating the command on a structurally valid current root reports its current
 identity/version without rewriting retained state. Unsupported versions and
 malformed partial schemas are rejected, rather than automatically repaired.
 
-Keep the backup as operational evidence. Old binaries cannot open schema 13,
+Keep the backup as operational evidence. Old binaries cannot open schema 14,
 and no automatic downgrade is provided. Restoring an older backup after further
 work has been accepted can lose that work; recovery then needs a separately
 assessed procedure. Never replace a retained coordinator or worker root merely

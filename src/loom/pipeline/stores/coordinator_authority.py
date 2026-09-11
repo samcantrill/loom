@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import ssl
+import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,7 @@ from .read_models import (
 
 COORDINATOR_AUTHORITY_ROUTE_PREFIX = "/v1/authority/coordinator"
 COORDINATOR_AUTHORITY_SERVICE_HEADER = "X-Loom-Authority-Service"
+COORDINATOR_PUBLISH_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/publish"
 COORDINATOR_OPEN_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/open"
 COORDINATOR_TRANSITION_RUN_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/transition"
@@ -172,17 +174,53 @@ def embedded_coordinator_authority(run_uri: str):
     return authority
 
 
-def initialize_embedded_coordinator_authority(run_uri: str) -> None:
-    """Create the embedded authority record for one prepared managed run.
+def coordinator_authority_identity(factory: object) -> dict[str, PlainData]:
+    """Return credential-free protected owner identity for preparation recovery."""
+    if factory is embedded_coordinator_authority:
+        return {"family": "embedded"}
+    if isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory):
+        return {
+            "family": "authenticated",
+            "service_id": factory.service_id,
+            "workspace_id": factory.workspace_id,
+            "service_generation": factory.service_generation,
+            "endpoint": factory.client.endpoint,
+        }
+    raise AuthorityStoreError("preparation authority implementation is unsupported")
 
-    Project setup code uses this boundary before daemon admission. Runtime
-    execution continues to receive only the narrow coordinator-authority
-    adapter and never constructs or reaches into the concrete store.
-    """
 
-    from .sqlite_authority import SQLitePerRunAuthorityStore
+def publish_prepared_run(
+    factory: object, run_uri: str, publication_digest: str
+) -> None:
+    """Reconcile exact idempotent creation and publication at the selected owner."""
+    coordinator_authority_identity(factory)
+    if factory is embedded_coordinator_authority:
+        from .sqlite_authority import SQLitePerRunAuthorityStore
 
-    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
+        authority = SQLitePerRunAuthorityStore(run_uri)
+        try:
+            authority.create_run(run_uri, idempotency_key=publication_digest)
+        except sqlite3.DatabaseError as exc:
+            if getattr(exc, "sqlite_errorcode", None) in {
+                sqlite3.SQLITE_CORRUPT,
+                sqlite3.SQLITE_NOTADB,
+            }:
+                raise AuthorityStoreError(
+                    "prepared authority database is corrupt"
+                ) from exc
+            raise
+    else:
+        assert isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory)
+        factory(run_uri).publish_prepared_run(run_uri, publication_digest)
+        return
+    snapshot = authority.open_run(run_uri)
+    if snapshot.status is RunStatus.CREATED:
+        authority.transition_run(
+            run_uri,
+            from_status=RunStatus.CREATED,
+            to_status=RunStatus.PLANNED,
+            expected_revision=snapshot.revision,
+        )
 
 
 def authenticated_coordinator_authority_factory(
@@ -278,6 +316,18 @@ class AuthenticatedCoordinatorAuthority:
         self._workspace_id = _non_empty(workspace_id, "workspace_id")
         self._service_generation = _non_empty(
             service_generation, "service_generation"
+        )
+
+    def publish_prepared_run(self, run_uri: str, publication_digest: str) -> None:
+        """Publish an exact checked target, reconciling a lost response by identity."""
+        self._call(
+            COORDINATOR_PUBLISH_RUN_PATH,
+            run_uri,
+            body={
+                "publication_digest": _non_empty(
+                    publication_digest, "publication_digest"
+                )
+            },
         )
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -838,6 +888,7 @@ __all__ = [
     "CoordinatorAuthorityTlsConfig",
     "authenticated_coordinator_authority_factory",
     "embedded_coordinator_authority",
-    "initialize_embedded_coordinator_authority",
+    "coordinator_authority_identity",
+    "publish_prepared_run",
     "https_coordinator_authority_factory",
 ]

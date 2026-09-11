@@ -223,7 +223,8 @@ def test_checked_stateful_recipe_is_published_and_replayed_without_recomposition
     assert store.read_recipe_manifest(receipt.run_uri) == composed.recipe_manifest
     assert store.read_composition_manifest(receipt.run_uri) == composed.manifest.to_dict()
     assert store.read_run_user_metadata(receipt.run_uri) == {
-        "config_provenance": composed.provenance.to_dict()
+        "config_provenance": composed.provenance.to_dict(),
+        "coordinator_authority": {"family": "embedded"},
     }
     snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert snapshot is not None

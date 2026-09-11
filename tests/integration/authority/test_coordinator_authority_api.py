@@ -63,7 +63,7 @@ pytestmark = pytest.mark.integration
 RUN_URI = "file:///runs/coordinator-api-r1"
 
 
-def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
+def _authority_factory(tmp_path, *, workspace_id: str = "workspace-a"):
     repository = initialize_authority_repository(
         tmp_path / "authority", service_generation="generation-1"
     )
@@ -89,6 +89,11 @@ def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
         workspace_id=workspace_id,
         service_generation="generation-1",
     )
+    return repository, factory
+
+
+def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
+    repository, factory = _authority_factory(tmp_path, workspace_id=workspace_id)
     return repository, factory(RUN_URI)
 
 
@@ -481,3 +486,121 @@ def _wait_for_authority(
             last_error = exc
             sleep(0.05)
     pytest.fail(f"authority process did not become ready: {last_error}")
+
+
+def test_prepared_publication_replays_lost_reply_and_preserves_principal(
+    tmp_path,
+) -> None:
+    from loom.pipeline.status import RunStatus
+
+    repository, authority = _authority(tmp_path)
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    prepared = authority.open_run(RUN_URI)
+    assert prepared.status is RunStatus.PLANNED
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    assert authority.open_run(RUN_URI).revision == prepared.revision
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError):
+        authority.publish_prepared_run(RUN_URI, "different-publication")
+    with pytest.raises(Exception, match="principal conflicts with preparation"):
+        repository.bind_coordinator_admission(
+            RUN_URI,
+            CoordinatorAdmissionRequest("admit-other", "other", RUN_URI, "intent"),
+            service_principal="other",
+        )
+    authority.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", RUN_URI, "intent-1"),
+    )
+    prepared_attempt = authority.ensure_prepared_attempt(
+        RUN_URI, _prepared_request(prepared.revision)
+    )
+    authority.bind_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-1",
+        attempt_id=prepared_attempt.attempt.attempt_id,
+    )
+    fence = authority.grant_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-1",
+        attempt_id=prepared_attempt.attempt.attempt_id,
+    )
+    assert authority.open_run(RUN_URI).status is RunStatus.PLANNED
+    authority.confirm_execution_started(RUN_URI, fence=fence)
+    assert authority.open_run(RUN_URI).status is RunStatus.RUNNING
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    assert authority.open_run(RUN_URI).status is RunStatus.RUNNING
+
+
+@pytest.mark.optional_dependency
+@pytest.mark.parametrize("interruption", ("created", "published"))
+def test_selected_authority_publisher_reconciles_unknown_reply(
+    tmp_path, monkeypatch, interruption
+) -> None:
+    from weave import compose_config
+    from loom.pipeline.status import RunStatus
+    from loom.pipeline.orchestration import ExecutionRequirement
+    from loom.pipeline.stores.coordinator_authority import (
+        AuthenticatedCoordinatorAuthority,
+    )
+    from loom.queue.managed_local_preparation import prepare_managed_run
+    from tests.integration.queue.test_preparation_operations import _service
+
+    service = _service(tmp_path)
+    repository, factory = _authority_factory(tmp_path)
+    service = replace(
+        service, daemon=replace(service.daemon, coordinator_authority_factory=factory)
+    )
+    composed = compose_config(tmp_path / "projects" / "pipeline.yaml")
+    profile = service.daemon.resident_worker_launch_profile
+    assert profile is not None
+    requirements = {
+        "produce": ExecutionRequirement(
+            str(profile.descriptor["project_fingerprint"]),
+            str(profile.descriptor["environment_fingerprint"]),
+            str(profile.descriptor["executor_fingerprint"]),
+        )
+    }
+    publish = AuthenticatedCoordinatorAuthority.publish_prepared_run
+    transition = repository.transition_run
+
+    def lose_reply(self, run_uri, digest):
+        publish(self, run_uri, digest)
+        raise OSError("publication reply lost")
+
+    def unavailable_transition(*args, **kwargs):
+        raise OSError("authority publication unavailable after creation")
+
+    if interruption == "published":
+        monkeypatch.setattr(
+            AuthenticatedCoordinatorAuthority, "publish_prepared_run", lose_reply
+        )
+    else:
+        monkeypatch.setattr(repository, "transition_run", unavailable_transition)
+    with pytest.raises((OSError, AuthenticatedCoordinatorAuthorityError)):
+        prepare_managed_run(
+            service, composed, "prepared", execution_requirements=requirements
+        )
+    expected = RunStatus.CREATED if interruption == "created" else RunStatus.PLANNED
+    assert (
+        repository.open_run(
+            (service.daemon.run_store_root / "prepared").resolve().as_uri()
+        ).status
+        is expected
+    )
+    monkeypatch.setattr(
+        AuthenticatedCoordinatorAuthority, "publish_prepared_run", publish
+    )
+    monkeypatch.setattr(repository, "transition_run", transition)
+    receipt = prepare_managed_run(
+        service, composed, "prepared", execution_requirements=requirements
+    )
+    assert repository.open_run(receipt.run_uri).status is RunStatus.PLANNED
+    assert not (
+        service.daemon.run_store_root / "prepared" / ".loom" / "authority.sqlite3"
+    ).exists()
+    assert (
+        prepare_managed_run(
+            service, composed, "prepared", execution_requirements=requirements
+        )
+        == receipt
+    )

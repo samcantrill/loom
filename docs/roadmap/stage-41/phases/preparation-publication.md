@@ -290,6 +290,18 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: in progress under the 2026-09-12 whole-stage execution request
 - Refiner: not used
+- Coverage selection: invocation request/capture/child/report/publication, selected
+  authority identity and principal binding, retained Slurm profiles, native readiness,
+  first confirmed execution and explicit failed-admission retry. Existing
+  managed publisher/authority/preparation suites are selected, with added shared
+  and staged sparse-intent cases, exact option precedence/resource separation,
+  authenticated lost-response/partial-publication cases, owner/profile restart
+  refusal and recovery, and worker-free skip/reuse completion. Changed shared
+  lifecycle/authority contracts retain both required full gates. Expand only for
+  relevant failures or remaining accepted evidence gaps.
+- Format decision: child input/report version 2 and `preparation-input-v2`;
+  coordinator root 14 rejects old preparation intent before mutation. Shared/staged
+  input receipts, result projection and worker-root formats remain unchanged.
 - Pre-submit gate: not run
 - Independent implementation review: required for selected-authority publication and lifecycle transitions
 - Blocker corrections: 0/3
@@ -299,10 +311,10 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
+| Implementation and changed paths | Implemented invocation request/child/report propagation; selected-authority publication/principal binding and retained profile recovery; truthful lifecycle/retry transitions; current preparation/operations docs. Source and related tests are in this phase branch. |
+| Tests added, updated or intentionally removed | Added ordered/sparse immutable invocation and closure checks, checked/published resource separation, embedded/authenticated state and lost-response/partial-authority replay, authenticated Slurm-profile restart recovery, and worker-free skip/reuse completion. Updated existing metadata, format and retry assertions. |
+| Validated revision/tree and evidence | Focused development checks passed for new authority/worker/restart/reuse cases (12 tests) and static typing; required full validation pending. |
 | Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
 | PR, review and merge | Pending |
 | Residual risk and cleanup | Selected-authority/invocation integration evidence pending |

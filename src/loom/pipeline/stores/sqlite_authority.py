@@ -1002,7 +1002,7 @@ class SQLitePerRunAuthorityStore:
             ):
                 raise AuthorityStoreError("managed retry stage ownership is unresolved")
             ensure_run_transition(
-                snapshot.status, RunStatus.RUNNING, intent=TransitionIntent.RESUME
+                snapshot.status, RunStatus.PLANNED, intent=TransitionIntent.RESUME
             )
             reason = LifecycleReason(
                 code="run.explicit_retry", detail={"operation_id": operation_id}
@@ -1026,7 +1026,7 @@ class SQLitePerRunAuthorityStore:
             conn.execute(
                 "UPDATE run_state SET status = ?, updated_revision_sequence = ?, reason_json = ? WHERE id = 1",
                 (
-                    RunStatus.RUNNING.value,
+                    RunStatus.PLANNED.value,
                     revision.sequence,
                     _json_dumps(reason.to_dict()),
                 ),
@@ -1518,6 +1518,17 @@ class SQLitePerRunAuthorityStore:
                 revision=revision,
                 reason=None,
             )
+            current = RunStatus(
+                conn.execute("SELECT status FROM run_state WHERE id = 1").fetchone()[
+                    "status"
+                ]
+            )
+            if current is RunStatus.PLANNED:
+                ensure_run_transition(current, RunStatus.RUNNING)
+                conn.execute(
+                    "UPDATE run_state SET status = ? WHERE id = 1",
+                    (RunStatus.RUNNING.value,),
+                )
             _touch_run(conn, revision)
 
     def record_managed_attempt_terminal(

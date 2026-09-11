@@ -8,7 +8,7 @@ preparation lifecycle.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import errno
 import hashlib
 import io
@@ -24,7 +24,12 @@ from uuid import uuid4
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest, hash_mapping, validate_digest
 from loom.io.uris import path_to_file_uri
-from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    stable_json_bytes,
+    thaw_plain_data,
+    freeze_plain_data,
+)
 
 from .errors import QueueServiceError
 from .models import validate_queue_id
@@ -34,7 +39,7 @@ _MAX_INCLUDES = 100
 _MAX_FILES = 4096
 _MAX_BYTES = 64 * 1024 * 1024
 PREPARATION_STAGE_TARGET = "loom.preparation.PreparationStage"
-PREPARATION_INPUT_CAPABILITY = "preparation-input-v1"
+PREPARATION_INPUT_CAPABILITY = "preparation-input-v2"
 PREPARATION_STAGED_INPUT_CAPABILITY = "preparation-staged-input-v1"
 PREPARATION_INPUT_CONTEXT_ENV = "LOOM_PREPARATION_INPUT_CONTEXT"
 
@@ -113,19 +118,71 @@ class PreparationSource:
         )
 
 
+def _invocation(instance: object) -> None:
+    """Freeze serializable sparse intent without materializing omitted defaults."""
+    from loom.pipeline.runtime.options import RunOptions
+
+    for name in ("overlays", "overrides"):
+        values = getattr(instance, name)
+        if not isinstance(values, (tuple, list)) or any(
+            not isinstance(item, str) or not item for item in values
+        ):
+            raise QueueServiceError(f"preparation {name} must be ordered strings")
+        object.__setattr__(
+            instance,
+            name,
+            tuple(
+                _relative(item, "overlay") if name == "overlays" else item
+                for item in values
+            ),
+        )
+    options = thaw_plain_data(getattr(instance, "run_options"))
+    if not isinstance(options, dict):
+        raise QueueServiceError("preparation run_options must be a mapping")
+    if "executor" in options or "adapter_options" in options:
+        raise QueueServiceError("preparation executor/adapter inputs are obsolete")
+    RunOptions.from_dict(options)
+    for stage in cast(dict[str, PlainData], options.get("stage_options", {})).values():
+        if isinstance(stage, Mapping) and (
+            "executor" in stage or "adapter_options" in stage
+        ):
+            raise QueueServiceError(
+                "preparation stage executor/adapter inputs are obsolete"
+            )
+    object.__setattr__(instance, "run_options", freeze_plain_data(options))
+
+
+def _invocation_data(instance: object) -> dict[str, PlainData]:
+    return {
+        "overlays": list(getattr(instance, "overlays")),
+        "overrides": list(getattr(instance, "overrides")),
+        "run_options": thaw_plain_data(getattr(instance, "run_options")),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class PrepareRunRequest:
-    """Coordinator-owned request for one idempotent preparation operation."""
+    """Immutable intent for one preparation operation.
+
+    Overlays are ordered captured project-relative files; overrides are ordered
+    native config strings. Sparse plain run options override authored runtime
+    settings using the existing config/profile/invocation precedence. Omitted
+    option fields stay omitted through capture, worker checks and publication.
+    """
 
     operation_id: str
     run_name: str
     source: PreparationSource
     config_path: str
     preparation_profile: str
+    overlays: tuple[str, ...] = ()
+    overrides: tuple[str, ...] = ()
+    run_options: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
 
+        _invocation(self)
         validate_queue_id(self.operation_id, "operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
         _validate_run_name(self.run_name)
@@ -142,11 +199,12 @@ class PrepareRunRequest:
             "source": self.source.to_dict(),
             "config_path": self.config_path,
             "preparation_profile": self.preparation_profile,
+            **_invocation_data(self),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
-        if set(data) != {
+        if set(data) - {"overlays", "overrides", "run_options"} != {
             "operation_id",
             "run_name",
             "source",
@@ -160,6 +218,9 @@ class PrepareRunRequest:
             PreparationSource.from_dict(cast(Mapping[str, object], data["source"])),
             cast(str, data["config_path"]),
             cast(str, data["preparation_profile"]),
+            cast(tuple[str, ...], data.get("overlays", ())),
+            cast(tuple[str, ...], data.get("overrides", ())),
+            cast(Mapping[str, PlainData], data.get("run_options", {})),
         )
 
     def intent_digest(self, principal_id: str) -> str:
@@ -278,18 +339,22 @@ def input_receipt_from_dict(data: Mapping[str, object]) -> PreparationInputRecei
 
 @dataclass(frozen=True, slots=True)
 class PreparationChildInput:
-    """Finite shared input for the fixed preparation stage, never a generic path binding."""
+    """Finite captured input and invocation for the fixed preparation stage."""
 
     operation_id: str
     preparation_profile: str
     config_path: str
     input_receipt: PreparationInputReceipt
     profile_descriptor: Mapping[str, PlainData]
+    overlays: tuple[str, ...] = ()
+    overrides: tuple[str, ...] = ()
+    run_options: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
+        _invocation(self)
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
         object.__setattr__(
@@ -304,12 +369,13 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "operation_id": self.operation_id,
             "preparation_profile": self.preparation_profile,
             "config_path": self.config_path,
             "input_receipt": self.input_receipt.to_dict(),
             "profile_descriptor": dict(self.profile_descriptor),
+            **_invocation_data(self),
         }
 
     @classmethod
@@ -324,9 +390,12 @@ class PreparationChildInput:
                 "config_path",
                 "input_receipt",
                 "profile_descriptor",
+                "overlays",
+                "overrides",
+                "run_options",
             }
             or type(value.get("schema_version")) is not int
-            or value.get("schema_version") != 1
+            or value.get("schema_version") != 2
             or not isinstance(value.get("input_receipt"), Mapping)
         ):
             raise QueueServiceError("preparation child input is invalid")
@@ -336,6 +405,9 @@ class PreparationChildInput:
             cast(str, value["config_path"]),
             input_receipt_from_dict(value["input_receipt"]),
             cast(Mapping[str, PlainData], value["profile_descriptor"]),
+            cast(tuple[str, ...], value["overlays"]),
+            cast(tuple[str, ...], value["overrides"]),
+            cast(Mapping[str, PlainData], value["run_options"]),
         )
 
 
@@ -346,6 +418,8 @@ def _capture_selected_source(
     project = _contained_path(source_root.absolute(), request.source.path)
     _require_directory(project)
     files = _selected_files(project, request.source.include)
+    if any(path not in files for path in request.overlays):
+        raise QueueServiceError("preparation overlay is not included")
     if request.config_path not in files:
         raise QueueServiceError("preparation config_path is not included")
     manifest: list[PlainData] = []

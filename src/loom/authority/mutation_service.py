@@ -114,6 +114,7 @@ class AuthorityMutationOperation(StrEnum):
     SET_RESOURCE_LIMIT = "set_resource_limit"
     ENSURE_RESOURCE_LIMITS = "ensure_resource_limits"
     READ_RESOURCE_LIMIT = "read_resource_limit"
+    COORDINATOR_PUBLISH_RUN = "coordinator_publish_run"
     COORDINATOR_OPEN_RUN = "coordinator_open_run"
     COORDINATOR_TRANSITION_RUN = "coordinator_transition_run"
     COORDINATOR_TRANSITION_STAGE = "coordinator_transition_stage"
@@ -151,6 +152,7 @@ TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL = "loom:trusted-in-process-coordinator"
 
 _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
     {
+        AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
@@ -387,9 +389,15 @@ class AuthorityMutationService:
                     raise AuthorityMutationValidationError(
                         "coordinator authority principal is invalid"
                     )
-                if operation is not AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION:
+                if operation not in {
+                    AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
+                    AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
+                }:
                     self._repository.require_coordinator_principal(
-                        _required_run_uri(request), scoped_principal
+                        _required_run_uri(request),
+                        scoped_principal,
+                        allow_prepared=operation
+                        is AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
                     )
             result = self._dispatch(
                 operation,
@@ -537,6 +545,10 @@ class AuthorityMutationService:
                 return self._bind_coordinator_admission(
                     request, coordinator_principal=coordinator_principal
                 )
+            case AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN:
+                return self._coordinator_publish_run(
+                    request, coordinator_principal=coordinator_principal
+                )
             case AuthorityMutationOperation.COORDINATOR_OPEN_RUN:
                 return self._coordinator_open_run(request)
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN:
@@ -608,6 +620,28 @@ class AuthorityMutationService:
             raise AuthorityMutationValidationError(
                 "coordinator authority workspace conflicts"
             )
+
+    def _coordinator_publish_run(
+        self, request: AuthorityProtocolRequest, *, coordinator_principal: str | None
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        digest = _required_body_value(request, "publication_digest")
+        if not isinstance(digest, str) or not digest:
+            raise AuthorityMutationValidationError("publication digest is invalid")
+        self._repository.admit_run(
+            run_uri,
+            idempotency_key=digest,
+            metadata={"preparation_principal": coordinator_principal},
+        )
+        snapshot = self._repository.open_run(run_uri)
+        if snapshot.status is RunStatus.CREATED:
+            self._repository.transition_run(
+                run_uri,
+                from_status=RunStatus.CREATED,
+                to_status=RunStatus.PLANNED,
+                expected_revision=snapshot.revision,
+            )
+        return self._coordinator_open_run(request)
 
     def _coordinator_open_run(
         self, request: AuthorityProtocolRequest
