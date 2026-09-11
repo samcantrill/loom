@@ -10,6 +10,9 @@ import sqlite3
 import sys
 import socket
 from threading import Event
+from concurrent.futures import ThreadPoolExecutor
+import io
+from time import monotonic, sleep
 
 import pytest
 
@@ -17,6 +20,7 @@ from loom.coordinator import CoordinatorClient, CoordinatorClientError
 from loom.artifacts import ArtifactRef
 from loom.serialization import ensure_plain_data, stable_json_bytes
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.io.uris import uri_to_path
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.cleanup import (
     CleanupManagedRoot,
@@ -59,6 +63,8 @@ from loom.queue.resident_readiness import (
     qualified_resident_profile,
 )
 from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
+from loom.queue._managed_local import AtomResourceProvider, SQLiteAgentJournal
+from loom.cli.main import main
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -185,6 +191,13 @@ def _request() -> PrepareRunRequest:
         "pipeline.yaml",
         "existing-project",
     )
+
+
+def _cli_result(*arguments: str, expected_exit: int = 0):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(["queue", *arguments, "--format", "json"], stdout=stdout, stderr=stderr)
+    assert code == expected_exit, (stdout.getvalue(), stderr.getvalue())
+    return json.loads(stdout.getvalue())
 
 
 def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> None:
@@ -362,6 +375,24 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
         executor.readiness_result.ok and not executor.readiness_result.preparation_ready
     )
     assert preparer.readiness_identity == executor.readiness_identity
+    other_project = tmp_path / "different-project"
+    (other_project / "src").mkdir(parents=True)
+    (other_project / "src" / "identity.py").write_text("PROJECT = 'different'\n")
+    incompatible = qualified_resident_profile(
+        replace(
+            base,
+            descriptor=replace(base.descriptor, profile_id="different-project-profile"),
+            project_root=other_project,
+            readiness_requirements=replace(
+                base.readiness_requirements, source_roots=("src",)
+            ),
+        )
+    )
+    assert incompatible.readiness_result.ok
+    assert (
+        incompatible.descriptor.project_fingerprint
+        != executor.descriptor.project_fingerprint
+    )
     ordinary_capabilities = (
         "python",
         REMOTE_EXECUTION_CAPABILITY,
@@ -374,6 +405,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
     authored["remote_profiles"] = [
         preparer.descriptor.to_dict(),
         executor.descriptor.to_dict(),
+        incompatible.descriptor.to_dict(),
     ]
     authored["preparation"]["profiles"]["existing-project"]["resident_profile_id"] = (
         preparer.descriptor.profile_id
@@ -393,8 +425,14 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
         )
     ]
     authored["agent_policy"]["principals"] = [
-        {"credential_id": "query", "principal_id": "client", "role": "client",
-         "actions": [], "agent_ids": [], "pools": []},
+        {
+            "credential_id": "query",
+            "principal_id": "client",
+            "role": "client",
+            "actions": [],
+            "agent_ids": [],
+            "pools": [],
+        },
     ]
     config_path.write_text(json.dumps(authored))
     pipeline_path = tmp_path / "projects" / "pipeline.yaml"
@@ -453,7 +491,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                 credentials[certificate].with_suffix(".crt"),
                 credentials[certificate].with_suffix(".key"),
                 tmp_path / f"remote-{certificate}" / "agent",
-                (profile,),
+                (profile,) if certificate == "agent" else (profile, incompatible),
             )
             LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
             agent = LocalDaemonAgentHttpClient(agent_config)
@@ -501,7 +539,11 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                     0,
                     30,
                     _resident_provider_descriptors(profile, session.agent_id),
-                    resident_profiles=(profile.descriptor,),
+                    resident_profiles=(
+                        (
+                            profile if certificate == "agent" else incompatible
+                        ).descriptor,
+                    ),
                 ),
                 idempotency_key=f"offer-{certificate}",
             )
@@ -580,10 +622,40 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             assert len(client.admissions().admissions) == 1
             target_uri = prepared.result["prepared_run"]["run_uri"]
             client.submit(LocalDaemonAdmissionRequest("remote-target", target_uri))
-            executed = agents[1].execute_one(
+            unavailable = agents[1].wait_for_work(
                 sessions[1].session_id,
                 sessions[1].availability_revision,
                 sequence=1,
+                wait_timeout_ms=250,
+            )
+            assert unavailable["result"] == "wait", unavailable
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?",
+                        (target_uri,),
+                    ).fetchone()[0]
+                    == 0
+                )
+            agents[1].publish_offer(
+                AgentOffer(
+                    sessions[1].session_id,
+                    sessions[1].coordinator_epoch,
+                    sessions[1].config_revision,
+                    sessions[1].inventory_revision,
+                    sessions[1].availability_revision,
+                    1,
+                    0,
+                    30,
+                    _resident_provider_descriptors(executor, sessions[1].agent_id),
+                    resident_profiles=(executor.descriptor,),
+                ),
+                idempotency_key="offer-compatible-c",
+            )
+            executed = agents[1].execute_one(
+                sessions[1].session_id,
+                sessions[1].availability_revision,
+                sequence=2,
                 wait_timeout_ms=5000,
             )
             assert executed["state"] == "RELEASED", executed
@@ -605,11 +677,281 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             assert LocalArtifactStore(store.local_artifact_root(target_uri)).load(
                 output
             ) == {"value": 41}
+            for agent in agents:
+                agent.shutdown_clean()
     finally:
         for agent in agents:
             agent.close()
         server.stop()
         daemon.stop()
+
+
+def test_running_preparation_cancellation_waits_for_native_resource_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _service(tmp_path)
+    installed = tmp_path / "existing-installation"
+    installed.mkdir()
+    (installed / "blocking_recipe.py").write_text(
+        "import os, socket\n"
+        "def recipe():\n"
+        "    with socket.create_connection(('127.0.0.1', int(os.environ['LOOM_TEST_RECIPE_PORT'])), timeout=30) as connection:\n"
+        "        connection.sendall(b'ready')\n"
+        "        connection.recv(1)\n"
+        "    return {'value': 41}\n"
+    )
+    distribution = installed / "blocking_recipe-1.0.dist-info"
+    distribution.mkdir()
+    (distribution / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: blocking-recipe\nVersion: 1.0\n"
+    )
+    (distribution / "entry_points.txt").write_text(
+        "[loom.recipes]\nblocking-value = blocking_recipe:recipe\n"
+    )
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(25)
+    agent_path = tmp_path / "agent.json"
+    authored = json.loads(agent_path.read_text())
+    authored["resident_profiles"][0]["environment"] = {
+        "PYTHONPATH": str(installed),
+        "LOOM_TEST_RECIPE_PORT": str(listener.getsockname()[1]),
+    }
+    agent_path.write_text(json.dumps(authored))
+    pipeline_path = tmp_path / "projects" / "pipeline.yaml"
+    pipeline = json.loads(pipeline_path.read_text())
+    pipeline["pipeline"]["stages"][0]["config"] = {"_recipe_": "blocking-value"}
+    pipeline_path.write_text(json.dumps(pipeline))
+    service = load_coordinator_service_config(tmp_path / "coordinator.json")
+    release_entered, allow_release = Event(), Event()
+    release = AtomResourceProvider.release
+
+    def delayed_release(provider, command):
+        release_entered.set()
+        assert allow_release.wait(25)
+        return release(provider, command)
+
+    monkeypatch.setattr(AtomResourceProvider, "release", delayed_release)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    server.start()
+    connection = None
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.prepare_run(_request())
+            connection, _ = listener.accept()
+            assert connection.recv(5) == b"ready"
+            operation = client.operation("prepare-1")
+            child = client.admission(
+                operation.result["preparation_admission_id"]
+            ).admission
+            assert child.state.value == "ACTIVE"
+            assert client.cancel_preparation("prepare-1").state == "pending"
+            assert release_entered.wait(25)
+            observation = client.wait_operation("prepare-1", timeout_seconds=0)
+            assert observation.operation.state == "pending"
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ? AND state != 'released'",
+                        (child.run_uri,),
+                    ).fetchone()[0]
+                    == 1
+                )
+            assert not (service.daemon.run_store_root / "target-1").exists()
+            allow_release.set()
+            cancelled = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            assert cancelled.state == "cancelled"
+            assert client.cancel_preparation("prepare-1") == cancelled
+            assert (
+                client.admission(child.admission_id).admission.state.value
+                == "CANCELLED"
+            )
+            assert cancelled.result["prepared_run"] is None
+            assert (
+                SQLiteAgentJournal(
+                    service.daemon.agent_journal, _allow_initialize=False
+                ).retained_claim_commands()
+                == ()
+            )
+            assert len(client.admissions().admissions) == 1
+    finally:
+        allow_release.set()
+        if connection is not None:
+            connection.close()
+        listener.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from weave import compose_config
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    _service(tmp_path)
+    config_path = tmp_path / "coordinator.json"
+    authored = json.loads(config_path.read_text())
+    authored.pop("preparation")
+    config_path.write_text(json.dumps(authored))
+    agent_path = tmp_path / "agent.json"
+    authored = json.loads(agent_path.read_text())
+    authored["resident_profiles"][0].pop("preparation_shared_roots")
+    agent_path.write_text(json.dumps(authored))
+    service = load_coordinator_service_config(config_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    profile = ResidentProfileDescriptor.from_dict(
+        service.daemon.resident_worker_launch_profile.descriptor
+    )
+    requirements = {
+        "produce": ExecutionRequirement(
+            profile.project_fingerprint,
+            profile.environment_fingerprint,
+            profile.executor_fingerprint,
+        )
+    }
+    source = tmp_path / "projects" / "pipeline.yaml"
+    complete = prepare_managed_run(
+        service, compose_config(source), "complete", execution_requirements=requirements
+    )
+    barrier = tmp_path / "worker-barrier"
+    authored = json.loads(source.read_text())
+    authored["pipeline"]["stages"][0]["factory"] = {
+        "_target_": "tests.support.pipeline_execution_stages.ReleaseStage"
+    }
+    authored["pipeline"]["stages"][0]["config"] = {
+        "marker_dir": str(barrier),
+        "timeout_seconds": 60,
+    }
+    source.write_text(json.dumps(authored))
+    active = prepare_managed_run(
+        service, compose_config(source), "active", execution_requirements=requirements
+    )
+    first = LocalDaemon(service.daemon)
+    first.start()
+    server = LocalDaemonSocketServer(first, service.daemon.endpoint)
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.submit(LocalDaemonAdmissionRequest("complete", complete.run_uri))
+            assert (
+                client.wait("complete", timeout_seconds=25).state.value == "SUCCEEDED"
+            )
+            client.submit(LocalDaemonAdmissionRequest("active", active.run_uri))
+            deadline = monotonic() + 25
+            while not (barrier / "produce.started").exists():
+                assert monotonic() < deadline
+                sleep(0.01)
+            coordinator_id = client.status().coordinator_id
+            admissions = client.admissions().admissions
+            assert {row.state.value for row in admissions} == {"SUCCEEDED", "ACTIVE"}
+    finally:
+        server.stop()
+        first.stop()
+
+    journal = SQLiteAgentJournal(service.daemon.agent_journal, _allow_initialize=False)
+    retained = journal.retained_claim_commands()
+    assert len(retained) == 1 and retained[0].assignment.run_uri == active.run_uri
+    worker_files = {
+        path: path.read_bytes()
+        for path in (
+            service.daemon.agent_journal,
+            service.daemon.agent_root / "control.sqlite",
+        )
+    }
+    # Prior formats are unchanged: create the exact predecessor control shape
+    # only after real native admissions, claims and a worker process exist.
+    with sqlite3.connect(service.daemon.control_database) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM preparation_operations").fetchone()[0]
+            == 0
+        )
+        conn.execute("DROP TABLE preparation_operations")
+        conn.execute("PRAGMA user_version = 12")
+        before = {
+            row[0]: tuple(conn.execute(f'SELECT * FROM "{row[0]}"'))
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 13}
+    with sqlite3.connect(service.daemon.control_database) as conn:
+        assert {
+            name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
+        } == before
+    assert {path: path.read_bytes() for path in worker_files} == worker_files
+    assert (
+        SQLiteAgentJournal(
+            service.daemon.agent_journal, _allow_initialize=False
+        ).retained_claim_commands()
+        == retained
+    )
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 13)
+    (backup,) = service.daemon.coordinator_root.glob("*.backup")
+    with sqlite3.connect(backup) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert (
+            tuple(conn.execute("SELECT * FROM managed_admissions"))
+            == before["managed_admissions"]
+        )
+
+    entered = Event()
+    resume = LocalDaemonExecution.resume_retained_local_work
+
+    def observe_resume(execution):
+        entered.set()
+        return resume(execution)
+
+    monkeypatch.setattr(
+        LocalDaemonExecution, "resume_retained_local_work", observe_resume
+    )
+    replacement = LocalDaemon(service.daemon)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as threads:
+            starting = threads.submit(replacement.start)
+            assert entered.wait(25)
+            assert not starting.done()
+            (barrier / "release").touch()
+            starting.result(timeout=25)
+        assert replacement.status().coordinator_id == coordinator_id
+        assert replacement._admission_for_queue_item("complete").admission_id == next(
+            row.admission_id for row in admissions if row.queue_item_id == "complete"
+        )
+        outcome = replacement._wait("active", timeout_seconds=25)
+        assert outcome.state.value == "SUCCEEDED"
+        assert outcome.admission_id == next(
+            row.admission_id for row in admissions if row.queue_item_id == "active"
+        )
+        assert (
+            SQLiteAgentJournal(
+                service.daemon.agent_journal, _allow_initialize=False
+            ).retained_claim_commands()
+            == ()
+        )
+        with sqlite3.connect(service.daemon.execution_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone()[
+                    0
+                ]
+                == 2
+            )
+        store = LocalRunStore(service.daemon.run_store_root)
+        result = StageWorkerResult.from_dict(
+            store.read_stage_worker_result(active.run_uri, "produce", attempt=1)
+        )
+        assert LocalArtifactStore(store.local_artifact_root(active.run_uri)).load(
+            result.outputs["data"]
+        ) == {"stage": "produce"}
+    finally:
+        (barrier / "release").touch()
+        replacement.stop()
 
 
 def test_cancellation_before_capture_is_durable_and_keeps_the_target_absent(
@@ -810,6 +1152,174 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         assert resumed.prepare_run(_request(), principal_id="caller") == completed
     finally:
         resumed.stop()
+
+
+@pytest.mark.parametrize(
+    "fault,code",
+    (
+        ("checks", "preflight_failed"),
+        ("compose", "preparation_child_failed"),
+        ("runtime_path", "invalid_preparation_report"),
+        ("profile", "installation_mismatch"),
+        ("requirements", "installation_mismatch"),
+        ("missing_requirement", "invalid_preparation_report"),
+        ("worker_result", "invalid_preparation_report"),
+        ("checksum", "invalid_preparation_report"),
+        ("required_unavailable", "preflight_failed"),
+    ),
+)
+def test_child_failure_or_inconsistent_evidence_never_publishes(
+    tmp_path: Path,
+    fault: str,
+    code: str,
+) -> None:
+    service = _service(tmp_path)
+    source = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(source.read_text())
+    stage = authored["pipeline"]["stages"][0]
+    if fault == "checks":
+        stage["inputs"] = {"missing": "unavailable.data"}
+    elif fault == "compose":
+        stage["config"] = {"_recipe_": "uninstalled-recipe"}
+    elif fault == "runtime_path":
+        stage["config"] = {"input_path": str(tmp_path / "worker-private")}
+    source.write_text(json.dumps(authored))
+
+    if fault in {
+        "profile",
+        "requirements",
+        "missing_requirement",
+        "required_unavailable",
+    }:
+        # A selected installed Python writes an inconsistent report before its
+        # native artifact checksum and authoritative output commit are created.
+        installed = tmp_path / "report-producer"
+        installed.mkdir()
+        (installed / "sitecustomize.py").write_text(
+            "import os\n"
+            "from dataclasses import replace\n"
+            "from loom.pipeline.context import StageContext\n"
+            "from loom.diagnostics import PreflightResult, PreflightCheckStatus\n"
+            "save = StageContext.save_artifact\n"
+            "def changed(self, name, value, **kwargs):\n"
+            "    if name == 'report' and self.stage_name == 'prepare':\n"
+            "        fault = os.environ['LOOM_TEST_REPORT_FAULT']\n"
+            "        if fault == 'profile':\n"
+            "            value['profile_descriptor']['revision'] = 'another-installation'\n"
+            "        elif fault == 'requirements':\n"
+            "            value['execution_requirements']['produce']['environment_fingerprint'] = 'another-environment'\n"
+            "        elif fault == 'missing_requirement':\n"
+            "            value['execution_requirements'] = {}\n"
+            "        else:\n"
+            "            preflight = PreflightResult.from_dict(value['preflight'])\n"
+            "            checks = (replace(preflight.checks[0], status=PreflightCheckStatus.SKIP, details={'applicability': 'required'}), *preflight.checks[1:])\n"
+            "            value['preflight'] = PreflightResult(checks, preflight.groups).to_dict()\n"
+            "    return save(self, name, value, **kwargs)\n"
+            "StageContext.save_artifact = changed\n"
+        )
+        agent_path = tmp_path / "agent.json"
+        config = json.loads(agent_path.read_text())
+        config["resident_profiles"][0]["environment"] = {
+            "PYTHONPATH": str(installed),
+            "LOOM_TEST_REPORT_FAULT": fault,
+        }
+        agent_path.write_text(json.dumps(config))
+        service = load_coordinator_service_config(tmp_path / "coordinator.json")
+
+    class ChangedPersistedEvidence(CoordinatorPreparation):
+        def read_report(self, config, admission, request, binding):
+            # Exercise disagreement at the existing filesystem evidence boundary,
+            # using a real committed child rather than a fabricated admission.
+            store = LocalRunStore(config.run_store_root)
+            result = store.read_stage_worker_result(
+                admission.run_uri, "prepare", attempt=1
+            )
+            if fault == "worker_result":
+                result["outputs"]["report"]["artifact_id"] = "different-report"
+                store.write_stage_worker_result(
+                    admission.run_uri, "prepare", result, attempt=1
+                )
+            elif fault == "checksum":
+                reference = ArtifactRef.from_dict(result["outputs"]["report"])
+                path = uri_to_path(reference.uri)
+                path.write_text('{"changed": true}')
+            return super().read_report(config, admission, request, binding)
+
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=ChangedPersistedEvidence(service))
+    daemon.start()
+    try:
+        daemon.prepare_run(_request(), principal_id="caller")
+        failed = daemon.wait_operation("prepare-1", timeout=25).operation
+        assert (failed.state, failed.code) == ("failed", code), failed
+        assert failed.result["prepared_run"] is None
+        assert not (service.daemon.run_store_root / "target-1").exists()
+        child = daemon._admission(failed.result["preparation_admission_id"])
+        assert child.state.value == ("FAILED" if fault == "compose" else "SUCCEEDED")
+        if fault == "checks":
+            assert failed.result["preflight_status"] == "FAIL"
+            assert failed.result["report_ref"] is not None
+        if fault == "required_unavailable":
+            assert failed.result["report_ref"] is not None
+            assert any(
+                check["status"] == "SKIP"
+                and check["details"].get("applicability") == "required"
+                for check in failed.result["preflight"]["checks"]
+            )
+        assert len(daemon.admissions().admissions) == 1
+    finally:
+        daemon.stop()
+
+
+def test_preparation_rejects_other_operation_ids_and_public_child_submission(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(
+        service.daemon,
+        preparation=CoordinatorPreparation(service),
+        trusted_scheduling_loader=lambda: service.daemon,
+    )
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    server.start()
+    try:
+        occupied = LocalDaemonSocketClient(service.daemon.endpoint).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "occupied-id",
+                daemon.status().scheduling_epoch,
+                "native operation collision",
+            ),
+        )
+        assert occupied["state"] == "applied", occupied
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            with pytest.raises(CoordinatorClientError) as collision:
+                client.prepare_run(replace(_request(), operation_id="occupied-id"))
+            assert collision.value.code == "conflict"
+            assert collision.value.mutation_outcome == "not_applied"
+            assert client.operation("occupied-id").kind == "scheduling_reload"
+            assert not (tmp_path / "snapshots").exists()
+            client.prepare_run(_request())
+            prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            assert prepared.state == "applied", prepared
+            child = client.admission(
+                prepared.result["preparation_admission_id"]
+            ).admission
+            for request in (
+                LocalDaemonAdmissionRequest("different-queue", child.run_uri),
+                LocalDaemonAdmissionRequest(
+                    child.queue_item_id, prepared.result["prepared_run"]["run_uri"]
+                ),
+            ):
+                with pytest.raises(CoordinatorClientError) as reserved:
+                    client.submit(request)
+                assert reserved.value.code == "conflict"
+                assert reserved.value.mutation_outcome == "not_applied"
+            assert len(client.admissions().admissions) == 1
+    finally:
+        server.stop()
+        daemon.stop()
 
 
 def test_partial_target_is_preserved_as_a_publication_conflict(tmp_path: Path) -> None:

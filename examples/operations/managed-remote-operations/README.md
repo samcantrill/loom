@@ -248,9 +248,13 @@ agent. Map preparation profile `example-cpu` to observed resident profile
 `remote-default`, allowing `projects` and shared mode with native child runtime
 options. In the worker profile, `preparation_shared_roots.projects` names the
 worker-visible mount of the same snapshot directory. The mount prefix may
-differ. Qualify the installed preparation module and `preparation-input-v1`
-binding and enable the corresponding protected policy; missing mapping or
-incompatible software fails explicitly. See
+differ. Configure this private mapping before worker initialization; an existing
+root keeps its launch binding until the normal replacement procedure after work
+settles. Append `preparation-input-v1` to both the agent's
+`registration.capabilities` and its coordinator policy entry's allowed
+`capabilities`. The actual installed Python must pass the preparation import
+check before advertising that capability. Missing mapping or incompatible
+software fails explicitly. See
 [operator configuration](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
 
 From the coordinator host:

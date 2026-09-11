@@ -160,8 +160,10 @@ this example directory and configure a separate shared snapshot directory.
 Map `example-cpu` to resident profile `starter-local`, explicitly allowing that
 root and shared mode with the existing native child runtime options. In the
 resident profile, map `preparation_shared_roots.projects` to that snapshot
-directory. Qualify the installed preparation module and input capability before
-starting or reloading the role. See the complete
+directory. Configure that private mapping before worker initialization, then
+qualify the installed preparation module. Existing worker roots retain their
+launch binding; changing it uses the normal replacement procedure after retained
+work settles. Coordinator policy changes use the existing reload. See the complete
 [preparation settings and limits](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
 
 With the configured service running, use its Unix endpoint:

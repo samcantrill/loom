@@ -55,6 +55,12 @@ class PreparationNotAccepted(QueueServiceError):
         self.code = code
 
 
+class PreparationChildReserved(QueueConflictError):
+    """Public child submission refused before native admission can mutate state."""
+
+    code = "conflict"
+
+
 @dataclass(frozen=True, slots=True)
 class PreparationReport:
     """One checked committed report, retained only for the current publication pass."""
@@ -98,6 +104,10 @@ class PreparationCallbacks(Protocol):
 
 class PreparationConfigurationUnavailable(QueueServiceError):
     """The accepted scheduling implementation is not currently available."""
+
+
+class PreparationInstallationMismatch(QueueConflictError):
+    """A report names software different from the accepted worker installation."""
 
 
 class _ResultTooLarge(QueueServiceError):
@@ -637,12 +647,17 @@ class CoordinatorPreparations:
         except _ResultTooLarge:
             self._fail(row, "result_too_large")
             return
-        except (QueueServiceError, QueueConflictError):
+        except (QueueServiceError, QueueConflictError) as exc:
             if row["state"] == "applying":
                 # Publication may already have completed. Keep its durable
                 # claim until the pinned report can prove the actual outcome.
                 raise
-            self._fail(row, "invalid_preparation_report")
+            self._fail(
+                row,
+                "installation_mismatch"
+                if isinstance(exc, PreparationInstallationMismatch)
+                else "invalid_preparation_report",
+            )
             return
         if not report.publishable:
             self._store_result(

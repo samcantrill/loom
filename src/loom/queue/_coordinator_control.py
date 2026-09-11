@@ -39,7 +39,7 @@ from .local_daemon import (
     OperationWaitResult,
 )
 from .preparation import PrepareRunRequest
-from ._preparation_operations import PreparationNotAccepted
+from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
 
 CONTROL_CAPABILITY = "daemon-control-v1"
@@ -619,7 +619,7 @@ def dispatch_control(
                 applied=applied,
             )
         return cast(Mapping[str, PlainData], plain)
-    except PreparationNotAccepted as exc:
+    except (PreparationNotAccepted, PreparationChildReserved) as exc:
         raise control_error(
             exc.code,
             operation,

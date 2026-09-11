@@ -2513,7 +2513,10 @@ class LocalDaemon:
         from .local_daemon_execution import load_managed_local_intent
 
         with self._cycle_lock:
-            from ._preparation_operations import PREPARATION_RUN_PREFIX
+            from ._preparation_operations import (
+                PREPARATION_RUN_PREFIX,
+                PreparationChildReserved,
+            )
             from loom.pipeline.stores import run_uri_to_path
 
             if preparation_operation_id is None:
@@ -2522,7 +2525,7 @@ class LocalDaemon:
                 except ValueError:
                     run_name = ""
                 if run_name.startswith(PREPARATION_RUN_PREFIX):
-                    raise QueueConflictError(
+                    raise PreparationChildReserved(
                         "preparation child run identity is reserved"
                     )
 
@@ -2552,7 +2555,7 @@ class LocalDaemon:
                     request.queue_item_id.startswith(PREPARATION_RUN_PREFIX)
                     or reserved is not None
                 ):
-                    raise QueueConflictError(
+                    raise PreparationChildReserved(
                         "preparation child queue identity is reserved"
                     )
             execution = self._execution

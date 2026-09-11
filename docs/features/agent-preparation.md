@@ -214,6 +214,16 @@ conflicting target inspectable. `result_too_large` prevents an unreadable requir
 projection. These codes complement the native report/admission evidence; they
 do not replace [client connection and mutation errors](coordinator-client.md#reconnect-and-reconcile).
 
+The coordinator reports `installation_mismatch` when the report's profile or
+per-stage software requirements differ from the accepted installation. Missing
+stage requirements, a mismatched committed worker result, corrupted report bytes,
+and nonportable target paths produce `invalid_preparation_report` before
+publication. The linked child admission retains the original execution evidence.
+An unavailable required check also prevents publication, even when other passing
+checks keep the native aggregate status at `PASS`; inspect the individual check's
+`SKIP` status and required applicability. Warnings and inapplicable skips remain
+visible without preventing an otherwise valid publication.
+
 `preparation_unavailable` on a pending or applying operation means reconciliation
 will retry from its retained state. In particular, a missing reply or temporarily
 unavailable report after the publication claim cannot establish that publication
@@ -309,6 +319,13 @@ interpreter paths or credentials into the request JSON. For the example request
 above, authoring reads `/nas/projects/example-project/configs/experiment.yaml`;
 the worker reads the verified capture through its own mapping.
 
+Configure the mapping before initializing a new worker root. An existing root
+retains its private launch binding, so adding or changing a mapping follows the
+existing worker replacement procedure after retained work settles. Coordinator
+policy reload can change allowed aliases while accepted operations retain their
+original selections; it cannot reinterpret a worker's retained input mapping.
+The coordinator-only upgrade does not rewrite or recreate worker roots.
+
 The profile chooses an existing installation, with no inferred default
 environment or shell command. Preparation requires embedded coordinator
 authority and rejects services with configured SLURM profiles. This restriction
@@ -330,8 +347,9 @@ Adding a shared-root mapping alone therefore does not make a previously compatib
 execution environment incompatible.
 
 An outbound agent must also include `preparation-input-v1` in its protected
-`registration.capabilities`. That declaration qualifies every configured resident
-profile, because the capability belongs to the agent session. Registration refuses
+`registration.capabilities`, with the same capability allowed for that agent in
+the coordinator's `agent_policy.agents` entry. That declaration qualifies every
+configured resident profile, because the capability belongs to the agent session. Registration refuses
 the capability if any of those environments lacks successful preparation
 qualification. Declare compatible existing installations before enabling it;
 the request itself never installs missing modules.

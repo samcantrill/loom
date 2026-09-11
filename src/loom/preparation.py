@@ -29,7 +29,11 @@ from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
-from loom.queue._preparation_operations import PreparationReport
+from loom.pipeline.stores.errors import ArtifactChecksumMismatchError
+from loom.queue._preparation_operations import (
+    PreparationInstallationMismatch,
+    PreparationReport,
+)
 from loom.queue._remote_stage_execution import (
     ResidentProfileDescriptor,
     _reject_path_bearing_data,
@@ -221,10 +225,14 @@ def decode_preparation_report(
         report["operation_id"] != expected.operation_id
         or report["input_manifest_digest"] != expected.input_receipt.manifest_digest
         or report["preparation_profile"] != expected.preparation_profile
-        or ResidentProfileDescriptor.from_dict(report["profile_descriptor"]).to_dict()
-        != dict(expected.profile_descriptor)
     ):
         raise QueueConflictError("preparation report identity conflicts")
+    if ResidentProfileDescriptor.from_dict(
+        report["profile_descriptor"]
+    ).to_dict() != dict(expected.profile_descriptor):
+        raise PreparationInstallationMismatch(
+            "preparation report installation identity conflicts"
+        )
     composition = _plain_mapping(report["composition"])
     if set(composition) != {
         "resolved",
@@ -258,10 +266,12 @@ def decode_preparation_report(
         requirement = _profile_requirement(
             ResidentProfileDescriptor.from_dict(expected.profile_descriptor)
         )
-        if set(requirements) != set(pipeline.stage_names) or any(
-            item != requirement for item in requirements.values()
-        ):
+        if set(requirements) != set(pipeline.stage_names):
             raise QueueConflictError(
+                "preparation execution requirements must exactly cover stages"
+            )
+        if any(item != requirement for item in requirements.values()):
+            raise PreparationInstallationMismatch(
                 "preparation execution requirements do not match the selected installation"
             )
         for stage in pipeline.stages:
@@ -431,9 +441,14 @@ class CoordinatorPreparation:
             raise QueueConflictError(
                 "preparation report does not match the committed worker result"
             )
-        value = LocalArtifactStore(store.local_artifact_root(admission.run_uri)).load(
-            reference
-        )
+        try:
+            value = LocalArtifactStore(
+                store.local_artifact_root(admission.run_uri)
+            ).load(reference)
+        except ArtifactChecksumMismatchError as exc:
+            raise QueueConflictError(
+                "preparation committed report checksum conflicts"
+            ) from exc
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
