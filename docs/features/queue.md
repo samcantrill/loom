@@ -6,6 +6,11 @@ owns connection selection, common control methods, identity guards and bounded
 observation/error behavior. Queue service, scheduling and execution ownership
 remain described here.
 
+[Agent preparation](agent-preparation.md) adds coordinator-owned acceptance,
+shared input capture, a normal managed preparation child and canonical target
+publication. It uses the specified existing worker environment. Preparation is
+observed through native operations and never automatically submits the target.
+
 ## Purpose
 
 `loom.queue` is the first built-in queue service for whole-run Loom work. It is
@@ -838,9 +843,11 @@ group/other permission bits.
 
 Initialization uses fresh roots and retains the resolved role and private launch
 binding. Start and explicit reload check compatibility before offering more
-work. Populated older roots are not migrated or reinterpreted. Keep an existing
-deployment on its compatible runtime until its work settles, then deliberately
-initialize the replacement.
+work. Startup does not migrate or reinterpret populated older roots. The explicit
+[coordinator schema-12 upgrade](../downstream-operations.md#upgrade-a-retained-coordinator-root)
+preserves existing work and worker roots while enabling preparation storage.
+Other incompatible roots stay on their compatible runtime until work settles,
+before deliberately initializing a replacement.
 
 ### Resident installation checks
 
@@ -890,6 +897,14 @@ it is not a dependency resolver or a version-range language.
 `import_roots` asserts that a declared import comes from the expected private
 directory. Merely importing a same-named package elsewhere does not satisfy
 that assertion. Source and import roots resolve against `project_root`.
+
+`readiness.preparation: true` additionally checks Loom's preparation stage and
+Weave's configuration loader in the selected Python. A nonempty
+`preparation_shared_roots` mapping or outbound `preparation-input-v1` capability
+requests this check automatically. It reports `packages.preparation_imports`
+without adding imports to the portable software fingerprint declaration. See
+[preparation rollout](agent-preparation.md#operator-configuration-and-rollout)
+for profile and capability selection.
 
 First the selected executable must answer a fixed stdlib handshake; only then
 does another bounded process import the declared packages and inspect metadata.
@@ -1353,11 +1368,14 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 ```
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
-under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots for older control schemas and use the v5 CLI result shape,
-agent protocol 11, and coordinator/agent state version 12. The GPU availability
-update preserves roots already using state version 12. Upgrade agent and
-coordinator together: protocol 10 peers are rejected at handshake. Historical
+under that ID conflicts. Current control uses the v5 CLI result shape and agent
+protocol 11. Coordinator roots use schema 13; agent roots and journals remain
+at schema 12. Existing schema-12 coordinator roots use the explicit
+[offline upgrade](../downstream-operations.md#upgrade-a-retained-coordinator-root),
+which preserves stable identities, admissions and worker state. Older unsupported
+schemas require their existing separately assessed rollout; normal startup does
+not recreate or repair a populated root. Protocol 10 peers remain rejected at
+handshake. Historical
 offers without GPU status decode as unverified and contribute no GPU capacity;
 existing assignment and release evidence remains intact. See
 [external GPU availability](runtime-resources.md#gpus-occupied-by-work-outside-loom)

@@ -50,6 +50,33 @@ def test_safety_approves_owned_target_under_managed_root(tmp_path) -> None:
     assert decision.managed_root_id == "root-1"
 
 
+def test_preparation_pins_protect_evidence_without_rewriting_the_run(tmp_path) -> None:
+    from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
+
+    run = tmp_path / "runs" / "prepared"
+    artifact = run / "artifacts" / "report.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("{}")
+    before = (artifact.read_bytes(), artifact.stat().st_mtime_ns)
+    retain_preparation_path(
+        run, coordinator_id="coordinator-1", operation_id="prepare-1"
+    )
+    pins = tuple((tmp_path / "runs" / ".loom-preparation-pins").rglob("*.json"))
+    assert len(pins) == 1
+    pin_before = (pins[0].read_bytes(), pins[0].stat().st_mtime_ns)
+    retain_preparation_path(
+        run, coordinator_id="coordinator-1", operation_id="prepare-1"
+    )
+    assert (pins[0].read_bytes(), pins[0].stat().st_mtime_ns) == pin_before
+    assert (artifact.read_bytes(), artifact.stat().st_mtime_ns) == before
+    for target in (artifact, run, run.parent, pins[0]):
+        decision = assess_local_target_safety(_target(target), (_root(tmp_path),))
+        assert decision.reason_code is CleanupSafetyReason.RETAINED_PREPARATION_EVIDENCE
+    sibling = tmp_path / "runs" / "unrelated.txt"
+    sibling.write_text("unrelated")
+    assert assess_local_target_safety(_target(sibling), (_root(tmp_path),)).approved
+
+
 def test_safety_rejects_target_outside_managed_root(tmp_path) -> None:
     outside = tmp_path.parent / "outside-payload.txt"
     outside.write_text("payload")

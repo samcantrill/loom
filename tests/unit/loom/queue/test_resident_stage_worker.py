@@ -21,6 +21,9 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         def worker_request(self) -> object:
             return object()
 
+        def preparation_context(self) -> None:
+            return None
+
     class FakeResult:
         def to_dict(self) -> dict[str, str]:
             return {"status": "succeeded"}

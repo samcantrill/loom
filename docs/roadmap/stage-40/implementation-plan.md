@@ -8,9 +8,9 @@ Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 2 - agent-preparation (pending startup after Phase 1 metadata synchronization)
+Current phase: 2 - agent-preparation (pr_open)
 Next phase: 3 - staged-preparation-inputs (after Phase 2 delivery and synchronization)
-Blockers: none
+Blockers: Phase 2 independent review requires terminal rejection of malformed committed native evidence; correction passes affected checks and awaits the same reviewer's confirmation.
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
 ## Summary
@@ -123,7 +123,7 @@ rewrite existing run/admission identities to make a migration easier.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | coordinator-client | merged | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | [#298](https://github.com/samcantrill/loom/pull/298) | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
-| 2 | agent-preparation | pending | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | pending | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
+| 2 | agent-preparation | pr_open | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | [#300](https://github.com/samcantrill/loom/pull/300) | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
 | 3 | staged-preparation-inputs | pending | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | pending | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
 | 4 | mcp-skills | pending | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | pending | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |
 
@@ -186,6 +186,6 @@ and all approved validation commands remain binding.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [#298](https://github.com/samcantrill/loom/pull/298), merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` | Native control delivered; both required full gates and affected TLS checks passed; independent review found no issues. See the phase card for revisions and counts | Physical deployment/Codex deferred as planned | Remote branch retired; persistent stage worktree retained through remaining phases |
-| 2 | Not started | No runtime receipt; no roots upgraded | Pending implementation | Reuses the retained Stage 40 worktree after predecessor synchronization |
+| 2 | [#300](https://github.com/samcantrill/loom/pull/300), open | Shared preparation lifecycle and native/CLI journeys implemented; focused worker placement, recovery, cancellation, report, retention and populated-root upgrade checks pass. Both required full gates pass. Independent review identified malformed-report decoder classification; the correction passes all 44 affected preparation cases and static checks, with reviewer confirmation pending. See the phase card | Loopback and fixture-root evidence; no physical deployment claim or real-root upgrade | Reuses the retained Stage 40 worktree; predecessor branches retired and synchronization passed |
 | 3 | Not started | No staged-input or retained-state receipt | Transfer/extraction unvalidated | Reuses the retained Stage 40 worktree after predecessor synchronization |
 | 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Reuses the retained Stage 40 worktree through final closeout |

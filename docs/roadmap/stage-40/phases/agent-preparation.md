@@ -2,18 +2,44 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 40 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p2-agent-preparation
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 1 merges; recheck the root schema predecessor then.
+- Base revision: `5fe1b3750a387b80aea8b84df521c08e25e42b21`, published and synchronized after Phase 1 merge and metadata.
 - PR target: develop
+- PR: [#300](https://github.com/samcantrill/loom/pull/300)
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 2: Durable Preparation On Shared Storage
-- Dependencies: Phase 1 remotely merged; stage plan approved on 2026-09-10
+- Dependencies: Phase 1 PR #298 remotely merged as `3b3942a88ee0729612f02fe3d7dbda3164c762d4`; stage plan approved on 2026-09-10
 - Workflow path: expanded for durable operations, filesystem/process handoffs, migration and cancellation
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: the malformed-evidence correction passes affected validation; independent confirmation is pending.
+
+### Execution startup
+
+On 2026-09-11 the shared transition/publication/synchronization gates verified
+Phase 1 delivery, then retired its exact merged local and remote phase branches.
+The start gate created this phase branch in the retained Stage 40 worktree at
+the published base above; control remains clean on develop. No implementation
+work uses the control checkout.
+
+The existing approved readiness receipt remains applicable to the published base.
+Phase 1 supplies the accepted shared client/transport boundary. No intervening
+product drift or missing contract requires planning refinement.
+
+The optional executor returned a partial foundation at
+`907fb9290d0992803a9aefd3e8f6d4214cd1ae56`. Ownership has returned to the manager
+for all runtime, tests, documentation and delivery. The manager has implemented the
+ordinary child, protected binding and durable publication lifecycle. No executor
+or explorer owns files or has authority to change branches.
+
+Validation retains every obligation in Test And Validation Plan. Start with
+source-mirrored checks of composition/publisher, configuration/capture, actual
+child execution, durable lifecycle/migration and public control. Broaden when
+shared assignment, root, admission, diagnostics or serialization changes affect
+existing consumers. Both approved full commands remain final gates; local
+fixtures do not claim physical fleet/NAS or live Codex qualification.
 
 ## Objective And Context
 
@@ -474,6 +500,51 @@ private types and physical file layout remain implementation choices.
 | `queue/managed_local_preparation.py` | Reuse `prepare_managed_run`; normalize recipe mapping/object forms in write and replay | Keep canonical publication at its existing owner and preserve nonempty recipe evidence |
 | Coordinator root handling and CLI | Add the explicit offline upgrade with preparation storage and native prepare/cancel commands | Retained admissions survive rollout, and CLI gets the same asynchronous operation as Python |
 
+The protected role loader accepts the currently installed service as
+`load_coordinator_service_config(path, current=active_service)` during reload.
+When the scheduling declaration and protected source are unchanged, it reuses
+the existing scheduling components and priority resolver. Its private source
+snapshot lives only in that in-memory service object; role and worker storage
+formats do not change. A changed declaration is constructed normally and still
+passes the native retained-component identity gate. `daemon-serve` advances its
+active service snapshot only when the existing reload plan is installed.
+This lets source/profile policy change while accepted preparation retains the
+original component instances, rather than attempting to replace them with newly
+constructed objects carrying the same descriptors.
+
+Preparation qualification stays at resident readiness. A nonempty protected
+shared-root mapping, explicit `readiness.preparation: true`, or an outbound
+`preparation-input-v1` declaration requests actual imports of
+`loom.preparation.PreparationStage` and `weave.compose_config` in the selected
+Python. The separate `packages.preparation_imports` finding does not change the
+declared inputs to portable software fingerprints. Outbound registration checks
+that all its configured profiles have this qualification before persisting a
+registration intent advertising the session-wide capability. The local daemon
+uses its existing readiness result; it adds no field to retained worker records.
+
+Runtime compilation recognizes the fixed preparation factory and adds an existing
+attribute hard constraint with the full selected profile descriptor fingerprint
+and `preparation-input-v1`. The normal scheduling kernel evaluates it against
+local readiness or the remote registered capability and offered profile. Target
+publication uses ordinary per-stage software requirements and authored placement,
+so preparation-only constraints do not follow the target onto another worker.
+The native remote-delivery boundary rechecks the capability before writing a
+delivery. Old workers can still receive ordinary compatible jobs.
+
+The existing resolved-placement serializer converts nested immutable hard
+constraint data into plain JSON values before durable stage-work storage. This
+preserves the existing schema and canonical fingerprint while allowing the
+attribute constraint to survive SQLite storage and reopening.
+
+Coordinator report decoding distinguishes installation disagreement from other
+invalid evidence through its existing callback boundary. A valid descriptor or
+requirement naming different software produces `installation_mismatch`; missing
+stage coverage, a committed-result identity mismatch, invalid executable paths
+or a native artifact checksum mismatch produces `invalid_preparation_report`.
+Both fail before publication. After a durable claim, unavailable or conflicting
+report evidence retains `applying` for reconciliation because publication may
+already have completed. No report conflict can establish a rollback.
+
 Authoring remains project work. An editor or project automation writes the
 configuration into storage visible to coordinator A. `source.root/path/include`
 then select those files; the native request is neither a remote editing command
@@ -554,6 +625,14 @@ applies another recipe/overlay/override pass. This matters when composition uses
 stateful project code: composing twice could check one result and publish another.
 Worker checks cover configuration/pipeline/selectors/runtime; installation
 readiness and coordinator store/authority checks stay with their respective owners.
+
+The worker's composition entrypoint explicitly lists installed `loom.recipes`
+entry points and loads them with the existing strict Loom plugin loader into a
+fresh Weave recipe catalog. This uses the selected installation, does not install
+packages, and keeps recipe imports inside the worker. Missing recipes, duplicate
+registrations and plugin import failures remain native child failures. The report
+retains Weave's recipe evidence; coordinator decoding uses plain private wrappers
+for the existing publisher's required fields and does not import Weave or recipes.
 
 A validates the committed report's recorded child, operation, input and profile
 identities, required checks, exact requirements, target portability and prospective
@@ -754,22 +833,47 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 ## Workflow State
 
-- Manager preparation: shared-storage delivery boundary approved on 2026-09-10
+- Manager preparation: startup verified on 2026-09-11; approved boundaries and current owners reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: the complete shared preparation lifecycle and its accepted local/remote coverage are implemented. both required full gates pass; subsequent test synchronization and report-decoder corrections are reconciled with the summary and affected tests/static checks
+- Named profile/capability discovery: optional explorer returned unavailable after empty tool output; no evidence was used. Manager source investigation and qualification/dispatch tests resolved the question
 - Refiner: not needed
-- Pre-submit gate: not run
-- Independent review: required before implementation merge
-- Blocker corrections: 0/3
-- PR and merge: not created
+- Pre-submit gate: passed; accepted scope, source boundaries, current full/affected evidence, documentation and residual limitations agree
+- Independent review: reviewed PR head `8d357aa4cc495da8dd8970c3b1d76aedd92e3438`; one blocker requires normalizing malformed committed native evidence into invalid_preparation_report. Return the correction to the same reviewer.
+- Blocker corrections: 3/3; profile process-spawn compatibility, summary-run test synchronization assumptions, and committed-report decoder classification. The third correction passes affected validation and awaits the same reviewer's confirmation.
+- PR and merge: #300 open against develop; independent review and delivery pending
 
 ## Completion Record
 
+Current correction coverage: normalize native value/serialization failures only
+at the report, worker-result and runtime decoding boundaries, and native artifact
+codec failures after checksum validation. Preserve storage/I/O retry behavior and
+the publication claim. The real worker fixture commits malformed preflight,
+requirements, pipeline, runtime and JSON report evidence; a native persisted
+worker result exercises its codec boundary. Each must terminate as
+failed/invalid_preparation_report with no target. The complete preparation
+operation, child, CLI and unit files passed in the isolated locked config environment
+(44 tests), with affected Ruff/Pyright and diff checks passing. This includes existing publication,
+placement, cancellation and unavailable-report recovery consumers. Expand only
+for a newly affected consumer or unresolved failure; reuse the two completed full
+gate receipts for unchanged behavior.
+
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
-| PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created; no real roots upgraded |
+| Implementation | Supplied-composition checks and native publisher normalization; finite shared capture; protected source/profile policy and worker mappings; qualified preparation dispatch; fixed resident child and native committed report; durable acceptance, target/child reservation, cancellation/publication claims and recovery; bounded operation projections; retained evidence pins; explicit coordinator-only upgrade; native/CLI preparation through Unix and HTTPS. |
+| Ownership and compatibility | Queue owns request/input values and durable operations. The integration module wires native diagnostics and publication without coordinator recipe imports. The existing scheduler, admissions, authority, worker supervisor, artifact stores and publisher retain their responsibilities. Reload reuses unchanged scheduling instances; no retained-component guard is relaxed. Ordinary worker assignment formats and portable software compatibility remain unchanged. Private root mappings use validated defensive copies, matching other profile fields and preserving process-spawn compatibility; retained launch encoding still owns binding identity. |
+| Composition/report coverage | A real selected Python discovers a worker-only installed recipe entry point, composes once from captured bytes after source edits, commits native output, and preserves nonempty recipe/manifest/provenance evidence through fresh publication and read-only replay. Report validation joins the native child/admission/attempt/commit, exact input and selected profile, and exactly one software requirement per target stage. Actual children exercise failed or unavailable required checks, composition failure, nonportable paths, native-checksummed profile/requirements/coverage mismatches, mismatched worker-result evidence and corrupted report bytes. Publication refuses each with the documented code. |
+| Native and CLI journeys | Unix prepare/observe/reconnect/submit executes the expected portable output. Both Unix and HTTPS CLI journeys cover JSON prepare/observation, expected-coordinator guarding before lookup, explicit submit/cancel and staged refusal without reservation. Public submission cannot take an internal child run or queue identity; known pre-admission refusals report conflict/not_applied. Other operation/principal/intent/target collisions retain their native meaning. Preparation never auto-submits the target. |
+| Remote placement coverage | An actual mTLS coordinator without a local worker uses B for preparation and C for target execution. A lost acceptance response replays the same operation. C cannot advertise unqualified preparation or receive the child; an incompatible offered software identity also receives no target assignment. C executes after offering its compatible profile, even though its profile ID differs and it has no preparation capability. Native assignment records prove both worker owners. These are loopback processes, not physical fleet/NAS acceptance. |
+| Recovery and cancellation coverage | Native reload/restarts after capture, child admission and target publication preserve accepted selection, captured bytes, one child and read-only target replay, including temporarily unavailable report evidence after the publication claim. Deterministic barriers exercise both claim/cancellation orderings without holding the global mutation lock during publication I/O. A real running child stays pending cancellation until native resource release, then retains terminal evidence. Partial targets remain inspectable conflicts. |
+| Bounds and retention coverage | Capture tests cover include/file/byte limits, safe descriptor-relative access, source changes, verification and coordinator/operation-owned temporary cleanup. Initial and later operation projections stay within 64 KiB. A large native preflight is omitted whole while its report and applied receipt remain accessible; an oversized prospective receipt fails before target creation. Cleanup refuses linked capture, child-report and target evidence, including after restart and at execution of a prior cleanup preview. |
+| Upgrade coverage | Isolated predecessor-shape coordinator fixtures qualify explicit 12-to-13 backup/lock/atomicity/retry behavior. The integration fixture first creates real completed and active admissions plus a retained worker process/journal, constructs the predecessor control schema, runs the actual CLI upgrade, and reopens/rejoins the worker to completion with the same coordinator/admission identities. Worker files and journal stay unchanged by upgrade. This qualifies old storage shape with current native producers, not execution of an old binary or an upgrade of a real deployment. |
+| Relevant compatibility correction | The first complete baseline exposed an unpicklable mapping proxy in new profile state and a stale diagnostics export expectation. The copied-mapping correction and updated expected export pass all 24 selected existing restart/export/remote-boundary cases, including the populated-mapping process-serialization regression (`/tmp/loom-stage40-p2-process-profile-regression.log`). The subsequent complete PR gate supersedes those failures. |
+| Validated tree and subsequent changes | `make validate-pr` passed at `915f7fa993dba41456d1820f521104d3f30b13cd`. Two integration tests subsequently gained the corrections described below; their affected coverage-enabled cases and Ruff pass, and affected Pyright reports zero errors (`/tmp/loom-stage40-p2-summary-races-pyright.log`). Phase-record edits only update current evidence. |
+| Required full PR gate | `make validate-pr` passed at the validated tree: Ruff passed; Pyright reported zero errors; isolated locked baseline had 3,250 passed, 2 skipped and 193 deselected; isolated locked config-extra had 199 passed, 18 skipped and 3,255 deselected; source and wheel builds passed. Evidence: `/tmp/loom-stage40-p2-process-compatible-validate.log`. |
+| Required summary gate | Corrected `make test-summary` passed at `533919291759df738e3432164e465aa17dc44162`: 125 package, 2,263 unit, 301 contract, 493 integration, 70 E2E and 199 config-extra tests passed; 3,451 passed overall, zero failures/errors and 18 skipped. Evidence: `/tmp/loom-stage40-p2-synchronized-summary.log` and `build/test-summary.md` (generated 2026-09-11T07:20:56Z). The complete result supersedes the initial summary failures. Its test-only corrections put a direct reconciliation call under the native daemon lock and use durable no-assignment evidence across ordinary execution rather than requiring one intermediate admission projection. The summary precedes the bounded report-decoder correction recorded below. |
+| Independent-review correction and current validation | Native report, worker-result and runtime value/serialization failures now become invalid_preparation_report; checksummed artifact codec failures follow the same path. Storage/I/O errors remain retryable and the applying publication claim is preserved. At `503b6d02b40c9b7fa0ba285757bf01073d68099e`, `env -u VIRTUAL_ENV uv run --python 3.12 --isolated --locked --group dev --extra config pytest tests/unit/loom/test_preparation.py tests/integration/queue/test_preparation_operations.py tests/integration/queue/test_preparation_child.py tests/integration/queue/test_preparation_cli.py -x` passed all 44 cases, including six malformed native producer regressions and existing unavailable-report recovery. Affected Ruff and Pyright passed (zero errors/warnings); diff whitespace passed. Evidence: `/tmp/loom-stage40-p2-report-decoder-tests.log`, `/tmp/loom-stage40-p2-report-decoder-pyright.log`. These affected checks reconcile the bounded source/test delta with both completed full gates; subsequent phase-record edits only update evidence. |
+| Documentation checks | All 23 added relative file links resolve; previously checked anchors are unchanged. The feature guide and two operation examples contain 24 shell/Python blocks that parse. Both example requests and the guide request round-trip through the native request model. Both YAML blocks parse, and the guide policy passes the native loader with its documented observed-profile placeholder. The CLI fixtures exercise the documented lifecycle. One unchanged link in `docs/loom.md` points to absent historical migration notes; this phase does not alter it. |
+| Pre-submit, PR and independent review | Pre-submit passed: the phase implements its accepted common lifecycle and shared-only boundary, reuses native authority/scheduling/publication, preserves ordinary protocols and import boundaries, and carries complete local evidence and accurate deployment limitations. [PR #300](https://github.com/samcantrill/loom/pull/300) is open, non-draft and mergeable against develop with the canonical title and phase branch. Independent review of `8d357aa4cc495da8dd8970c3b1d76aedd92e3438` found the report decoder blocker. Its correction and affected evidence now await confirmation from the same reviewer; no approval is claimed yet. |
+| Residual limitations | Shared mode only; staged mode belongs to Phase 3. Finite capture, one existing qualified preparation environment, embedded authority with no configured SLURM preparation, no code/environment installation, retained evidence without automatic expiration, and preserved partial-target conflicts remain accepted limits. The 18 summary skips are opt-in Docker/Apptainer acceptance cases. Physical fleet/NAS/Codex acceptance is assigned to Phase 4. No real roots were upgraded. |
+| Delivery and cleanup | Phase 2 remains in progress until independent review, remote merge, metadata publication and synchronization complete. Persistent Stage 40 worktree retained; Phase 3 has not started. |

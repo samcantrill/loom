@@ -5188,6 +5188,13 @@ def _target_remote_delivery(
             or session.coordinator_epoch != daemon._epoch
         ):  # type: ignore[attr-defined]
             raise QueueConflictError("targeted delivery session is stale")
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
+        if (
+            request.preparation_input is not None
+            and PREPARATION_INPUT_CAPABILITY not in session.capabilities
+        ):
+            raise QueueServiceError("agent session lacks preparation-input-v1")
         prior = conn.execute(
             "SELECT request_json, session_id, availability_revision, coordinator_epoch "
             "FROM agent_deliveries WHERE assignment_id = ?",

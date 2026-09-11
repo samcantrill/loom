@@ -233,6 +233,49 @@ agent with a declared Torch runtime, and before starting its owning service, run
 Use the role files produced or copied for your deployment. A running or retained
 agent defers the probe; only a `resources.gpu_compute` PASS proves computation and
 cleanup. The existing agent journal retains any uncertain claim across restart.
+
+## Prepare On An Outbound Agent Using Shared Storage
+
+The original runner and manual helper above compose on the coordinator. The
+coordinator's agent-preparation route instead composes and checks in the qualified
+outbound agent's existing environment. Use [prepare-request.json](prepare-request.json)
+for that route; it captures only `pipeline.yaml`, while installed `stages.py`
+remains part of the worker's observed project identity.
+
+In the protected coordinator copy, map source root `projects` to this example
+directory and configure a shared snapshot directory visible to the outbound
+agent. Map preparation profile `example-cpu` to observed resident profile
+`remote-default`, allowing `projects` and shared mode with native child runtime
+options. In the worker profile, `preparation_shared_roots.projects` names the
+worker-visible mount of the same snapshot directory. The mount prefix may
+differ. Configure this private mapping before worker initialization; an existing
+root keeps its launch binding until the normal replacement procedure after work
+settles. Append `preparation-input-v1` to both the agent's
+`registration.capabilities` and its coordinator policy entry's allowed
+`capabilities`. The actual installed Python must pass the preparation import
+check before advertising that capability. Missing mapping or incompatible
+software fails explicitly. See
+[operator configuration](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
+
+From the coordinator host:
+
+```sh
+loom queue daemon-prepare --endpoint "$LOOM_ENDPOINT" --request prepare-request.json --format json
+loom queue daemon-operation-wait --endpoint "$LOOM_ENDPOINT" prepare-remote-agent-001 --timeout 25 --format json
+loom queue daemon-operation --endpoint "$LOOM_ENDPOINT" prepare-remote-agent-001 --format json
+```
+
+An enrolled client on another host uses `--connection client.yaml` with the
+[protected client file](../../../docs/features/coordinator-client.md#choose-a-connection).
+It connects directly to the coordinator and needs no worker root. Its certificate
+must have the client role; the example's worker certificate does not grant it.
+
+Keep the returned coordinator ID for guarded reconnect. After `applied`, submit
+the exact `result.prepared_run.run_uri` using the existing command flow. The
+target's report still contains `value: 42`. Another compatible worker may execute
+it: shared configuration capture is for preparation, and does not deploy source
+or rewrite target input paths. A loopback run of this example does not qualify a
+physical NAS or a second host.
 The configured NVIDIA occupancy check defers an externally busy GPU and reports
 failed qualification when availability cannot be established. Other selected
 devices can still be tested; a later free observation never clears an uncertain claim.

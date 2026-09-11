@@ -24,6 +24,7 @@ from loom.queue._coordinator_transport import (
     UnixControlTransport,
 )
 from loom.queue.errors import QueueError
+from loom.queue.preparation import PrepareRunRequest
 
 
 class CoordinatorClient(NativeCoordinatorClient):
@@ -90,4 +91,5 @@ __all__ = [
     "CoordinatorClient",
     "CoordinatorClientError",
     "CoordinatorConnectionDescription",
+    "PrepareRunRequest",
 ]

@@ -440,3 +440,22 @@ def test_process_free_initialization_requires_serve_and_clean_shutdown(
     finally:
         if restarted._endpoint.exists():  # noqa: SLF001
             restarted.shutdown_for_test()
+
+
+def test_preparation_root_mapping_is_retained_in_launch_identity(tmp_path: Path) -> None:
+    from loom.queue._agent_process_supervisor import _profile_from_value, _profile_value
+
+    original = _profile()
+    legacy = _profile_value(original)
+    assert "preparation_shared_roots" not in legacy
+    assert original.fingerprint == hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    configured = replace(original, preparation_shared_roots={"projects": tmp_path / "first-mount"})
+    retained = _profile_value(configured)
+    assert retained["preparation_shared_roots"] == {"projects": str(tmp_path / "first-mount")}
+    reopened = _profile_from_value(json.loads(json.dumps(retained)))
+    assert reopened.fingerprint == configured.fingerprint
+    assert reopened.preparation_shared_roots == configured.preparation_shared_roots
+    changed = replace(configured, preparation_shared_roots={"projects": tmp_path / "different-mount"})
+    assert changed.descriptor == configured.descriptor
+    assert changed.fingerprint != configured.fingerprint
+    assert _profile_from_value(retained).preparation_shared_roots == {"projects": tmp_path / "first-mount"}

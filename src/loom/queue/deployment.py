@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 from importlib import import_module
 import json
@@ -60,6 +60,8 @@ from .resident_readiness import (
     qualified_resident_profile,
 )
 from .gpu.occupancy import GpuOccupancyPolicy
+from ._preparation_policy import PreparationPolicy, load_preparation_policy
+from .preparation import PREPARATION_INPUT_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,17 +79,31 @@ def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionF
     """Load the strict protected ``loom.coordinator-client`` v1 file."""
     source, _environment, payload, _fingerprint = _load_protected_config(path)
     allowed = {"schema_version", "kind", "transport", "expected_coordinator_id"}
-    if not {"schema_version", "kind", "transport"}.issubset(payload) or not set(payload).issubset(allowed) or type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1 or payload.get("kind") != "loom.coordinator-client":
+    if (
+        not {"schema_version", "kind", "transport"}.issubset(payload)
+        or not set(payload).issubset(allowed)
+        or type(payload.get("schema_version")) is not int
+        or payload.get("schema_version") != 1
+        or payload.get("kind") != "loom.coordinator-client"
+    ):
         raise QueueConfigError("coordinator client config is invalid")
     expected = payload.get("expected_coordinator_id")
     if expected is not None and (not isinstance(expected, str) or not expected):
         raise QueueConfigError("coordinator client expected coordinator ID is invalid")
     transport = payload["transport"]
-    if not isinstance(transport, Mapping) or set(transport) != {"kind", "url", "server_ca_path", "certificate_path", "private_key_path"} or transport.get("kind") != "https":
+    if (
+        not isinstance(transport, Mapping)
+        or set(transport)
+        != {"kind", "url", "server_ca_path", "certificate_path", "private_key_path"}
+        or transport.get("kind") != "https"
+    ):
         raise QueueConfigError("coordinator client transport is invalid")
     base = source.parent
     try:
-        values = {key: transport[key] for key in ("url", "server_ca_path", "certificate_path", "private_key_path")}
+        values = {
+            key: transport[key]
+            for key in ("url", "server_ca_path", "certificate_path", "private_key_path")
+        }
         if not all(isinstance(value, str) and value for value in values.values()):
             raise ValueError
         server_ca_path = Path(cast(str, values["server_ca_path"]))
@@ -96,12 +112,24 @@ def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionF
         result = CoordinatorConnectionFile(
             cast(str, values["url"]),
             server_ca_path if server_ca_path.is_absolute() else base / server_ca_path,
-            certificate_path if certificate_path.is_absolute() else base / certificate_path,
-            private_key_path if private_key_path.is_absolute() else base / private_key_path,
+            certificate_path
+            if certificate_path.is_absolute()
+            else base / certificate_path,
+            private_key_path
+            if private_key_path.is_absolute()
+            else base / private_key_path,
             cast(str | None, expected),
         )
         parsed = urlsplit(result.url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/") or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.path not in ("", "/")
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ValueError
         if parsed.port is not None and not 1 <= parsed.port <= 65535:
             raise ValueError
@@ -110,13 +138,14 @@ def load_coordinator_connection_file(path: str | Path) -> CoordinatorConnectionF
             ("coordinator certificate", result.certificate_path),
             ("coordinator private key", result.private_key_path),
         ):
-            _protected_input_path(candidate, label=label, require_owner_only=label.endswith("key"))
+            _protected_input_path(
+                candidate, label=label, require_owner_only=label.endswith("key")
+            )
         return result
     except QueueConfigError:
         raise
     except (TypeError, ValueError):
         raise QueueConfigError("coordinator client transport is invalid") from None
-
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 3
@@ -135,6 +164,7 @@ class CoordinatorServiceConfig:
     effective_capacity: EffectiveAgentCapacity | None = None
     resident_readiness: ResidentReadinessResult | None = None
     local_agent: LocalAgentServiceConfig | None = None
+    _scheduling_source: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,9 +211,20 @@ class RunInspectionClientConfig:
 
 
 def load_coordinator_service_config(
-    path: str | Path, *, env_file: str | Path | None = None,
+    path: str | Path,
+    *,
+    env_file: str | Path | None = None,
+    current: CoordinatorServiceConfig | None = None,
     _allow_unready: bool = False,
 ) -> CoordinatorServiceConfig:
+    """Load one protected coordinator role, observing its selected installation.
+
+    During reload, pass the currently installed service snapshot as ``current``.
+    An unchanged scheduling declaration from the same protected source reuses
+    its existing component instances and priority resolver. Changed declarations
+    are constructed normally and remain subject to the daemon's retained-identity
+    checks. This does not activate the replacement or bypass the reload gate.
+    """
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
     )
@@ -203,14 +244,28 @@ def load_coordinator_service_config(
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles"},
+        {"scheduling", "slurm_profiles", "preparation"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
     payload = _normalize_coordinator_payload(payload)
     base = source.parent
     root = _path(payload, "deployment_root", base)
-    local_agent = _local_agent_service(payload["local_agent"], base, allow_unready=_allow_unready)
+    local_agent = _local_agent_service(
+        payload["local_agent"], base, allow_unready=_allow_unready
+    )
+    remote_profiles = tuple(
+        _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
+        for index, value in enumerate(_sequence(payload, "remote_profiles"))
+    )
+    preparation_policy = load_preparation_policy(
+        payload.get("preparation"),
+        base=base,
+        descriptors=(
+            *remote_profiles,
+            *((local_agent.profile.descriptor,) if local_agent is not None else ()),
+        ),
+    )
     fingerprint = _canonical_fingerprint(
         {
             "coordinator": _coordinator_immutable_projection(payload),
@@ -219,7 +274,9 @@ def load_coordinator_service_config(
     )
     active_fingerprint = _canonical_fingerprint(
         {
-            "coordinator": _coordinator_active_projection(payload),
+            "coordinator": _coordinator_active_projection(
+                payload, preparation=preparation_policy
+            ),
             "local_agent": _local_agent_active_projection(local_agent),
         }
     )
@@ -227,18 +284,31 @@ def load_coordinator_service_config(
     authority_factory = _coordinator_authority_factory(
         _mapping(payload, "authority"), base
     )
-    scheduling, priority_resolver = _scheduling_composition(payload.get("scheduling"))
+    scheduling_source = json.dumps(
+        payload.get("scheduling"),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    if (
+        current is not None
+        and current.source_path == source
+        and current.environment_path == environment_path
+        and current.immutable_fingerprint == fingerprint
+        and current._scheduling_source == scheduling_source
+    ):
+        scheduling = current.daemon.scheduling_components
+        priority_resolver = current.daemon.admission_priority_resolver
+    else:
+        scheduling, priority_resolver = _scheduling_composition(
+            payload.get("scheduling")
+        )
     slurm_profiles = _slurm_profile_composition(payload.get("slurm_profiles"))
     server_value = payload["agent_server"]
     server = (
         None
         if server_value is None
         else _agent_server(_mapping_value(server_value, "agent_server"), base)
-    )
-    remote_values = _sequence(payload, "remote_profiles")
-    remote_profiles = tuple(
-        _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
-        for index, value in enumerate(remote_values)
     )
     daemon = LocalDaemonConfig(
         coordinator_root=root / "coordinator",
@@ -279,6 +349,12 @@ def load_coordinator_service_config(
         gpu_occupancy_policy=None
         if local_agent is None
         else local_agent.gpu_occupancy_policy,
+        preparation_policy=preparation_policy,
+        resident_preparation_ready=(
+            local_agent is not None
+            and local_agent.profile.readiness_result is not None
+            and local_agent.profile.readiness_result.preparation_ready
+        ),
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -294,11 +370,14 @@ def load_coordinator_service_config(
         if local_agent is None
         else local_agent.profile.readiness_result,
         local_agent=local_agent,
+        _scheduling_source=scheduling_source,
     )
 
 
 def load_outbound_agent_service_config(
-    path: str | Path, *, env_file: str | Path | None = None,
+    path: str | Path,
+    *,
+    env_file: str | Path | None = None,
     _allow_unready: bool = False,
 ) -> OutboundAgentServiceConfig:
     source, environment_path, payload, _ = _load_protected_config(
@@ -324,22 +403,42 @@ def load_outbound_agent_service_config(
     _header(payload, "loom.outbound-agent-service")
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
+    preparation = PREPARATION_INPUT_CAPABILITY in _strings(
+        _mapping(payload, "registration"), "capabilities", non_empty=True
+    )
     profiles = tuple(
         _resident_profile(
             _mapping_value(value, f"resident_profiles[{index}]"),
             base,
             f"resident_profiles[{index}]",
             allow_unready=_allow_unready,
+            preparation=preparation,
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
     if not profiles:
         raise QueueConfigError("resident_profiles must not be empty")
     authored_profiles = _sequence(payload, "resident_profiles")
-    payload = {**payload, "resident_profiles": [
-        {**_mapping_value(value, "resident profile"), "descriptor": profile.descriptor.to_dict()}
-        for value, profile in zip(authored_profiles, profiles, strict=True)
-    ]}
+    payload = {
+        **payload,
+        "resident_profiles": [
+            {
+                **_mapping_value(value, "resident profile"),
+                "descriptor": profile.descriptor.to_dict(),
+                **(
+                    {
+                        "preparation_shared_roots": {
+                            alias: str(path)
+                            for alias, path in profile.preparation_shared_roots.items()
+                        }
+                    }
+                    if profile.preparation_shared_roots
+                    else {}
+                ),
+            }
+            for value, profile in zip(authored_profiles, profiles, strict=True)
+        ],
+    }
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     resource_inventory, effective_capacity = _agent_resource_inventory(
         payload.get("resources")
@@ -714,7 +813,9 @@ def _normalize_coordinator_payload(
     return normalized
 
 
-def _local_agent_service(value: object, base: Path, *, allow_unready: bool = False) -> LocalAgentServiceConfig | None:
+def _local_agent_service(
+    value: object, base: Path, *, allow_unready: bool = False
+) -> LocalAgentServiceConfig | None:
     """Load the optional protected agent role used by a local coordinator."""
 
     if value is None:
@@ -1209,7 +1310,9 @@ def _outbound_immutable_projection(
     }
 
 
-def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+def _coordinator_active_projection(
+    payload: Mapping[str, object], *, preparation: PreparationPolicy | None = None
+) -> dict[str, object]:
     server = payload.get("agent_server")
     server_mapping = None if server is None else _mapping_value(server, "agent_server")
     server_credentials = (
@@ -1230,6 +1333,11 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),
                 "slurm_profiles": payload.get("slurm_profiles"),
+                **(
+                    {"preparation": preparation.safe_identity()}
+                    if preparation is not None
+                    else {}
+                ),
             }
         ),
     )
@@ -1263,6 +1371,15 @@ def _local_agent_active_projection(
         ],
         "providers": local_agent.provider_configuration,
         **(
+            {
+                "preparation_shared_roots": _preparation_mapping_identity(
+                    profile.preparation_shared_roots
+                )
+            }
+            if profile.preparation_shared_roots
+            else {}
+        ),
+        **(
             {"gpu_occupancy": local_agent.gpu_occupancy_policy.to_dict()}
             if local_agent.gpu_occupancy_policy is not None
             and local_agent.gpu_occupancy_policy != GpuOccupancyPolicy()
@@ -1278,10 +1395,20 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
         {
             key: item
             for key, item in _mapping_value(value, "resident profile").items()
-            if key != "readiness"
+            if key not in {"readiness", "preparation_shared_roots"}
         }
         for value in _sequence(payload, "resident_profiles")
     ]
+    for profile, value in zip(
+        profiles, _sequence(payload, "resident_profiles"), strict=True
+    ):
+        roots = _mapping_value(value, "resident profile").get(
+            "preparation_shared_roots"
+        )
+        if roots:
+            profile["preparation_shared_roots"] = _preparation_mapping_identity(
+                cast(Mapping[str, Path], roots)
+            )
     return cast(
         dict[str, object],
         _without_paths(
@@ -1293,6 +1420,16 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
             }
         ),
     )
+
+
+def _preparation_mapping_identity(roots: Mapping[str, Path]) -> list[dict[str, str]]:
+    return [
+        {
+            "alias": alias,
+            "binding_digest": hashlib.sha256(str(path).encode()).hexdigest(),
+        }
+        for alias, path in sorted(roots.items())
+    ]
 
 
 def _without_paths(value: object) -> object:
@@ -1337,6 +1474,7 @@ def _resident_profile(
     label: str,
     *,
     allow_unready: bool = False,
+    preparation: bool = False,
 ) -> ResidentExecutionProfile:
     _required_allowed(
         value,
@@ -1349,7 +1487,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
-        {"readiness"},
+        {"readiness", "preparation_shared_roots"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1370,6 +1508,8 @@ def _resident_profile(
     if any(not isinstance(item, str) for item in environment.values()):
         raise QueueConfigError(f"{label}.environment values must be strings")
     requirements = _resident_readiness_requirements(value.get("readiness"))
+    if preparation:
+        requirements = replace(requirements, preparation=True)
     profile = ResidentExecutionProfile(
         _resident_descriptor_declaration(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
@@ -1379,6 +1519,12 @@ def _resident_profile(
         tuple(devices),
         cast(Mapping[str, str], environment),
         requirements,
+        preparation_shared_roots={
+            alias: _path({"root": path}, "root", base)
+            for alias, path in _mapping_value(
+                value.get("preparation_shared_roots", {}), "preparation shared roots"
+            ).items()
+        },
     )
     profile = qualified_resident_profile(profile)
     result = profile.readiness_result
@@ -1412,7 +1558,10 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
     _required_allowed(
         readiness,
         set(),
-        sequence_fields | mapping_fields | string_fields | {"timeout_seconds"},
+        sequence_fields
+        | mapping_fields
+        | string_fields
+        | {"timeout_seconds", "preparation"},
         "resident readiness",
     )
     fields: dict[str, Any] = {}
@@ -1429,6 +1578,8 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
         fields[name] = _string(readiness, name)
     if "timeout_seconds" in readiness:
         fields["timeout_seconds"] = _positive_number(readiness, "timeout_seconds")
+    if "preparation" in readiness:
+        fields["preparation"] = readiness["preparation"]
     try:
         return ResidentReadinessRequirements(**fields)
     except ValueError as exc:

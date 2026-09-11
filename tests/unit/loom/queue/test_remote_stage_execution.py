@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import replace
 import json
 from pathlib import Path
+import pickle
 import sqlite3
 import sys
 
@@ -54,6 +55,9 @@ from loom.queue._remote_stage_execution import (
     _RemoteOutputArtifact,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.preparation import (
+    PREPARATION_STAGE_TARGET, PreparationChildInput, SharedInputReceipt,
+)
 from loom.scheduling import (
     CapacityAtom,
     ExactQuantity,
@@ -97,6 +101,20 @@ def _profile(tmp_path: Path) -> ResidentExecutionProfile:
         project_root,
         Path(sys.executable),
     )
+
+
+def test_preparation_profile_preserves_its_binding_across_process_serialization(
+    tmp_path: Path,
+) -> None:
+    roots = {"projects": tmp_path / "snapshots"}
+    profile = replace(_profile(tmp_path), preparation_shared_roots=roots)
+    retained_launch = profile.launch_profile
+    roots["projects"] = tmp_path / "different-snapshots"
+
+    received = pickle.loads(pickle.dumps(profile))
+    assert received == profile
+    assert received.launch_profile == retained_launch
+    assert received.preparation_shared_roots == {"projects": tmp_path / "snapshots"}
 
 
 def _request(
@@ -283,6 +301,34 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
             portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
+
+
+def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(tmp_path: Path) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    binding = PreparationChildInput(
+        "prepare-1", "existing", "configs/pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+        profile.descriptor.to_dict(),
+    )
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    prepared_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, factory_target=PREPARATION_STAGE_TARGET, stage_config=binding.to_dict()),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    preparation = replace(request, fingerprint=prepared_fingerprint.to_dict())
+    assert _ResidentAssignmentBundle.from_remote_dict(preparation.to_dict()) == preparation
+    assert preparation.preparation_input == binding
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(preparation, resolved_runtime={**preparation.resolved_runtime, "scratch_path": "/worker/private"}).validate_remote_transport()
+    ordinary_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(prepared_fingerprint.payload, factory_target="pkg.Stage"),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(request, fingerprint=ordinary_fingerprint.to_dict()).validate_remote_transport()
 
 
 def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:
@@ -780,6 +826,35 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         request = _request(profile)
         input_path = tmp_path / "input.data"
         input_path.write_bytes(b"input")
+        binding = PreparationChildInput(
+            "prepare-1", "existing", "configs/pipeline.yaml",
+            SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+            profile.descriptor.to_dict(),
+        )
+        fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+        preparation = replace(
+            request,
+            fingerprint=StageFingerprintRecord.create(
+                algorithm=fingerprint.algorithm,
+                payload=replace(
+                    fingerprint.payload,
+                    factory_target=PREPARATION_STAGE_TARGET,
+                    stage_config=binding.to_dict(),
+                ),
+                inputs_summary=fingerprint.inputs_summary,
+            ).to_dict(),
+        )
+        with pytest.raises(QueueServiceError, match="lacks preparation-input-v1"):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=preparation,
+                run_uri="file:///coordinator/run",
+                input_paths={"input-1": input_path},
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
         with pytest.raises(QueueServiceError, match="path-bearing"):
             _target_remote_delivery(
                 daemon,

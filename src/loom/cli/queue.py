@@ -202,6 +202,13 @@ def register_subparser(
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
 
+    daemon_upgrade = queue_subparsers.add_parser(
+        "daemon-upgrade", help="offline upgrade a stopped coordinator root"
+    )
+    _add_role_config_arguments(daemon_upgrade)
+    _add_output_options(daemon_upgrade)
+    daemon_upgrade.set_defaults(handler=handle_daemon_upgrade)
+
     daemon_serve = queue_subparsers.add_parser(
         "daemon-serve",
         help="serve one initialized coordinator deployment bundle",
@@ -260,6 +267,22 @@ def register_subparser(
             daemon_client.add_argument("--timeout", type=float, default=None)
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
+
+    prepare = queue_subparsers.add_parser(
+        "daemon-prepare", help="durably accept one shared preparation request"
+    )
+    _add_client_connection_arguments(prepare)
+    prepare.add_argument("--request", type=Path, required=True, metavar="PATH")
+    _add_output_options(prepare)
+    prepare.set_defaults(handler=handle_daemon_prepare)
+
+    cancel_preparation = queue_subparsers.add_parser(
+        "daemon-cancel-preparation", help="request cancellation of one preparation"
+    )
+    _add_client_connection_arguments(cancel_preparation)
+    cancel_preparation.add_argument("operation_id", metavar="OPERATION_ID")
+    _add_output_options(cancel_preparation)
+    cancel_preparation.set_defaults(handler=handle_daemon_cancel_preparation)
 
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
@@ -534,6 +557,7 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     from threading import Event
 
     from loom.diagnostics.run_inspection import projection_callable
+    from loom.preparation import CoordinatorPreparation
     from loom.pipeline.stores import LocalRunStore
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
@@ -546,13 +570,16 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
+    active_service = service
     pending_service = None
     agent_server = None
 
     def load_replacement():  # type: ignore[no-untyped-def]
         nonlocal pending_service
         pending_service = load_coordinator_service_config(
-            service.source_path, env_file=service.environment_path
+            service.source_path,
+            env_file=service.environment_path,
+            current=active_service,
         )
         return pending_service.daemon
 
@@ -566,7 +593,8 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
                 raise QueueServiceError("agent TLS listener cannot be added by reload")
 
             def install_absent() -> None:
-                nonlocal pending_service
+                nonlocal active_service, pending_service
+                active_service = prepared
                 pending_service = None
 
             return install_absent
@@ -575,8 +603,9 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
         install_server = agent_server.prepare_reload(prepared.agent_server)
 
         def install() -> None:
-            nonlocal pending_service
+            nonlocal active_service, pending_service
             install_server()
+            active_service = prepared
             pending_service = None
 
         return install
@@ -585,6 +614,7 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
         config,
         trusted_scheduling_loader=load_replacement,
         prepare_role_reload=prepare_role_reload,
+        preparation=CoordinatorPreparation(service),
     )
     server = LocalDaemonSocketServer(
         daemon,
@@ -766,16 +796,61 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
+def handle_daemon_upgrade(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
+
+    try:
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file, _allow_unready=True
+        )
+        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(
+            service.daemon
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version}
+    )
+
+
+def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
+    from loom.queue.preparation import PrepareRunRequest
+
+    try:
+        raw = json.loads(namespace.request.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("prepare request must be a JSON object")
+        result = _daemon_client(namespace).prepare_run(PrepareRunRequest.from_dict(raw))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _queue_cli_error(
+            QueueServiceError("prepare request file is unavailable or invalid JSON")
+        ) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_cancel_preparation(namespace: argparse.Namespace) -> int:
+    try:
+        result = _daemon_client(namespace).cancel_preparation(namespace.operation_id)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
 def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
     """Select the unified native client for every coordinator client command."""
     from loom.coordinator import CoordinatorClient
 
     if namespace.connection is not None:
         return CoordinatorClient.from_connection_file(
-            namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id,
+            namespace.connection,
+            expected_coordinator_id=namespace.expected_coordinator_id,
         )
     return CoordinatorClient.from_unix_socket(
-        namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id,
+        namespace.endpoint,
+        expected_coordinator_id=namespace.expected_coordinator_id,
     )
 
 
@@ -799,9 +874,7 @@ def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_admission(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).admission(
-            namespace.admission_id
-        )
+        result = _daemon_client(namespace).admission(namespace.admission_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_admission_payload(namespace, result.to_dict())
@@ -827,9 +900,7 @@ def handle_daemon_agent(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).operation(
-            namespace.operation_id
-        )
+        result = _daemon_client(namespace).operation(namespace.operation_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -837,14 +908,26 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
     try:
-        if namespace.timeout is not None and (not math.isfinite(namespace.timeout) or namespace.timeout < 0):
+        if namespace.timeout is not None and (
+            not math.isfinite(namespace.timeout) or namespace.timeout < 0
+        ):
             raise QueueServiceError("operation wait timeout is invalid")
         client = _daemon_client(namespace)
-        deadline = None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        deadline = (
+            None if namespace.timeout is None else time.monotonic() + namespace.timeout
+        )
         while True:
-            duration = 25.0 if deadline is None else max(0.0, min(25.0, deadline - time.monotonic()))
-            result = client.wait_operation(namespace.operation_id, timeout_seconds=duration)
-            if result.kind.value != "TIMEOUT" or (deadline is not None and time.monotonic() >= deadline):
+            duration = (
+                25.0
+                if deadline is None
+                else max(0.0, min(25.0, deadline - time.monotonic()))
+            )
+            result = client.wait_operation(
+                namespace.operation_id, timeout_seconds=duration
+            )
+            if result.kind.value != "TIMEOUT" or (
+                deadline is not None and time.monotonic() >= deadline
+            ):
                 break
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -863,9 +946,7 @@ def handle_daemon_wait(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).cancel(
-            namespace.queue_item_id
-        )
+        result = _daemon_client(namespace).cancel(namespace.queue_item_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -1381,12 +1462,14 @@ __all__ = [
     "handle_drain_foreground",
     "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
+    "handle_daemon_cancel_preparation",
     "handle_daemon_admission",
     "handle_daemon_admissions",
     "handle_daemon_agent",
     "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
+    "handle_daemon_upgrade",
     "handle_daemon_check",
     "handle_daemon_serve",
     "handle_daemon_status",
@@ -1397,6 +1480,7 @@ __all__ = [
     "handle_daemon_replace_agent_session",
     "handle_daemon_recover_unknown",
     "handle_daemon_submit",
+    "handle_daemon_prepare",
     "handle_daemon_wait",
     "handle_preflight",
     "handle_start",

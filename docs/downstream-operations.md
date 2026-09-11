@@ -247,9 +247,11 @@ embedded root. With `local_agent: null`, no agent subdirectory is created.
 initializer constructs and validates a private sibling staging directory and
 performs one final directory rename; an existing target is never overwritten.
 Startup reopens only the complete bound role and rejects a different config.
-Old role schemas and populated roots are rejected; there is no root migration
-or in-place profile update. Settle existing work with its compatible runtime,
-then explicitly initialize fresh roots for the new configuration.
+Unsupported role schemas, incompatible profile bindings and incomplete roots
+are rejected. Initialization never overwrites a populated root. The narrow
+[coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
+schema-12 root when moving to schema 13; it does not reinterpret profiles or
+provide a migration for other historical root versions.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
 service and remains the process owner
@@ -278,3 +280,62 @@ agent profile, the current process, or one run-wide default. A resident offer
 is eligible only when one named profile exactly matches the prepared stage;
 the selected profile is retained with the delivery. Worker processes receive a
 new allowlisted environment rather than the daemon's ambient environment.
+
+## Prepare Authored Configuration On An Agent
+
+Configure explicit preparation root/profile aliases in the protected coordinator
+file and shared snapshot mappings in each participating resident profile. Qualify
+the actual existing Python installation before enabling it. The full settings,
+request fields and limits are in [agent preparation](features/agent-preparation.md).
+The feature currently supports shared inputs and embedded coordinator authority,
+with no configured SLURM preparation family.
+
+Author configuration in the selected coordinator-visible project, save a native
+JSON request with a stable operation ID, then use the existing client connection:
+
+```sh
+loom queue daemon-prepare --connection client.yaml --request prepare-request.json --format json
+loom queue daemon-operation-wait --connection client.yaml PREPARATION_ID --timeout 25 --format json
+```
+
+Keep `result.coordinator_id` and use `--expected-coordinator-id` on reconnect.
+Wait for `applied`, then submit the exact `result.prepared_run.run_uri` if execution
+is intended. A successful request only means acceptance; timeout or session exit
+leaves the operation running. Preparation on B can lead to execution on compatible
+C. The captured configuration is not automatic delivery of code or runtime data.
+
+Inputs, reports and linked evidence remain pinned for operation replay, including
+failed or cancelled operations. Monitor retained storage through the existing
+store tools; no automatic expiry or preparation-delete command is provided.
+
+## Upgrade A Retained Coordinator Root
+
+Coordinator control roots use schema 13; worker roots and journals remain at
+schema 12. For a valid existing schema-12 coordinator, stop its foreground service
+and retain the same protected role configuration and deployment binding. Run the
+local administrative command on the coordinator host:
+
+```sh
+loom queue daemon-upgrade coordinator-service.yaml --env-file coordinator-service.env --format json
+loom queue daemon-serve coordinator-service.yaml --env-file coordinator-service.env
+```
+
+The upgrade takes the existing exclusive coordinator lock, checks ownership,
+private permissions, deployment binding and stable identity, and creates a
+protected pre-upgrade backup through SQLite's backup API. It will not overwrite
+an existing backup. One transaction adds preparation storage and changes the
+coordinator marker from 12 to 13. Stable coordinator IDs, admissions and other
+existing durable identities remain intact; worker databases are not changed.
+A running coordinator is rejected without mutation. Workers do not need a
+fresh root or an inferred shutdown for this coordinator-only migration.
+
+A crash before commit leaves schema 12; after commit the root reopens at 13.
+Repeating the command on a structurally valid current root reports its current
+identity/version without rewriting retained state. Unsupported versions and
+malformed partial schemas are rejected, rather than automatically repaired.
+
+Keep the backup as operational evidence. Old binaries cannot open schema 13,
+and no automatic downgrade is provided. Restoring an older backup after further
+work has been accepted can lose that work; recovery then needs a separately
+assessed procedure. Never replace a retained coordinator or worker root merely
+to get preparation to start.

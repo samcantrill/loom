@@ -93,6 +93,30 @@ def test_preflight_result_computes_aggregate_status() -> None:
     assert result.to_dict()["status"] == "PASS"
 
 
+@pytest.mark.parametrize("status", tuple(PreflightCheckStatus))
+def test_received_preflight_preserves_checks_and_verifies_aggregate(
+    status: PreflightCheckStatus,
+) -> None:
+    check = PreflightCheckResult(
+        "runtime.options", PreflightGroup.RUNTIME, status, PreflightSeverity.INFO,
+        "runtime observation", {"applicability": "required", "path": "/worker/config"},
+    )
+    result = PreflightResult((check,), (PreflightGroup.RUNTIME,))
+    assert PreflightResult.from_dict(result.to_dict()) == result
+    assert PreflightCheckResult.from_dict(check.to_dict()) == check
+    conflicting = result.to_dict()
+    conflicting["status"] = "FAIL" if result.status is not PreflightStatus.FAIL else "PASS"
+    with pytest.raises(PreflightError, match="aggregate"):
+        PreflightResult.from_dict(conflicting)
+
+
+def test_received_preflight_rejects_incompatible_schema() -> None:
+    with pytest.raises(PreflightError, match="fields"):
+        PreflightResult.from_dict({"status": "PASS", "groups": ["config"]})
+    with pytest.raises(PreflightError, match="fields"):
+        PreflightCheckResult.from_dict({"status": "PASS", "group": "config"})
+
+
 def test_normalize_groups_preserves_default_order_and_deduplicates() -> None:
     assert normalize_groups(("executor", "config", "executor")) == (
         PreflightGroup.CONFIG,
