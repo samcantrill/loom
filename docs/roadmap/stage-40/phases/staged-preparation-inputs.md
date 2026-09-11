@@ -2,18 +2,40 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 40 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p3-staged-preparation-inputs
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 2 merges; reconcile its actual input and state owners.
+- Base revision: `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, published Phase 2 completion metadata after squash merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d`.
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 3: Preparation With Transferred Inputs
-- Dependencies: Phase 2 remotely merged with its complete shared preparation lifecycle
+- Dependencies: Phase 2 PR #300 remotely merged, metadata published, exact stage/control/remote synchronization passed and both exact phase branches retired.
 - Workflow path: expanded for archive extraction, transfer/recovery boundaries and retained-state compatibility
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: none
+
+### Execution startup
+
+The shared start gate created this branch in the retained Stage 40 worktree on
+2026-09-11 after verified Phase 2 delivery. Control develop remains clean and is
+used only for synchronization. The approved four-phase readiness receipt applies
+without product-contract changes; no planning refinement is needed.
+
+The actual predecessor owns receipt values/capture in queue/preparation.py,
+state orchestration in queue/_preparation_operations.py, native application wiring
+in preparation.py and assignment materialization in _remote_stage_execution.py,
+_managed_local.py and agent_session_transport.py. The fixed preparation binding
+already travels in the native stage fingerprint. Staged mode can join its committed
+archive as one bounded native assignment input, extract before workspace acceptance,
+and retain the existing operation/report/publication and root schemas.
+
+One bounded executor is justified by the archive/filesystem boundary and its
+independent test surface. It owns receipt/capture/extraction helpers and their
+unit tests; the manager owns orchestration, native assignment/readiness wiring,
+integration/CLI coverage, user docs and all delivery gates. They share the stage
+worktree and phase branch with disjoint file ownership; neither changes branches
+while the other is active. Final gates remain make validate-pr and make test-summary.
 
 ## Objective And Context
 
@@ -385,9 +407,9 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 
 ## Workflow State
 
-- Manager preparation: staged-input delivery boundary approved on 2026-09-10
+- Manager preparation: approved boundaries reconciled against the actual merged predecessor on 2026-09-11; no refinement needed
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: started; bounded archive/extraction work delegated, native lifecycle/assignment/qualification and journeys owned by manager
 - Refiner: not needed
 - Pre-submit gate: not run
 - Independent review: required before implementation merge
@@ -403,4 +425,4 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 | Validated revision/tree state and evidence | No implementation receipt |
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created; no roots or environments changed |
+| Residual risk and cleanup | Retained Stage 40 worktree and phase branch verified; predecessor exact branches retired. No real roots or environments changed. |
