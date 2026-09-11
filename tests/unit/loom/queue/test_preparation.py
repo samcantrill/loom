@@ -65,7 +65,7 @@ def test_shared_capture_is_finite_and_immutable(tmp_path: Path) -> None:
     }
 
 
-def test_staged_is_a_valid_future_vocabulary_but_not_a_shared_capture() -> None:
+def test_staged_request_does_not_use_shared_capture() -> None:
     with pytest.raises(QueueServiceError, match="unsupported"):
         capture_shared_input(
             _request(mode="staged"),

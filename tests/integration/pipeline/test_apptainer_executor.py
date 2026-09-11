@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -157,7 +157,7 @@ def test_apptainer_executor_fake_runner_parent_finalizes_stage(
         assert result.status == RunStatus.SUCCEEDED
         assert result.stage_results["build"].status == StageStatus.SUCCEEDED
         receipt = result.stage_results["build"].to_safe_metadata()
-        route = receipt["executor_metadata"]
+        route = cast(dict[str, Any], receipt["executor_metadata"])
         assert route["executor"] == "apptainer"
         assert route["command"][:3] == ["apptainer", "exec", "--cleanenv"]
         assert route["container"]["image"] == "analysis.sif"

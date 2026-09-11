@@ -100,6 +100,42 @@ def test_preparation_qualification_checks_the_actual_selected_environment(
     )
 
 
+@pytest.mark.optional_dependency
+def test_staged_qualification_requires_the_selected_installation_handler(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("weave")
+    ordinary = qualified_resident_profile(_profile(tmp_path))
+    staged = qualified_resident_profile(
+        _profile(tmp_path, ResidentReadinessRequirements(preparation_staged=True))
+    )
+    assert staged.readiness_result is not None
+    assert staged.readiness_result.preparation_staged_ready
+    assert staged.descriptor == ordinary.descriptor
+
+    # Model a selected shared-only installation in its real probe process.
+    (tmp_path / "sitecustomize.py").write_text(
+        "import loom.queue.preparation as preparation\n"
+        "del preparation.resolve_staged_input\n"
+    )
+    shared_only = replace(_profile(tmp_path), environment={"PYTHONPATH": str(tmp_path)})
+    shared = qualify_resident_profile(replace(
+        shared_only, readiness_requirements=ResidentReadinessRequirements(preparation=True)
+    ))
+    assert shared.preparation_ready
+    assert not shared.preparation_staged_ready
+    unsupported = qualify_resident_profile(replace(
+        shared_only,
+        readiness_requirements=ResidentReadinessRequirements(preparation_staged=True),
+    ))
+    assert not unsupported.ok
+    assert not unsupported.preparation_staged_ready
+    assert next(
+        check for check in unsupported.checks
+        if check.check_id == "packages.preparation_staged_imports"
+    ).status == "FAIL"
+
+
 def test_identity_tracks_declared_source_not_path_or_unrelated_files(
     tmp_path: Path,
 ) -> None:

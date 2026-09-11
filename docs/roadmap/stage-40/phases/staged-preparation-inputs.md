@@ -2,18 +2,41 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 40 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p3-staged-preparation-inputs
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 2 merges; reconcile its actual input and state owners.
+- Base revision: `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, published Phase 2 completion metadata after squash merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d`.
+- PR: [#302](https://github.com/samcantrill/loom/pull/302)
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 3: Preparation With Transferred Inputs
-- Dependencies: Phase 2 remotely merged with its complete shared preparation lifecycle
+- Dependencies: Phase 2 PR #300 remotely merged, metadata published, exact stage/control/remote synchronization passed and both exact phase branches retired.
 - Workflow path: expanded for archive extraction, transfer/recovery boundaries and retained-state compatibility
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: none
+
+### Execution startup
+
+The shared start gate created this branch in the retained Stage 40 worktree on
+2026-09-11 after verified Phase 2 delivery. Control develop remains clean and is
+used only for synchronization. The approved four-phase readiness receipt applies
+without product-contract changes; no planning refinement is needed.
+
+The actual predecessor owns receipt values/capture in queue/preparation.py,
+state orchestration in queue/_preparation_operations.py, native application wiring
+in preparation.py and assignment materialization in _remote_stage_execution.py,
+_managed_local.py and agent_session_transport.py. The fixed preparation binding
+already travels in the native stage fingerprint. Staged mode can join its committed
+archive as one bounded native assignment input, extract before workspace acceptance,
+and retain the existing operation/report/publication and root schemas.
+
+One bounded executor is justified by the archive/filesystem boundary and its
+independent test surface. It owns receipt/capture/extraction helpers and their
+unit tests; the manager owns orchestration, native assignment/readiness wiring,
+integration/CLI coverage, user docs and all delivery gates. They share the stage
+worktree and phase branch with disjoint file ownership; neither changes branches
+while the other is active. Final gates remain make validate-pr and make test-summary.
 
 ## Objective And Context
 
@@ -385,22 +408,81 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 
 ## Workflow State
 
-- Manager preparation: staged-input delivery boundary approved on 2026-09-10
+- Manager preparation: approved boundaries reconciled against the actual merged predecessor on 2026-09-11; no refinement needed
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: complete at `4c166d39c4579bc39610cfe4eb79228f90779b4e`; manager owns full gates, documentation reconciliation, PR and delivery. Executor archive ownership has returned; no subagent writes remain.
 - Refiner: not needed
-- Pre-submit gate: not run
+- Pre-submit gate: passed; accepted scope, native ownership, complete local evidence, documentation and committed diff reconciled on 2026-09-11
 - Independent review: required before implementation merge
-- Blocker corrections: 0/3
-- PR and merge: not created
+- Blocker corrections: 3/3; archive transfer ceiling/frozen receipt handoff, redundant archive metadata exceeding the native JSON depth limit, and retained pre-grant transfer recovery. Each has a concrete correction, focused evidence and passing required full validation.
+- PR and merge: #302 open against develop; published-base reconciliation passed; independent review is next
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added or updated | Not run; planning only |
-| Validated revision/tree state and evidence | No implementation receipt |
-| Validation-relevant changes after evidence | Not applicable |
-| PR, review, and merge | Pending |
-| Residual risk and cleanup | Stage worktree not yet created; no roots or environments changed |
+| Capture and receipt | queue/preparation.py owns the unchanged shared value and new StagedInputReceipt/PreparationInputReceipt union, native receipt decoding, common finite selection/source-recheck helpers, deterministic regular tar capture, native ArtifactRef and safe extraction. The archive is committed under the coordinator's protected preparation-inputs directory before a ready receipt, pinned by operation ownership, and bounded including tar overhead. Ready receipt and report schemas remain 1. |
+| Assignment boundary | The fixed child's validated fingerprint joins its exact archive to one auxiliary native transfer input. Existing relay chunks, checksums, aggregate limit, authorization and workspace journal remain authoritative. Ordinary declared inputs remain exact; the archive does not enter the target pipeline or ordinary stage inputs. Workspace acceptance verifies extraction first; the child receives the verified directory through the retained supervisor binding. |
+| Native recovery | agent_session_transport.py factors the existing delivered-assignment path from execute_one so resume_retained_work can continue an already durable REQUEST_DURABLE/PREPARED/ACCEPTED assignment without a grant or supervisor launch. New polling/offers stay blocked until retained work settles. No state, root schema, assignment wire schema or separate transfer engine is added; existing post-grant supervisor recovery is preserved. |
+| Qualification and control | Effective policy now admits shared/staged through the same coordinator client and CLI. readiness.preparation_staged and the explicit preparation-staged-input-v1 session capability qualify the actual selected Python's handler plus preparation entrypoints. Shared-only qualification does not imply staged support; scheduling and delivery guard it. Ordinary portable software fingerprint meaning and disabled configuration remain unchanged. |
+| Archive evidence | Executor commits `8738f97ac1d96342602df5338394a529903d5b0b` and `a458cc5f3d5de1c1e582041b2c4b9b284ccb2b68` provide staged/shared receipt/capture tests, native frozen mapping roundtrip, source changes, owned partial cleanup, checksum/manifest identity, unsafe path/type/duplicate rejection and packed/expanded limits. All 33 focused staged/shared input cases passed. Manager removed redundant reference metadata; the receipt already owns the manifest identity and native transfer owns size. The current compatibility run passed the same archive/shared cases after that change. |
+| New journeys and lifecycle | The isolated locked config run at the manager implementation tree passed eight selected cases: actual mTLS staged B preparation/C target execution with no shared mapping, dropped acceptance response, agent restart after a persisted transfer chunk, interrupted extraction and same-reference recovery after author edits, no readiness for partial files, cancellation before input acceptance with native pre-grant release, coordinator restart after ready staged capture, shared-only qualification excluded from staged work while ordinary execution proceeds, cancellation during archive capture, and all four shared/staged Unix/HTTPS CLI journeys. Evidence: /tmp/loom-stage40-p3-staged-lifecycle.log. The local staged/shared journey and selected-environment handler qualification also passed in the earlier focused run. |
+| Retained compatibility | Focused and full gates pass the schema-13 fixture containing both a pending and completed shared operation: restart/replay preserves prior completed target bytes/mtimes and IDs, then completes the pending capture from retained bytes despite source edits. Worker root user_version remains 12 and coordinator 13. Shared/staged input, remote assignment and effective staged policy cases pass. |
+| Validated revision and static evidence | Both required full gates ran at clean `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`, containing implementation `4c166d39c4579bc39610cfe4eb79228f90779b4e`. Ruff and full Pyright passed with zero errors/warnings, and both distribution builds passed. The complete committed diff passes git diff --check. The initial evidence-recording edits were metadata only. PR creation then found published develop had advanced through #299 and #301; the upstream reconciliation below identifies the subsequent changes and required affected checks. |
+| Required full validation | make validate-pr passed: baseline 3,263 passed / 2 skipped / 207 deselected; isolated config-extra 213 passed / 18 skipped / 3,268 deselected. Evidence: /tmp/loom-stage40-p3-validate-pr.log. make test-summary passed: package 125, unit 2,276, contract 301, integration 493, E2E 70 and config-extra 213 passed; 3,478 total passed, zero failures/errors, 18 skipped. Those skips are the existing opt-in Docker/Apptainer physical acceptance cases (13 namespace lifecycle and five other container cases), not omitted staged-preparation tests. Evidence: /tmp/loom-stage40-p3-test-summary.log and build/test-summary.md. These full receipts supersede intermediate failures and cover ordinary native agent/control/lifecycle consumers affected by the shared delivered-assignment helper, all preparation cases, deployment, package/import boundaries and the approved lanes. |
+| Documentation | Feature guide and local/remote examples now explain both source modes, explicit existing-environment qualification, tar/expanded/aggregate bounds, no laptop upload or target code delivery, restart/cancel behavior and schema-13 compatibility. Documentation checks passed for the three changed user guides: 15 local links resolve, 20 shell and four Python examples parse, two YAML examples load, and the documented request roundtrips through the native model in both source modes; the protected policy example also loads. |
+| PR, review, and merge | #302 is open with the canonical title, branch and develop target. Published-base reconciliation checks pass; the actual updated PR head is ready for independent review. |
+| Residual risk and cleanup | Finite regular tar input only; explicit selected existing installation; embedded managed authority with no SLURM preparation; retained archive/report without automatic expiry; native partial-target conflicts preserved. Loopback/fixture roots do not qualify physical NAS/fleet/Codex. No real roots upgraded or environments provisioned. Stage worktree retained; Phase 4 has not started. |
+
+### Published-base reconciliation
+
+While both required gates ran, develop advanced through ready-Slurm container
+support (#299) and retained safe execution observations (#301), ending at
+`c3d23b547d8ff90e061eb95cfe12ab00705edb15`. Their published changes are preserved.
+The only conflicted file was _remote_stage_execution.py: upstream reformatted
+the preparation launch check and helper signature where Phase 3 adds staged
+handling. Resolution retains both the formatted existing check and staged branch,
+plus the staged input helpers. Auto-merged shared owners were inspected.
+
+The upstream changes extend remote execution reports with safe executor metadata
+(version 3, retaining version 1/2 decode/replay), terminal worker request evidence,
+and ready-Slurm container support. Preparation request/input/report versions and
+root versions remain as approved. Existing full receipts remain evidence for the
+original Phase 3 tree; affected preparation, assignment, native transport and
+execution-model consumers plus static/package checks qualify this merge before
+independent review. This is published-base synchronization, not a new product
+blocker correction or a reset of the 3/3 budget. Reconciliation runtime checks
+started at clean merge `c599bfa385ac982dc938212fa0f5c2c8866cd621` and are reconciled below.
+
+Full Pyright on that merge exposed 338 errors in eight upstream-added test
+sections that index nested PlainData/object metadata without narrowing. Source
+checks were clean. Localized typing corrections add casts and two test-local
+aliases; assertions, exercised values and production code are unchanged. Full
+Ruff/Pyright now pass with zero errors/warnings at that correction tree
+(/tmp/loom-stage40-p3-published-base-static-corrected.log). These typing-only
+changes do not invalidate the runtime assertions in the already-running merge
+qualification. They are a published-base validation repair, not another product
+blocker or a weakening of the static gate.
+
+Qualification result: 464 selected cases passed; the final local cancellation
+case failed only while creating a fixture directory with ENOSPC on the nearly
+full local filesystem. After removing only this completed run's disposable
+pytest-508 directory, that exact case passed at
+`21a168a84fdf8976842e39f83839cc50270a750f`. No product source or dependency changed
+since the clean merge test start. All 465 selected cases are therefore qualified;
+the later changes contain only the documented test casts/aliases and evidence.
+Logs: /tmp/loom-stage40-p3-published-base-tests.log and
+/tmp/loom-stage40-p3-space-retry.log. Full corrected static checks pass at the
+21a168a test-typing tree. The original two full-gate receipts plus these affected
+checks qualify the current implementation; no second full-suite rerun is needed.
+
+The isolated locked Python 3.12/config selection covered every preparation unit
+and integration/CLI/child case, staged lifecycle, managed preparation, remote
+assignment values, readiness, deployment, execution models, native agent HTTP
+transport, agent-service lifecycle, local daemon production and package import
+boundaries. Exact selectors were the source-mirrored preparation files plus
+test_remote_stage_execution.py, test_resident_readiness.py, test_deployment.py,
+test_execution_models.py, test_agent_session_transport.py,
+test_agent_service_lifecycle.py, test_local_daemon_production.py and
+tests/package/test_import_boundaries.py. No physical fleet/NAS/container claim
+is added by this reconciliation.

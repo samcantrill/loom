@@ -166,6 +166,13 @@ launch binding; changing it uses the normal replacement procedure after retained
 work settles. Coordinator policy changes use the existing reload. See the complete
 [preparation settings and limits](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
 
+The same local worker also supports explicit `staged` preparation. Allow that
+mode in the coordinator profile, enable `readiness.preparation_staged: true` in
+the resident profile, and use `source.mode: staged` with new operation/run IDs.
+This mode uses a committed archive and verified assignment extraction without a
+shared-root mapping. The selected existing environment and submit workflow stay
+the same; input delivery never installs the example's code.
+
 With the configured service running, use its Unix endpoint:
 
 ```sh

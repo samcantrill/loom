@@ -965,7 +965,10 @@ def _exercise_mixed_route_run(
                 )
                 assert saved_result is not None
                 metadata = cast(Mapping[str, object], saved_result["executor_metadata"])
-                assert metadata["request"]["executor_name"] == "local"
+                assert (
+                    cast(Mapping[str, object], metadata["request"])["executor_name"]
+                    == "local"
+                )
                 scheduler = cast(Mapping[str, object], metadata["scheduler"])
                 assert scheduler["mode"] == "ready"
                 assert scheduler["job_id"] == record.job_id

@@ -50,6 +50,7 @@ from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
+    _ResidentAssignmentWorkspace,
 )
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -59,7 +60,7 @@ from loom.queue.agent_session_transport import (
     _resident_provider_descriptors,
 )
 from loom.queue.agent_sessions import AgentOffer, AgentRegistration
-from loom.queue.preparation import PREPARATION_INPUT_CAPABILITY
+from loom.queue.preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
 from loom.queue.resident_readiness import (
     ResidentReadinessRequirements,
     qualified_resident_profile,
@@ -76,7 +77,7 @@ from loom.cli.main import main
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _service(tmp_path: Path):
+def _service(tmp_path: Path, *, mode: str = "shared"):
     pytest.importorskip("weave")
     repository = Path(__file__).resolve().parents[3]
     projects = tmp_path / "projects"
@@ -186,14 +187,24 @@ def _service(tmp_path: Path):
         )
     )
     coordinator.chmod(0o600)
+    if mode == "staged":
+        authored_agent = json.loads(agent.read_text())
+        profile = authored_agent["resident_profiles"][0]
+        profile.pop("preparation_shared_roots")
+        profile["readiness"]["preparation_staged"] = True
+        agent.write_text(json.dumps(authored_agent))
+        authored = json.loads(coordinator.read_text())
+        authored["preparation"]["source_roots"]["projects"].pop("shared_snapshot_root")
+        authored["preparation"]["profiles"]["existing-project"]["source_modes"] = [mode]
+        coordinator.write_text(json.dumps(authored))
     return load_coordinator_service_config(coordinator)
 
 
-def _request() -> PrepareRunRequest:
+def _request(mode: str = "shared") -> PrepareRunRequest:
     return PrepareRunRequest(
         "prepare-1",
         "target-1",
-        PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
+        PreparationSource(mode, "projects", ".", ("pipeline.yaml",)),
         "pipeline.yaml",
         "existing-project",
     )
@@ -212,8 +223,9 @@ def _result(operation: LocalDaemonOperation) -> Mapping[str, Any]:
     return operation.result
 
 
-def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> None:
-    service = _service(tmp_path)
+@pytest.mark.parametrize("mode", ("shared", "staged"))
+def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path, mode: str) -> None:
+    service = _service(tmp_path, mode=mode)
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
@@ -221,7 +233,7 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> Non
     server.start()
     try:
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
-            accepted = client.prepare_run(_request())
+            accepted = client.prepare_run(_request(mode))
             assert accepted.state == "pending"
             completed = client.wait_operation(
                 accepted.operation_id, timeout_seconds=25
@@ -233,7 +245,7 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> Non
             receipt = _result(completed)["prepared_run"]
             assert _result(completed)["preflight_status"] == "PASS"
             assert _result(completed)["report_ref"] is not None
-            assert client.prepare_run(_request()) == completed
+            assert client.prepare_run(_request(mode)) == completed
             store = LocalRunStore(service.daemon.run_store_root)
             assert (
                 store.read_stage_worker_result(receipt["run_uri"], "produce", attempt=1)
@@ -263,16 +275,21 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> Non
         daemon.stop()
 
 
-@pytest.mark.parametrize("missing", ("capability", "selected_profile"))
+@pytest.mark.parametrize("missing", ("capability", "selected_profile", "staged_capability"))
 def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordinary_work(
     tmp_path: Path, missing: str
 ) -> None:
-    service = _service(tmp_path)
+    mode = "staged" if missing == "staged_capability" else "shared"
+    service = _service(tmp_path, mode=mode)
     config_path = tmp_path / "coordinator.json"
-    if missing == "capability":
+    if missing in {"capability", "staged_capability"}:
         agent_path = tmp_path / "agent.json"
         authored = json.loads(agent_path.read_text())
-        authored["resident_profiles"][0].pop("preparation_shared_roots")
+        if missing == "capability":
+            authored["resident_profiles"][0].pop("preparation_shared_roots")
+        else:
+            authored["resident_profiles"][0]["readiness"].pop("preparation_staged")
+            authored["resident_profiles"][0]["readiness"]["preparation"] = True
         agent_path.write_text(json.dumps(authored))
     else:
         assert service.daemon.resident_worker_launch_profile is not None
@@ -321,7 +338,7 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
     server.start()
     try:
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
-            client.prepare_run(_request())
+            client.prepare_run(_request(mode))
             assert admitted_child.wait(25)
             daemon.reconcile_once()
             operation = client.operation("prepare-1")
@@ -363,13 +380,21 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
         daemon.stop()
 
 
+@pytest.mark.parametrize("mode", ("shared", "staged"))
 def test_https_prepares_on_one_worker_then_executes_on_another(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
     import loom.queue.agent_session_transport as transport
 
-    _service(tmp_path)
+    _service(tmp_path, mode=mode)
+    prepare_request = _request(mode)
+    if mode == "staged":
+        (tmp_path / "projects" / "included.txt").write_bytes(b"x" * (96 * 1024))
+        prepare_request = replace(prepare_request, source=replace(
+            prepare_request.source, include=("pipeline.yaml", "included.txt")
+        ))
     credentials = mutual_tls_credentials(tmp_path / "tls")
     repository = Path(__file__).resolve().parents[3]
     base = ResidentExecutionProfile(
@@ -385,7 +410,8 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
     preparer = qualified_resident_profile(
         replace(
             base,
-            preparation_shared_roots={"projects": tmp_path / "snapshots"},
+            preparation_shared_roots={"projects": tmp_path / "snapshots"} if mode == "shared" else {},
+            readiness_requirements=replace(base.readiness_requirements, preparation_staged=mode == "staged"),
         )
     )
     executor = qualified_resident_profile(
@@ -425,7 +451,10 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
         REMOTE_EXECUTION_CAPABILITY,
         REGULAR_FILE_RELAY_CAPABILITY,
     )
-    preparation_capabilities = (*ordinary_capabilities, PREPARATION_INPUT_CAPABILITY)
+    preparation_capabilities = (
+        *ordinary_capabilities, PREPARATION_INPUT_CAPABILITY,
+        *((PREPARATION_STAGED_INPUT_CAPABILITY,) if mode == "staged" else ()),
+    )
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
     authored["local_agent"] = None
@@ -506,6 +535,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
     )
     connection_path.chmod(0o600)
     agents = []
+    agent_configs = []
     sessions = []
     try:
         for profile, certificate, capabilities in (
@@ -520,6 +550,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                 tmp_path / f"remote-{certificate}" / "agent",
                 (profile,) if certificate == "agent" else (profile, incompatible),
             )
+            agent_configs.append(agent_config)
             assert agent_config.agent_root is not None
             LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
             agent = LocalDaemonAgentHttpClient(agent_config)
@@ -596,14 +627,14 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
         monkeypatch.setattr(transport._Handler, "_reply", drop_accepted_reply)
         with CoordinatorClient.from_connection_file(connection_path) as client:
             description = client.describe_connection()
-            assert description.source_modes == ("shared",)
+            assert description.source_modes == (mode,)
             with pytest.raises(CoordinatorClientError) as wrong:
                 client.prepare_run(
-                    _request(), expected_coordinator_id="wrong-coordinator"
+                    prepare_request, expected_coordinator_id="wrong-coordinator"
                 )
             assert wrong.value.mutation_outcome == "not_applied"
             staged = replace(
-                _request(), source=replace(_request().source, mode="staged")
+                prepare_request, source=replace(prepare_request.source, mode="staged" if mode == "shared" else "shared")
             )
             for native in (False, True):
                 with pytest.raises(CoordinatorClientError) as unsupported:
@@ -626,23 +657,82 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                     == 0
                 )
             with pytest.raises(CoordinatorClientError) as lost:
-                client.prepare_run(_request())
+                client.prepare_run(prepare_request)
             assert dropped.is_set() and lost.value.mutation_outcome == "unknown"
 
         with CoordinatorClient.from_connection_file(connection_path) as client:
             replay = client.prepare_run(
-                _request(), expected_coordinator_id=description.coordinator_id
+                prepare_request, expected_coordinator_id=description.coordinator_id
             )
             assert replay.operation_id == "prepare-1"
-            result = agents[0].execute_one(
-                sessions[0].session_id,
-                sessions[0].availability_revision,
-                sequence=1,
-                wait_timeout_ms=5000,
-            )
+            if mode == "staged":
+                import loom.queue.preparation as preparation_inputs
+
+                persisted_chunks = []
+                original_chunk = _ResidentAssignmentWorkspace.stage_input_chunk
+
+                def interrupt_after_chunk(workspace, transfer_id, offset, data, *, final):
+                    observed = original_chunk(workspace, transfer_id, offset, data, final=final)
+                    if not final and not persisted_chunks:
+                        persisted_chunks.append(workspace.root)
+                        raise RuntimeError("interrupted staged input transfer")
+                    return observed
+
+                monkeypatch.setattr(_ResidentAssignmentWorkspace, "stage_input_chunk", interrupt_after_chunk)
+                with pytest.raises(RuntimeError, match="interrupted staged input transfer"):
+                    agents[0].execute_one(sessions[0].session_id, sessions[0].availability_revision,
+                                          sequence=1, wait_timeout_ms=5000)
+                assert len(persisted_chunks) == 1
+                workspace_root = persisted_chunks[0]
+                assert not tuple(workspace_root.glob("preparation-input-*"))
+                assert client.operation("prepare-1").state == "pending"
+                ready_receipt = _result(client.operation("prepare-1"))["input_receipt"]
+                (tmp_path / "projects" / "pipeline.yaml").write_text("edited after ready capture")
+                agents[0].close()
+                agents[0] = LocalDaemonAgentHttpClient(agent_configs[0])
+                monkeypatch.setattr(_ResidentAssignmentWorkspace, "stage_input_chunk", original_chunk)
+
+                original_unpack = preparation_inputs._unpack_staged_archive
+                interrupted_extraction = []
+
+                def interrupt_extraction(archive_path, destination, digest):
+                    directory = original_unpack(archive_path, destination, digest)
+                    if destination.is_relative_to(workspace_root) and not interrupted_extraction:
+                        interrupted_extraction.append(destination)
+                        raise RuntimeError("interrupted staged input extraction")
+                    return directory
+
+                monkeypatch.setattr(preparation_inputs, "_unpack_staged_archive", interrupt_extraction)
+                with pytest.raises(QueueConflictError, match="cannot poll"):
+                    agents[0].wait_for_work(sessions[0].session_id, sessions[0].availability_revision,
+                                            sequence=1, wait_timeout_ms=5000)
+                with pytest.raises(RuntimeError, match="interrupted staged input extraction"):
+                    agents[0].resume_retained_work()
+                assert len(interrupted_extraction) == 1
+                assert not interrupted_extraction[0].exists()
+                assert not tuple(workspace_root.glob("preparation-input-*"))
+                assert _result(client.operation("prepare-1"))["input_receipt"] == ready_receipt
+                agents[0].close()
+                agents[0] = LocalDaemonAgentHttpClient(agent_configs[0])
+                monkeypatch.setattr(preparation_inputs, "_unpack_staged_archive", original_unpack)
+
+            if mode == "staged":
+                (result,) = agents[0].resume_retained_work()
+                assert agents[0].resume_retained_work() == ()
+            else:
+                result = agents[0].execute_one(
+                    sessions[0].session_id,
+                    sessions[0].availability_revision,
+                    sequence=1,
+                    wait_timeout_ms=5000,
+                )
             assert result["state"] == "RELEASED", result
             prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert prepared.state == "applied", prepared
+            assert _result(prepared)["input_receipt"]["mode"] == mode
+            if mode == "staged":
+                assert not (tmp_path / "snapshots").exists()
+                assert not (tmp_path / "remote-agent" / "projects").exists()
             child = client.admission(
                 _result(prepared)["preparation_admission_id"]
             ).admission
@@ -705,6 +795,51 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             assert LocalArtifactStore(store.local_artifact_root(target_uri)).load(
                 output
             ) == {"value": 41}
+            if mode == "staged":
+                cancel_request = replace(prepare_request, operation_id="cancel-transfer", run_name="cancel-transfer")
+                client.prepare_run(cancel_request)
+                session_b = agents[0]._require_journal().session(sessions[0].session_id)
+                agents[0].publish_offer(AgentOffer(
+                    session_b.session_id, session_b.coordinator_epoch,
+                    session_b.config_revision, session_b.inventory_revision,
+                    session_b.availability_revision, 1, 0, 30,
+                    _resident_provider_descriptors(preparer, session_b.agent_id),
+                    resident_profiles=(preparer.descriptor,),
+                ), idempotency_key="offer-cancel-transfer")
+                assert daemon._execution is not None
+                cancellation_durable = Event()
+                fan_out = daemon._execution._fan_out_remote_cancellation
+
+                def observed_cancellation(run_uri, operation_id):
+                    settling = fan_out(run_uri, operation_id)
+                    cancellation_durable.set()
+                    return settling
+
+                monkeypatch.setattr(daemon._execution, "_fan_out_remote_cancellation", observed_cancellation)
+                original_accept = _ResidentAssignmentWorkspace.accept
+                cancelled_during_delivery = []
+
+                def cancel_before_inputs_ready(workspace):
+                    binding = workspace.request().preparation_input
+                    if binding is not None and binding.operation_id == "cancel-transfer":
+                        cancelled_during_delivery.append(workspace.assignment_id)
+                        assert client.cancel_preparation("cancel-transfer").state == "pending"
+                        assert cancellation_durable.wait(25)
+                        assert client.operation("cancel-transfer").state == "pending"
+                    return original_accept(workspace)
+
+                monkeypatch.setattr(_ResidentAssignmentWorkspace, "accept", cancel_before_inputs_ready)
+                cancelled_assignment = agents[0].execute_one(
+                    session_b.session_id, session_b.availability_revision,
+                    sequence=2, wait_timeout_ms=5000,
+                )
+                assert cancelled_assignment["state"] == "CANCELLED_BEFORE_GRANT", cancelled_assignment
+                assert len(cancelled_during_delivery) == 1
+                cancelled = client.wait_operation("cancel-transfer", timeout_seconds=25).operation
+                assert cancelled.state == "cancelled", cancelled
+                assert not (service.daemon.run_store_root / "cancel-transfer").exists()
+                cancelled_child = client.admission(_result(cancelled)["preparation_admission_id"]).admission
+                assert cancelled_child.state.value == "CANCELLED"
             for agent in agents:
                 agent.shutdown_clean()
     finally:
@@ -1041,17 +1176,23 @@ def test_cancellation_before_capture_is_durable_and_keeps_the_target_absent(
 
 
 @pytest.mark.parametrize(
-    "boundary", ("captured", "child_accepted", "published", "report_unavailable")
+    "boundary,mode", (("captured", "shared"), ("child_accepted", "shared"),
+                      ("published", "shared"), ("report_unavailable", "shared"),
+                      ("captured", "staged"))
 )
 def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
-    tmp_path: Path, boundary: str
+    tmp_path: Path, boundary: str, mode: str
 ) -> None:
-    service = _service(tmp_path)
+    service = _service(tmp_path, mode=mode)
     reached = Event()
+    prior_request = replace(_request(), operation_id="retained-shared", run_name="retained-shared")
+    prior_operation = None
+    prior_target = service.daemon.run_store_root / "retained-shared"
+    prior_files = {}
 
     class InterruptedPreparation(CoordinatorPreparation):
         def prepare_child(self, *args, **kwargs):
-            if boundary == "captured":
+            if boundary == "captured" and args[1].operation_id == "prepare-1":
                 reached.set()
                 raise RuntimeError("injected interruption after durable capture")
             return super().prepare_child(*args, **kwargs)
@@ -1086,7 +1227,13 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     server.start()
     try:
-        daemon.prepare_run(_request(), principal_id="caller")
+        if mode == "shared" and boundary == "captured":
+            daemon.prepare_run(prior_request, principal_id="caller")
+            prior_operation = daemon.wait_operation(prior_request.operation_id, timeout=25).operation
+            assert prior_operation.state == "applied", prior_operation
+            prior_files = {path.relative_to(prior_target): (path.read_bytes(), path.stat().st_mtime_ns)
+                           for path in prior_target.rglob("*") if path.is_file()}
+        daemon.prepare_run(_request(mode), principal_id="caller")
         assert reached.wait(25), daemon.operation("prepare-1")
         # Protected changes use the same atomic reload as the CLI. Accepted
         # preparation retains its snapshot even after new preparation is disabled.
@@ -1114,6 +1261,11 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
     (tmp_path / "projects" / "pipeline.yaml").write_text(
         "invalid edited authoring bytes"
     )
+    with sqlite3.connect(service.daemon.control_database) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert service.daemon.agent_root is not None
+    with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     service = load_coordinator_service_config(config_path)
     report_unavailable, allow_report = Event(), Event()
 
@@ -1148,7 +1300,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         with sqlite3.connect(service.daemon.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM managed_admissions").fetchone()[0]
-                == 1
+                == (2 if prior_operation is not None else 1)
             )
         if boundary in {"published", "report_unavailable"}:
             assert {
@@ -1164,10 +1316,9 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         )
         for retained in (
             str(target),
-            str(
-                tmp_path
-                / "snapshots"
-                / _result(completed)["input_receipt"]["reference"]["path"]
+            (
+                str(tmp_path / "snapshots" / _result(completed)["input_receipt"]["reference"]["path"])
+                if mode == "shared" else _result(completed)["input_receipt"]["reference"]["uri"]
             ),
             _result(completed)["report_ref"]["uri"],
         ):
@@ -1181,7 +1332,11 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
                 decision.reason_code
                 is CleanupSafetyReason.RETAINED_PREPARATION_EVIDENCE
             )
-        assert resumed.prepare_run(_request(), principal_id="caller") == completed
+        assert resumed.prepare_run(_request(mode), principal_id="caller") == completed
+        if prior_operation is not None:
+            assert resumed.prepare_run(prior_request, principal_id="caller") == prior_operation
+            assert {path.relative_to(prior_target): (path.read_bytes(), path.stat().st_mtime_ns)
+                    for path in prior_target.rglob("*") if path.is_file()} == prior_files
     finally:
         resumed.stop()
 

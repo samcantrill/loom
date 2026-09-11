@@ -2952,7 +2952,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         if restart_barrier == "before_result_commit":
             stored_result = runs.read_stage_worker_result(run_uri, "build", attempt=1)
             assert stored_result is not None
-            receipt = cast(Mapping[str, object], stored_result["executor_metadata"])
+            receipt = cast(Mapping[str, Any], stored_result["executor_metadata"])
             assert receipt["execution_kind"] == "resident_stage_worker"
             assert "loom.queue._resident_stage_worker" in receipt["command"]
             assert receipt["request"]["executor_name"] == "local"
@@ -2960,7 +2960,9 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         if no_start:
             stored = runs.read_stage_worker_result(run_uri, "build", attempt=1)
             assert stored is not None
-            public_request = stored["executor_metadata"]["request"]
+            public_request = cast(Mapping[str, Any], stored["executor_metadata"])[
+                "request"
+            ]
             assert public_request["stage_name"] == "build"
             assert public_request["executor_name"] == "local"
             assert str(tmp_path) not in json.dumps(public_request)

@@ -19,7 +19,7 @@ from .models import validate_queue_id
 from .preparation import PrepareRunRequest
 
 
-_IMPLEMENTED_MODES = frozenset({"shared"})
+_IMPLEMENTED_MODES = frozenset({"shared", "staged"})
 
 
 @dataclass(frozen=True, slots=True)

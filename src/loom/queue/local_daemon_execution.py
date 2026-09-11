@@ -72,6 +72,7 @@ from loom.pipeline.orchestration import (
     StageWorkRecord,
 )
 from loom.pipeline.planning import (
+    StageFingerprintRecord,
     AttemptReadiness,
     ExecutionPlan,
     PlanAction,
@@ -146,6 +147,7 @@ from ._remote_stage_execution import (
     _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
     _validate_remote_semantic_data,
+    _resident_input_refs,
 )
 from ._agent_process_supervisor import (
     AgentProcessSupervisorClient,
@@ -4233,7 +4235,7 @@ class LocalDaemonExecution:
         return settling
 
     def _candidate(self) -> Candidate:
-        from .preparation import PREPARATION_INPUT_CAPABILITY
+        from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
 
         inventory: dict[str, ResourceInventoryEnvelope] = {}
         availability: dict[str, ResourceAvailabilityEnvelope] = {}
@@ -4289,6 +4291,10 @@ class LocalDaemonExecution:
                 attributes["preparation_input_capability"] = (
                     PREPARATION_INPUT_CAPABILITY
                 )
+            if self.config.resident_preparation_staged_ready:
+                attributes["preparation_staged_capability"] = (
+                    PREPARATION_STAGED_INPUT_CAPABILITY
+                )
         return Candidate(
             self.config.machine_id,
             inventory,
@@ -4334,7 +4340,7 @@ class LocalDaemonExecution:
     def _remote_candidates(
         self,
     ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
-        from .preparation import PREPARATION_INPUT_CAPABILITY
+        from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
 
         if not self.config.remote_profiles:
             return {}
@@ -4529,7 +4535,13 @@ class LocalDaemonExecution:
                             {
                                 "preparation_input_capability": PREPARATION_INPUT_CAPABILITY
                             }
-                            if PREPARATION_INPUT_CAPABILITY
+                            if {PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY}
+                            .intersection(json.loads(str(row["capabilities_json"])))
+                            else {}
+                        ),
+                        **(
+                            {"preparation_staged_capability": PREPARATION_STAGED_INPUT_CAPABILITY}
+                            if PREPARATION_STAGED_INPUT_CAPABILITY
                             in json.loads(str(row["capabilities_json"]))
                             else {}
                         ),
@@ -4608,7 +4620,7 @@ class LocalDaemonExecution:
                 worker_metadata={},
             )
             total_bytes = 0
-            for index, (logical_name, ref) in enumerate(sorted(inputs.items())):
+            for index, (logical_name, ref) in enumerate(sorted(_resident_input_refs(inputs, fingerprint).items())):
                 descriptor, _path = _RemoteArtifact.from_local_ref(
                     transfer_id=f"preflight-{index}",
                     logical_name=logical_name,
@@ -4857,7 +4869,10 @@ class LocalDaemonExecution:
             remote_inputs: list[_RemoteArtifact] = []
             input_paths: dict[str, Path] = {}
             total_bytes = 0
-            for logical_name, ref in sorted(worker_request.inputs.items()):
+            transfer_refs = _resident_input_refs(
+                worker_request.inputs, cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
+            )
+            for logical_name, ref in sorted(transfer_refs.items()):
                 transfer_id = (
                     "input-"
                     + hashlib.sha256(

@@ -3,7 +3,7 @@
 from pathlib import Path
 import json
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from loom.pipeline import (
     OutputSpec,
@@ -205,7 +205,7 @@ def test_local_stage_and_result_share_admitted_request_view_before_stage_work(
     assert result.status is StageStatus.SUCCEEDED
     assert len(seen) == 1
     assert seen[0]["resolved_runtime"]["resources"]["entries"]["cpu"]["amount"] == 4
-    public = result.to_safe_metadata()
+    public = cast(dict[str, Any], result.to_safe_metadata())
     assert public["executor_metadata"]["request"] == request.to_safe_metadata()
     assert public["executor_metadata"]["execution_kind"] == "in_process"
     assert public["executor_metadata"]["command"] is None
@@ -232,7 +232,7 @@ def test_early_stop_retains_requested_resources_and_safe_execution_view(
     result = LocalExecutor().execute(request)
     assert result.status is StageStatus.CANCELLED
     assert result.failure is None
-    public = result.to_safe_metadata()
+    public = cast(dict[str, Any], result.to_safe_metadata())
     assert public["executor_metadata"]["request"] == request.to_safe_metadata()
     assert public["executor_metadata"]["execution_kind"] == "in_process"
     assert public["executor_metadata"]["command"] is None

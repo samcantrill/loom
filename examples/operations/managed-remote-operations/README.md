@@ -257,6 +257,17 @@ check before advertising that capability. Missing mapping or incompatible
 software fails explicitly. See
 [operator configuration](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
 
+For machines without shared project storage, allow `staged` in that coordinator
+profile and change the request's `source.mode` to `staged`, using new operation
+and run IDs. The coordinator still reads the selected example files. Enable
+`readiness.preparation_staged: true` in the existing worker environment and allow
+and declare `preparation-staged-input-v1` alongside the other capabilities.
+Staged-only preparation needs no snapshot root or shared-root mapping. Loom
+relays a bounded archive and verifies extraction in the assignment workspace;
+the archive, including tar overhead, must fit 64 MiB. The commands and explicit
+submit step below stay the same. This does not install `stages.py` on another
+worker or deliver target datasets.
+
 From the coordinator host:
 
 ```sh
