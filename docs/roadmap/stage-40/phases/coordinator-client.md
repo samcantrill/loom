@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 40 / 1
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p1-coordinator-client
@@ -485,8 +485,7 @@ the new accept deadline leaked past TLS negotiation into the worker protocol.
 Resetting the authenticated socket timeout preserves the established idle behavior
 while native control keeps its own cumulative deadline. The regression and
 affected TLS/native-control cases passed fresh validation; no wider
-codec, dispatch, persistence or CLI behavior changed. Independent PR review
-remains required.
+codec, dispatch, persistence or CLI behavior changed. Independent PR review passed with no findings at the delivered head.
 
 ## Workflow State
 
@@ -495,9 +494,9 @@ remains required.
 - Implementation: shared native boundaries implemented; manager correction and validation complete
 - Refiner: not needed
 - Pre-submit gate: passed; phase scope, native/legacy contracts, required evidence, docs and bounded post-validation delta accepted
-- Independent review: required on the actual PR head before implementation merge
+- Independent review: passed with no findings at `fd9462db797a2400e8b898361599c8a2a67179de`; validation reconciliation accepted
 - Blocker corrections: 1/3 completed; native control boundary completion
-- PR and merge: [PR #298](https://github.com/samcantrill/loom/pull/298) open against develop; independent review pending
+- PR and merge: [PR #298](https://github.com/samcantrill/loom/pull/298) squash-merged into develop as `3b3942a88ee0729612f02fe3d7dbda3164c762d4` on 2026-09-11
 
 ## Completion Record
 
@@ -508,5 +507,5 @@ remains required.
 | Validated revision/tree state and evidence | `make validate-pr` passed at `a1f86df5f18b67490ecea8a9e251de540a26ff88`: Ruff and Pyright passed; isolated baseline 3195 passed, 2 skipped, 156 deselected; isolated config-extra 162 passed, 18 skipped, 3200 deselected; wheel and sdist built. `/tmp/loom-stage40-a1f86df-validate.log` and `.exit` record exit 0 |
 | Required summary run | `make test-summary` passed at the same runtime checkpoint: package 125, unit 2209, contract 301, integration 492, e2e 70 and config-extra 162 passed; 3359 passed overall, 18 config-extra skips, no failures/errors. `build/test-summary.md` and `/tmp/loom-stage40-a1f86df-summary.log` inspected; `.exit` records 0 |
 | Validation-relevant changes after evidence | Post-checkpoint runtime delta restores worker idle keepalive after bounded TLS negotiation, with a real TLS regression test. Fresh `uv run --locked --group dev pytest tests/integration/queue/test_agent_session_transport.py -k 'native or tls_rotation or loopback_mtls or loopback_rejects or loopback_exposes or worker_keepalive or coordinator_cli_submit' -q`: 18 passed, 78 deselected. Ruff and Pyright passed. Removing incidental whole-file formatting preserved identical Python syntax trees; Ruff and diff checks passed afterward. Broader evidence remains applicable to unchanged native schemas, CLI, persistence and import contracts |
-| PR, review, and merge | [PR #298](https://github.com/samcantrill/loom/pull/298) open with the canonical title, develop base and expected phase branch; actual-head independent review pending |
-| Residual risk and cleanup | Independent PR review remains before merge. Container/physical deployment acceptance is not claimed by skipped tests. Persistent stage worktree retained; no root migration |
+| PR, review, and merge | [PR #298](https://github.com/samcantrill/loom/pull/298), reviewed head `fd9462db797a2400e8b898361599c8a2a67179de`, no findings; remote squash merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` verified. Transition synchronized the stage coordination branch and local/remote develop to that merge |
+| Residual risk and cleanup | Container/physical deployment acceptance is not claimed by skipped tests. No root migration. Remote phase branch retired at the reviewed SHA; the persistent stage worktree remains for later phases. This completion metadata must be published and synchronized before the next branch starts |
