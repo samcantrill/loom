@@ -1,7 +1,7 @@
 name = "loom_phase_planner"
 description = "Resolves one named uncertainty in a Loom phase execution plan."
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Phase Planner", "Contract Planner"]
 developer_instructions = """
