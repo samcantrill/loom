@@ -8,8 +8,8 @@ Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: none; implementation not started
-Next phase: Phase 1, preparation-publication, after amended readiness and landing
-Blockers: amended packet readiness review and landing pending; Stage 40 delivered
+Next phase: Phase 1, preparation-publication, after packet landing and startup verification
+Blockers: none in the reviewed packet; landing and stage-worktree verification pending
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements and startup review requested on 2026-09-12.
 
@@ -177,24 +177,41 @@ and all approved validation commands remain binding.
   neither receipt establishes runtime implementation or physical qualification.
 - Original planning quality: pass; the approved behavior and nine-phase shape
   remain the baseline. The current published-source amendment is reviewed below.
-- Execution readiness: amended packet awaiting independent review and landing.
+- Execution readiness: amended packet passed independent review; landing and
+  stage-worktree verification remain the implementation handoff.
   All phase execution statuses remain pending. No runtime work started.
 
 ### Published-source startup readiness review
 
-- Status: pending independent review of the amended packet.
+- Status: pass on 2026-09-12; no required corrections or qualified blockers.
 - Source assumptions: published develop `25d97f50d66f44273bf979a5488a312e7f1a15d2`;
   [baseline contract inventory](planning.md#published-baseline-and-amendment-ownership).
-- Reviewed packet revision/tree and paths: pending; roadmap Stage 41 entry,
-  lifecycle brief, planning.md, this manifest and all nine linked phase cards.
+- Reviewed packet revision: `d2e36893a3e206933ad255b0306104d41045b5bc`;
+  tree: `a379008512799b7042efb19176af2fbdb4bae409`.
+  Paths: `docs/roadmap.md` Stage 41 entry,
+  `docs/briefs/unified-execution-lifecycle.md`,
+  `docs/roadmap/stage-41/{planning,implementation-plan}.md` and all nine cards
+  indexed in Phase Index under `docs/roadmap/stage-41/phases/`.
 - Scope: the maintainer-requested predecessor reconciliation; preserve unaffected
   original reviews, accepted outcomes, phase order and all required phase gates.
-- Independent result, findings and correction disposition: pending.
-- Documentation validation and post-review changes: pending.
-- Landing/startup handoff: pending review and publication. After landing, bootstrap
-  `stage-41` with `tools/phase_workflow.py` before implementation startup review
-  or writes, verify the exact packet/source, and reuse this receipt if unchanged.
-  Startup-only scope does not authorize implementing Phase 1.
+- Independent result: the amended packet accurately preserves published
+  preparation/publication, explicit retry, verified completion/output replay,
+  container/report, service-lifetime and MCP contracts. Phase ownership, merge
+  boundaries, validation obligations and incremental removals are consistent.
+  No findings required correction; unaffected original reviews were reused.
+- Documentation validation: 13 documentation-only paths; 52 local links/anchors,
+  nine Python snippets, 35 shell examples and 42 test-path references checked;
+  nine pending phase identities/order/approval/full gates and FR/FQ/DQ tables
+  preserved; `git diff --check` passed. No runtime tests or live qualification
+  are claimed by this amendment review.
+- Post-review changes: readiness/status and receipt updates only. No accepted
+  contract, example, validation obligation or phase boundary changed.
+- Landing/startup handoff: [plan PR 307](https://github.com/samcantrill/loom/pull/307).
+  Publication is pending. After landing, bootstrap `stage-41` with
+  `tools/phase_workflow.py` before implementation startup review or writes,
+  verify the exact packet/source, and reuse this receipt if unchanged. Record
+  the published base and startup result in Phase 1's Workflow State. Startup-only
+  scope does not authorize implementing Phase 1.
 
 - Accepted risks: breaking APIs; original owner loss/accounting delay can leave
   work unresolved; live fleet/container/HPC/MCP qualification remains explicit.

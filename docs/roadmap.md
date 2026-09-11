@@ -3044,9 +3044,10 @@ environment provisioning and general source deployment remain outside this stage
 Status: approved on 2026-09-10 with nine bounded implementation phases. The
 reviewed behavior/correction is retained; the manager checked the approved phase
 decomposition and documentation. Stage 40 is delivered. On 2026-09-12 the
-maintainer requested published-source refinements and a startup-readiness review;
-the implementation manifest owns the current review/landing receipt. No Stage 41
-runtime work has started.
+maintainer requested published-source refinements and a startup-readiness review.
+The independent amendment review passed with no required corrections; the
+implementation manifest owns the review and landing handoff. No Stage 41 runtime
+work has started.
 
 Build on Stage 40's native client and assigned preparation. One public run
 connects to or starts configured coordinator/agent services, prepares and admits

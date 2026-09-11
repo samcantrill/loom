@@ -14,7 +14,7 @@
 - Dependencies: Published Stage 40; Stage 41 plan and nine-phase split approved on 2026-09-10
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: amended readiness review and landing pending; published Stage 40 is available
+- Blockers: none in the reviewed packet; landing and stage-worktree verification pending
 
 ## Objective And Context
 
