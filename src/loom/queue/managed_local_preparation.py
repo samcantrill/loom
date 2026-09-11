@@ -280,15 +280,13 @@ def _persist_composed_config(
     redacted = getattr(composed, "redacted", None)
     manifest = getattr(composed, "manifest", None)
     provenance = getattr(composed, "provenance", None)
-    recipe_manifest = getattr(composed, "recipe_manifest", None)
+    recipe_manifest = _recipe_manifest_data(composed)
     if (
         not isinstance(redacted, Mapping)
         or not hasattr(manifest, "to_dict")
         or not hasattr(provenance, "to_dict")
     ):
         raise QueueServiceError("managed-local composed config evidence is unavailable")
-    if not isinstance(recipe_manifest, Sequence):
-        raise QueueServiceError("managed-local recipe evidence is unavailable")
     store.write_config_snapshot(run_uri, "resolved", json_dumps_pretty(resolved))
     store.write_config_snapshot(
         run_uri, "resolved_redacted", json_dumps_pretty(redacted)
@@ -296,10 +294,7 @@ def _persist_composed_config(
     store.write_composition_manifest(
         run_uri, _plain_mapping(cast(Any, manifest).to_dict())
     )
-    store.write_recipe_manifest(
-        run_uri,
-        tuple(_plain_mapping(cast(Any, item).to_dict()) for item in recipe_manifest),
-    )
+    store.write_recipe_manifest(run_uri, recipe_manifest)
     store.write_run_user_metadata(
         run_uri, {"config_provenance": _plain_mapping(cast(Any, provenance).to_dict())}
     )
@@ -348,12 +343,11 @@ def _replay_matches(
     redacted = getattr(composed, "redacted", None)
     manifest = getattr(composed, "manifest", None)
     provenance = getattr(composed, "provenance", None)
-    recipe_manifest = getattr(composed, "recipe_manifest", None)
+    recipe_manifest = _recipe_manifest_data(composed)
     if (
         not isinstance(redacted, Mapping)
         or not hasattr(manifest, "to_dict")
         or not hasattr(provenance, "to_dict")
-        or not isinstance(recipe_manifest, Sequence)
     ):
         raise QueueServiceError("managed-local composed config evidence is unavailable")
     if store.read_config_snapshot(run_uri, "resolved") != json_dumps_pretty(resolved):
@@ -366,9 +360,7 @@ def _replay_matches(
         cast(Any, manifest).to_dict()
     ):
         raise QueueServiceError("managed-local composition manifest conflicts")
-    if store.read_recipe_manifest(run_uri) != tuple(
-        _plain_mapping(cast(Any, item).to_dict()) for item in recipe_manifest
-    ):
+    if store.read_recipe_manifest(run_uri) != recipe_manifest:
         raise QueueServiceError("managed-local recipe manifest conflicts")
     if store.read_run_user_metadata(run_uri) != {
         "config_provenance": _plain_mapping(cast(Any, provenance).to_dict())
@@ -423,6 +415,22 @@ def _receipt(
         runtime_digest=runtime_digest,
         stage_names=plan.stage_order,
     )
+
+
+def _recipe_manifest_data(composed: object) -> tuple[dict[str, PlainData], ...]:
+    """Normalize current mapping and established object recipe evidence once."""
+    items = getattr(composed, "recipe_manifest", None)
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        raise QueueServiceError("managed-local recipe evidence is unavailable")
+    result: list[dict[str, PlainData]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            serializer = getattr(item, "to_dict", None)
+            if not callable(serializer):
+                raise QueueServiceError("managed-local recipe evidence is unavailable")
+            item = serializer()
+        result.append(_plain_mapping(item))
+    return tuple(result)
 
 
 def _plain_mapping(value: object) -> dict[str, PlainData]:

@@ -33,7 +33,8 @@ serve, with no discovery or environment override. Former daemon root/profile
 setup flags are a hard cut. Operator commands retain their endpoint-based
 surface, including the guarded `daemon-time-recover` operation.
 
-Coordinator client commands (`daemon-submit`, `daemon-status`,
+Coordinator client commands (`daemon-prepare`, `daemon-cancel-preparation`,
+`daemon-submit`, `daemon-status`,
 `daemon-admissions`, `daemon-admission`, `daemon-agents`, `daemon-agent`,
 `daemon-operation`, `daemon-operation-wait`, `daemon-wait` and `daemon-cancel`)
 use the native `CoordinatorClient`. Select exactly one of `--endpoint PATH`
@@ -43,6 +44,18 @@ before lookup or mutation. Existing positional arguments, output fields, exits,
 page defaults and legacy overall wait durations remain supported. The
 [native client guide](coordinator-client.md) documents the connection schema,
 bounded calls, native results and reconciliation after an uncertain mutation.
+
+`loom queue daemon-prepare --request PATH` reads the exact native JSON preparation
+request and returns an operation; it does not wait for publication or submit the
+target. `daemon-operation` and `daemon-operation-wait` observe it, and
+`daemon-cancel-preparation OPERATION_ID` requests its native cancellation.
+See [agent preparation](agent-preparation.md) for request fields, the specified
+existing environment, shared snapshots, result states and replay semantics.
+
+`loom queue daemon-upgrade CONFIG --env-file ENV_FILE` is the separate local
+administrative upgrade for a retained coordinator root from schema 12 to 13.
+It requires the stopped coordinator's exclusive lock and preserves worker roots
+at schema 12. See the [upgrade procedure](../downstream-operations.md#upgrade-a-retained-coordinator-root).
 
 V12 adds portable run exchange commands under the existing `loom runs` group:
 `loom runs export`, `loom runs inspect`, and `loom runs import`. These commands

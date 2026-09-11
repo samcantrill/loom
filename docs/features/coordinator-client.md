@@ -56,6 +56,9 @@ for service configuration and initialization.
 
 The run must already be prepared by a supported Loom workflow. Its URI identifies
 coordinator-owned state; the client need not be able to open that path locally.
+Use [agent preparation](agent-preparation.md) when authored configuration needs
+composition and checks in a selected existing worker environment. Preparation
+returns a durable operation; submit its canonical receipt only after `applied`.
 
 ```python
 from loom.coordinator import CoordinatorClient
@@ -106,6 +109,8 @@ results reuse native models at their existing import paths.
 | `agent(agent_id)` | `AgentProjection` |
 | `inspect_run(run_uri)` | Existing `RunInspectionResponse` success/failure union for a managed admitted run |
 | `operation(operation_id)` | `LocalDaemonOperation` |
+| `prepare_run(request)` | `LocalDaemonOperation` accepting a `PrepareRunRequest`; observe until canonical publication is applied |
+| `cancel_preparation(operation_id)` | `LocalDaemonOperation` with the native cancellation/publication outcome |
 | `wait_operation(operation_id, timeout_seconds=25)` | `OperationWaitResult`: `TERMINAL` or `TIMEOUT` |
 | `submit(request)` | `LocalDaemonAdmission` for a `LocalDaemonAdmissionRequest` |
 | `wait_admission(admission_id, expected_revision=..., timeout_seconds=25)` | `AdmissionWaitResult`: `CHANGED`, `TERMINAL` or `TIMEOUT` |

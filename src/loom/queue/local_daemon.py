@@ -1634,50 +1634,17 @@ class LocalDaemon:
             raise
 
     @classmethod
-    def upgrade_coordinator_root(cls, root: Path) -> tuple[str, int]:
-        """Atomically upgrade a stopped coordinator root from schema 12 to 13.
+    def upgrade_coordinator_root(cls, config: LocalDaemonConfig) -> tuple[str, int]:
+        """Upgrade a stopped, protected deployment's coordinator from 12 to 13.
 
-        Worker roots intentionally remain schema 12.  The backup is evidence for
-        an operator, never an automatic rollback path.
+        The native owner checks the role lock, deployment binding and database
+        structure, retains a private SQLite backup and commits the schema change
+        atomically. Worker roots and journals are opened read-only for identity
+        validation and retain their existing version and contents.
         """
-        _validate_private_directory(root)
-        database = root / "control.sqlite"
-        if not database.is_file() or stat.S_IMODE(database.stat().st_mode) & 0o077:
-            raise QueueStorageError("coordinator root is unavailable")
-        with sqlite3.connect(database) as conn:
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            identity = conn.execute(
-                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
-            ).fetchone()
-            role = conn.execute(
-                "SELECT value FROM root_metadata WHERE key = 'role'"
-            ).fetchone()
-            if role is None or str(role[0]) != "coordinator" or identity is None:
-                raise QueueStorageError("coordinator root identity is invalid")
-            if version == _COORDINATOR_SCHEMA_VERSION:
-                return str(identity[0]), version
-            if version != 12:
-                raise QueueStorageError("coordinator root schema cannot be upgraded")
-            backup = root / f"control.sqlite.{str(identity[0])}.schema-12.backup"
-            if backup.exists():
-                raise QueueStorageError("coordinator upgrade backup already exists")
-            with sqlite3.connect(backup) as destination:
-                conn.backup(destination)
-            backup.chmod(0o600)
-            try:
-                conn.execute(
-                    "CREATE TABLE preparation_operations ("
-                    "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                    "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
-                    "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
-                    "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
-                )
-                conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
-                conn.commit()
-            except sqlite3.Error as exc:
-                conn.rollback()
-                raise QueueStorageError("coordinator root upgrade failed") from exc
-        return str(identity[0]), _COORDINATOR_SCHEMA_VERSION
+        from ._coordinator_upgrade import upgrade_coordinator_root
+
+        return upgrade_coordinator_root(config)
 
     @classmethod
     def initialize_agent_root(cls, root: Path) -> None:
@@ -4198,85 +4165,128 @@ def _initialize_root(path: Path, *, role: str) -> None:
         )
         conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION if role == 'coordinator' else _AGENT_SCHEMA_VERSION}")
         if role == "coordinator":
-            conn.execute(
-                "CREATE TABLE daemon_metadata "
-                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            conn.executemany(
-                "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
-                (
-                    ("accepted_time_health", "healthy"),
-                    ("accepted_time_revision", "0"),
-                ),
-            )
-            conn.execute(
-                "CREATE TABLE coordinator_epochs "
-                "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
-            )
-            conn.execute(
-                """
-                CREATE TABLE managed_admissions (
-                    admission_id TEXT PRIMARY KEY,
-                    queue_item_id TEXT NOT NULL UNIQUE,
-                    coordinator_id TEXT NOT NULL,
-                    run_uri TEXT NOT NULL,
-                    intent_digest TEXT NOT NULL,
-                    execution_owner TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    accepted_at TEXT NOT NULL,
-                    authority_operation_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-                    run_priority INTEGER NOT NULL,
-                    enqueue_sequence INTEGER NOT NULL UNIQUE,
-                    cancellation_operation_id TEXT,
-                    cancellation_principal_id TEXT,
-                    blocked_reason TEXT,
-                    UNIQUE(coordinator_id, run_uri)
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO daemon_metadata(key, value) VALUES "
-                "('admission_enqueue_sequence', '0')"
-            )
-            conn.execute(
-                "CREATE TABLE admission_reconciliation_health ("
-                "admission_id TEXT PRIMARY KEY REFERENCES managed_admissions(admission_id), "
-                "health TEXT NOT NULL, observed_at TEXT NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE scheduling_reloads ("
-                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, state TEXT NOT NULL, "
-                "result_code TEXT, scheduling_epoch TEXT, "
-                "configuration_revision INTEGER, replacement_fingerprint TEXT)"
-            )
-            conn.execute(
-                "CREATE TABLE recovery_operations ("
-                "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
-                "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
-                "evidence_json TEXT, result_json TEXT NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE time_recoveries ("
-                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
-                "result_json TEXT NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE preparation_operations ("
-                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
-                "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
-                "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
-            )
+            _initialize_coordinator_schema(conn)
         initialize_agent_session_schema(conn, coordinator=role == "coordinator")
         conn.commit()
     database.chmod(0o600)
 
 
-def _open_root(path: Path, *, role: str) -> str:
+def _initialize_coordinator_schema(
+    conn: sqlite3.Connection, *, preparation: bool = True
+) -> None:
+    conn.execute(
+        "CREATE TABLE daemon_metadata "
+        "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.executemany(
+        "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
+        (
+            ("accepted_time_health", "healthy"),
+            ("accepted_time_revision", "0"),
+        ),
+    )
+    conn.execute(
+        "CREATE TABLE coordinator_epochs "
+        "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE managed_admissions (
+            admission_id TEXT PRIMARY KEY,
+            queue_item_id TEXT NOT NULL UNIQUE,
+            coordinator_id TEXT NOT NULL,
+            run_uri TEXT NOT NULL,
+            intent_digest TEXT NOT NULL,
+            execution_owner TEXT NOT NULL,
+            state TEXT NOT NULL,
+            accepted_at TEXT NOT NULL,
+            authority_operation_id TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+            run_priority INTEGER NOT NULL,
+            enqueue_sequence INTEGER NOT NULL UNIQUE,
+            cancellation_operation_id TEXT,
+            cancellation_principal_id TEXT,
+            blocked_reason TEXT,
+            UNIQUE(coordinator_id, run_uri)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO daemon_metadata(key, value) VALUES "
+        "('admission_enqueue_sequence', '0')"
+    )
+    conn.execute(
+        "CREATE TABLE admission_reconciliation_health ("
+        "admission_id TEXT PRIMARY KEY REFERENCES managed_admissions(admission_id), "
+        "health TEXT NOT NULL, observed_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE scheduling_reloads ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, state TEXT NOT NULL, "
+        "result_code TEXT, scheduling_epoch TEXT, "
+        "configuration_revision INTEGER, replacement_fingerprint TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE recovery_operations ("
+        "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+        "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
+        "evidence_json TEXT, result_json TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE time_recoveries ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+        "result_json TEXT NOT NULL)"
+    )
+    if preparation:
+        _initialize_preparation_schema(conn)
+
+
+def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE preparation_operations ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+        "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
+        "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
+    )
+
+
+def _validate_coordinator_schema(
+    conn: sqlite3.Connection, *, preparation: bool
+) -> None:
+    """Validate durable table/identity constraints against the initialization owner."""
+    def shape(database: sqlite3.Connection, table: str) -> tuple[object, ...]:
+        columns = tuple(tuple(row) for row in database.execute(f'PRAGMA table_info("{table}")'))
+        indexes = []
+        for index in database.execute(f'PRAGMA index_list("{table}")'):
+            if index[2]:
+                name = str(index[1]).replace('"', '""')
+                indexes.append(tuple(row[2] for row in database.execute(f'PRAGMA index_info("{name}")')))
+        foreign_keys = tuple(tuple(row) for row in database.execute(f'PRAGMA foreign_key_list("{table}")'))
+        return columns, tuple(sorted(indexes)), foreign_keys
+
+    try:
+        with sqlite3.connect(":memory:") as expected:
+            _initialize_coordinator_schema(expected, preparation=preparation)
+            tables = tuple(row[0] for row in expected.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ))
+            if any(shape(conn, table) != shape(expected, table) for table in tables):
+                raise QueueStorageError("coordinator control schema is incomplete or incompatible")
+        if not preparation and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_operations'"
+        ).fetchone() is not None:
+            raise QueueStorageError("coordinator predecessor contains partial preparation state")
+    except sqlite3.Error as exc:
+        raise QueueStorageError("coordinator control schema is invalid") from exc
+
+
+def _open_root(
+    path: Path, *, role: str, schema_version: int | None = None
+) -> str:
     _validate_private_directory(path)
     database = path / "control.sqlite"
     if not database.is_file():
@@ -4286,12 +4296,20 @@ def _open_root(path: Path, *, role: str) -> str:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        expected_version = _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
+        expected_version = schema_version if schema_version is not None else (
+            _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
+        )
         if version != expected_version:
+            if role == "coordinator" and version == 12:
+                raise QueueStorageError(
+                    "coordinator schema 12 requires an offline upgrade with loom queue daemon-upgrade"
+                )
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
+        if role == "coordinator":
+            _validate_coordinator_schema(conn, preparation=version == _COORDINATOR_SCHEMA_VERSION)
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")
@@ -4301,7 +4319,9 @@ def _open_root(path: Path, *, role: str) -> str:
     return values["stable_id"]
 
 
-def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
+def _validate_deployment_binding(
+    config: LocalDaemonConfig, *, coordinator_id: str | None = None
+) -> None:
     target = config.deployment_root
     if target is None:
         raise QueueServiceError("coordinator deployment root is required")
@@ -4322,7 +4342,9 @@ def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
         "role_kind": "coordinator"
         if config.agent_root is None
         else "coordinator-bundle",
-        "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
+        "coordinator_id": coordinator_id if coordinator_id is not None else _open_root(
+            config.coordinator_root, role="coordinator"
+        ),
         "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
     if config.agent_root is not None:

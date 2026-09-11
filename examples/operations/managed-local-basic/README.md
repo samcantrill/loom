@@ -148,6 +148,44 @@ roots. A passing result qualifies that test directory's operation, not another
 filesystem. The CPU example declares one CPU and zero GPUs; readiness reports
 declared capacity separately from hardware observations.
 
+## Preparation In The Selected Agent Environment
+
+The original runner above uses the local preparation helper. To exercise the
+coordinator's asynchronous agent preparation, use [prepare-request.json](prepare-request.json)
+with an enabled preparation profile. The request selects only `pipeline.yaml`;
+`stages.py` remains part of the already-installed, qualified project.
+
+In the protected coordinator copy, map preparation source root `projects` to
+this example directory and configure a separate shared snapshot directory.
+Map `example-cpu` to resident profile `starter-local`, explicitly allowing that
+root and shared mode with the existing native child runtime options. In the
+resident profile, map `preparation_shared_roots.projects` to that snapshot
+directory. Qualify the installed preparation module and input capability before
+starting or reloading the role. See the complete
+[preparation settings and limits](../../../docs/features/agent-preparation.md#operator-configuration-and-rollout).
+
+With the configured service running, use its Unix endpoint:
+
+```sh
+loom queue daemon-prepare --endpoint "$LOOM_ENDPOINT" --request prepare-request.json --format json
+loom queue daemon-operation-wait --endpoint "$LOOM_ENDPOINT" prepare-starter-agent-001 --timeout 25 --format json
+loom queue daemon-operation --endpoint "$LOOM_ENDPOINT" prepare-starter-agent-001 --format json
+```
+
+Save `result.coordinator_id` for guarded reconnect. Once the operation is
+`applied`, set `RUN_URI` to its exact `result.prepared_run.run_uri` and continue:
+
+```sh
+loom queue daemon-submit --endpoint "$LOOM_ENDPOINT" starter-agent-job "$RUN_URI"
+loom queue daemon-wait --endpoint "$LOOM_ENDPOINT" starter-agent-job --timeout 25
+```
+
+The target still produces and consumes the example's value `42`. Preparation
+does not execute those target stages. A timeout leaves preparation running; reuse
+the same operation ID to observe or retry its exact request. Use
+`daemon-cancel-preparation` for preparation cancellation and `daemon-cancel` for
+a separately submitted job. A prepared receipt does not reserve worker capacity.
+
 Optional GPU qualification is a maintenance operation. After initializing a GPU
 agent with a declared Torch runtime, and before starting its owning service, run
 `loom queue daemon-check coordinator.yaml --env-file coordinator.env --probe-gpu`.

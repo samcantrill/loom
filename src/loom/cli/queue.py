@@ -795,7 +795,7 @@ def handle_daemon_upgrade(namespace: argparse.Namespace) -> int:
 
     try:
         service = load_coordinator_service_config(namespace.config, env_file=namespace.env_file, _allow_unready=True)
-        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(service.daemon.coordinator_root)
+        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(service.daemon)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version})
@@ -809,7 +809,9 @@ def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
         if not isinstance(raw, Mapping):
             raise QueueServiceError("prepare request must be a JSON object")
         result = _daemon_client(namespace).prepare_run(PrepareRunRequest.from_dict(raw))
-    except (OSError, json.JSONDecodeError, QueueError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _queue_cli_error(QueueServiceError("prepare request file is unavailable or invalid JSON")) from exc
+    except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 

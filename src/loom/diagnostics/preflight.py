@@ -224,12 +224,7 @@ def run_preflight(request: PreflightRequest) -> PreflightResult:
 
     if not isinstance(request, PreflightRequest):
         raise TypeError("request must be a PreflightRequest")
-    selected_groups = normalize_groups(request.groups)
-    context = _Context(request=request)
-    checks: list[PreflightCheckResult] = []
-    for group in selected_groups:
-        checks.extend(_CHECKS[group](context))
-    return PreflightResult(checks=tuple(checks), groups=selected_groups)
+    return _run_checks(_Context(request=request))
 
 
 def run_preflight_composed(composed: object, request: PreflightRequest) -> PreflightResult:
@@ -244,8 +239,13 @@ def run_preflight_composed(composed: object, request: PreflightRequest) -> Prefl
         raise TypeError("request must be a PreflightRequest")
     if request.overlays or request.overrides:
         raise ValueError("supplied composition preflight does not accept overlays or overrides")
-    selected_groups = normalize_groups(request.groups)
-    context = _Context(request=request, composed=composed)
+    if composed is None:
+        raise TypeError("supplied composition must not be None")
+    return _run_checks(_Context(request=request, composed=composed))
+
+
+def _run_checks(context: _Context) -> PreflightResult:
+    selected_groups = normalize_groups(context.request.groups)
     checks: list[PreflightCheckResult] = []
     for group in selected_groups:
         checks.extend(_CHECKS[group](context))

@@ -1099,6 +1099,24 @@ authentication, framing and bounded I/O; the worker transport retains its
 journal, polling, process supervision and worker-specific errors. The facade
 imports no MCP SDK, starts no service and owns no job lifetime.
 
+### 6.15 Agent Preparation
+
+Detailed specification: [agent-preparation.md](features/agent-preparation.md)
+
+The native coordinator surface exposes preparation request values and operations.
+Queue owns accepted intent, source/profile snapshots, capture references,
+child/target linkage, finalization claims, bounded operation projections and
+retained-root upgrade. Existing managed admission, execution, artifact transfer
+and publication owners retain their responsibilities.
+
+`loom.preparation` is an integration layer above queue and diagnostics. Its fixed
+managed child composes once in the selected worker environment and commits a
+checked-composition report. Service wiring supplies coordinator finalization;
+queue and lower execution code do not import diagnostics or project recipes.
+`diagnostics.preflight` shares checks between path-based and supplied-composition
+entrypoints. `queue.managed_local_preparation` remains the canonical publisher
+and normalizes recipe evidence for fresh writes and replay.
+
 ## 7. Documentation Map
 
 Use the docs this way:

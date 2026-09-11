@@ -23,18 +23,15 @@ The start gate created this phase branch in the retained Stage 40 worktree at
 the published base above; control remains clean on develop. No implementation
 work uses the control checkout.
 
-The existing approved readiness receipt remains applicable. Current source still
-uses coordinator/worker root schema 12, the publisher accepts explicit stage
-requirements, and its fresh/replay recipe handling has the recorded mapping
-mismatch. Phase 1 supplies the accepted shared client/transport boundary. No
-intervening product drift or missing contract requires planning refinement.
+The existing approved readiness receipt remains applicable to the published base.
+Phase 1 supplies the accepted shared client/transport boundary. No intervening
+product drift or missing contract requires planning refinement.
 
-One optional executor owns Phase 2 runtime and its tests because durable
-orchestration, protected input binding and the ordinary managed child cross
-several existing owners. The manager owns product documentation, the manifest,
-acceptance, final full validation and delivery. The executor may update this
-card's implementation/evidence sections and returns ownership before final gates;
-it does not open a PR, review, merge or delegate.
+The optional executor returned a partial foundation at
+`907fb9290d0992803a9aefd3e8f6d4214cd1ae56`. Ownership has returned to the manager
+for all runtime, tests, documentation and delivery. The manager is completing the
+ordinary child, protected binding and durable publication lifecycle. No executor
+or explorer owns files or has authority to change branches.
 
 Validation retains every obligation in Test And Validation Plan. Start with
 source-mirrored checks of composition/publisher, configuration/capture, actual
@@ -784,7 +781,7 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 - Manager preparation: startup verified on 2026-09-11; approved boundaries and current owners reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: executor runtime/test pass starting; manager owns product docs and final validation
+- Implementation: manager owns continuation after the partial executor foundation; checked-composition, bounded shared capture/access and offline upgrade checks pass; managed child and durable publication remain in progress
 - Refiner: not needed
 - Pre-submit gate: not run
 - Independent review: required before implementation merge
@@ -795,9 +792,10 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added native request/source/capture value models, supplied-composition preflight, initial coordinator prepare/cancel operation persistence, coordinator-only 12-to-13 root upgrade, native client/transport dispatch and CLI request/cancel/upgrade entrypoints. The shared capture validates contained regular files, manifest/reuse integrity and copied bytes. |
-| Tests added or updated | Added focused request/capture and durable operation tests plus supplied-composition preflight coverage. |
-| Validated revision/tree state and evidence | Focused Ruff passed. Unit selection passed: 173 tests across preparation, publisher, deployment, diagnostics, coordinator client and CLI. The broader existing integration selection ran 166 tests with one existing GPU placement test failure: `test_gpu_model_preference_selects_exact_private_local_or_remote_binding[False]` timed out waiting for its preprocess stage; no preparation path is involved. |
-| Validation-relevant changes after evidence | None after the focused evidence; the integration failure remains to be triaged or rerun by the manager. |
-| PR, review, and merge | Pending |
-| Residual risk and cleanup | The managed child/report/final publication/reconciliation integration remains incomplete: this initial durable operation currently stops at acceptance and cancellation. It cannot satisfy Phase 2 delivery until that runtime is wired through qualified profiles, native child execution and `prepare_managed_run`. Persistent Stage 40 worktree retained; no real roots upgraded. |
+| Implementation and changed paths | Foundation at `907fb929` adds native request/control and initial preparation rows. Manager continuation normalizes native recipe evidence for publication/replay, shares supplied/path preflight checks, bounds shared capture and verifies worker access through protected aliases, and adds locked/transactional offline upgrade with retained backups. Product guide, links and native request examples are drafted. Managed child/report/publication integration remains incomplete. |
+| Tests added or updated | Actual stateful recipe composes once, survives removal of the authored file, publishes and replays unchanged. Capture cases cover authored manifest names, native digest, differing worker mount prefixes, source edits/list changes, symlinks/special files, file/byte/include limits, exact snapshot reuse and tampering. Upgrade cases cover preserved rows/IDs, unchanged worker root, private backup, live lock/wrong binding refusal, transactional rollback/retry and invalid schema refusal. |
+| Validated revision/tree state and evidence | Manager working tree based on `907fb929`: 104 tests passed across `test_preparation.py`, `test_managed_local_preparation.py`, diagnostics `test_diagnostics_preflight.py`, `test_coordinator_upgrade.py` and CLI `test_queue.py`, with `--extra config`; `/tmp/loom-stage40-p2-capture-checks.log`. All 54 existing `test_local_daemon.py` cases passed during upgrade validation; the corrected six new upgrade cases also passed separately. Affected Ruff and diff checks passed. Earlier 57 publisher/preflight cases passed. These are selected checks, not either final phase gate. |
+| Validation-relevant changes after evidence | A manifest-list type annotation was corrected after the 104-test run; full Pyright then passed with zero errors (`/tmp/loom-stage40-p2-pyright.log`). The executor's GPU placement timeout did not reproduce in the manager's exact integration rerun (`test_gpu_model_preference_selects_exact_private_local_or_remote_binding[False]`: 1 passed; `/tmp/loom-stage40-p2-gpu-placement.log`). Required final integration/full gates remain outstanding. |
+| Documentation checks | Added relative links/anchors resolve; 20 shell blocks parse, the Python example parses, both JSON requests round-trip through the native request model, and the two YAML examples parse. Protected policy and complete native journey examples must be checked against the finished lifecycle before delivery. |
+| PR, review, and merge | Pending; required independent review and both full phase commands have not run. |
+| Residual risk and cleanup | Initial operation control still stops at acceptance/cancellation. Qualified profile policy, private child binding, committed report joins, claim/recovery/cancellation/retention and actual prepare-to-execute journeys must be completed before Phase 2 acceptance. Upgrade storage tests do not replace the required live retained-admission/worker-journal integration case. Persistent Stage 40 worktree retained; no real roots upgraded. |
