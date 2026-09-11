@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 40 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p3-staged-preparation-inputs
@@ -413,9 +413,9 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 - Implementation: complete at `4c166d39c4579bc39610cfe4eb79228f90779b4e`; manager owns full gates, documentation reconciliation, PR and delivery. Executor archive ownership has returned; no subagent writes remain.
 - Refiner: not needed
 - Pre-submit gate: passed; accepted scope, native ownership, complete local evidence, documentation and committed diff reconciled on 2026-09-11
-- Independent review: required before implementation merge
+- Independent review: passed at `27b54165d4943f47f3213702c24b0b4f53414c68`; no blockers, localized corrections, optional hardening or workflow findings
 - Blocker corrections: 3/3; archive transfer ceiling/frozen receipt handoff, redundant archive metadata exceeding the native JSON depth limit, and retained pre-grant transfer recovery. Each has a concrete correction, focused evidence and passing required full validation.
-- PR and merge: #302 open against develop; published-base reconciliation passed; independent review is next
+- PR and merge: #302 squash-merged into develop at `82ee364bc73856be2f709ff5ac682fc9a4844b27` on 2026-09-11T10:10:28Z; delivery verified the remote outcome and retired the remote phase branch.
 
 ## Completion Record
 
@@ -431,7 +431,7 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 | Validated revision and static evidence | Both required full gates ran at clean `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`, containing implementation `4c166d39c4579bc39610cfe4eb79228f90779b4e`. Ruff and full Pyright passed with zero errors/warnings, and both distribution builds passed. The complete committed diff passes git diff --check. The initial evidence-recording edits were metadata only. PR creation then found published develop had advanced through #299 and #301; the upstream reconciliation below identifies the subsequent changes and required affected checks. |
 | Required full validation | make validate-pr passed: baseline 3,263 passed / 2 skipped / 207 deselected; isolated config-extra 213 passed / 18 skipped / 3,268 deselected. Evidence: /tmp/loom-stage40-p3-validate-pr.log. make test-summary passed: package 125, unit 2,276, contract 301, integration 493, E2E 70 and config-extra 213 passed; 3,478 total passed, zero failures/errors, 18 skipped. Those skips are the existing opt-in Docker/Apptainer physical acceptance cases (13 namespace lifecycle and five other container cases), not omitted staged-preparation tests. Evidence: /tmp/loom-stage40-p3-test-summary.log and build/test-summary.md. These full receipts supersede intermediate failures and cover ordinary native agent/control/lifecycle consumers affected by the shared delivered-assignment helper, all preparation cases, deployment, package/import boundaries and the approved lanes. |
 | Documentation | Feature guide and local/remote examples now explain both source modes, explicit existing-environment qualification, tar/expanded/aggregate bounds, no laptop upload or target code delivery, restart/cancel behavior and schema-13 compatibility. Documentation checks passed for the three changed user guides: 15 local links resolve, 20 shell and four Python examples parse, two YAML examples load, and the documented request roundtrips through the native model in both source modes; the protected policy example also loads. |
-| PR, review, and merge | #302 is open with the canonical title, branch and develop target. Published-base reconciliation checks pass; the actual updated PR head is ready for independent review. |
+| PR, review, and merge | #302 independently reviewed at `27b54165d4943f47f3213702c24b0b4f53414c68` with no findings, then squash-merged into develop at `82ee364bc73856be2f709ff5ac682fc9a4844b27`. Review accepted the original full gates plus published-base qualification. The delivery and transition gates verified the merge and synchronized the retained stage worktree on its coordination branch. |
 | Residual risk and cleanup | Finite regular tar input only; explicit selected existing installation; embedded managed authority with no SLURM preparation; retained archive/report without automatic expiry; native partial-target conflicts preserved. Loopback/fixture roots do not qualify physical NAS/fleet/Codex. No real roots upgraded or environments provisioned. Stage worktree retained; Phase 4 has not started. |
 
 ### Published-base reconciliation

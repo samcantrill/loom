@@ -8,8 +8,8 @@ Planning document: [planning.md](planning.md)
 Behavior guide: [Detailed explanation and code examples](../../briefs/mcp-implementation-plan.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: 3 - staged-preparation-inputs (pr_open)
-Next phase: 4 - mcp-skills (after Phase 3 delivery and synchronization)
+Current phase: 3 - staged-preparation-inputs (merged)
+Next phase: 4 - mcp-skills (after publication of this completion metadata and synchronization)
 Blockers: none
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
@@ -109,8 +109,10 @@ rewrite existing run/admission identities to make a migration easier.
 ## Execution Context
 
 - Execution worktree root: `/nas/home/can134/work/loom-worktrees`.
-- Clean control checkout: `control` under that root; verify or create a clean
-  linked checkout on develop without repurposing unrelated work.
+- Clean control checkout: `control-stage-40` under that root, on develop.
+  The original `control` checkout was occupied by unrelated settings work at
+  Phase 3 transition; it was preserved and this clean linked checkout created.
+  This mechanical path update leaves the persistent stage worktree unchanged.
 - Persistent stage worktree: `stage-40` under that root; bootstrap before
   startup review or writes and retain through final synchronized closeout.
 - Coordination branch: `agent/stage-40` for metadata and closeout.
@@ -124,7 +126,7 @@ rewrite existing run/admission identities to make a migration easier.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | coordinator-client | merged | [Direct coordinator control](phases/coordinator-client.md) | agent/stage-40-p1-coordinator-client | [#298](https://github.com/samcantrill/loom/pull/298) | Native client, Unix/HTTPS, protected client config, CLI adapters | Same native control from any client host |
 | 2 | agent-preparation | merged | [Durable preparation on shared storage](phases/agent-preparation.md) | agent/stage-40-p2-agent-preparation | [#300](https://github.com/samcantrill/loom/pull/300) | Common preparation lifecycle, shared capture/child/report, diagnostics/publisher, profile policy and root upgrade | Complete preparation and target execution using shared storage |
-| 3 | staged-preparation-inputs | pr_open | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | [#302](https://github.com/samcantrill/loom/pull/302) | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
+| 3 | staged-preparation-inputs | merged | [Preparation with transferred inputs](phases/staged-preparation-inputs.md) | agent/stage-40-p3-staged-preparation-inputs | [#302](https://github.com/samcantrill/loom/pull/302) | Archive capture, native relay/extraction, effective mode support and staged boundary validation | Same preparation lifecycle without shared project storage |
 | 4 | mcp-skills | pending | [MCP and portable skills](phases/mcp-skills.md) | agent/stage-40-p4-mcp-skills | pending | Optional SDK adapter, tool contracts, skill distribution, examples and SDK lane | Use both native source modes from Codex across projects |
 
 Each phase is one independently mergeable PR. Its card has four or five bounded
@@ -178,10 +180,10 @@ and all approved validation commands remain binding.
   retained operation evidence consumes space; client policy is deployment-wide.
 - Revisit triggers: a supported project needs code deployment, large runtime
   inputs, another authority/preparation family or multiple preparation environments.
-- Phases 1 and 2 are merged and independently reviewed. Phase 3 implementation
-  and both required local gates pass. PR #302 is open; published-base
-  reconciliation passes with 465 affected cases and full static checks.
-  Independent review of the current head is next.
+- Phases 1 through 3 are merged and independently reviewed. Phase 3 review
+  passed at `27b54165d4943f47f3213702c24b0b4f53414c68` with no findings;
+  PR #302 merged at `82ee364bc73856be2f709ff5ac682fc9a4844b27`.
+  Both required full gates and the published-base qualification passed.
   The published Stage 41 lifecycle guide remains separate product planning.
 
 ## Completion
@@ -190,5 +192,5 @@ and all approved validation commands remain binding.
 | --- | --- | --- | --- | --- |
 | 1 | [#298](https://github.com/samcantrill/loom/pull/298), merge `3b3942a88ee0729612f02fe3d7dbda3164c762d4` | Native control delivered; both required full gates and affected TLS checks passed; independent review found no issues. See the phase card for revisions and counts | Physical deployment/Codex deferred as planned | Remote branch retired; persistent stage worktree retained through remaining phases |
 | 2 | [#300](https://github.com/samcantrill/loom/pull/300), merge `5918bfd364a8637a0aa6acf87b60a5d71defd39d` | Shared preparation lifecycle and native/CLI journeys implemented; focused worker placement, recovery, cancellation, report, retention and populated-root upgrade checks pass. Both required full gates pass; all 44 preparation cases and affected static checks qualify the later decoder correction. Independent review confirmed the final head with no remaining findings. See the phase card | Loopback and fixture-root evidence; no physical deployment claim or real-root upgrade | Both exact phase branches retired; published metadata synchronized at `ad4ed8a986c7ee9a5e67f01ca00df300f5d2d280`, then the shared start gate created Phase 3 in the retained worktree |
-| 3 | [#302](https://github.com/samcantrill/loom/pull/302), open | Transferred inputs, qualified placement and native recovery implemented. Both required full gates pass at `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`; 3,478 tests pass in the summary. Published-base reconciliation adds 465 passing affected cases and full static checks. See the phase card for revisions and evidence | Loopback and fixture-root evidence; physical fleet/NAS/Codex remains separate | Active phase branch in the retained Stage 40 worktree; predecessor synchronization complete |
+| 3 | [#302](https://github.com/samcantrill/loom/pull/302), merge `82ee364bc73856be2f709ff5ac682fc9a4844b27` | Transferred inputs, qualified placement and native recovery implemented. Both required full gates pass at `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`; 3,478 tests pass in the summary. Published-base reconciliation adds 465 passing affected cases and full static checks. Independent review passed with no findings. See the phase card for revisions and evidence | Loopback and fixture-root evidence; physical fleet/NAS/Codex remains separate | Remote phase branch retired; transition verified the merge and synchronized the retained stage worktree and clean control. Completion metadata publication and exact local phase retirement precede Phase 4 |
 | 4 | Not started | No runtime or live acceptance receipt | Codex/physical deployment unvalidated | Reuses the retained Stage 40 worktree through final closeout |
