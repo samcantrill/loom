@@ -13,6 +13,7 @@ from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 import io
 from time import monotonic, sleep
+from typing import Any
 
 import pytest
 
@@ -34,6 +35,7 @@ from loom.queue import (
     CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
+    LocalDaemonOperation,
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
 )
@@ -63,7 +65,11 @@ from loom.queue.resident_readiness import (
     qualified_resident_profile,
 )
 from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
-from loom.queue._managed_local import AtomResourceProvider, SQLiteAgentJournal
+from loom.queue._managed_local import (
+    AtomResourceProvider,
+    ManagedAssignment,
+    SQLiteAgentJournal,
+)
 from loom.cli.main import main
 
 
@@ -200,6 +206,12 @@ def _cli_result(*arguments: str, expected_exit: int = 0):
     return json.loads(stdout.getvalue())
 
 
+def _result(operation: LocalDaemonOperation) -> Mapping[str, Any]:
+    assert operation.kind == "prepare_run"
+    assert isinstance(operation.result, Mapping)
+    return operation.result
+
+
 def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> None:
     service = _service(tmp_path)
     LocalDaemon.initialize_deployment(service.daemon)
@@ -218,17 +230,17 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> Non
                 completed.to_dict(),
                 daemon._service_error,
             )
-            receipt = completed.result["prepared_run"]
-            assert completed.result["preflight_status"] == "PASS"
-            assert completed.result["report_ref"] is not None
+            receipt = _result(completed)["prepared_run"]
+            assert _result(completed)["preflight_status"] == "PASS"
+            assert _result(completed)["report_ref"] is not None
             assert client.prepare_run(_request()) == completed
             store = LocalRunStore(service.daemon.run_store_root)
             assert (
                 store.read_stage_worker_result(receipt["run_uri"], "produce", attempt=1)
                 is None
             )
-            assert completed.result["preparation_admission_id"] != accepted.operation_id
-            coordinator_id = completed.result["coordinator_id"]
+            assert _result(completed)["preparation_admission_id"] != accepted.operation_id
+            coordinator_id = _result(completed)["coordinator_id"]
         with CoordinatorClient.from_unix_socket(
             service.daemon.endpoint, expected_coordinator_id=coordinator_id
         ) as client:
@@ -263,6 +275,7 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
         authored["resident_profiles"][0].pop("preparation_shared_roots")
         agent_path.write_text(json.dumps(authored))
     else:
+        assert service.daemon.resident_worker_launch_profile is not None
         profile = ResidentProfileDescriptor.from_dict(
             service.daemon.resident_worker_launch_profile.descriptor
         )
@@ -286,6 +299,7 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
     LocalDaemon.initialize_deployment(service.daemon)
     from weave import compose_config
 
+    assert service.daemon.resident_worker_launch_profile is not None
     local_profile = ResidentProfileDescriptor.from_dict(
         service.daemon.resident_worker_launch_profile.descriptor
     )
@@ -313,7 +327,7 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
             operation = client.operation("prepare-1")
             assert operation.state == "pending"
             child = client.admission(
-                operation.result["preparation_admission_id"]
+                _result(operation)["preparation_admission_id"]
             ).admission
             assert child.state.value == "WAITING", child
             with sqlite3.connect(service.daemon.execution_database) as conn:
@@ -370,6 +384,8 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             descriptor=replace(base.descriptor, profile_id="execute-profile"),
         )
     )
+    assert preparer.readiness_result is not None
+    assert executor.readiness_result is not None
     assert preparer.readiness_result.preparation_ready
     assert (
         executor.readiness_result.ok and not executor.readiness_result.preparation_ready
@@ -388,6 +404,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             ),
         )
     )
+    assert incompatible.readiness_result is not None
     assert incompatible.readiness_result.ok
     assert (
         incompatible.descriptor.project_fingerprint
@@ -493,6 +510,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                 tmp_path / f"remote-{certificate}" / "agent",
                 (profile,) if certificate == "agent" else (profile, incompatible),
             )
+            assert agent_config.agent_root is not None
             LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
             agent = LocalDaemonAgentHttpClient(agent_config)
             agents.append(agent)
@@ -616,11 +634,11 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
             prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert prepared.state == "applied", prepared
             child = client.admission(
-                prepared.result["preparation_admission_id"]
+                _result(prepared)["preparation_admission_id"]
             ).admission
             assert child.state.value == "SUCCEEDED"
             assert len(client.admissions().admissions) == 1
-            target_uri = prepared.result["prepared_run"]["run_uri"]
+            target_uri = _result(prepared)["prepared_run"]["run_uri"]
             client.submit(LocalDaemonAdmissionRequest("remote-target", target_uri))
             unavailable = agents[1].wait_for_work(
                 sessions[1].session_id,
@@ -747,7 +765,7 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             assert connection.recv(5) == b"ready"
             operation = client.operation("prepare-1")
             child = client.admission(
-                operation.result["preparation_admission_id"]
+                _result(operation)["preparation_admission_id"]
             ).admission
             assert child.state.value == "ACTIVE"
             assert client.cancel_preparation("prepare-1").state == "pending"
@@ -771,7 +789,7 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
                 client.admission(child.admission_id).admission.state.value
                 == "CANCELLED"
             )
-            assert cancelled.result["prepared_run"] is None
+            assert _result(cancelled)["prepared_run"] is None
             assert (
                 SQLiteAgentJournal(
                     service.daemon.agent_journal, _allow_initialize=False
@@ -806,6 +824,8 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
     agent_path.write_text(json.dumps(authored))
     service = load_coordinator_service_config(config_path)
     LocalDaemon.initialize_deployment(service.daemon)
+    assert service.daemon.resident_worker_launch_profile is not None
+    assert service.daemon.agent_root is not None
     profile = ResidentProfileDescriptor.from_dict(
         service.daemon.resident_worker_launch_profile.descriptor
     )
@@ -857,7 +877,9 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
 
     journal = SQLiteAgentJournal(service.daemon.agent_journal, _allow_initialize=False)
     retained = journal.retained_claim_commands()
-    assert len(retained) == 1 and retained[0].assignment.run_uri == active.run_uri
+    assert len(retained) == 1
+    assert isinstance(retained[0].assignment, ManagedAssignment)
+    assert retained[0].assignment.run_uri == active.run_uri
     worker_files = {
         path: path.read_bytes()
         for path in (
@@ -1109,10 +1131,10 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
             allow_report.set()
         completed = resumed.wait_operation("prepare-1", timeout=25).operation
         assert completed.state == "applied", completed
-        receipt = completed.result["prepared_run"]
-        assert json.loads(store.read_config_snapshot(receipt["run_uri"], "resolved"))[
-            "pipeline"
-        ]["stages"][0]["config"] == {"value": 41}
+        receipt = _result(completed)["prepared_run"]
+        snapshot = store.read_config_snapshot(receipt["run_uri"], "resolved")
+        assert snapshot is not None
+        assert json.loads(snapshot)["pipeline"]["stages"][0]["config"] == {"value": 41}
         with sqlite3.connect(service.daemon.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM managed_admissions").fetchone()[0]
@@ -1135,9 +1157,9 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
             str(
                 tmp_path
                 / "snapshots"
-                / completed.result["input_receipt"]["reference"]["path"]
+                / _result(completed)["input_receipt"]["reference"]["path"]
             ),
-            completed.result["report_ref"]["uri"],
+            _result(completed)["report_ref"]["uri"],
         ):
             decision = assess_local_target_safety(
                 CleanupTargetRef(
@@ -1231,9 +1253,11 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
             # Exercise disagreement at the existing filesystem evidence boundary,
             # using a real committed child rather than a fabricated admission.
             store = LocalRunStore(config.run_store_root)
-            result = store.read_stage_worker_result(
+            stored_result = store.read_stage_worker_result(
                 admission.run_uri, "prepare", attempt=1
             )
+            assert stored_result is not None
+            result: dict[str, Any] = stored_result
             if fault == "worker_result":
                 result["outputs"]["report"]["artifact_id"] = "different-report"
                 store.write_stage_worker_result(
@@ -1252,19 +1276,19 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         daemon.prepare_run(_request(), principal_id="caller")
         failed = daemon.wait_operation("prepare-1", timeout=25).operation
         assert (failed.state, failed.code) == ("failed", code), failed
-        assert failed.result["prepared_run"] is None
+        assert _result(failed)["prepared_run"] is None
         assert not (service.daemon.run_store_root / "target-1").exists()
-        child = daemon._admission(failed.result["preparation_admission_id"])
+        child = daemon._admission(_result(failed)["preparation_admission_id"])
         assert child.state.value == ("FAILED" if fault == "compose" else "SUCCEEDED")
         if fault == "checks":
-            assert failed.result["preflight_status"] == "FAIL"
-            assert failed.result["report_ref"] is not None
+            assert _result(failed)["preflight_status"] == "FAIL"
+            assert _result(failed)["report_ref"] is not None
         if fault == "required_unavailable":
-            assert failed.result["report_ref"] is not None
+            assert _result(failed)["report_ref"] is not None
             assert any(
                 check["status"] == "SKIP"
                 and check["details"].get("applicability") == "required"
-                for check in failed.result["preflight"]["checks"]
+                for check in _result(failed)["preflight"]["checks"]
             )
         assert len(daemon.admissions().admissions) == 1
     finally:
@@ -1304,12 +1328,12 @@ def test_preparation_rejects_other_operation_ids_and_public_child_submission(
             prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert prepared.state == "applied", prepared
             child = client.admission(
-                prepared.result["preparation_admission_id"]
+                _result(prepared)["preparation_admission_id"]
             ).admission
             for request in (
                 LocalDaemonAdmissionRequest("different-queue", child.run_uri),
                 LocalDaemonAdmissionRequest(
-                    child.queue_item_id, prepared.result["prepared_run"]["run_uri"]
+                    child.queue_item_id, _result(prepared)["prepared_run"]["run_uri"]
                 ),
             ):
                 with pytest.raises(CoordinatorClientError) as reserved:
@@ -1336,9 +1360,9 @@ def test_partial_target_is_preserved_as_a_publication_conflict(tmp_path: Path) -
         daemon.prepare_run(_request(), principal_id="caller")
         completed = daemon.wait_operation("prepare-1", timeout=25).operation
         assert (completed.state, completed.code) == ("conflict", "publication_conflict")
-        assert completed.result["preflight_status"] == "PASS"
-        assert completed.result["report_ref"] is not None
-        assert completed.result["prepared_run"] is None
+        assert _result(completed)["preflight_status"] == "PASS"
+        assert _result(completed)["report_ref"] is not None
+        assert _result(completed)["prepared_run"] is None
         assert (sentinel.read_bytes(), sentinel.stat().st_mtime_ns) == before
         assert tuple(target.iterdir()) == (sentinel,)
         assert (
@@ -1425,16 +1449,17 @@ def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_
             completed
         )
         assert len(stable_json_bytes(completed.to_dict())) <= 64 * 1024
-        assert completed.result["preflight_status"] == "PASS"
+        assert _result(completed)["preflight_status"] == "PASS"
         reference = ArtifactRef.from_dict(
-            ensure_plain_data(completed.result["report_ref"])
+            ensure_plain_data(_result(completed)["report_ref"])
         )
         report = LocalArtifactStore(service.daemon.run_store_root).load(reference)
+        assert isinstance(report, dict)
         assert report["preflight"]["status"] == "PASS"
         if large == "preflight":
-            assert completed.result["preflight"] is None
+            assert _result(completed)["preflight"] is None
             assert len(stable_json_bytes(report["preflight"])) > 64 * 1024
-            assert completed.result["prepared_run"] is not None
+            assert _result(completed)["prepared_run"] is not None
         else:
             assert completed.code == "result_too_large"
             assert not (service.daemon.run_store_root / "target-1").exists()

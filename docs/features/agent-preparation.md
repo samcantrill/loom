@@ -349,8 +349,8 @@ execution environment incompatible.
 An outbound agent must also include `preparation-input-v1` in its protected
 `registration.capabilities`, with the same capability allowed for that agent in
 the coordinator's `agent_policy.agents` entry. That declaration qualifies every
-configured resident profile, because the capability belongs to the agent session. Registration refuses
-the capability if any of those environments lacks successful preparation
+configured resident profile, because the capability belongs to the agent session.
+Registration refuses the capability if any of those environments lacks successful preparation
 qualification. Declare compatible existing installations before enabling it;
 the request itself never installs missing modules.
 

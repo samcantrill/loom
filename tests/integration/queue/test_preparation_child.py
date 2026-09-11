@@ -173,6 +173,7 @@ def _child(tmp_path: Path, *, fault: str | None = None):
     plan_data = store.read_plan(child.run_uri)
     assert plan_data is not None
     plan = ExecutionPlan.from_dict(plan_data)
+    assert plan.stage_plans[0].fingerprint is not None
     worker_request = StageWorkerRequest(
         STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         child.run_uri,
@@ -285,6 +286,7 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
     report = LocalArtifactStore(workspace.root / "artifacts").load(
         result.outputs["report"]
     )
+    assert isinstance(report, dict)
     composed, requirements, preflight = decode_preparation_report(
         report, expected=binding
     )
@@ -311,7 +313,9 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
         service, composed, "target-1", execution_requirements=requirements
     )
     store = LocalRunStore(service.daemon.run_store_root)
-    resolved = json.loads(store.read_config_snapshot(receipt.run_uri, "resolved"))
+    snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
+    assert snapshot is not None
+    resolved = json.loads(snapshot)
     assert resolved["pipeline"]["stages"][0]["config"] == {"value": 41}
     assert store.read_recipe_manifest(receipt.run_uri) == tuple(
         report["composition"]["recipe_manifest"]
