@@ -434,7 +434,7 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         receipt = execute()
         assert receipt.worker_result.status is StageStatus.FAILED
         assert receipt.output_commit is None
-        assert receipt.worker_result.failure is not None
+        assert isinstance(receipt.worker_result.failure, ExecutionFailure)
         assert "complete owned-group exit" in receipt.worker_result.failure.message
         assert authority.list_output_commits(run_uri, stage_name="build") == ()
         raw_result = json.loads((agent_root / "assignments" / assignment.assignment_id / "worker-result.json").read_text())
