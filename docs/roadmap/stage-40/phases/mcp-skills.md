@@ -2,18 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 40 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p4-mcp-skills
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 3 merges
+- Base revision: `d9b283b5352b6ab246af30fb9d6f67c51853361b`, published Phase 3 completion metadata.
 - PR target: develop
 - PR title: Stage 40 Coordinator Client, Agent Preparation, And MCP - Phase 4: MCP Tools And Portable Loom Skills
-- Dependencies: Phase 3 remotely merged; shared and staged native contracts validated
+- Dependencies: Phase 3 PR #302 merged at `82ee364bc73856be2f709ff5ac682fc9a4844b27`; metadata published, synchronization passed and both phase branches retired.
 - Workflow path: expanded for assistant mutation/error semantics and dependency isolation
-- Blockers: predecessor pending; no unresolved planning blockers
+- Blockers: none; no refinement needed
 
 ## Objective And Context
 
@@ -399,9 +399,9 @@ reopening coordinator topology, source/profile authority or native result names.
 
 ## Workflow State
 
-- Manager preparation: Phase 4 sequencing approved on 2026-09-10
+- Manager preparation: approved boundaries reconciled against the published predecessor on 2026-09-11; shared start/preflight gates verified the persistent stage worktree and phase branch. No refinement needed.
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: not started
+- Implementation: in progress. One executor is justified by SDK boundary/context isolation; it owns src/loom/mcp and focused MCP unit tests. Manager owns packaging, harness, integration evidence, skills, docs and delivery.
 - Refiner: not needed
 - Pre-submit gate: not run
 - Independent review: required before implementation merge
@@ -418,4 +418,22 @@ reopening coordinator topology, source/profile authority or native result names.
 | Validation-relevant changes after evidence | Not applicable |
 | PR, review, and merge | Pending |
 | Live Codex and physical NAS acceptance | Not run |
-| Residual risk and cleanup | Stage worktree not yet created |
+| Residual risk and cleanup | Persistent stage worktree retained. Physical NAS and live Codex acceptance remain unqualified. |
+
+### Startup and validation selection
+
+The manifest readiness receipt remains applicable. Phase 3 delivers both native
+source modes; its published-base reconciliation retains the intervening execution
+contracts. No new native policy or durable format is required. MCP SDK 2.2.0 is
+the maintained release inspected for this phase; validate its installed public
+API before use. The optional dependency is isolated from native runtime imports.
+
+Coverage follows the adapter boundary: SDK stdio schemas/results/errors, native
+guards and mutation outcomes, capacity/deadlines/closure; daemon fixture journeys
+reuse the existing shared/staged preparation owners. Package checks prove base
+imports and explicit optional entrypoint behavior. Harness checks cover the new
+MCP lane and summary selection. Four relocated skill directories receive behavior
+trials with project-supplied inputs. Run focused checks during implementation,
+then both make validate-pr and make test-summary at the stable tree. Expand for
+changed native transport semantics, missing cross-boundary evidence or failures;
+never infer physical deployment from loopback fixtures.
