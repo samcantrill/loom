@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import sqlite3
 import sys
+import socket
 from threading import Event
 
 import pytest
 
-from loom.coordinator import CoordinatorClient
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 from loom.artifacts import ArtifactRef
 from loom.serialization import ensure_plain_data, stable_json_bytes
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
@@ -33,8 +35,30 @@ from loom.queue import (
 )
 from loom.queue.deployment import load_coordinator_service_config
 from loom.queue.preparation import PreparationSource, PrepareRunRequest
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.managed_local_preparation import prepare_managed_run
+from loom.pipeline.orchestration import ExecutionRequirement
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue._preparation_operations import PreparationNotAccepted
+from loom.queue._remote_stage_execution import (
+    REGULAR_FILE_RELAY_CAPABILITY,
+    REMOTE_EXECUTION_CAPABILITY,
+    ResidentExecutionProfile,
+)
+from loom.queue.agent_session_transport import (
+    AgentTlsClientConfig,
+    AgentTlsServerConfig,
+    LocalDaemonAgentHttpClient,
+    LocalDaemonAgentHttpServer,
+    _resident_provider_descriptors,
+)
+from loom.queue.agent_sessions import AgentOffer, AgentRegistration
+from loom.queue.preparation import PREPARATION_INPUT_CAPABILITY
+from loom.queue.resident_readiness import (
+    ResidentReadinessRequirements,
+    qualified_resident_profile,
+)
+from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -210,6 +234,380 @@ def test_native_unix_prepare_publish_submit_and_reconnect(tmp_path: Path) -> Non
                 store.local_artifact_root(receipt["run_uri"])
             ).load(worker_result.outputs["data"]) == {"value": 41}
     finally:
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("missing", ("capability", "selected_profile"))
+def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordinary_work(
+    tmp_path: Path, missing: str
+) -> None:
+    service = _service(tmp_path)
+    config_path = tmp_path / "coordinator.json"
+    if missing == "capability":
+        agent_path = tmp_path / "agent.json"
+        authored = json.loads(agent_path.read_text())
+        authored["resident_profiles"][0].pop("preparation_shared_roots")
+        agent_path.write_text(json.dumps(authored))
+    else:
+        profile = ResidentProfileDescriptor.from_dict(
+            service.daemon.resident_worker_launch_profile.descriptor
+        )
+        selected = replace(profile, profile_id="selected-remote")
+        authored = json.loads(config_path.read_text())
+        authored["remote_profiles"] = [selected.to_dict()]
+        authored["preparation"]["profiles"]["existing-project"][
+            "resident_profile_id"
+        ] = selected.profile_id
+        config_path.write_text(json.dumps(authored))
+    service = load_coordinator_service_config(config_path)
+    admitted_child = Event()
+
+    class ObservedDaemon(LocalDaemon):
+        def _submit(self, *args, **kwargs):
+            admission = super()._submit(*args, **kwargs)
+            if kwargs.get("preparation_operation_id") is not None:
+                admitted_child.set()
+            return admission
+
+    LocalDaemon.initialize_deployment(service.daemon)
+    from weave import compose_config
+
+    local_profile = ResidentProfileDescriptor.from_dict(
+        service.daemon.resident_worker_launch_profile.descriptor
+    )
+    ordinary = prepare_managed_run(
+        service,
+        compose_config(tmp_path / "projects" / "pipeline.yaml"),
+        "ordinary",
+        execution_requirements={
+            "produce": ExecutionRequirement(
+                local_profile.project_fingerprint,
+                local_profile.environment_fingerprint,
+                local_profile.executor_fingerprint,
+            ),
+        },
+    )
+    daemon = ObservedDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.prepare_run(_request())
+            assert admitted_child.wait(25)
+            daemon.reconcile_once()
+            operation = client.operation("prepare-1")
+            assert operation.state == "pending"
+            child = client.admission(
+                operation.result["preparation_admission_id"]
+            ).admission
+            assert child.state.value == "WAITING", child
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?",
+                        (child.run_uri,),
+                    ).fetchone()[0]
+                    == 0
+                )
+            client.submit(LocalDaemonAdmissionRequest("ordinary", ordinary.run_uri))
+            assert (
+                client.wait("ordinary", timeout_seconds=25).state.value == "SUCCEEDED"
+            )
+            assert client.operation("prepare-1").state == "pending"
+            client.cancel_preparation("prepare-1")
+            assert (
+                client.wait_operation("prepare-1", timeout_seconds=25).operation.state
+                == "cancelled"
+            )
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+def test_https_prepares_on_one_worker_then_executes_on_another(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.queue.agent_session_transport as transport
+
+    _service(tmp_path)
+    credentials = mutual_tls_credentials(tmp_path / "tls")
+    repository = Path(__file__).resolve().parents[3]
+    base = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "prepare-profile", "v1", "project", "environment", "executor"
+        ),
+        repository,
+        Path(sys.executable),
+        readiness_requirements=ResidentReadinessRequirements(
+            imports=("loom", "loom.preparation", "weave")
+        ),
+    )
+    preparer = qualified_resident_profile(
+        replace(
+            base,
+            preparation_shared_roots={"projects": tmp_path / "snapshots"},
+        )
+    )
+    executor = qualified_resident_profile(
+        replace(
+            base,
+            descriptor=replace(base.descriptor, profile_id="execute-profile"),
+        )
+    )
+    assert preparer.readiness_result.preparation_ready
+    assert (
+        executor.readiness_result.ok and not executor.readiness_result.preparation_ready
+    )
+    assert preparer.readiness_identity == executor.readiness_identity
+    ordinary_capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    preparation_capabilities = (*ordinary_capabilities, PREPARATION_INPUT_CAPABILITY)
+    config_path = tmp_path / "coordinator.json"
+    authored = json.loads(config_path.read_text())
+    authored["local_agent"] = None
+    authored["remote_profiles"] = [
+        preparer.descriptor.to_dict(),
+        executor.descriptor.to_dict(),
+    ]
+    authored["preparation"]["profiles"]["existing-project"]["resident_profile_id"] = (
+        preparer.descriptor.profile_id
+    )
+    authored["agent_policy"]["agents"] = [
+        {
+            "credential_id": certificate,
+            "principal_id": agent,
+            "agent_id": agent,
+            "pools": ["default"],
+            "capabilities": list(capabilities),
+            "gpu_devices": [],
+        }
+        for certificate, agent, capabilities in (
+            ("agent", "worker-b", preparation_capabilities),
+            ("other", "worker-c", ordinary_capabilities),
+        )
+    ]
+    authored["agent_policy"]["principals"] = [
+        {"credential_id": "query", "principal_id": "client", "role": "client",
+         "actions": [], "agent_ids": [], "pools": []},
+    ]
+    config_path.write_text(json.dumps(authored))
+    pipeline_path = tmp_path / "projects" / "pipeline.yaml"
+    pipeline = json.loads(pipeline_path.read_text())
+    pipeline["pipeline"]["stages"][0]["placement"] = {"target": "worker-c"}
+    pipeline_path.write_text(json.dumps(pipeline))
+    service = load_coordinator_service_config(config_path)
+    assert service.daemon.agent_root is None
+    assert service.resident_readiness is None
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                certificate_fingerprint(credentials[name].with_suffix(".crt")): name
+                for name in ("agent", "other", "query")
+            },
+        ),
+    )
+    server.start()
+    url = f"https://localhost:{server.port}"
+    connection_path = tmp_path / "client.json"
+    connection_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "loom.coordinator-client",
+                "transport": {
+                    "kind": "https",
+                    "url": url,
+                    "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                    "certificate_path": str(credentials["query"].with_suffix(".crt")),
+                    "private_key_path": str(credentials["query"].with_suffix(".key")),
+                },
+            }
+        )
+    )
+    connection_path.chmod(0o600)
+    agents = []
+    sessions = []
+    try:
+        for profile, certificate, capabilities in (
+            (preparer, "agent", preparation_capabilities),
+            (executor, "other", ordinary_capabilities),
+        ):
+            agent_config = AgentTlsClientConfig(
+                url,
+                credentials["ca"].with_suffix(".crt"),
+                credentials[certificate].with_suffix(".crt"),
+                credentials[certificate].with_suffix(".key"),
+                tmp_path / f"remote-{certificate}" / "agent",
+                (profile,),
+            )
+            LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
+            agent = LocalDaemonAgentHttpClient(agent_config)
+            agents.append(agent)
+            handshake = agent.handshake()
+            registration = AgentRegistration(
+                f"register-{certificate}",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+            if certificate == "other":
+                with pytest.raises(
+                    QueueServiceError, match="preparation qualification"
+                ):
+                    agent.register(
+                        replace(
+                            registration, declared_capabilities=preparation_capabilities
+                        )
+                    )
+                with sqlite3.connect(
+                    agent_config.agent_root / "control.sqlite"
+                ) as conn:
+                    assert (
+                        conn.execute(
+                            "SELECT COUNT(*) FROM agent_registration_intents"
+                        ).fetchone()[0]
+                        == 0
+                    )
+            session = agent.register(registration)
+            sessions.append(session)
+            agent.publish_offer(
+                AgentOffer(
+                    session.session_id,
+                    session.coordinator_epoch,
+                    session.config_revision,
+                    session.inventory_revision,
+                    session.availability_revision,
+                    1,
+                    0,
+                    30,
+                    _resident_provider_descriptors(profile, session.agent_id),
+                    resident_profiles=(profile.descriptor,),
+                ),
+                idempotency_key=f"offer-{certificate}",
+            )
+
+        dropped = Event()
+        reply = transport._Handler._reply
+
+        def drop_accepted_reply(handler, status, value):
+            result = value.get("result")
+            if (
+                isinstance(result, Mapping)
+                and result.get("kind") == "prepare_run"
+                and result.get("operation_id") == "prepare-1"
+                and not dropped.is_set()
+            ):
+                dropped.set()
+                handler.close_connection = True
+                handler.connection.shutdown(socket.SHUT_RDWR)
+                return
+            reply(handler, status, value)
+
+        monkeypatch.setattr(transport._Handler, "_reply", drop_accepted_reply)
+        with CoordinatorClient.from_connection_file(connection_path) as client:
+            description = client.describe_connection()
+            assert description.source_modes == ("shared",)
+            with pytest.raises(CoordinatorClientError) as wrong:
+                client.prepare_run(
+                    _request(), expected_coordinator_id="wrong-coordinator"
+                )
+            assert wrong.value.mutation_outcome == "not_applied"
+            staged = replace(
+                _request(), source=replace(_request().source, mode="staged")
+            )
+            for native in (False, True):
+                with pytest.raises(CoordinatorClientError) as unsupported:
+                    if native:
+                        client._native_call(
+                            "prepare_run",
+                            {"request": staged.to_dict()},
+                            None,
+                            negotiate=False,
+                        )
+                    else:
+                        client.prepare_run(staged)
+                assert unsupported.value.code == "unsupported"
+                assert unsupported.value.mutation_outcome == "not_applied"
+            with sqlite3.connect(service.daemon.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM preparation_operations"
+                    ).fetchone()[0]
+                    == 0
+                )
+            with pytest.raises(CoordinatorClientError) as lost:
+                client.prepare_run(_request())
+            assert dropped.is_set() and lost.value.mutation_outcome == "unknown"
+
+        with CoordinatorClient.from_connection_file(connection_path) as client:
+            replay = client.prepare_run(
+                _request(), expected_coordinator_id=description.coordinator_id
+            )
+            assert replay.operation_id == "prepare-1"
+            result = agents[0].execute_one(
+                sessions[0].session_id,
+                sessions[0].availability_revision,
+                sequence=1,
+                wait_timeout_ms=5000,
+            )
+            assert result["state"] == "RELEASED", result
+            prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            assert prepared.state == "applied", prepared
+            child = client.admission(
+                prepared.result["preparation_admission_id"]
+            ).admission
+            assert child.state.value == "SUCCEEDED"
+            assert len(client.admissions().admissions) == 1
+            target_uri = prepared.result["prepared_run"]["run_uri"]
+            client.submit(LocalDaemonAdmissionRequest("remote-target", target_uri))
+            executed = agents[1].execute_one(
+                sessions[1].session_id,
+                sessions[1].availability_revision,
+                sequence=1,
+                wait_timeout_ms=5000,
+            )
+            assert executed["state"] == "RELEASED", executed
+            assert (
+                client.wait("remote-target", timeout_seconds=25).state.value
+                == "SUCCEEDED"
+            )
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                owners = conn.execute(
+                    "SELECT run_uri, agent_id FROM coordinator_assignments"
+                ).fetchall()
+            assert (child.run_uri, "worker-b") in owners
+            assert (target_uri, "worker-c") in owners
+            assert len(owners) == 2
+            store = LocalRunStore(service.daemon.run_store_root)
+            result = store.read_stage_worker_result(target_uri, "produce", attempt=1)
+            assert result is not None
+            output = StageWorkerResult.from_dict(result).outputs["data"]
+            assert LocalArtifactStore(store.local_artifact_root(target_uri)).load(
+                output
+            ) == {"value": 41}
+    finally:
+        for agent in agents:
+            agent.close()
         server.stop()
         daemon.stop()
 

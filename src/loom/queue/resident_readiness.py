@@ -35,6 +35,14 @@ _INSTALLATION = r"""
 import contextlib, hashlib, importlib, importlib.metadata, json, os, pathlib, shutil, sys, urllib.parse
 request = json.loads(sys.argv[1])
 result = {"protocol": "loom.resident-installation.v1", "imports": {}, "distributions": {}, "sources": [], "environment": {}, "programs": {}, "lockfile": None}
+if request.get("preparation", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.preparation import PreparationStage
+            from weave import compose_config
+        result["preparation_available"] = callable(PreparationStage) and callable(compose_config)
+    except Exception:
+        result["preparation_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -144,6 +152,9 @@ class ResidentReadinessRequirements:
     Import roots assert the expected location without adding absolute paths to
     portable identity. Declared distributions alone require presence; entries in
     distribution_versions additionally require an exact installed version.
+    ``preparation`` also imports Loom's preparation stage and configuration loader
+    in the selected Python. A shared preparation mapping requests the same check.
+    This qualification does not add members to portable software fingerprints.
     """
 
     imports: tuple[str, ...] = ("loom",)
@@ -158,8 +169,11 @@ class ResidentReadinessRequirements:
     required_environment: tuple[str, ...] = ()
     required_programs: tuple[str, ...] = ()
     lockfile: str = "uv.lock"
+    preparation: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.preparation) is not bool:
+            raise ValueError("resident preparation requirement must be boolean")
         for values in (
             self.imports,
             self.distributions,
@@ -238,6 +252,15 @@ class ResidentReadinessResult:
             check.status is PreflightCheckStatus.FAIL for check in self.checks
         )
 
+    @property
+    def preparation_ready(self) -> bool:
+        """Whether this observation qualified the installed preparation entrypoints."""
+        return self.ok and any(
+            check.check_id == "packages.preparation_imports"
+            and check.status is PreflightCheckStatus.PASS
+            for check in self.checks
+        )
+
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "ok": self.ok,
@@ -266,6 +289,7 @@ def qualify_resident_profile(
     """
 
     requirements = profile.readiness_requirements
+    preparation = requirements.preparation or bool(profile.preparation_shared_roots)
     checks: list[PreflightCheckResult] = []
 
     def add(
@@ -388,6 +412,8 @@ def qualify_resident_profile(
         "required_programs": list(requirements.required_programs),
         "lockfile": str(profile.project_root / requirements.lockfile),
     }
+    if preparation:
+        request["preparation"] = True
     response = run_resident_probe(
         profile.launch_profile,
         _INSTALLATION,
@@ -414,6 +440,17 @@ def qualify_resident_profile(
         )
         return ResidentReadinessResult(tuple(checks), None)
     assert observed is not None
+    if preparation:
+        available = observed.get("preparation_available") is True
+        add(
+            "packages.preparation_imports",
+            PreflightGroup.PACKAGES,
+            available,
+            "Selected Python imports the installed preparation stage and config loader."
+            if available
+            else "The preparation stage or config loader is unavailable in the selected Python.",
+            "Install compatible Loom with its config extra in the existing environment before enabling preparation.",
+        )
     imports = cast(Mapping[str, Mapping[str, object]], observed["imports"])
     distributions = cast(
         Mapping[str, Mapping[str, object] | None], observed["distributions"]

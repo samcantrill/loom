@@ -26,7 +26,7 @@ from loom.scheduling import (
     SchedulingComponentDescriptor,
     SchedulingLimits,
 )
-from loom.serialization import PlainData, stable_json_dumps
+from loom.serialization import PlainData, stable_json_dumps, thaw_plain_data
 
 from .scheduling_resources import scheduling_entry_view
 from .resource_policy import ResourcePolicy, coerce_resource_policy
@@ -601,7 +601,7 @@ def _hard_spec_data(spec: HardConstraintSpec) -> dict[str, PlainData]:
     return {
         "identifier": spec.identifier,
         "evaluator": spec.evaluator,
-        "data": dict(spec.data),
+        "data": thaw_plain_data(spec.data, path="HardConstraintSpec.data"),
         "descriptor": spec.descriptor.to_dict(),
     }
 

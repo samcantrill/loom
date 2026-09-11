@@ -2254,9 +2254,11 @@ def test_preparation_policy_refuses_invalid_protected_selection(
 
 
 @pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.optional_dependency
 def test_preparation_worker_mapping_preserves_software_identity_and_binds_private_launch(
     tmp_path: Path, role: str
 ) -> None:
+    pytest.importorskip("weave")
     source = (
         _coordinator_config(tmp_path)
         if role == "coordinator"
@@ -2295,6 +2297,8 @@ def test_preparation_worker_mapping_preserves_software_identity_and_binds_privat
         current_profile = configured.client.resident_profiles[0]
         old_profile = original.client.resident_profiles[0]
     assert current_profile.descriptor == old_profile.descriptor
+    assert current_profile.readiness_result is not None
+    assert current_profile.readiness_result.preparation_ready
     assert (
         current_profile.launch_profile.fingerprint
         != old_profile.launch_profile.fingerprint

@@ -511,6 +511,30 @@ This lets source/profile policy change while accepted preparation retains the
 original component instances, rather than attempting to replace them with newly
 constructed objects carrying the same descriptors.
 
+Preparation qualification stays at resident readiness. A nonempty protected
+shared-root mapping, explicit `readiness.preparation: true`, or an outbound
+`preparation-input-v1` declaration requests actual imports of
+`loom.preparation.PreparationStage` and `weave.compose_config` in the selected
+Python. The separate `packages.preparation_imports` finding does not change the
+declared inputs to portable software fingerprints. Outbound registration checks
+that all its configured profiles have this qualification before persisting a
+registration intent advertising the session-wide capability. The local daemon
+uses its existing readiness result; it adds no field to retained worker records.
+
+Runtime compilation recognizes the fixed preparation factory and adds an existing
+attribute hard constraint with the full selected profile descriptor fingerprint
+and `preparation-input-v1`. The normal scheduling kernel evaluates it against
+local readiness or the remote registered capability and offered profile. Target
+publication uses ordinary per-stage software requirements and authored placement,
+so preparation-only constraints do not follow the target onto another worker.
+The native remote-delivery boundary rechecks the capability before writing a
+delivery. Old workers can still receive ordinary compatible jobs.
+
+The existing resolved-placement serializer converts nested immutable hard
+constraint data into plain JSON values before durable stage-work storage. This
+preserves the existing schema and canonical fingerprint while allowing the
+attribute constraint to survive SQLite storage and reopening.
+
 Authoring remains project work. An editor or project automation writes the
 configuration into storage visible to coordinator A. `source.root/path/include`
 then select those files; the native request is neither a remote editing command
@@ -801,7 +825,7 @@ The manager owns startup reconciliation and any changed public/durable decision.
 
 - Manager preparation: startup verified on 2026-09-11; approved boundaries and current owners reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: manager owns continuation after the partial executor foundation; coordinator lifecycle, native child/report joins, bounded publication and cleanup retention are integrated; dispatch qualification and remaining phase acceptance coverage are in progress
+- Implementation: manager owns continuation after the partial executor foundation; coordinator lifecycle, native child/report joins, bounded publication, cleanup retention and qualified exact-profile dispatch are integrated. The actual HTTPS prepare-on-B/execute-on-C journey passes; remaining phase acceptance coverage is in progress
 - Named profile/capability discovery: optional explorer returned unavailable after empty tool output; no evidence was used, and the manager owns the remaining local investigation
 - Refiner: not needed
 - Pre-submit gate: not run
@@ -820,5 +844,7 @@ The manager owns startup reconciliation and any changed public/durable decision.
 | Validation-relevant changes after evidence | A manifest-list type annotation was corrected after the 104-test run; full Pyright then passed with zero errors (`/tmp/loom-stage40-p2-pyright.log`). The executor's GPU placement timeout did not reproduce in the manager's exact integration rerun (`test_gpu_model_preference_selects_exact_private_local_or_remote_binding[False]`: 1 passed; `/tmp/loom-stage40-p2-gpu-placement.log`). Subsequent safe-identity handling preserves aliases as data, including aliases named environment/private_key: 12 affected preparation policy/mapping cases and affected Pyright passed (`/tmp/loom-stage40-p2-policy-identity.log`, `/tmp/loom-stage40-p2-policy-identity-pyright.log`). Source disappearance between selection and first open now reports source_changed; all 19 preparation cases, affected Pyright and Ruff passed (`/tmp/loom-stage40-p2-source-open.log`, `/tmp/loom-stage40-p2-source-open-pyright.log`). Child/report continuation on `a91500f`: 48 cases passed across integration `queue/test_preparation_child.py`, unit queue `test_resident_stage_worker.py`, `test_remote_stage_execution.py`, `test_managed_local_preparation.py` and diagnostics `test_diagnostics_models.py`, using the locked config-extra environment (`/tmp/loom-stage40-p2-child-boundaries.log`). Affected source Pyright reports zero errors (`/tmp/loom-stage40-p2-child-pyright.log`); affected Ruff and diff checks pass. Only documentation changed afterward. Required final integration/full gates remain outstanding. |
 | Documentation checks | Added relative links/anchors resolve; 20 shell blocks parse, the Python example parses, both JSON requests round-trip through the native request model, and the two YAML examples parse. Protected policy and complete native journey examples must be checked against the finished lifecycle before delivery. |
 | Lifecycle continuation evidence | Working tree based on `70fde44a268cb32b00ae0eb2557509940b8de99c`: all 11 actual lifecycle integration cases pass in the locked isolated config-extra environment (`/tmp/loom-stage40-p2-lifecycle-recovery-final.log`). The earlier expanded selection passed 65 cases across preparation, upgrade, native client and cleanup owners; its four reload/restart failures are superseded by the final integration receipt (`/tmp/loom-stage40-p2-lifecycle-expanded.log`). Three additional loader/readiness/retained-component checks passed in `/tmp/loom-stage40-p2-lifecycle-retained-reload.log`; that run's lost-admission failure is also superseded. Affected source Pyright reports zero errors in `/tmp/loom-stage40-p2-lifecycle-current-pyright.log`, `/tmp/loom-stage40-p2-lifecycle-reload-pyright.log` and `/tmp/loom-stage40-p2-lifecycle-dispatch-pyright.log`. Affected Ruff and diff checks pass. These establish selected local lifecycle/reload evidence, not either final phase gate or remote deployment acceptance. |
+| Qualification and dispatch evidence | Working tree based on `769750962f08fbc820bb6b395062aeb9675e3d83`: selected actual-Python readiness and protected role loading pass 84 baseline cases in a locked isolated environment (`/tmp/loom-stage40-p2-qualification-baseline.log`). Five config-extra readiness/policy cases passed in `/tmp/loom-stage40-p2-qualification-config.log`; that run's interrupted lifecycle failures exposed nested immutable constraint serialization, fixed at resolved placement. All 13 local lifecycle cases then passed (`/tmp/loom-stage40-p2-qualification-lifecycle-fixed.log`), including missing capability/exact-profile refusal while ordinary work runs. All 39 stage-work storage/reopen and remote assignment cases passed (`/tmp/loom-stage40-p2-qualification-native-boundaries.log`), including capability refusal before delivery mutation. Affected source Pyright reports zero errors (`/tmp/loom-stage40-p2-qualification-current-pyright.log`); affected Ruff and diff checks pass. |
+| HTTPS worker journey | The additional `test_https_prepares_on_one_worker_then_executes_on_another` passes in the locked isolated config-extra environment (`/tmp/loom-stage40-p2-https-two-workers.log`). A protected pure coordinator has no local worker/readiness environment. Two actual mTLS agents use separately owned roots; B qualifies preparation and C has matching portable software identity with a different profile ID and no preparation capability. A dropped acceptance reply reconnects/replays the same operation; wrong-coordinator and unsupported staged requests make no reservation. C cannot advertise unqualified preparation, with no registration journal write. B commits the preparation report, no target is auto-submitted, and explicit submission executes on C with the expected native artifact. Native assignment records prove both worker owners. This is loopback process evidence, not physical fleet/NAS qualification. |
 | PR, review, and merge | Pending; required independent review and both full phase commands have not run. |
-| Residual risk and cleanup | Phase 2 remains incomplete. Actual preparation-module qualification/capability and exact-profile dispatch eligibility, the HTTPS/CLI and prepare-on-B/execute-on-C journeys, running-child cancellation/release proof and remaining accepted negative-boundary cases still require completion. Upgrade storage tests do not replace the required retained-admission/worker-journal integration case. Both full gates and independent actual-PR review remain outstanding. Persistent Stage 40 worktree retained; no real roots upgraded. |
+| Residual risk and cleanup | Phase 2 remains incomplete. CLI journeys through both connection options, running-child cancellation/release proof and remaining accepted negative-boundary cases still require completion. Upgrade storage tests do not replace the required retained-admission/worker-journal integration case. Both full gates and independent actual-PR review remain outstanding. Persistent Stage 40 worktree retained; no real roots upgraded. |

@@ -4232,6 +4232,8 @@ class LocalDaemonExecution:
         return settling
 
     def _candidate(self) -> Candidate:
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
         inventory: dict[str, ResourceInventoryEnvelope] = {}
         availability: dict[str, ResourceAvailabilityEnvelope] = {}
         for kind, provider in self.providers.items():
@@ -4276,10 +4278,21 @@ class LocalDaemonExecution:
                 data=data,
                 atoms=observed.atoms,
             )
+        profile = self.config.resident_worker_launch_profile
+        attributes: dict[str, PlainData] = {}
+        if profile is not None:
+            attributes["resident_profile_fingerprint"] = (
+                ResidentProfileDescriptor.from_dict(profile.descriptor).fingerprint
+            )
+            if self.config.resident_preparation_ready:
+                attributes["preparation_input_capability"] = (
+                    PREPARATION_INPUT_CAPABILITY
+                )
         return Candidate(
             self.config.machine_id,
             inventory,
             availability,
+            attributes=attributes,
         )
 
     def preparation_scheduling_components(
@@ -4320,6 +4333,8 @@ class LocalDaemonExecution:
     def _remote_candidates(
         self,
     ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
         if not self.config.remote_profiles:
             return {}
         accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
@@ -4331,7 +4346,7 @@ class LocalDaemonExecution:
             rows = tuple(
                 conn.execute(
                     "SELECT o.offer_id, o.offer_json, o.expires_at, "
-                    "s.agent_id, s.session_id, r.observed_claim_ids_json "
+                    "s.agent_id, s.session_id, s.capabilities_json, r.observed_claim_ids_json "
                     "FROM agent_offers o "
                     "JOIN agent_sessions s ON s.session_id = o.session_id "
                     "LEFT JOIN session_replacements r "
@@ -4509,6 +4524,14 @@ class LocalDaemonExecution:
                         "resident_environment_fingerprint": profile.environment_fingerprint,
                         "resident_executor_fingerprint": profile.executor_fingerprint,
                         "artifact_capability": "regular-file-relay-v1",
+                        **(
+                            {
+                                "preparation_input_capability": PREPARATION_INPUT_CAPABILITY
+                            }
+                            if PREPARATION_INPUT_CAPABILITY
+                            in json.loads(str(row["capabilities_json"]))
+                            else {}
+                        ),
                     },
                     pool_names=offer.pools,
                 )

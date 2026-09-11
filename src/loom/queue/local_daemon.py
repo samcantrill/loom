@@ -668,6 +668,7 @@ class LocalDaemonConfig:
     coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
     gpu_occupancy_policy: GpuOccupancyPolicy | None = None
     preparation_policy: PreparationPolicy | None = None
+    resident_preparation_ready: bool = False
 
     @property
     def preparation_enabled(self) -> bool:
@@ -677,6 +678,8 @@ class LocalDaemonConfig:
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
+        if type(self.resident_preparation_ready) is not bool:
+            raise QueueServiceError("resident preparation readiness must be boolean")
         if self.preparation_policy is not None and not isinstance(
             self.preparation_policy, PreparationPolicy
         ):
@@ -4733,6 +4736,11 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
     if config.active_configuration_fingerprint is not None:
         return config.active_configuration_fingerprint
     payload = {
+        **(
+            {"resident_preparation_ready": True}
+            if config.resident_preparation_ready
+            else {}
+        ),
         "machine_id": config.machine_id,
         "cpu_capacity": config.cpu_capacity,
         "memory_capacity_bytes": config.memory_capacity_bytes,

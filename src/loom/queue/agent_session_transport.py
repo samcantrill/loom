@@ -2424,6 +2424,19 @@ class LocalDaemonAgentHttpClient:
         return result
 
     def register(self, request: AgentRegistration) -> AgentSession:
+        from .preparation import PREPARATION_INPUT_CAPABILITY
+
+        if PREPARATION_INPUT_CAPABILITY in request.declared_capabilities and (
+            not self._profiles
+            or any(
+                profile.readiness_result is None
+                or not profile.readiness_result.preparation_ready
+                for profile in self._profiles.values()
+            )
+        ):
+            raise QueueServiceError(
+                "preparation-input-v1 requires preparation qualification in each advertised resident environment"
+            )
         journal = self._require_journal()
         persisted = journal.persist_registration_intent(request)
         session = _session_from_value(self._call("register", persisted.value()))

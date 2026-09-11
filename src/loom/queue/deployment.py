@@ -61,6 +61,7 @@ from .resident_readiness import (
 )
 from .gpu.occupancy import GpuOccupancyPolicy
 from ._preparation_policy import PreparationPolicy, load_preparation_policy
+from .preparation import PREPARATION_INPUT_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +350,11 @@ def load_coordinator_service_config(
         if local_agent is None
         else local_agent.gpu_occupancy_policy,
         preparation_policy=preparation_policy,
+        resident_preparation_ready=(
+            local_agent is not None
+            and local_agent.profile.readiness_result is not None
+            and local_agent.profile.readiness_result.preparation_ready
+        ),
     )
     return CoordinatorServiceConfig(
         daemon,
@@ -397,12 +403,16 @@ def load_outbound_agent_service_config(
     _header(payload, "loom.outbound-agent-service")
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
+    preparation = PREPARATION_INPUT_CAPABILITY in _strings(
+        _mapping(payload, "registration"), "capabilities", non_empty=True
+    )
     profiles = tuple(
         _resident_profile(
             _mapping_value(value, f"resident_profiles[{index}]"),
             base,
             f"resident_profiles[{index}]",
             allow_unready=_allow_unready,
+            preparation=preparation,
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
@@ -1464,6 +1474,7 @@ def _resident_profile(
     label: str,
     *,
     allow_unready: bool = False,
+    preparation: bool = False,
 ) -> ResidentExecutionProfile:
     _required_allowed(
         value,
@@ -1497,6 +1508,8 @@ def _resident_profile(
     if any(not isinstance(item, str) for item in environment.values()):
         raise QueueConfigError(f"{label}.environment values must be strings")
     requirements = _resident_readiness_requirements(value.get("readiness"))
+    if preparation:
+        requirements = replace(requirements, preparation=True)
     profile = ResidentExecutionProfile(
         _resident_descriptor_declaration(_mapping(value, "descriptor")),
         _path(value, "project_root", base),
@@ -1545,7 +1558,10 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
     _required_allowed(
         readiness,
         set(),
-        sequence_fields | mapping_fields | string_fields | {"timeout_seconds"},
+        sequence_fields
+        | mapping_fields
+        | string_fields
+        | {"timeout_seconds", "preparation"},
         "resident readiness",
     )
     fields: dict[str, Any] = {}
@@ -1562,6 +1578,8 @@ def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirem
         fields[name] = _string(readiness, name)
     if "timeout_seconds" in readiness:
         fields["timeout_seconds"] = _positive_number(readiness, "timeout_seconds")
+    if "preparation" in readiness:
+        fields["preparation"] = readiness["preparation"]
     try:
         return ResidentReadinessRequirements(**fields)
     except ValueError as exc:

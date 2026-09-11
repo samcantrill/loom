@@ -321,6 +321,29 @@ capability or profile they lack. The coordinator advertises
 `agent-preparation-v1` and safe source/profile aliases only when the capability
 is installed and enabled. This describes support, not a capacity reservation.
 
+A nonempty `preparation_shared_roots` mapping requests a bounded import check for
+`loom.preparation.PreparationStage` and `weave.compose_config` in the profile's
+selected Python. `readiness.preparation: true` requests the same check explicitly.
+Its finding is `packages.preparation_imports`; it does not compose a project or
+change the declared members used to calculate portable software fingerprints.
+Adding a shared-root mapping alone therefore does not make a previously compatible
+execution environment incompatible.
+
+An outbound agent must also include `preparation-input-v1` in its protected
+`registration.capabilities`. That declaration qualifies every configured resident
+profile, because the capability belongs to the agent session. Registration refuses
+the capability if any of those environments lacks successful preparation
+qualification. Declare compatible existing installations before enabling it;
+the request itself never installs missing modules.
+
+The preparation child's native placement includes the selected profile's full
+descriptor fingerprint and preparation capability as hard constraints. A different
+profile with the same software fingerprints cannot take that child. A worker
+without the capability remains eligible for ordinary compatible jobs, so waiting
+preparation does not prevent other work from running. Published target stages
+retain their normal software requirements and authored placement; they do not
+inherit the child's preparation-only constraints.
+
 For an existing coordinator root at schema 12, follow the explicit
 [offline upgrade procedure](../downstream-operations.md#upgrade-a-retained-coordinator-root)
 before restarting with schema 13. Worker roots and journals stay at schema 12.

@@ -811,6 +811,35 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         request = _request(profile)
         input_path = tmp_path / "input.data"
         input_path.write_bytes(b"input")
+        binding = PreparationChildInput(
+            "prepare-1", "existing", "configs/pipeline.yaml",
+            SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+            profile.descriptor.to_dict(),
+        )
+        fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+        preparation = replace(
+            request,
+            fingerprint=StageFingerprintRecord.create(
+                algorithm=fingerprint.algorithm,
+                payload=replace(
+                    fingerprint.payload,
+                    factory_target=PREPARATION_STAGE_TARGET,
+                    stage_config=binding.to_dict(),
+                ),
+                inputs_summary=fingerprint.inputs_summary,
+            ).to_dict(),
+        )
+        with pytest.raises(QueueServiceError, match="lacks preparation-input-v1"):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=preparation,
+                run_uri="file:///coordinator/run",
+                input_paths={"input-1": input_path},
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
         with pytest.raises(QueueServiceError, match="path-bearing"):
             _target_remote_delivery(
                 daemon,

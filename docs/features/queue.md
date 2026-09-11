@@ -843,9 +843,11 @@ group/other permission bits.
 
 Initialization uses fresh roots and retains the resolved role and private launch
 binding. Start and explicit reload check compatibility before offering more
-work. Populated older roots are not migrated or reinterpreted. Keep an existing
-deployment on its compatible runtime until its work settles, then deliberately
-initialize the replacement.
+work. Startup does not migrate or reinterpret populated older roots. The explicit
+[coordinator schema-12 upgrade](../downstream-operations.md#upgrade-a-retained-coordinator-root)
+preserves existing work and worker roots while enabling preparation storage.
+Other incompatible roots stay on their compatible runtime until work settles,
+before deliberately initializing a replacement.
 
 ### Resident installation checks
 
@@ -895,6 +897,14 @@ it is not a dependency resolver or a version-range language.
 `import_roots` asserts that a declared import comes from the expected private
 directory. Merely importing a same-named package elsewhere does not satisfy
 that assertion. Source and import roots resolve against `project_root`.
+
+`readiness.preparation: true` additionally checks Loom's preparation stage and
+Weave's configuration loader in the selected Python. A nonempty
+`preparation_shared_roots` mapping or outbound `preparation-input-v1` capability
+requests this check automatically. It reports `packages.preparation_imports`
+without adding imports to the portable software fingerprint declaration. See
+[preparation rollout](agent-preparation.md#operator-configuration-and-rollout)
+for profile and capability selection.
 
 First the selected executable must answer a fixed stdlib handshake; only then
 does another bounded process import the declared packages and inspect metadata.
