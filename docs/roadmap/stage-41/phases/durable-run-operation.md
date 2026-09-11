@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p2-durable-run-operation
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 1 merges; record exact SHA at execution preparation
+- Base revision: `383e9d473f479516db892f135693dd282100d526` (published Phase 1 completion metadata after PR 308)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 2: Durable Run Operation
 - Dependencies: Phase 1 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 1 merged, metadata published and stage/control/live develop synchronized
 
 ## Objective And Context
 
@@ -28,6 +28,7 @@ Validation ownership: VAL-41-01 (persistent run), VAL-41-05 (run cancellation).
 ## Current Source And Harness
 
 - Published Stage 40 `src/loom/coordinator.py`, PrepareRunRequest, LocalDaemonOperation, Unix/HTTPS codecs and expected-coordinator guard.
+- Shared native call/validation/dispatch owners remain `src/loom/queue/_coordinator_client.py` and `_coordinator_control.py`, with `local_daemon_transport.py` and `agent_session_transport.py` providing Unix/HTTPS transport. Keep diagnostics-dependent observation above queue in `loom.coordinator`.
 - `src/loom/queue/_preparation_operations.py`, `local_daemon.py`: dedicated preparation table, reconciliation, operation projection and target admission. Published submit also accepts an explicit `retry_failed_revision`; default replay cannot retry failed work.
 - `src/loom/diagnostics/run_inspection.py`: native execution/settlement observation, bounded evidence and failure projection.
 - Existing agent-session transport, managed preparation, daemon production and CLI/native receipt tests; proposed `tests/contracts/test_unified_run_contract.py` covers the new operation.
@@ -301,9 +302,36 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on 2026-09-12 in the manifest's persistent stage
+  worktree and this card's phase branch. Phase 1 PR 308 merged as
+  `c133d1798a73d3a4e8903527aa813a70b7659091`; completion metadata published as
+  the Base revision above. The shared synchronization gate verified stage,
+  local develop, fetched origin/develop and advertised develop equality. Both
+  exact Phase 1 branch refs were retired after verification; unrelated checkouts
+  were preserved. Successor `start` and `preflight` passed on a clean worktree.
+- Source reconciliation: Phase 1 now supplies immutable invocation controls,
+  selected-owner recovery and PLANNED publication. The existing dedicated
+  preparation table/projections, native client/control dispatch, query/wait and
+  admission/cancellation owners remain as assumed by this card. Its listed
+  existing test paths are present; the unified-run contract suite is new work.
+  Root version 14 is the published predecessor; any required durable format
+  change must use the existing incompatible-root refusal rule.
+- Named refinement: none needed. Reuse the independent readiness receipt;
+  accepted run/cancel identities, serialized ownership, projection budget,
+  persistent-service boundary and all required checks remain unchanged.
+- Coverage selection: native request/codec/authorization and bounded projections;
+  deterministic publication/admission/cancellation crash orderings; retained
+  exact admission and no implicit failed-admission retry; persistent two-stage
+  execution and observation through both transports. Reuse the existing
+  preparation, coordinator-client, admission and transport fixtures. Expand
+  only for relevant failures, newly affected consumers or unresolved accepted
+  coverage; both `make validate-pr` and `make test-summary` remain required.
+- Execution delegation: one executor is justified by the coupled durable
+  acceptance/continuation/cancellation and transport/observation changes.
+  The manager retains pre-submit acceptance, PR/review/delivery and manifest
+  ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: in progress under the approved whole-stage execution request
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable continuation and cancellation boundary
