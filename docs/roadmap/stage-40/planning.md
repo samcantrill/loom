@@ -1,6 +1,6 @@
 # Roadmap Stage 40 Planning: Coordinator Client, Agent Preparation, And MCP
 
-Status: approved design; implementation delivery tracked in the manifest
+Status: approved design; all four implementation phases merged into develop
 Roadmap stage: 40
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-85-control` at
 `382065646608f4f19fed17a6fc0ecc9fce4a6e3f`, branch `agent/loom-mcp-plan`.
@@ -8,7 +8,7 @@ Relevant dirty paths on entry: `README.md` and the untracked
 `docs/briefs/mcp-implementation-plan.md`, both earlier work for this request.
 Planning route: expanded, for a public client, durable preparation, authenticated
 filesystem access, publication/cancellation races, and retained-root migration.
-Current gate: planning/startup complete; Phases 1–3 delivered and Phase 4 locally validated, with PR review pending
+Current gate: implementation delivered; validation, review and release limitations recorded in the manifest
 Blockers: none.
 Maintainer approval: Stage 40 behavior and four-phase delivery approved on 2026-09-10.
 
@@ -312,7 +312,7 @@ receipts govern those release claims. No scientific/GPU/SLURM run is needed.
 | 1 | Python/CLI direct coordinator control on either transport | Client, compatible transport/CLI migration; preparation excluded | Published develop | Parity, roles, waits, legacy behavior | merged |
 | 2 | Complete native preparation through shared storage and target execution | Common operation/report, shared capture, diagnostics, profiles, upgrade/publication and cancellation; staged delivery excluded | Phase 1 merged | Local/remote shared workers, restart/cancel, retained roots, target consumption, staged refused before mutation | merged |
 | 3 | Same preparation lifecycle with transferred inputs | Archive capture, native relay/extraction, staged support and boundary validation; shared lifecycle reused | Phase 2 merged | Disjoint-root worker, archive/transfer limits, staged recovery/cancel, unchanged shared state | merged |
-| 4 | Codex tools and portable skills over both native modes | Optional adapter, skills, docs, SDK lane | Phase 3 merged | Real stdio workflow and distinct live acceptance | locally validated; PR review pending |
+| 4 | Codex tools and portable skills over both native modes | Optional adapter, skills, docs, SDK lane | Phase 3 merged | Real stdio workflow and distinct live acceptance | merged; live deployment limitations recorded |
 
 The approved four-phase shape isolates archive/relay/extraction as a complete
 second input mode after shared-NAS preparation works. This justifies one phase
@@ -346,8 +346,10 @@ correction and manifest/card consistency. The maintainer approved the final
 Stage 40 behavior and four-phase delivery on 2026-09-10. The revised delivery
 boundaries passed focused independent plan/startup review with no blockers,
 optional concerns or required correction. The manifest records the verified base,
-documentation checks and next pending phase; common architecture remains intact.
-Implementation awaits a separate execution instruction.
+documentation checks and completed delivery; common architecture remains intact.
+All four implementation PRs are merged with passing required local gates and
+independent review. Live Codex and physical NAS acceptance remain unqualified,
+as recorded in the manifest and Phase 4 card.
 Accepted risks: finite installation observations/input closure, retained evidence
 space, partial-publication conflicts and deployment-wide client policy.
 
@@ -360,4 +362,4 @@ space, partial-publication conflicts and deployment-wide client policy.
 | Large projects/datasets and mixed preparation environments | Deferred | Current relay/profile contracts are finite | Concrete unsupported project need |
 | Local laptop authoring upload | Deferred; author on coordinator or shared storage | Direct connection is not a file editor/uploader | Accepted remote authoring requirement |
 | Hosted MCP, plugin bundle, per-project ACLs | Deferred | Initial stdio/native authorization meets current workflow | Distribution/security requirement |
-| Runtime implementation | Plan approved; await execution instruction | This workflow is planning-only | Implementation request |
+| Live Codex and physical NAS qualification | Code implementation delivered; deployment trials remain unqualified | Automated SDK/loopback evidence does not prove these deployments | Configured live Codex session and selected physical synthetic deployment |

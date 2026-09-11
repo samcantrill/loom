@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 40 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-40-p4-mcp-skills
@@ -402,12 +402,12 @@ reopening coordinator topology, source/profile authority or native result names.
 
 - Manager preparation: approved boundaries reconciled against the published predecessor on 2026-09-11; shared start/preflight gates verified the persistent stage worktree and phase branch. No refinement needed.
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: complete; executor ownership has returned. Manager completed the native/SDK boundary corrections, packaging/harness lane, real stdio contracts and daemon journeys, four skills, documentation and relocated behavior trials. Both required full gates pass; PR review and delivery remain.
+- Implementation: complete and merged; executor ownership has returned. Manager completed the native/SDK boundary corrections, packaging/harness lane, real stdio contracts and daemon journeys, four skills, documentation and relocated behavior trials. Both required full gates and independent review pass.
 - Refiner: not needed
 - Pre-submit gate: passed; accepted scope, native ownership, both required full gates, optional dependency isolation, documentation, skill trials and committed diff are reconciled.
-- Independent review: required before implementation merge
+- Independent review: passed at `67c68f38a2c241b4b56816f585163aabb7fc6c55`; the required independent phase reviewer found no product blockers, localized corrections, workflow issues or additional acceptance requirements. Review verified the actual PR identity, native/MCP contracts, skills, dependency isolation and current evidence.
 - Blocker corrections: 3/3. Correction 1 (`ed0c935`) releases successful calls and shares one absolute native deadline; seven focused unit cases pass. Correction 2 uses Loom plain-data conversion before SDK serialization: real stdio preparation exposed frozen MappingProxyType evidence in native operation results. The same projection correction selects summary fields from native envelopes and shows the report reference URI without interpreting project details as lifecycle state. Correction 3 preserves raw source keys until native decoding: the SDK TypedDict normalization silently removed an unsupported exclude field. Source discovery now derives from the native dataclass schema while native decoding receives the complete dictionary and refuses unsupported intent before dispatch. All affected SDK contract/integration cases pass; all seven adapter units pass after the schema assertion update. Both required full gates pass.
-- PR and merge: #304 open; canonical title, branch, non-draft state and develop target verified. Independent review of the published head is next.
+- PR and merge: #304 merged into develop at `31f4310e18d56ece4969bc2df2bfd42c707f37c1` on 2026-09-11T12:00:35Z. The delivery helper verified the remote merge at the reviewed head and retired the matching remote phase branch. Transition returned the retained stage worktree to coordination and synchronized published state.
 
 ## Completion Record
 
@@ -417,9 +417,9 @@ reopening coordinator topology, source/profile authority or native result names.
 | Tests added or updated | All 36 MCP cases pass: 21 contract mappings/schema/result/error cases, eight real SDK stdio/native daemon cases and seven adapter units. Package tests cover explicit no-extra failure and native import isolation; harness tests cover marker selection and isolated dependency commands. |
 | Validated revision/tree state and evidence | Both required gates ran at clean `b675257aa20f4e0b16f3fe12f887fbe6a03ea3bd`. make validate-pr passed: Ruff/Pyright zero errors; 3,284 baseline, 213 config-extra and 36 MCP tests passed; wheel and source distribution built. make test-summary passed: 3,535 tests, zero failures/errors, 18 existing opt-in container skips. Logs: /tmp/loom-stage40-p4-validate-pr.log and /tmp/loom-stage40-p4-test-summary.log; summary: build/test-summary.md. |
 | Validation-relevant changes after evidence | Merge `c78d1cbce974e6f18b78f06cf3ef8d6064023d52` incorporates published PR #303 (`5971117e3eaef9e62d644c3dd178a36eb40ae924`), changing only nine Codex model-setting TOML files. They parse successfully; production code, tests, dependency lock and harness are unchanged from the validated tree. Later phase/status records are documentation only. |
-| PR, review, and merge | [#304](https://github.com/samcantrill/loom/pull/304) is open against develop with the canonical title and phase branch. Required local validation is reconciled; independent review is next. |
+| PR, review, and merge | [#304](https://github.com/samcantrill/loom/pull/304) passed independent review at `67c68f38a2c241b4b56816f585163aabb7fc6c55` with no findings and merged into develop at `31f4310e18d56ece4969bc2df2bfd42c707f37c1` on 2026-09-11T12:00:35Z. Required local validation is reconciled to the reviewed head; review also confirmed the six skill trials and explicit deployment limitations. |
 | Live Codex and physical NAS acceptance | Not run. Read-only Codex configuration inspection found no registered Loom MCP server; no real client session was configured or changed. No physical two-machine synthetic deployment was selected/configured for this task. Automated SDK/loopback evidence does not qualify either release claim. |
-| Residual risk and cleanup | Persistent stage worktree retained. Physical NAS and live Codex acceptance remain unqualified. |
+| Residual risk and cleanup | Physical NAS and live Codex acceptance remain unqualified. The matching remote phase branch is retired and transition verified the merged state. The persistent stage worktree and local refs remain through final metadata publication and synchronization; exact cleanup is reported in the final handoff. |
 
 ### Startup and validation selection
 

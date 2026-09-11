@@ -1,9 +1,9 @@
 # Loom coordinator access, agent preparation, MCP, and skills
 
-Status: Stage 40 behavior and four-phase delivery approved on 2026-09-10;
-Phases 1–3 are delivered, and Phase 4 implementation and full local validation
-are complete with independent PR review pending. This document explains the approved behavior
-and implementation approach. The
+Status: all four Stage 40 implementation phases are merged into develop as of
+2026-09-11, with passing required local validation and independent reviews.
+Live Codex and physical NAS deployment trials remain unqualified. This document
+explains the approved behavior and implementation approach. The
 [implementation manifest](../roadmap/stage-40/implementation-plan.md) and linked
 phase cards own the implementation contracts; the
 [planning document](../roadmap/stage-40/planning.md) owns design decisions and
@@ -29,8 +29,8 @@ meaning across projects.
 Phase 1 is useful independently. Phase 2 keeps capture, child execution, and
 publication together because their recovery and cancellation behavior form one
 usable operation. Phase 3 adds the distinct transfer/extraction boundary, and
-Phase 4 wraps the completed native functionality. Its implementation is locally
-validated; the manifest owns the remaining review/delivery and release-acceptance status.
+Phase 4 wraps the completed native functionality. All four phases are delivered;
+the manifest owns the validation, review and remaining deployment limitations.
 
 Each phase is one independently mergeable PR, containing four or five smaller
 implementation steps with focused tests. The extra phase gives the shared-NAS
