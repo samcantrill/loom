@@ -415,7 +415,7 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 - Pre-submit gate: passed; accepted scope, native ownership, complete local evidence, documentation and committed diff reconciled on 2026-09-11
 - Independent review: required before implementation merge
 - Blocker corrections: 3/3; archive transfer ceiling/frozen receipt handoff, redundant archive metadata exceeding the native JSON depth limit, and retained pre-grant transfer recovery. Each has a concrete correction, focused evidence and passing required full validation.
-- PR and merge: #302 open against develop; independent review pending upstream reconciliation checks
+- PR and merge: #302 open against develop; published-base reconciliation passed; independent review is next
 
 ## Completion Record
 
@@ -431,7 +431,7 @@ policy or target portability. Phase 4 consumes the same API with both modes.
 | Validated revision and static evidence | Both required full gates ran at clean `48b3108dc56c3b7d8bdb5ee4723ab0f00bcbdeda`, containing implementation `4c166d39c4579bc39610cfe4eb79228f90779b4e`. Ruff and full Pyright passed with zero errors/warnings, and both distribution builds passed. The complete committed diff passes git diff --check. The initial evidence-recording edits were metadata only. PR creation then found published develop had advanced through #299 and #301; the upstream reconciliation below identifies the subsequent changes and required affected checks. |
 | Required full validation | make validate-pr passed: baseline 3,263 passed / 2 skipped / 207 deselected; isolated config-extra 213 passed / 18 skipped / 3,268 deselected. Evidence: /tmp/loom-stage40-p3-validate-pr.log. make test-summary passed: package 125, unit 2,276, contract 301, integration 493, E2E 70 and config-extra 213 passed; 3,478 total passed, zero failures/errors, 18 skipped. Those skips are the existing opt-in Docker/Apptainer physical acceptance cases (13 namespace lifecycle and five other container cases), not omitted staged-preparation tests. Evidence: /tmp/loom-stage40-p3-test-summary.log and build/test-summary.md. These full receipts supersede intermediate failures and cover ordinary native agent/control/lifecycle consumers affected by the shared delivered-assignment helper, all preparation cases, deployment, package/import boundaries and the approved lanes. |
 | Documentation | Feature guide and local/remote examples now explain both source modes, explicit existing-environment qualification, tar/expanded/aggregate bounds, no laptop upload or target code delivery, restart/cancel behavior and schema-13 compatibility. Documentation checks passed for the three changed user guides: 15 local links resolve, 20 shell and four Python examples parse, two YAML examples load, and the documented request roundtrips through the native model in both source modes; the protected policy example also loads. |
-| PR, review, and merge | #302 is open with the canonical title, branch and develop target. Independent review follows the affected upstream-reconciliation checks. |
+| PR, review, and merge | #302 is open with the canonical title, branch and develop target. Published-base reconciliation checks pass; the actual updated PR head is ready for independent review. |
 | Residual risk and cleanup | Finite regular tar input only; explicit selected existing installation; embedded managed authority with no SLURM preparation; retained archive/report without automatic expiry; native partial-target conflicts preserved. Loopback/fixture roots do not qualify physical NAS/fleet/Codex. No real roots upgraded or environments provisioned. Stage worktree retained; Phase 4 has not started. |
 
 ### Published-base reconciliation
@@ -452,7 +452,7 @@ original Phase 3 tree; affected preparation, assignment, native transport and
 execution-model consumers plus static/package checks qualify this merge before
 independent review. This is published-base synchronization, not a new product
 blocker correction or a reset of the 3/3 budget. Reconciliation runtime checks
-started at clean merge `c599bfa385ac982dc938212fa0f5c2c8866cd621` and remain pending.
+started at clean merge `c599bfa385ac982dc938212fa0f5c2c8866cd621` and are reconciled below.
 
 Full Pyright on that merge exposed 338 errors in eight upstream-added test
 sections that index nested PlainData/object metadata without narrowing. Source
@@ -463,3 +463,26 @@ Ruff/Pyright now pass with zero errors/warnings at that correction tree
 changes do not invalidate the runtime assertions in the already-running merge
 qualification. They are a published-base validation repair, not another product
 blocker or a weakening of the static gate.
+
+Qualification result: 464 selected cases passed; the final local cancellation
+case failed only while creating a fixture directory with ENOSPC on the nearly
+full local filesystem. After removing only this completed run's disposable
+pytest-508 directory, that exact case passed at
+`21a168a84fdf8976842e39f83839cc50270a750f`. No product source or dependency changed
+since the clean merge test start. All 465 selected cases are therefore qualified;
+the later changes contain only the documented test casts/aliases and evidence.
+Logs: /tmp/loom-stage40-p3-published-base-tests.log and
+/tmp/loom-stage40-p3-space-retry.log. Full corrected static checks pass at the
+21a168a test-typing tree. The original two full-gate receipts plus these affected
+checks qualify the current implementation; no second full-suite rerun is needed.
+
+The isolated locked Python 3.12/config selection covered every preparation unit
+and integration/CLI/child case, staged lifecycle, managed preparation, remote
+assignment values, readiness, deployment, execution models, native agent HTTP
+transport, agent-service lifecycle, local daemon production and package import
+boundaries. Exact selectors were the source-mirrored preparation files plus
+test_remote_stage_execution.py, test_resident_readiness.py, test_deployment.py,
+test_execution_models.py, test_agent_session_transport.py,
+test_agent_service_lifecycle.py, test_local_daemon_production.py and
+tests/package/test_import_boundaries.py. No physical fleet/NAS/container claim
+is added by this reconciliation.
