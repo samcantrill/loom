@@ -11,15 +11,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import errno
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import tarfile
 from typing import cast
 from uuid import uuid4
 
-from loom.fingerprints import hash_mapping, validate_digest
+from loom.artifacts import ArtifactRef
+from loom.fingerprints import format_digest, hash_mapping, validate_digest
+from loom.io.uris import path_to_file_uri
 from loom.serialization import PlainData, stable_json_bytes
 
 from .errors import QueueServiceError
@@ -31,6 +35,7 @@ _MAX_FILES = 4096
 _MAX_BYTES = 64 * 1024 * 1024
 PREPARATION_STAGE_TARGET = "loom.preparation.PreparationStage"
 PREPARATION_INPUT_CAPABILITY = "preparation-input-v1"
+PREPARATION_STAGED_INPUT_CAPABILITY = "preparation-staged-input-v1"
 PREPARATION_INPUT_CONTEXT_ENV = "LOOM_PREPARATION_INPUT_CONTEXT"
 
 
@@ -210,13 +215,63 @@ class SharedInputReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class StagedInputReceipt:
+    """Identity of a completed archive capture for one preparation operation."""
+
+    manifest_digest: str
+    reference: ArtifactRef
+
+    def __post_init__(self) -> None:
+        validate_digest(self.manifest_digest, algorithms={"sha256"})
+        if not isinstance(self.reference, ArtifactRef):
+            raise QueueServiceError("preparation staged input reference is invalid")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "mode": "staged",
+            "manifest_digest": self.manifest_digest,
+            "reference": cast(PlainData, self.reference.to_dict()),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "StagedInputReceipt":
+        reference = data.get("reference")
+        if (
+            set(data) != {"mode", "manifest_digest", "reference"}
+            or data.get("mode") != "staged"
+            or not isinstance(reference, dict)
+        ):
+            raise QueueServiceError("preparation staged input receipt is invalid")
+        try:
+            artifact = ArtifactRef.from_dict(reference)
+        except Exception as exc:
+            raise QueueServiceError(
+                "preparation staged input receipt is invalid"
+            ) from exc
+        return cls(cast(str, data["manifest_digest"]), artifact)
+
+
+PreparationInputReceipt = SharedInputReceipt | StagedInputReceipt
+
+
+def input_receipt_from_dict(data: Mapping[str, object]) -> PreparationInputReceipt:
+    """Decode exactly one persisted shared or staged preparation input receipt."""
+    mode = data.get("mode")
+    if mode == "shared":
+        return SharedInputReceipt.from_dict(data)
+    if mode == "staged":
+        return StagedInputReceipt.from_dict(data)
+    raise QueueServiceError("preparation input receipt is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class PreparationChildInput:
     """Finite shared input for the fixed preparation stage, never a generic path binding."""
 
     operation_id: str
     preparation_profile: str
     config_path: str
-    input_receipt: SharedInputReceipt
+    input_receipt: PreparationInputReceipt
     profile_descriptor: Mapping[str, PlainData]
 
     def __post_init__(self) -> None:
@@ -228,7 +283,7 @@ class PreparationChildInput:
         object.__setattr__(
             self, "config_path", _relative(self.config_path, "config_path")
         )
-        if not isinstance(self.input_receipt, SharedInputReceipt):
+        if not isinstance(self.input_receipt, (SharedInputReceipt, StagedInputReceipt)):
             raise QueueServiceError("preparation child input receipt is invalid")
         descriptor = ResidentProfileDescriptor.from_dict(self.profile_descriptor)
         object.__setattr__(
@@ -267,7 +322,7 @@ class PreparationChildInput:
             cast(str, value["operation_id"]),
             cast(str, value["preparation_profile"]),
             cast(str, value["config_path"]),
-            SharedInputReceipt.from_dict(value["input_receipt"]),
+            input_receipt_from_dict(value["input_receipt"]),
             cast(Mapping[str, PlainData], value["profile_descriptor"]),
         )
 
@@ -365,6 +420,303 @@ def capture_shared_input(
     finally:
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
+
+
+def capture_staged_input(
+    request: PrepareRunRequest,
+    *,
+    source_root: Path,
+    artifact_root: Path,
+    owner_id: str | None = None,
+) -> StagedInputReceipt:
+    """Commit one bounded preparation archive after verifying its source closure.
+
+    The returned reference identifies a regular tar archive below the coordinator's
+    protected artifact root.  It becomes visible only after the finite source
+    selection has been reread, so an authoring change cannot publish a ready
+    staged receipt.
+    """
+    if request.source.mode != "staged":
+        raise QueueServiceError("shared preparation input is not a staged capture")
+    staging: Path | None = None
+    try:
+        root = source_root.absolute()
+        project = _contained_path(root, request.source.path)
+        _require_directory(project)
+        files = _selected_files(project, request.source.include)
+        if request.config_path not in files:
+            raise QueueServiceError("preparation config_path is not included")
+        manifest: list[PlainData] = []
+        contents: dict[str, bytes] = {}
+        total = 0
+        for relative, details in sorted(files.items()):
+            data = _read_regular_file(
+                project, relative, _MAX_BYTES - total, expected=details
+            )
+            total += len(data)
+            contents[relative] = data
+            manifest.append(
+                {
+                    "path": relative,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        encoded: dict[str, PlainData] = {"schema_version": 1, "files": manifest}
+        digest = hash_mapping(encoded)
+        operation_key = _capture_operation_key(request.operation_id, owner_id)
+        relative = f"{operation_key}-{digest.removeprefix('sha256:')}.tar"
+        artifact_root = artifact_root.absolute()
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        _require_directory(artifact_root)
+        destination = artifact_root / relative
+        if destination.exists() or destination.is_symlink():
+            _verify_staged_archive(destination, digest, artifact_root)
+            return _staged_archive_receipt(destination, digest, operation_key)
+        staging = artifact_root / f".{operation_key}.tmp-{uuid4().hex}.tar"
+        _write_staged_archive(staging, encoded, contents)
+        try:
+            if _file_identities(
+                _selected_files(project, request.source.include)
+            ) != _file_identities(files):
+                raise QueueServiceError("preparation source_changed")
+            for relative, original in contents.items():
+                if (
+                    _read_regular_file(
+                        project, relative, len(original), expected=files[relative]
+                    )
+                    != original
+                ):
+                    raise QueueServiceError("preparation source_changed")
+        except (OSError, QueueServiceError) as exc:
+            raise QueueServiceError("preparation source_changed") from exc
+        try:
+            staging.rename(destination)
+        except FileExistsError:
+            _verify_staged_archive(destination, digest, artifact_root)
+            staging.unlink()
+        staging = None
+        _sync_directory(artifact_root)
+        return _staged_archive_receipt(destination, digest, operation_key)
+    except OSError as exc:
+        raise QueueServiceError("preparation source_unavailable") from exc
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+
+
+def discard_staged_input_temporaries(
+    request: PrepareRunRequest, *, artifact_root: Path, owner_id: str
+) -> None:
+    """Remove only interrupted archive writes owned by this operation."""
+    if not artifact_root.exists():
+        return
+    _require_directory(artifact_root)
+    prefix = f".{_capture_operation_key(request.operation_id, owner_id)}.tmp-"
+    for candidate in artifact_root.iterdir():
+        suffix = candidate.name.removeprefix(prefix)
+        if (
+            candidate.name.startswith(prefix)
+            and suffix.endswith(".tar")
+            and len(suffix.removesuffix(".tar")) == 32
+            and all(char in "0123456789abcdef" for char in suffix.removesuffix(".tar"))
+        ):
+            details = candidate.lstat()
+            if stat.S_ISREG(details.st_mode):
+                candidate.unlink()
+    _sync_directory(artifact_root)
+
+
+def resolve_staged_input(
+    receipt: StagedInputReceipt, *, archive_path: Path, workspace_root: Path
+) -> Path:
+    """Extract and verify a relayed archive below one assignment workspace.
+
+    A complete replay only verifies the existing immutable extraction. Failed
+    extraction removes its private temporary directory and never exposes it as a
+    preparation input.
+    """
+    if not isinstance(receipt, StagedInputReceipt):
+        raise QueueServiceError("preparation staged input receipt is invalid")
+    try:
+        _require_regular_file(archive_path)
+        _verify_archive_checksum(archive_path, receipt.reference.checksum)
+        workspace_root = workspace_root.absolute()
+        _require_directory(workspace_root)
+        name = "preparation-input-" + receipt.manifest_digest.removeprefix("sha256:")
+        destination = workspace_root / name
+        if destination.exists() or destination.is_symlink():
+            return _verify_capture(destination, receipt.manifest_digest)
+        _discard_extraction_temporaries(workspace_root, name)
+        staging = workspace_root / f".{name}.tmp-{uuid4().hex}"
+        staging.mkdir()
+        try:
+            _unpack_staged_archive(archive_path, staging, receipt.manifest_digest)
+            try:
+                staging.rename(destination)
+            except FileExistsError:
+                verified = _verify_capture(destination, receipt.manifest_digest)
+                shutil.rmtree(staging)
+                return verified
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        _sync_directory(workspace_root)
+        return _verify_capture(destination, receipt.manifest_digest)
+    except OSError as exc:
+        raise QueueServiceError("preparation staged archive is unavailable") from exc
+
+
+def _staged_archive_receipt(
+    path: Path, manifest_digest: str, operation_key: str
+) -> StagedInputReceipt:
+    return StagedInputReceipt(
+        manifest_digest,
+        ArtifactRef(
+            artifact_id=f"preparation-inputs/{operation_key}",
+            uri=path_to_file_uri(path.absolute()),
+            artifact_type="bytes",
+            codec_key="bytes.v1",
+            checksum=_file_checksum(path),
+            metadata={
+                "manifest_digest": manifest_digest,
+                "size_bytes": path.stat().st_size,
+            },
+        ),
+    )
+
+
+def _write_staged_archive(
+    path: Path, manifest: Mapping[str, PlainData], contents: Mapping[str, bytes]
+) -> None:
+    """Write the deterministic regular-file archive before publication."""
+    with tarfile.open(path, "x", format=tarfile.PAX_FORMAT) as archive:
+        _add_archive_member(archive, "manifest.json", stable_json_bytes(manifest))
+        for relative, data in sorted(contents.items()):
+            _add_archive_member(archive, f"files/{relative}", data)
+    with path.open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def _add_archive_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
+    member = tarfile.TarInfo(name)
+    member.size = len(data)
+    member.mode = 0o644
+    member.mtime = 0
+    member.uid = 0
+    member.gid = 0
+    member.uname = ""
+    member.gname = ""
+    archive.addfile(member, io.BytesIO(data))
+
+
+def _verify_staged_archive(path: Path, digest: str, artifact_root: Path) -> None:
+    """Check an existing published archive before reusing its deterministic name."""
+    _require_regular_file(path)
+    staging = artifact_root / f".verify-staged-input-{uuid4().hex}"
+    staging.mkdir()
+    try:
+        _unpack_staged_archive(path, staging, digest)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _unpack_staged_archive(archive_path: Path, destination: Path, digest: str) -> Path:
+    """Materialize only a bounded regular-file archive into a private directory."""
+    _require_directory(destination)
+    try:
+        with tarfile.open(archive_path, "r:") as archive:
+            members = archive.getmembers()
+            if not 1 <= len(members) <= _MAX_FILES + 1:
+                raise QueueServiceError("preparation staged archive exceeds file limit")
+            names: set[str] = set()
+            total = 0
+            for member in members:
+                name = _staged_member_name(member)
+                if name in names:
+                    raise QueueServiceError(
+                        "preparation staged archive has duplicate destination"
+                    )
+                names.add(name)
+                if name == "manifest.json":
+                    if member.size > _MAX_BYTES:
+                        raise QueueServiceError(
+                            "preparation input_limit_exceeded during extraction"
+                        )
+                else:
+                    total += member.size
+                    if total > _MAX_BYTES:
+                        raise QueueServiceError(
+                            "preparation input_limit_exceeded during extraction"
+                        )
+                target = destination / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = archive.extractfile(member)
+                if source is None:
+                    raise QueueServiceError("preparation staged archive is invalid")
+                with source:
+                    data = source.read(member.size + 1)
+                if len(data) != member.size:
+                    raise QueueServiceError("preparation staged archive is incomplete")
+                _write_durable(target, data)
+    except (OSError, tarfile.TarError) as exc:
+        raise QueueServiceError("preparation staged archive is invalid") from exc
+    return _verify_capture(destination, digest)
+
+
+def _staged_member_name(member: tarfile.TarInfo) -> str:
+    if not member.isreg():
+        raise QueueServiceError(
+            "preparation staged archive contains unsupported member"
+        )
+    if member.size < 0:
+        raise QueueServiceError("preparation staged archive is invalid")
+    if member.name == "manifest.json":
+        return member.name
+    if not member.name.startswith("files/"):
+        raise QueueServiceError("preparation staged archive has unsafe destination")
+    try:
+        relative = _relative(member.name.removeprefix("files/"), "captured path")
+    except QueueServiceError as exc:
+        raise QueueServiceError(
+            "preparation staged archive has unsafe destination"
+        ) from exc
+    if member.name != f"files/{relative}":
+        raise QueueServiceError("preparation staged archive has unsafe destination")
+    return member.name
+
+
+def _require_regular_file(path: Path) -> None:
+    details = path.lstat()
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+        raise QueueServiceError("preparation staged archive must be a regular file")
+
+
+def _file_checksum(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return format_digest("sha256", digest.hexdigest())
+
+
+def _verify_archive_checksum(path: Path, checksum: str | None) -> None:
+    if checksum is not None and _file_checksum(path) != checksum:
+        raise QueueServiceError("preparation staged archive checksum is invalid")
+
+
+def _discard_extraction_temporaries(workspace_root: Path, name: str) -> None:
+    prefix = f".{name}.tmp-"
+    for candidate in workspace_root.iterdir():
+        suffix = candidate.name.removeprefix(prefix)
+        if (
+            candidate.name.startswith(prefix)
+            and len(suffix) == 32
+            and all(char in "0123456789abcdef" for char in suffix)
+        ):
+            details = candidate.lstat()
+            if stat.S_ISDIR(details.st_mode) and not stat.S_ISLNK(details.st_mode):
+                shutil.rmtree(candidate)
 
 
 def discard_shared_input_temporaries(
@@ -604,7 +956,15 @@ def _verify_capture(directory: Path, digest: str) -> Path:
 __all__ = [
     "PrepareRunRequest",
     "PreparationSource",
+    "PreparationChildInput",
+    "PreparationInputReceipt",
     "SharedInputReceipt",
+    "StagedInputReceipt",
     "capture_shared_input",
+    "capture_staged_input",
+    "discard_shared_input_temporaries",
+    "discard_staged_input_temporaries",
+    "input_receipt_from_dict",
     "resolve_shared_input",
+    "resolve_staged_input",
 ]
