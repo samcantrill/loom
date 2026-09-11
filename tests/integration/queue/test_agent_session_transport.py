@@ -2958,6 +2958,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             assert receipt["request"]["executor_name"] == "local"
             assert str(tmp_path) not in json.dumps(receipt)
         if no_start:
+            stored = runs.read_stage_worker_result(run_uri, "build", attempt=1)
+            assert stored is not None
+            public_request = stored["executor_metadata"]["request"]
+            assert public_request["stage_name"] == "build"
+            assert public_request["executor_name"] == "local"
+            assert str(tmp_path) not in json.dumps(public_request)
             failure = runs.read_stage_failure(run_uri, "build")
             assert failure is not None
             assert "enforce" in str(failure["message"])

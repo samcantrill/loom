@@ -212,3 +212,28 @@ def test_local_stage_and_result_share_admitted_request_view_before_stage_work(
     assert public["status"] == StageStatus.SUCCEEDED.value
     assert str(tmp_path) not in json.dumps(public)
     assert "execution_request" not in request.context.metadata
+
+
+def test_early_stop_retains_requested_resources_and_safe_execution_view(
+    tmp_path: Path,
+) -> None:
+    class EarlyStoppingStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            context.stop_early("enough evidence")
+
+    request = replace(
+        _request(tmp_path, EarlyStoppingStage()),
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build",
+            resources={"entries": {"cpu": {"kind": "cpu", "amount": 4}}},
+            resource_policy={"enforce": []},
+        ),
+    )
+    result = LocalExecutor().execute(request)
+    assert result.status is StageStatus.CANCELLED
+    assert result.failure is None
+    public = result.to_safe_metadata()
+    assert public["executor_metadata"]["request"] == request.to_safe_metadata()
+    assert public["executor_metadata"]["execution_kind"] == "in_process"
+    assert public["executor_metadata"]["command"] is None
+    assert str(tmp_path) not in json.dumps(public)

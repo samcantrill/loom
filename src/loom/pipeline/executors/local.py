@@ -140,7 +140,7 @@ class LocalExecutor:
                 stderr_path=str(request.stderr_path),
                 executor_metadata=metadata_with_timeout(
                     {
-                        "capture_stdout_stderr": self.capture_stdout_stderr,
+                        **common_metadata,
                         "lifecycle_reason": reason.to_dict(),
                     },
                     timeout,

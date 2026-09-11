@@ -1280,6 +1280,12 @@ def test_connected_active_cancellation_withholds_output_commit(
         assert stage.status is StageStatus.CANCELLED
         assert stage.latest_commit is None
         assert stage.artifact_facts == ()
+        result = run_store.read_stage_worker_result(run_uri, "slow", attempt=1)
+        assert result is not None
+        request = result["executor_metadata"]["request"]
+        assert request["stage_name"] == "slow"
+        assert request["executor_name"] == "local"
+        assert str(tmp_path) not in json.dumps(request)
     finally:
         server.stop()
         daemon.stop()
@@ -1406,6 +1412,10 @@ def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
         assert "enforce: []" in cast(str, failure["message"])
         metadata = cast(Mapping[str, PlainData], result["executor_metadata"])
         assert metadata["process_created"] is False
+        request = metadata["request"]
+        assert request["stage_name"] == "build"
+        assert request["resolved_runtime"]["resources"]["entries"]["cpu"]["amount"] == 1
+        assert str(tmp_path) not in json.dumps(request)
         assert metadata["resource_controls"] == [
             {
                 "resource": "cpu",
@@ -2242,9 +2252,14 @@ def test_resident_worker_loss_terminalizes_after_containment_without_output_or_r
         assert worker_result.status is StageStatus.FAILED
         assert worker_result.exit_code is None
         assert worker_result.signal == signal.SIGKILL
-        assert thaw_plain_data(
+        metadata = thaw_plain_data(
             worker_result.executor_metadata, path="lost worker executor metadata"
-        ) == {
+        )
+        request = metadata.pop("request")
+        assert request["stage_name"] == "slow"
+        assert request["executor_name"] == "local"
+        assert str(tmp_path) not in json.dumps(request)
+        assert metadata == {
             "process_created": True,
             "resource_controls": [
                 {
