@@ -269,7 +269,8 @@ general call-any-method API is authorized.
 
 This section explains how the fixed contracts fit together. Public examples use
 the proposed API; internal helper names below are pseudocode, not additional
-interfaces or a required module layout. Runtime implementation has not started.
+interfaces or a required module layout. The implementation below now supplies
+the public behavior; private helper names in examples remain illustrative.
 
 ### Core changes and why they belong here
 
@@ -478,18 +479,24 @@ stalled setup capacity, native nested failure evidence and response size limits,
 portable imports, and native/legacy page and CLI timeout compatibility. The CLI
 submit/status/lookup/cancel/wait journey runs over both connection options.
 
-Final full validation and independent PR review remain required. Targeted passes
-are evidence for the selected contracts only, not a substitute for those gates.
+Both required full commands passed at the runtime checkpoint recorded below.
+A subsequent real-TLS reproducer identified an idle worker keepalive regression:
+the new accept deadline leaked past TLS negotiation into the worker protocol.
+Resetting the authenticated socket timeout preserves the established idle behavior
+while native control keeps its own cumulative deadline. The regression and
+affected TLS/native-control cases passed fresh validation; no wider
+codec, dispatch, persistence or CLI behavior changed. Independent PR review
+remains required.
 
 ## Workflow State
 
 - Manager preparation: startup verified on 2026-09-11; approved contracts and current source reconciled
 - Expanded planning: common design and four-phase boundary review passed
-- Implementation: shared native boundaries implemented; manager validating the completed correction
+- Implementation: shared native boundaries implemented; manager correction and validation complete
 - Refiner: not needed
-- Pre-submit gate: pending final validation and manager acceptance
+- Pre-submit gate: passed; phase scope, native/legacy contracts, required evidence, docs and bounded post-validation delta accepted
 - Independent review: required on the actual PR head before implementation merge
-- Blocker corrections: 1/3 in progress; native control boundary completion
+- Blocker corrections: 1/3 completed; native control boundary completion
 - PR and merge: not created
 
 ## Completion Record
@@ -498,8 +505,8 @@ are evidence for the selected contracts only, not a substitute for those gates.
 | --- | --- |
 | Implementation and changed paths | Public coordinator facade; private queue control/client/transport owners; Unix/HTTPS adapters; deployment connection loader; queue CLI; native client product docs |
 | Tests added or updated | Native client unit tests, import boundary, CLI compatibility, real Unix/mTLS control recovery/guards, native error and size bounds, and HTTP deadline/capacity/authentication fixtures |
-| Validated revision/tree state and evidence | The manager's working-tree focused run passed 37 tests with 165 deselected using the native/coordinator/CLI selectors over the transport, import, client and CLI owners. Changed-file Ruff passed. Earlier static typing passed; one new test required a mapping cast, now corrected. The source-mirrored, legacy socket, CLI, inspection-contract and import pass completed with 164 passed and 1 deselected. The required fresh full gates have not started |
-| Prior full evidence | The earlier draft at `49295a6` completed `make validate-pr` with exit 0: 3161 baseline tests passed, 2 skipped, 156 deselected; 162 config-extra tests passed, 18 skipped, 3166 deselected; static checks and distributions passed. `/tmp/loom-stage40-final-validate.log` and its `.exit` receipt record that result. This is not evidence for the current runtime refactor. `make test-summary` has not run |
-| Validation-relevant changes after evidence | Shared runtime/transport extraction supersedes the earlier full-run evidence. The final checkpoint requires fresh full validation and test summary. Product documentation link/example checks remain valid where unchanged |
+| Validated revision/tree state and evidence | `make validate-pr` passed at `a1f86df5f18b67490ecea8a9e251de540a26ff88`: Ruff and Pyright passed; isolated baseline 3195 passed, 2 skipped, 156 deselected; isolated config-extra 162 passed, 18 skipped, 3200 deselected; wheel and sdist built. `/tmp/loom-stage40-a1f86df-validate.log` and `.exit` record exit 0 |
+| Required summary run | `make test-summary` passed at the same runtime checkpoint: package 125, unit 2209, contract 301, integration 492, e2e 70 and config-extra 162 passed; 3359 passed overall, 18 config-extra skips, no failures/errors. `build/test-summary.md` and `/tmp/loom-stage40-a1f86df-summary.log` inspected; `.exit` records 0 |
+| Validation-relevant changes after evidence | Post-checkpoint runtime delta restores worker idle keepalive after bounded TLS negotiation, with a real TLS regression test. Fresh `uv run --locked --group dev pytest tests/integration/queue/test_agent_session_transport.py -k 'native or tls_rotation or loopback_mtls or loopback_rejects or loopback_exposes or worker_keepalive or coordinator_cli_submit' -q`: 18 passed, 78 deselected. Ruff and Pyright passed. Removing incidental whole-file formatting preserved identical Python syntax trees; Ruff and diff checks passed afterward. Broader evidence remains applicable to unchanged native schemas, CLI, persistence and import contracts |
 | PR, review, and merge | Pending |
-| Residual risk and cleanup | Full regression and required independent review remain before merge. Persistent stage worktree retained; no PR or root migration |
+| Residual risk and cleanup | Independent PR review remains before merge. Container/physical deployment acceptance is not claimed by skipped tests. Persistent stage worktree retained; no PR or root migration |

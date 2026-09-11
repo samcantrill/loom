@@ -4856,7 +4856,12 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         connection, address = super().get_request()
         try:
             connection.settimeout(_HTTP_TIMEOUT_SECONDS)
-            return self._context.wrap_socket(connection, server_side=True), address
+            authenticated = self._context.wrap_socket(connection, server_side=True)
+            # The accept deadline bounds TLS negotiation, not the established
+            # worker protocol's idle keepalive interval. Native control I/O has
+            # its own cumulative client deadline.
+            authenticated.settimeout(None)
+            return authenticated, address
         except Exception:
             connection.close()
             raise

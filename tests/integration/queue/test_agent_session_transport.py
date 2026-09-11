@@ -5897,6 +5897,28 @@ def test_native_https_authentication_rejects_before_mutation(
     assert daemon.admissions().admissions == ()
 
 
+def test_worker_keepalive_remains_usable_after_the_tls_accept_deadline(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    daemon, server, _connection_path, credentials = native_control_endpoint
+    monkeypatch.setattr(agent_session_transport, "_HTTP_TIMEOUT_SECONDS", 1.0)
+    client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+        )
+    )
+    try:
+        assert client.handshake()["coordinator_id"] == daemon._coordinator_id
+        sleep(1.2)
+        assert client.handshake()["coordinator_id"] == daemon._coordinator_id
+    finally:
+        client.close()
+
+
 def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     tmp_path: Path,
 ) -> None:
