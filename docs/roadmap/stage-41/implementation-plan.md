@@ -8,8 +8,8 @@ Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: none; implementation not started
-Next phase: Phase 1, preparation-publication, after packet landing and startup verification
-Blockers: none in the reviewed packet; landing and stage-worktree verification pending
+Next phase: Phase 1, preparation-publication; startup verified, implementation pending
+Blockers: none; the reviewed packet is published and stage-worktree startup passed
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements and startup review requested on 2026-09-12.
 
@@ -177,8 +177,8 @@ and all approved validation commands remain binding.
   neither receipt establishes runtime implementation or physical qualification.
 - Original planning quality: pass; the approved behavior and nine-phase shape
   remain the baseline. The current published-source amendment is reviewed below.
-- Execution readiness: amended packet passed independent review; landing and
-  stage-worktree verification remain the implementation handoff.
+- Execution readiness: amended packet passed independent review and is published;
+  stage-worktree startup passed as recorded in Phase 1's Workflow State.
   All phase execution statuses remain pending. No runtime work started.
 
 ### Published-source startup readiness review
@@ -207,11 +207,11 @@ and all approved validation commands remain binding.
 - Post-review changes: readiness/status and receipt updates only. No accepted
   contract, example, validation obligation or phase boundary changed.
 - Landing/startup handoff: [plan PR 307](https://github.com/samcantrill/loom/pull/307).
-  Publication is pending. After landing, bootstrap `stage-41` with
-  `tools/phase_workflow.py` before implementation startup review or writes,
-  verify the exact packet/source, and reuse this receipt if unchanged. Record
-  the published base and startup result in Phase 1's Workflow State. Startup-only
-  scope does not authorize implementing Phase 1.
+  The reviewed packet is published; the exact merged base and completed startup
+  verification are recorded in [Phase 1's Workflow State](phases/preparation-publication.md#workflow-state).
+  The stage-worktree helper verified isolation before startup review and writes.
+  No relevant source drift invalidated the independent review. Startup receipts
+  join the future Phase 1 PR; no runtime implementation has started.
 
 - Accepted risks: breaking APIs; original owner loss/accounting delay can leave
   work unresolved; live fleet/container/HPC/MCP qualification remains explicit.

@@ -8,13 +8,13 @@
 - Branch: agent/stage-41-p1-preparation-publication
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop containing Stage 40; record exact SHA at execution preparation
+- Base revision: `ae1470149e84f679933ee3ec9765888556f78e67` (published develop with Stage 40 and plan PR 307)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 1: Preparation And Publication
 - Dependencies: Published Stage 40; Stage 41 plan and nine-phase split approved on 2026-09-10
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none in the reviewed packet; landing and stage-worktree verification pending
+- Blockers: none; reviewed packet published and stage-worktree startup verified
 
 ## Objective And Context
 
@@ -273,7 +273,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: startup passed on 2026-09-12 in the manifest's persistent
+  stage worktree, on this card's phase branch. Phase 1 remains pending.
+- Publication: plan PR 307 merged as the Base revision above; its tree
+  `ecc307c1af9fccb471dcedacd203d7278926f271` exactly matches the validated packet.
+  Stage 40 implementation and closeout are present in that published base.
+- Startup checks: `tools/phase_workflow.py setup` and `preflight` passed before
+  review/writes. The phase, coordination, local develop and origin/develop refs
+  matched the published base, with a clean stage worktree. All nine cards are
+  published and pending; no relevant source or workflow drift from the reviewed
+  evidence base. The manifest's independent pass is reusable.
+- Named refinement: none needed. Scope, contracts, source/test references,
+  merge boundary, private discretion and required validation remain current.
+- Startup evidence: documentation and Git checks only; subsequent changes only
+  record these startup facts. Keep this receipt with the future Phase 1 PR.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
