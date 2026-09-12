@@ -364,8 +364,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native/container profile, worker, supervisor, report and example
-  changes implemented; review correction passed affected checks and awaits fresh
-  final gates. The delegated executor
+  changes implemented; review correction and both fresh required gates passed.
+  The delegated executor
   terminated at a service usage limit before its final handoff. The manager
   verified its committed work, failed terminal gate and process inventory, then
   continued locally without a replacement executor or overlapping writes.
@@ -385,8 +385,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   errors return UNKNOWN and retain ownership. The new regression failed for both
   error cases before correction; 36 supervisor, Docker, public backend and
   Apptainer example checks passed afterward. Evidence:
-  `build/phase-4/apptainer-signal-race-{before,after}.log`. Fresh final gates and
-  affected confirmation by the same reviewer remain pending.
+  `build/phase-4/apptainer-signal-race-{before,after}.log`. Both fresh final gates
+  passed as recorded below; affected confirmation by the same reviewer remains
+  pending. Manager pre-submit acceptance includes this bounded correction.
 - Blocker corrections: 3/3; named Docker source/contract preparation correction,
   then the manager's Docker example socket-path correction. The config-extra
   smoke producer supplies a long output root; locating the fixture socket there
@@ -402,23 +403,26 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ### Final validation receipt
 
-- Prior validated implementation revision: `feed35902ab06db541f4f1028cc1e35da91dd2f7`;
-  tree: `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`. Both commands ran on this
-  same clean revision. The subsequent narrow Apptainer signaling correction has
-  affected regression coverage above; fresh required gate receipts are pending.
+- Validated implementation revision: `1196926f92285c6857842198936e97f59369ed14`;
+  tree: `fd5e4240609f6f46946632566d26809e6cafba24`. Both commands ran on this
+  same clean revision, including the Apptainer signaling correction. Subsequent
+  changes are phase/manifest execution metadata only.
 - `make validate-pr`: exit 0; Ruff passed, Pyright reported zero errors/warnings;
-  baseline 3,320 passed / 2 skipped / 294 deselected; config-extra 254 passed /
-  18 skipped / 3,361 deselected; MCP 36 passed / 3,580 deselected; sdist and wheel
-  built. Command elapsed time: 2,443.69 seconds.
-- `make test-summary`: exit 0; 3,612 passed, zero failures/errors, 18 skipped,
-  7,214 row-summed deselections. Suite passes: package 127, unit 2,330, contract
+  baseline 3,322 passed / 2 skipped / 294 deselected; config-extra 254 passed /
+  18 skipped / 3,363 deselected; MCP 36 passed / 3,582 deselected; sdist and wheel
+  built. Command elapsed time: 2,408.61 seconds.
+- `make test-summary`: exit 0; 3,614 passed, zero failures/errors, 18 skipped,
+  7,218 row-summed deselections. Suite passes: package 127, unit 2,332, contract
   302, integration 516, e2e 47, config-extra 254, MCP 36. Report duration:
-  2,788.91 seconds; command elapsed time: 2,902.27 seconds.
-- Evidence: `build/phase-4/{validate-pr-final,test-summary-final}.log`,
+  2,772.74 seconds; command elapsed time: 2,884.70 seconds.
+- Evidence: `build/phase-4/{validate-pr-review-final,test-summary-review-final}.log`,
   `build/test-summary.md` and seven suite `junit.xml` files. The manager parsed
-  all seven XML files (3,630 test cases, including 18 skips) and byte-verified
-  their copies, the summary and selected/failed/final logs: 23 archived files
-  under `/tmp/loom-stage41-p4-summary-evidence/`. Archived logs are in `phase-4/`.
+  all seven XML files (3,632 test cases, including 18 skips) and byte-verified
+  their copies, the summary and four before/after/final logs: 12 archived files
+  under `/tmp/loom-stage41-p4-review-correction-evidence/`. Archived logs are in
+  `phase-4/`. The prior 23-file evidence archive remains unchanged at
+  `/tmp/loom-stage41-p4-summary-evidence/`; it records the pre-review revision
+  `feed35902ab06db541f4f1028cc1e35da91dd2f7` and earlier validation history.
 - Superseded evidence remains inspectable: recovery work interrupted the first
   run; the native metadata merge failure was corrected; the later config-extra
   Docker socket failures were corrected. An additional full baseline encountered
@@ -443,8 +447,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Complete: installed container profiles and readiness, existing agent/supervisor backend evidence and recovery, result metadata, native/container public examples; manager pre-submit passed |
 | Tests added, updated or intentionally removed | Stateful Docker effect/recovery tests, container binding/resources, native/Docker/Apptainer public replay, existing finalizer crash/predecessor assertions with Docker, native regression preservation and converted example assertions |
-| Validated revision/tree and evidence | Both required commands passed on `feed35902ab06db541f4f1028cc1e35da91dd2f7`, tree `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
-| Validation-relevant changes after evidence | Review correction handles the Apptainer namespace signaling race; before/after regression evidence recorded above, fresh full gates and same-reviewer confirmation pending |
+| Validated revision/tree and evidence | Both required commands passed on `1196926f92285c6857842198936e97f59369ed14`, tree `fd5e4240609f6f46946632566d26809e6cafba24`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
+| Validation-relevant changes after evidence | None; execution metadata only after both gates passed with the review correction |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
-| PR, review and merge | PR 311 open with verified canonical identity; independent review found one containment blocker, bounded correction awaiting final gates and same-reviewer confirmation; merge pending |
+| PR, review and merge | PR 311 open with verified canonical identity; bounded containment correction and fresh final gates passed; same-reviewer confirmation and merge pending |
 | Residual risk and cleanup | No current implementation blocker. Physical runtime qualification remains unavailable and unclaimed; all phase-owned processes terminal; PR/review/delivery and branch retirement pending |
