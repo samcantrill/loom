@@ -7,8 +7,8 @@ Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 5, agent-slurm-jobs
-Next phase: Phase 6, slurm-result-recovery, after Phase 5 merge and synchronization
+Current phase: Phase 6, slurm-result-recovery; awaiting synchronized preparation
+Next phase: Phase 7, unified-sweeps, after Phase 6 merge and synchronization
 Blockers: none; the reviewed packet is published and stage-worktree startup passed
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
@@ -131,7 +131,7 @@ links directly to all nine walkthroughs.
 | 2 | durable-run-operation | merged | [Phase 2](phases/durable-run-operation.md) | agent/stage-41-p2-durable-run-operation | [309](https://github.com/samcantrill/loom/pull/309) | Native run operation, coordinator continuation and cancellation | An accepted run reaches its exact admission after client loss and supports race-safe cancellation and observation against existing services. |
 | 3 | service-startup-lifetime | merged | [Phase 3](phases/service-startup-lifetime.md) | agent/stage-41-p3-service-startup-lifetime | [310](https://github.com/samcantrill/loom/pull/310) | Deployment initializer, per-service lifetime and public run composition | The ordinary run command connects or safely starts configured services, then cleans only the roles whose lifetime permits it. |
 | 4 | agent-worker-execution | merged | [Phase 4](phases/agent-worker-execution.md) | agent/stage-41-p4-agent-worker-execution | [311](https://github.com/samcantrill/loom/pull/311) | Agent resident execution, process supervisor and native/container executors | Native and configured container attempts use the same agent-owned worker and result boundary with correct resource and containment evidence. |
-| 5 | agent-slurm-jobs | pr_open | [Phase 5](phases/agent-slurm-jobs.md) | agent/stage-41-p5-agent-slurm-jobs | [312](https://github.com/samcantrill/loom/pull/312) | Agent Slurm operation journal, authorized placement and backend observation | One assigned agent submits, observes, cancels and recovers the exact Slurm job without duplicate submission or capacity accounting. |
+| 5 | agent-slurm-jobs | merged | [Phase 5](phases/agent-slurm-jobs.md) | agent/stage-41-p5-agent-slurm-jobs | [312](https://github.com/samcantrill/loom/pull/312) | Agent Slurm operation journal, authorized placement and backend observation | One assigned agent submits, observes, cancels and recovers the exact Slurm job without duplicate submission or capacity accounting. |
 | 6 | slurm-result-recovery | pending | [Phase 6](phases/slurm-result-recovery.md) | agent/stage-41-p6-slurm-result-recovery | pending | Bootstrap result publisher, submit-agent transport and existing coordinator finalizer | A job can finish and its compute process exit during coordinator downtime; the recovered submit agent delivers the same result for one authority commit. |
 | 7 | unified-sweeps | pending | [Phase 7](phases/unified-sweeps.md) | agent/stage-41-p7-unified-sweeps | pending | Sweep expansion/dispatch state and native admission references | Sweep trials use the unified run lifecycle with unchanged experiment meaning and stable retry identities. |
 | 8 | unified-mcp | pending | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | pending | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |

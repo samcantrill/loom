@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 5
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p5-agent-slurm-jobs
@@ -401,8 +401,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   and all seven JUnit suites are verified. Only evidence metadata follows the
   final validated tree. Physical skips and existing monitor teardown warnings
   remain explicit. All gate terminals are complete; unrelated work is preserved.
-  The same independent reviewer must confirm the bounded correction.
-- Independent implementation review: one qualified fast-bootstrap blocker; correction and same-reviewer confirmation pending
+  The same independent reviewer confirmed the bounded correction.
+- Independent implementation review: passed at
+  `849c757eb8cb8ea1f35e9417d785e8e23ba7ad3e`; the same reviewer confirmed the
+  fast-bootstrap correction with no remaining qualified finding. Exact PR title,
+  develop target, non-draft status, mergeability and fresh evidence were verified.
+  The PR body records this SHA and links its immutable phase card. The only delta
+  after the validated implementation is phase evidence metadata.
 - Blocker corrections: 1/3. Independent review at
   `285fa7f5e07cc3e23f146f14de939e7d10b1d210` found a fast registered bootstrap
   could reach input readiness before agent submission acknowledgement and exit
@@ -425,10 +430,14 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   recovery variants passed unchanged under targeted coverage (22.77 seconds;
   `/tmp/loom-p5-review-release-probe.log`), then the complete summary passed
   unchanged. No timeout or assertion was relaxed for this retry. The same
-  reviewer must confirm the fast-bootstrap correction.
-- PR and merge: [PR 312](https://github.com/samcantrill/loom/pull/312) is open,
-  non-draft and mergeable with the canonical title, exact phase branch and develop
-  base verified. Independent review and gated delivery are pending.
+  reviewer confirmed the fast-bootstrap correction; budget remains 1/3.
+- PR and merge: [PR 312](https://github.com/samcantrill/loom/pull/312) remotely
+  squash-merged at 2026-09-12T19:50:29Z as
+  `5e4237d1fe5165152dc2e7f296edb574dfea6463`. The delivery gate verified the exact
+  reviewed head, local validation reconciliation and remote outcome. The exact
+  remote phase branch is deleted. Transition to `agent/stage-41` passed; this
+  completion metadata is being published before final synchronization and exact
+  local branch retirement. All phase agents and owned processes are terminal.
 
 ## Completion Record
 
@@ -439,5 +448,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both make gates passed at `8424df64537f3f6cc8c5810dd5c50948a039c408` / `4fcc403091c17dd04e299082204b6294916c1c1f`; 3625 summary passes; final archive `/tmp/loom-stage41-p5-review-correction-evidence`; prior failures/corrections retained above |
 | Validation-relevant changes after evidence | None; final commit updates only this phase card's Workflow State and Completion Record |
 | Replaced-code removal / retained primitive consumers | Coordinator external-call owner and `_submit_slurm_ready`, `_before_slurm_runner`, `_publish_slurm_verifier`, `_mirror_slurm_submission_eligibility` removed; `AgentSlurmJobs` alone drives the existing backend journal/helpers for agent-bound assignments; standalone backend utility/tests retain the primitive |
-| PR, review and merge | [PR 312](https://github.com/samcantrill/loom/pull/312) open; canonical identity verified; independent review and delivery pending |
+| PR, review and merge | [PR 312](https://github.com/samcantrill/loom/pull/312); independent pass at `849c757eb8cb8ea1f35e9417d785e8e23ba7ad3e`; remote merge `5e4237d1fe5165152dc2e7f296edb574dfea6463`; publication/synchronization gates own successor admission |
 | Residual risk and cleanup | No implementation blocker. Unknown jobs retain capacity and original ownership. Physical Slurm/container qualification and Phase 6 completed-job storage guarantee remain explicit; executor-owned processes are finished and unrelated processes preserved |
