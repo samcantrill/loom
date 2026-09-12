@@ -619,6 +619,10 @@ def run_outbound_agent_service(
                     ),
                     prepare_role_reload=prepare_install,
                 )
+            client._resume_pending_poll(
+                wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+                suspend_requested=stop.is_set,
+            )
             client.resume_retained_work(suspend_requested=stop.is_set)
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])

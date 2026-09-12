@@ -416,10 +416,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   baseline 3292 passed, 2 skipped, 286 deselected, 4 failed in 1194.87 s.
   The failures were stale public-export and mocked-dispatch expectations, now
   corrected to include root `run` and the required deployment argument. Their
-  package/CLI selection passed (18 passed in 0.96 s). No runtime changes followed
-  that completed baseline. Config-extra feedback is being collected before the
-  final complete rerun; documentation-only edits did not restart that healthy
-  selection.
+  package/CLI selection passed (18 passed in 0.96 s). Config-extra feedback
+  completed with 242 passed, 18 skipped, 3337 deselected and four documentation
+  failures in 904.33 s (exit 2); all runtime selections passed. Those four catalog
+  failures were corrected and the affected documentation checks passed below.
+  MCP-extra passed: 36 passed, 3548 deselected in 58.12 s (exit 0).
+- Interrupted outbound restart: a new native fixture reproduced an outstanding
+  poll retained across agent interruption. Startup now replays that exact poll
+  through the existing journal/digest and coordinator delivery owner before new
+  capacity. The application entrypoint no longer writes clean-stop evidence on
+  return from interrupted observation; only authorized native retirement does.
+  The regression first failed (pending preparation after 40 s), then passed
+  (1 passed, 18 deselected in 23.38 s), retaining bound identity and observing
+  native success and actual authorized agent exit. These runtime changes require
+  the final complete gates; earlier partial evidence does not replace them.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover

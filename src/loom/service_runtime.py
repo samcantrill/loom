@@ -162,8 +162,6 @@ def main() -> None:
         run_outbound_agent_service(
             agent, stop=stop, lifetime=config.lifetime, expected_coordinator_id=expected
         )
-        assert agent.client.agent_root is not None
-        record_process(agent.client.agent_root, stopped=True)
     else:
         raise QueueServiceError("unsupported local role")
 

@@ -941,6 +941,16 @@ class _RemoteAgentJournal:
             ).fetchone()
         return 1 if row is None else int(row["sequence"]) + 1
 
+    def pending_poll(self) -> tuple[str, str, int] | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT session_id, availability_revision, sequence "
+                "FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["session_id"]), str(row["availability_revision"]), int(row["sequence"])
+
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
             session.agent_root_id != self.root_id
@@ -3952,6 +3962,38 @@ class LocalDaemonAgentHttpClient:
             # A proven no-start outcome completes without a supervisor to join.
             suspend_requested=suspend_requested if launch is not None else None,
         )
+
+    def _resume_pending_poll(
+        self,
+        *,
+        wait_timeout_ms: int,
+        suspend_requested: Callable[[], bool] | None = None,
+    ) -> None:
+        """Replay the service's exact outstanding delivery before new capacity.
+
+        The retained request digest validates the configured timeout as well as
+        session/revision/sequence. An incompatible restart keeps work retained.
+        """
+        journal = self._require_journal()
+        pending = journal.pending_poll()
+        if pending is None:
+            return
+        _raise_if_application_suspended(suspend_requested)
+        session_id, revision, sequence = pending
+        value: dict[str, PlainData] = {
+            "session_id": session_id,
+            "availability_revision": revision,
+            "sequence": sequence,
+            "wait_timeout_ms": wait_timeout_ms,
+        }
+        journal.prepare_poll(session_id, revision, sequence, value)
+        result = self._call("poll", value)
+        journal.complete_poll(session_id, sequence, result)
+        if result.get("result") == "assignment":
+            request = _ResidentAssignmentBundle.from_remote_dict(result.get("request"))
+            self._execute_delivered_assignment(
+                session_id, request, suspend_requested=suspend_requested
+            )
 
     def resume_retained_work(
         self, *, suspend_requested: Callable[[], bool] | None = None
