@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p3-service-startup-lifetime
@@ -10,6 +10,7 @@
   all phases share that stage worktree through synchronized closeout.
 - Base revision: `4e3635b706f6406cca4861f97f846914ad3dcae1` (published Phase 2 completion metadata after PR 309)
 - PR target: develop
+- PR: [310](https://github.com/samcantrill/loom/pull/310)
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 3: Service Startup And Lifetime
 - Dependencies: Phase 2 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
@@ -518,7 +519,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   and one assignment/worker. The 1aa2141 gate was interrupted for this fix:
   exit 2, baseline 447 passed, 2 skipped, 287 deselected in 146.42 s.
 - Blocker corrections: 2/3
-- PR and merge: not started
+- PR: [310](https://github.com/samcantrill/loom/pull/310), opened on 2026-09-12;
+  canonical title, develop target, selected phase branch, non-draft/open state
+  and mergeability verified. Independent review is pending; no merge is claimed.
 
 ## Completion Record
 
@@ -529,5 +532,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both required gates exited 0 at `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`; terminal logs, summary and row artifacts recorded above. |
 | Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
 | Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
-| PR, review and merge | Manager pre-submit passed; PR creation, independent review and delivery remain. |
+| PR, review and merge | PR 310 open against develop; manager pre-submit passed; independent review and delivery remain. |
 | Residual risk and cleanup | Native mixed-role/process evidence passed; no attempt-owned services remain. Physical fleet/container/Slurm qualification remains explicitly excluded and mapped to successor owners above. |
