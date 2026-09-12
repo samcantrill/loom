@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p3-service-startup-lifetime
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 2 merges; record exact SHA at execution preparation
+- Base revision: `4e3635b706f6406cca4861f97f846914ad3dcae1` (published Phase 2 completion metadata after PR 309)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 3: Service Startup And Lifetime
 - Dependencies: Phase 2 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 2 merged, metadata published and stage/control/live develop synchronized
 
 ## Objective And Context
 
@@ -312,7 +312,40 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on 2026-09-12 in the manifest's persistent stage
+  worktree and this phase branch. Phase 2 PR 309 merged as
+  `5a624d11ca5c777765fb35583a628bc57562f419`; completion metadata was published
+  as the Base revision above. Synchronization verified matching stage, local
+  develop, fetched origin/develop and advertised develop revisions. Exact local
+  and remote Phase 2 branch refs were retired; the stage worktree was retained.
+  All predecessor agents/validation processes are terminal. Successor `start`
+  and `preflight` passed on the clean prepared branch.
+- Source reconciliation: published Phase 2 supplies native RunRequest,
+  start_run/cancel_run_operation, durable publication/admission linkage and
+  bounded observation. Coordinator schema is 15; worker schema remains 12.
+  Existing protected role loaders and outbound agent service remain in
+  queue/deployment.py; coordinator foreground composition remains in
+  cli/queue.py. Ordinary cli/run.py still dispatches the old execution paths.
+  Local retained-work checks and low-level stop remain insufficient for the
+  global quiescence decision, as this card already specifies. Reuse those owners
+  and the predecessor's unchanged run/cancel contract.
+- Named refinement: none needed. The reviewed behavior, phase boundary, trust
+  and identity contracts, and required validation remain unchanged. Protected
+  deployment key layout and private composition/helper choices remain execution
+  discretion; no new discovery, provisioning or compatibility path is approved.
+- Coverage selection: protected relative paths and creation/open binding;
+  concurrent startup and interrupted initialization; cumulative startup/dispatch
+  budgets; acceptance/retirement barriers including waiting preparation,
+  continuation and explicit retry; mixed-role lifetime and stale retirement
+  evidence; cold run, detach and actual process exit; ordinary CLI cutover and
+  cheap root imports. Use the listed native service/transport and CLI fixtures.
+  Physical fleet qualification remains separate. Expand only for changed shared
+  contracts, relevant failures or unresolved accepted concerns. Both required
+  full commands remain binding.
+- Execution delegation: one executor is justified by the coupled durable
+  creation/startup/quiescence, independent role lifetime and public CLI/Python
+  cutover. The manager retains manifest, pre-submit, PR/review and delivery
+  ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used

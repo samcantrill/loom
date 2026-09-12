@@ -431,8 +431,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   completed, and the manager found no remaining process in the stage cwd.
   The shared gate moved this clean persistent worktree to `agent/stage-41`
   and fast-forwarded published state and local develop to the verified merge.
-  This coordination record is awaiting publication/synchronization and exact
-  local phase-branch retirement before successor startup.
+  Completion metadata was published as
+  `4e3635b706f6406cca4861f97f846914ad3dcae1`. The synchronization gate verified
+  matching stage, local develop, fetched origin/develop and advertised develop.
+  The exact local phase branch was retired after its reviewed head and published
+  merge were verified; the remote ref was confirmed absent. Phase 3 then started
+  in the retained worktree from that synchronized published base.
 
 ## Completion Record
 
@@ -444,4 +448,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | None. Only this card's execution/completion metadata changed after the tested commit. |
 | Replaced-code removal / retained primitive consumers | Existing coordinator facade and raw CLI contained no production prepare/wait/submit orchestration chain to remove. Preparation-only and explicit prepared submission/retry remain separate native primitives and retain their tests. The old in-process execution RunRequest remains with its Phase 9 removal owner. |
 | PR, review and merge | Manager pre-submit and independent review passed; [PR 309](https://github.com/samcantrill/loom/pull/309) merged as `5a624d11ca5c777765fb35583a628bc57562f419`. Reviewed head and exact receipts are above. |
-| Residual risk and cleanup | No unresolved implementation blocker. Physical qualification remains with its owning phases. Owned agents/processes are terminal, fixture cleanup passed, and temporary edit scripts were removed. Logs plus archived summary/JUnit evidence remain available. Remote phase branch retired; coordination metadata publication/sync and exact local branch retirement precede successor startup. |
+| Residual risk and cleanup | No unresolved implementation blocker. Physical qualification remains with its owning phases. Owned agents/processes are terminal, fixture cleanup passed, and temporary edit scripts were removed. Logs plus archived summary/JUnit evidence remain available. Completion metadata published/synchronized; exact remote/local phase branches retired; persistent stage worktree retained for Phase 3. |
