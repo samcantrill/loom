@@ -218,6 +218,19 @@ def test_independent_mixed_lifetimes(
     finally:
         _stop_fixture_process(tmp_path / "outbound")
         _stop_fixture_process(tmp_path / "deployment/coordinator")
+        from loom.queue._agent_process_supervisor import (
+            AgentProcessSupervisorClient,
+            _endpoint_for_root,
+            _service_configuration,
+        )
+
+        root = tmp_path / "outbound"
+        if _endpoint_for_root(root / "supervisor").exists():
+            supervisor = AgentProcessSupervisorClient(
+                root, _service_configuration(root / "supervisor")
+            )
+            supervisor.shutdown_for_test()
+            assert not Path(f"/proc/{supervisor.service_process_id}").exists()
 
 
 def test_waiting_preparation_survives_detach_without_local_worker(

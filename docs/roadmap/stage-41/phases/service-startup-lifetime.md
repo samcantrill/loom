@@ -383,6 +383,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   consumers. Existing generic runtime, sweep, prepared-run, stage-worker, Slurm,
   artifact and authority primitives remain for these owners. The physical Slurm
   acceptance hook was preserved unchanged; default fixtures do not qualify it.
+- Validation preparation correction: the initial `make validate-pr` at
+  `1aa60f9f599d8bdd8328284f9b526b01bda0f903` passed Ruff/Pyright but was
+  intentionally interrupted during the baseline lane (exit 130) after the cleanup
+  audit found retained fixture supervisors. The mixed-role fixture now uses the
+  existing authenticated `shutdown_for_test` owner and verifies process exit.
+  Its three role combinations passed (79.46 s). Three earlier orphaned fixture
+  supervisors whose temporary state had already been removed were identified by
+  exact command/root and absence of children, interrupted, and observed exited;
+  unrelated supervisors were untouched.
+- Final retirement race correction: already-issued agent retirement authorization
+  remains replayable after a new startup hold. The selected run-agent readiness
+  check observes its exact native session's retained retirement record before
+  dispatch, so a closing incarnation cannot stand in for the next eligible one.
+  The deterministic authorization/replay/new-hold test passed (4.78 s).
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover

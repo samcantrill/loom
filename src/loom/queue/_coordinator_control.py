@@ -420,7 +420,7 @@ def validate_request(
         "start_run": {"request"},
         "startup_attach": {"attachment_id", "expires_at"},
         "startup_release": {"attachment_id"},
-        "service_lifetime": set(),
+        "service_lifetime": {"agent_root_id"},
         "cancel_run_operation": {"operation_id"},
         "cancel_preparation": {"operation_id"},
         "admissions": {"limit", "cursor"},
@@ -437,6 +437,9 @@ def validate_request(
         raise control_error("unsupported", operation, payload)
     value = dict(payload)
     value.pop("expected_coordinator_id", None)
+    if operation == "service_lifetime":
+        value.setdefault("agent_root_id", None)
+        optional_id(value["agent_root_id"])
     if legacy and operation in {"admissions", "agents"}:
         value.setdefault("limit", 100)
         value.setdefault("cursor", None)
@@ -559,6 +562,10 @@ def dispatch_control(
         elif operation == "service_lifetime":
             with daemon._cycle_lock:
                 result = {"coordinator_id": daemon._require_started(), "coordinator_epoch": daemon._epoch, "retiring": daemon._lifetime.retiring, "retained": daemon._lifetime.retained(), "cleanup_blocked": daemon._lifetime.cleanup_blocked}
+                if value["agent_root_id"] is not None:
+                    with daemon._connection() as conn:
+                        row = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("service-agent:" + cast(str, value["agent_root_id"]),)).fetchone()
+                    result["agent"] = None if row is None else json.loads(row[0])
         elif operation == "status":
             result = view.status()
         elif operation == "admissions":

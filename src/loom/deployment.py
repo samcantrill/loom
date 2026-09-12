@@ -441,7 +441,21 @@ def ensure_available(
                 except FileNotFoundError:
                     live = False
                 if live:
-                    break
+                    if roles["agent"]["identity"]["lifetime"] == "run":
+                        projection = client._native_call(
+                            "service_lifetime",
+                            {"agent_root_id": roles["agent"]["ids"]["agent"]},
+                            connection.coordinator_id,
+                            deadline=deadline,
+                        )
+                        retained = projection.get("agent")
+                        live = (
+                            isinstance(retained, Mapping)
+                            and retained.get("state") == "retained"
+                            and retained.get("session_id") == state["session_id"]
+                        )
+                    if live:
+                        break
             time.sleep(min(0.05, max(0, deadline - time.monotonic())))
     return AvailableDeployment(
         selection, client, roles, connection.coordinator_id, connection, attachment_id

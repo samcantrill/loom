@@ -444,3 +444,30 @@ def test_run_owned_agent_does_not_retire_on_unavailable_or_stale_decision(remote
     assert work.supervisor.status()["service_process_id"] == work.supervisor.service_process_id
     with sqlite3.connect(work.daemon.config.control_database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM agent_retirement_proofs").fetchone()[0] == 0
+
+
+def test_retirement_replay_stays_authorized_after_new_startup_hold(remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+    work = remote_owner
+    original = LocalDaemonAgentHttpClient._call
+    decisions = []
+    def interrupted_reply(self, operation, value, **kwargs):
+        decision = original(self, operation, value, **kwargs)
+        if operation == "service_lifetime" and value["action"] == "observe" and decision["state"] == "authorized" and not decisions:
+            work.daemon._lifetime.attach("racing-starter", time.time() + 20)
+            replay = original(self, operation, value, **kwargs)
+            decisions.extend([decision, replay])
+        return decision
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", interrupted_reply)
+    service = work.start_agent(lifetime="run")
+    service.thread.join(15)
+    assert not service.thread.is_alive()
+    assert not service.errors
+    assert len(decisions) == 2 and decisions[0] == decisions[1]
+    assert decisions[1]["state"] == "authorized"
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT state FROM agent_sessions").fetchone()[0] == "RETIRED_CLEAN"
+        record = json.loads(conn.execute("SELECT value FROM daemon_metadata WHERE key LIKE 'service-agent:%'").fetchone()[0])
+    assert record["state"] == "closed"
+    assert not work.daemon._lifetime.retire_if_idle()
+    work.daemon._lifetime.release("racing-starter")

@@ -3995,7 +3995,13 @@ class AgentSessionService:
                 state = "closed"
             else:
                 daemon._lifetime.require_accepting()
-                if daemon._lifetime.retained():
+                if record.get("state") == "authorized" and all(record.get(k) == v for k, v in identity.items()):
+                    # Assignment eligibility was already closed atomically. New
+                    # startup work waits for a fresh eligible incarnation.
+                    state = "authorized"
+                elif session.state is not AgentSessionState.ACTIVE:
+                    raise QueueConflictError("service retirement session is not active")
+                elif daemon._lifetime.retained():
                     state = "retained"
                 else:
                     if not _coordinator_references_empty(conn, session_id):
