@@ -332,8 +332,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native run acceptance/continuation, independent cancellation,
-  bounded projections and existing-service observation are implemented. Final
-  owner-level checks passed; the two required full commands remain pending.
+  bounded projections and existing-service observation are implemented. Owner-level
+  checks and both required full commands passed; manager pre-submit and delivery
+  remain pending.
 - Durable ownership: schema 15 extends preparation rows with kind and exact queue
   identity; the native cancellation table holds independent control progress.
   Publication is retained before admission, and the immutable admission receipt
@@ -368,8 +369,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Ruff/Pyright had passed; interrupted baseline evidence was 629 passed, 2 skipped,
   269 deselected in 410.08 seconds. This is incomplete evidence, not a gate pass;
   `/tmp/loom-stage41-p2-validate-pr.log` retains the actual outcome. Its owned
-  fixture supervisors exited during pytest cleanup. The required full command
-  will be repeated on the corrected tree.
+  fixture supervisors exited during pytest cleanup. The corrected full-gate
+  receipt below supersedes this incomplete attempt.
 - Correction checks: isolated locked Python 3.12/config pytest selected
   `test_run_operations.py::test_publication_budget_refusal_still_allows_bounded_cancellation`,
   `test_local_daemon.py::test_forward_clock_jump_degrades_without_advancing_and_requires_recovery`
@@ -377,6 +378,37 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   3 passed; `/tmp/loom-stage41-p2-corrections.log`. The earlier owner selection
   (cancellation paging, native child release, bounded publication, root/upgrade
   checks) passed 17 cases; `/tmp/loom-stage41-p2-owner-checks.log`.
+- Final validation: **passed** on clean commit
+  `7f343c90b9f79bf14a731d75979c03638f02c196`, tree
+  `78bcc2d8f9d4619b528a1c0aa605d4f49795f078`, using Python 3.12 and the
+  harness's isolated locked dependency lanes.
+  - `make validate-pr`: exit 0. Ruff and Pyright passed; baseline 3341 passed,
+    2 skipped, 270 deselected; config-extra 240 passed, 18 skipped,
+    3382 deselected; MCP-extra 36 passed, 3577 deselected; source and wheel builds
+    passed. Log: `/tmp/loom-stage41-p2-validate-pr-final.log`.
+  - `make test-summary`: exit 0. Package 127, unit 2336, contract 302,
+    integration 508, e2e 70, config-extra 240 and MCP-extra 36 passed; zero
+    failures/errors. The summary reports 3619 passed and 18 skipped across its
+    documented lanes. Log: `/tmp/loom-stage41-p2-test-summary.log`; commands,
+    deselections, coverage and JUnit evidence: `build/test-summary.md` and
+    `build/test-summary/<suite>/junit.xml`.
+  - The two baseline skips are the dotenv-dependent queue journey checks;
+    both executed successfully in the summary's config-enabled e2e lane.
+    All 18 config-extra skips are opt-in physical container acceptance: 13
+    Apptainer namespace/timeout cases and one each for Docker smoke, Apptainer
+    smoke, SIF build, resource enforcement and scheduling-only resources. These
+    skips do not qualify physical container/fleet/HPC execution. The summary
+    also retains two coroutine RuntimeWarnings from unchanged monitor UI tests;
+    no test failed.
+- Evidence reconciliation: the final full commands include the 38-case native
+  run/transport/observation selection, the 17 owner cases and the three correction
+  checks, after all relevant source/test edits. Only this card's Workflow State
+  and Completion Record were updated after the final evidence; runtime, tests,
+  dependencies, build and validation configuration are unchanged.
+- Cleanup: all owned validation terminals completed. Fixture service cleanup
+  passed; five phase-owned temporary edit scripts were removed. Validation logs
+  and the harness report/JUnit artifacts remain for the manager. The persistent
+  stage worktree and branch remain in place for the manager's delivery workflow.
 - PR and merge: not started
 
 ## Completion Record
@@ -385,8 +417,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Coordinator facade; native request/client/control and preparation/admission owners; raw queue CLI; downstream operations documentation. Schema 15 refuses incompatible schema-14 roots without mutation. |
 | Tests added, updated or intentionally removed | New unified-run contract and durable run integration suites; native observation/CLI/import tests; preparation child-release and projection-budget cases extended to run intent; root/upgrade checks updated for schema 15. No accepted predecessor coverage removed. |
-| Validated revision/tree and evidence | Interim isolated Python 3.12/config selection: 38 passed (`/tmp/loom-stage41-p2-run-tests.log`); Pyright and Ruff passed before final owner edits. Final revision/tree and both required commands pending. |
-| Validation-relevant changes after evidence | Added cancellation paging and its 33-control regression; bounded target-reservation lookup; preparation run/cancel projection/release cases and schema-14 refusal coverage await final validation. |
+| Validated revision/tree and evidence | Both `make validate-pr` and `make test-summary` passed on `7f343c90b9f79bf14a731d75979c03638f02c196`, tree `78bcc2d8f9d4619b528a1c0aa605d4f49795f078`. Exact outcomes, logs, skipped qualification and report/JUnit paths are in the final validation receipt above. |
+| Validation-relevant changes after evidence | None. Only this card's execution/completion metadata changed after the tested commit. |
 | Replaced-code removal / retained primitive consumers | Existing coordinator facade and raw CLI contained no production prepare/wait/submit orchestration chain to remove. Preparation-only and explicit prepared submission/retry remain separate native primitives and retain their tests. The old in-process execution RunRequest remains with its Phase 9 removal owner. |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Tests use local synthetic services and mutual TLS fixtures; no physical container/fleet/HPC qualification is claimed. No services, external workloads or deployment roots were created outside test fixtures. Final full-gate results and process cleanup pending. |
+| PR, review and merge | Manager-owned pre-submit, PR, independent review and delivery remain pending. |
+| Residual risk and cleanup | No unresolved implementation blocker. Evidence is local synthetic services and mutual TLS fixtures; physical qualification remains with its owning phases. Owned validation processes completed, fixture cleanup passed, and temporary edit scripts were removed. Logs and harness artifacts remain available; stage worktree/branch are retained for manager delivery. |
