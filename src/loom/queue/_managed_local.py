@@ -4200,17 +4200,21 @@ def _project_resident_result(
             created_at=item.created_at,
             metadata=item.metadata,
         )
-    metadata = {**result.executor_metadata, **dict(report.executor_metadata or {})}
-    failure = cast(ExecutionFailure | None, result.failure)
-    result = replace(
-        result,
-        executor_metadata=metadata,
-        failure=None
-        if failure is None
-        else replace(
-            failure, executor_metadata={**failure.executor_metadata, **metadata}
-        ),
-    )
+    if report.executor_metadata and report.executor_metadata.get("executor") in (
+        "docker",
+        "apptainer",
+    ):
+        metadata = {**result.executor_metadata, **dict(report.executor_metadata or {})}
+        failure = cast(ExecutionFailure | None, result.failure)
+        result = replace(
+            result,
+            executor_metadata=metadata,
+            failure=None
+            if failure is None
+            else replace(
+                failure, executor_metadata={**failure.executor_metadata, **metadata}
+            ),
+        )
     return _map_resident_result_identity(
         result, worker_request=worker_request, outputs=outputs
     )
