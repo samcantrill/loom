@@ -392,7 +392,17 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: accepted contracts retained; source readiness is recorded in
   the manifest Quality Gate.
 - Refiner: not used
-- Pre-submit gate: manager-owned; not run by executor
+- Pre-submit gate: passed. Manager verified the clean executor handoff
+  `88ea65bad743fea0b657042f0e5c8d87aa88037b`, accepted scope/removals, current
+  docs and bounded test correction, exact validated revision/tree, both required
+  gates and all seven JUnit suites. No product blocker was identified. Only this
+  card changed after validation; no runtime or test evidence was invalidated.
+  Summary, XML/coverage and eleven gate/correction logs are retained in
+  `/tmp/loom-stage41-p5-summary-evidence` (33 files verified byte-for-byte).
+  Summary has 3641 cases: 3623 passed, zero failed/errors and 18 explicitly gated
+  physical-container skips. Existing monitor teardown warnings remain visible
+  in the passing unit receipt. No phase-owned process remained; unrelated
+  processes and checkouts are preserved. Independent PR review remains required.
 - Independent implementation review: required for external-call ownership, fencing and capacity
 - Blocker corrections: 0/3
 - PR and merge: not started
