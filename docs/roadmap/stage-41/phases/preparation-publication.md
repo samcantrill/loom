@@ -321,6 +321,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   errors across package 127, unit 2329, contract 301, integration 508, e2e 70,
   config-extra 223 and MCP-extra 36. Report: `build/test-summary.md`; JUnit and
   coverage: `build/test-summary/`; log: `/tmp/loom-stage41-p1-test-summary.log`.
+  The summary and seven JUnit reports were preserved before successor validation
+  at `/tmp/loom-stage41-p1-summary-evidence/`; later phases reuse the build paths.
   Started after `d8be797` (tree `fb55c78626fd340438243620e13e4a6531093300`):
   package collection 07:56:30+10 followed that commit at 07:56:27; the corrected
   example at 08:10 preceded e2e collection at 08:22:38; rollout prose at 08:13
@@ -368,9 +370,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   retired the remote branch at the reviewed SHA.
 - Post-merge transition: all phase agents and validation processes finished;
   the shared gate entered `agent/stage-41` and synchronized stage/control/live
-  develop to the verified merge. This completion metadata is published from
-  coordination before the final synchronization and successor startup. Retire
-  only the exact reviewed local phase branch after that synchronization.
+  develop to the verified merge. Completion metadata was published from
+  coordination as `383e9d473f479516db892f135693dd282100d526`; final synchronization
+  verified stage/control/fetched/advertised equality before Phase 2 startup.
+  The exact reviewed local phase branch was then retired, with the persistent
+  stage worktree retained. No unknown or unrelated ref was removed.
 
 ## Completion Record
 
@@ -382,4 +386,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | Workflow evidence and PR identity only; runtime/example, MCP assertion and rollout prose are covered as qualified above. |
 | Replaced-code removal / retained primitive consumers | Removed forced embedded/empty-Slurm recovery and unconditional RUNNING initializer; managed publication uses selected authority. Replay retains its original persisted plan; pure composition and planning remain fresh-publication owners. Embedded-local facade restrictions remain its explicit supported scope. |
 | PR, review and merge | [PR 308](https://github.com/samcantrill/loom/pull/308); independent pass at `4983595`; merged as `c133d1798a73d3a4e8903527aa813a70b7659091`. |
-| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored. Remote phase branch retired; local retirement follows published-metadata synchronization, with the stage worktree retained for Phase 2. |
+| Residual risk and cleanup | Physical fleet/NAS/Slurm and container qualification remain unavailable locally; fake-Slurm and local authenticated/shared/staged fixtures are not physical qualification. The 18 opt-in skips comprise 13 Apptainer timeout/namespace cases and 5 Docker/Apptainer smoke/build/resource cases. Existing monitor tests emitted unawaited-coroutine warnings without failures. No external workload or sidecar was launched. Build/report artifacts remain ignored. Exact remote/local phase branches retired after verified merge and metadata synchronization; stage worktree retained for Phase 2. |

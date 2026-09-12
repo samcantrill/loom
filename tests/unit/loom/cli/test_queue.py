@@ -960,3 +960,31 @@ def test_role_gpu_probe_cli_reports_cpu_inapplicability(
     check = next(item for item in checks if item["check_id"] == "resources.gpu_compute")
     assert check["status"] == "SKIP"
     assert check["details"]["applicability"] == "inapplicable"
+
+
+def test_native_run_cli_keeps_request_ids_and_returns_cancel_control(tmp_path, monkeypatch):
+    from loom.coordinator import CoordinatorClient, RunRequest
+    from loom.queue.preparation import PrepareRunRequest, PreparationSource
+    from loom.queue import LocalDaemonOperation
+
+    request = RunRequest(PrepareRunRequest("run-original", "target", PreparationSource("shared", "root", ".", ("pipeline.yaml",)), "pipeline.yaml", "profile"), "queue-original")
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request.to_dict()))
+    calls = []
+    def start(client, accepted):
+        calls.append(accepted)
+        return LocalDaemonOperation("run-original", "run", "pending", None, {"coordinator_id": "owner", "queue_item_id": "queue-original", "admission": None})
+    def cancel(client, target):
+        calls.append(target)
+        return LocalDaemonOperation("cancel-original", "cancel_run", "pending", None, {"target_operation_id": target})
+    monkeypatch.setattr(CoordinatorClient, "start_run", start)
+    monkeypatch.setattr(CoordinatorClient, "cancel_run_operation", cancel)
+    for command, arguments, expected in [
+        ("daemon-start-run", ["--request", str(path)], "run-original"),
+        ("daemon-cancel-run", ["run-original"], "cancel-original"),
+    ]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        assert main(["queue", command, "--endpoint", str(tmp_path / "absent.sock"), *arguments, "--format", "json"], stdout=stdout, stderr=stderr) == 0
+        assert json.loads(stdout.getvalue())["result"]["operation_id"] == expected
+        assert stderr.getvalue() == ""
+    assert calls == [request, "run-original"]

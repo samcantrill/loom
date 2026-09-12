@@ -291,3 +291,46 @@ def test_old_application_handshake_refuses_dependent_mutation_as_unsupported(
         assert caught.value.mutation_outcome == "not_applied"
         assert caught.value.ids["queue_item_id"] == "original-item"
         assert [request["operation"] for request in requests] == ["handshake"]
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, EOFError])
+def test_run_observation_interruption_returns_known_reference_without_cancellation(tmp_path, interruption):
+    operation = {"operation_id": "run-original", "kind": "run", "state": "pending", "code": None,
+                 "result": {"coordinator_id": "coordinator-a", "queue_item_id": "queue-original", "admission": None}}
+    def respond(connection, request):
+        assert request["operation"] == "operation"
+        connection.sendall(encode_wire({"ok": True, "result": operation}) + b"\n")
+    with _peer(tmp_path / "service.sock", respond) as requests:
+        client = CoordinatorClient.from_unix_socket(tmp_path / "service.sock")
+        def interrupt(*args, **kwargs):
+            raise interruption()
+        client._wait_native = interrupt
+        observed = client.observe_run("run-original")
+        assert observed.operation is not None
+        assert observed.operation.operation_id == "run-original"
+        assert observed.admission is None
+        assert observed.connection.coordinator_id == "coordinator-a"
+        assert not any(row["operation"] in {"cancel", "cancel_run_operation", "submit"} for row in requests)
+
+
+@pytest.mark.parametrize("delay_at", ["operation", "wait_operation"])
+def test_run_observation_deadline_bounds_reads_and_detaches_with_reference(tmp_path, delay_at):
+    operation = {"operation_id": "original", "kind": "run", "state": "pending", "code": None,
+                 "result": {"coordinator_id": "coordinator-a", "queue_item_id": "original-queue", "admission": None}}
+    def respond(connection, request):
+        if request["operation"] == delay_at:
+            # A peer which remains connected without completing its reply must
+            # not gain a new transport budget after every observation call.
+            time.sleep(0.3)
+        result = operation if request["operation"] == "operation" else {"kind": "TIMEOUT", "operation": operation}
+        connection.sendall(encode_wire({"ok": True, "result": result}) + b"\n")
+    with _peer(tmp_path / "service.sock", respond) as requests:
+        client = CoordinatorClient.from_unix_socket(tmp_path / "service.sock")
+        started = time.monotonic()
+        observed = client.observe_run("original", timeout_seconds=0.08)
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.25
+        assert observed.operation_id == "original"
+        assert observed.connection.coordinator_id == "coordinator-a"
+        assert (observed.operation is None) is (delay_at == "operation")
+        assert not any(row["operation"] in {"cancel", "cancel_run_operation"} for row in requests)

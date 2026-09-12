@@ -284,6 +284,22 @@ def register_subparser(
     _add_output_options(cancel_preparation)
     cancel_preparation.set_defaults(handler=handle_daemon_cancel_preparation)
 
+    start_run = queue_subparsers.add_parser(
+        "daemon-start-run", help="durably accept preparation and exact target admission"
+    )
+    _add_client_connection_arguments(start_run)
+    start_run.add_argument("--request", type=Path, required=True, metavar="PATH")
+    _add_output_options(start_run)
+    start_run.set_defaults(handler=handle_daemon_start_run)
+
+    cancel_run = queue_subparsers.add_parser(
+        "daemon-cancel-run", help="explicitly cancel a durable run operation"
+    )
+    _add_client_connection_arguments(cancel_run)
+    cancel_run.add_argument("operation_id", metavar="OPERATION_ID")
+    _add_output_options(cancel_run)
+    cancel_run.set_defaults(handler=handle_daemon_cancel_run)
+
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
     )
@@ -834,6 +850,30 @@ def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
 def handle_daemon_cancel_preparation(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).cancel_preparation(namespace.operation_id)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_start_run(namespace: argparse.Namespace) -> int:
+    from loom.coordinator import RunRequest
+
+    try:
+        raw = json.loads(namespace.request.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("run request must be a JSON object")
+        request = RunRequest.from_dict(raw)
+        result = _daemon_client(namespace).start_run(request)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _queue_cli_error(QueueServiceError("run request file is unavailable or invalid JSON")) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_cancel_run(namespace: argparse.Namespace) -> int:
+    try:
+        result = _daemon_client(namespace).cancel_run_operation(namespace.operation_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -1463,6 +1503,8 @@ __all__ = [
     "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
     "handle_daemon_cancel_preparation",
+    "handle_daemon_start_run",
+    "handle_daemon_cancel_run",
     "handle_daemon_admission",
     "handle_daemon_admissions",
     "handle_daemon_agent",

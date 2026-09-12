@@ -72,7 +72,7 @@ def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp()
         socket.create_connection = unexpected
         threading.Thread.start = unexpected
         subprocess.Popen = unexpected
-        from loom.coordinator import CoordinatorClient, CoordinatorClientError
+        from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest, RunObservation
         from loom.queue import LocalDaemonSocketClient, QueueServiceError
         with CoordinatorClient.from_unix_socket('/nonexistent/loom.sock'):
             pass
