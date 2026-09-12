@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p3-service-startup-lifetime
@@ -477,13 +477,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   their actual skip reasons. The only delta from the validated revision is
   this card's execution evidence. No product blocker remains; corrections 1
   and 2 are resolved. The process inventory confirms no phase-owned service,
-  worker or validation process remains. Independent PR review is still required.
+  worker or validation process remains. The separate independent review receipt
+  below owns the subsequent approval.
 - Evidence archive: the summary, seven per-suite `junit.xml` reports and both
   final gate logs were copied and byte-verified under
   `/tmp/loom-stage41-p3-summary-evidence/`. This preserves the Phase 3 evidence
   before a successor reuses ignored build paths. No runtime checks were repeated
   for the manager's metadata-only acceptance record.
-- Independent implementation review: required for durable startup/lifetime and public cutover
+- Independent implementation review: passed on 2026-09-12 at
+  `09b6405b169041805af2bf0ac1d56c4fa1f7f4af`; no required corrections,
+  product blockers or workflow issues. The reviewer verified actual PR scope,
+  title/target/head, both required gates, all seven archived JUnit reports and
+  the metadata-only delta from the validated implementation. The exact review
+  receipt is also retained in PR 310's body. Physical qualification remains
+  distinct from the passed native service and mutual TLS fixtures.
 - Manager correction 1/3: corrected stale current ordinary-run guidance in
   docs/features/cli.md, slurm.md, container-example-coverage.md and testing.md,
   the Docker/Apptainer entrypoint descriptions, active resume examples and the
@@ -519,9 +526,17 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   and one assignment/worker. The 1aa2141 gate was interrupted for this fix:
   exit 2, baseline 447 passed, 2 skipped, 287 deselected in 146.42 s.
 - Blocker corrections: 2/3
-- PR: [310](https://github.com/samcantrill/loom/pull/310), opened on 2026-09-12;
-  canonical title, develop target, selected phase branch, non-draft/open state
-  and mergeability verified. Independent review is pending; no merge is claimed.
+- PR and merge: [310](https://github.com/samcantrill/loom/pull/310) squash-merged
+  into develop as `a4bedaa2624750de2b3c28a42e9a950065d16bb6` on
+  2026-09-12T05:05:30Z. The delivery helper verified the reviewed head,
+  canonical title, target, mergeability and actual remote merge, then retired
+  the exact remote phase branch with a lease to the reviewed commit.
+- Transition: executor and independent reviewer are terminal; validation and
+  phase-owned service/worker processes completed. The shared gate moved the
+  clean persistent stage worktree to `agent/stage-41` and synchronized published
+  state and local develop to the verified merge. This coordination-branch
+  completion metadata must be published and synchronized before the exact local
+  phase branch is retired and Phase 4 starts.
 
 ## Completion Record
 
@@ -532,5 +547,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both required gates exited 0 at `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`; terminal logs, summary and row artifacts recorded above. |
 | Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
 | Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
-| PR, review and merge | PR 310 open against develop; manager pre-submit passed; independent review and delivery remain. |
-| Residual risk and cleanup | Native mixed-role/process evidence passed; no attempt-owned services remain. Physical fleet/container/Slurm qualification remains explicitly excluded and mapped to successor owners above. |
+| PR, review and merge | Manager pre-submit and independent review passed; PR 310 merged as `a4bedaa2624750de2b3c28a42e9a950065d16bb6`; exact reviewed head and evidence recorded above. |
+| Residual risk and cleanup | No implementation blocker; native mixed-role/process evidence passed and no phase-owned services remain. Physical qualification and retained consumers remain with successor owners. Evidence archived; remote phase branch retired; coordination metadata publication/synchronization and exact local branch retirement precede Phase 4. |
