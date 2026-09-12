@@ -358,6 +358,7 @@ class SlurmReadyStageProfile:
     qos: str | None = None
     cluster: str | None = None
     available: bool = True
+    poll_interval_seconds: float = 1.0
     containment_helper: SlurmContainmentHelper | None = field(default=None, repr=False)
     descriptor: SchedulingComponentDescriptor = field(init=False)
 
@@ -385,6 +386,12 @@ class SlurmReadyStageProfile:
             or not 1 <= self.max_outstanding <= 10_000
         ):
             raise SlurmPlanningError("ready-stage profile limit is invalid")
+        if (
+            isinstance(self.poll_interval_seconds, bool)
+            or not isinstance(self.poll_interval_seconds, (int, float))
+            or not 0.05 <= self.poll_interval_seconds <= 3600
+        ):
+            raise SlurmPlanningError("ready-stage polling interval is invalid")
         if not isinstance(self.available, bool):
             raise SlurmPlanningError("ready-stage profile availability is invalid")
         if self.executor_name != "local":
@@ -463,6 +470,8 @@ class SlurmReadyStageProfile:
                 else float(self.containment_helper.timeout_seconds)
             ),
         }
+        if self.poll_interval_seconds != 1.0:
+            payload["poll_interval_seconds"] = float(self.poll_interval_seconds)
         if container is not None:
             # The protected profile fingerprint binds every selected container
             # value, while the request receipt below exposes only redacted data.
@@ -669,6 +678,7 @@ def map_ready_stage(
     stage_work_id: str,
     run_uri: str,
     attempt_id: str,
+    _check_commands: bool = True,
 ) -> SlurmReadyStageRequest:
     """Translate every supported hard semantic or reject before submission."""
 
@@ -681,7 +691,11 @@ def map_ready_stage(
         != profile.configuration_fingerprint
     ):
         raise SlurmPlanningError("slurm_profile_changed")
-    profile_diagnostic = profile.preflight()
+    profile_diagnostic = (
+        profile.preflight()
+        if _check_commands
+        else (None if profile.available else "slurm_profile_unavailable")
+    )
     if profile_diagnostic is not None:
         raise SlurmPlanningError(profile_diagnostic)
     if (
@@ -1032,7 +1046,7 @@ class SQLiteReadyStageSubmissions:
         profile: SlurmReadyStageProfile,
         script_path: str | Path,
     ) -> SlurmReadyStageSubmission:
-        """Retain one replay-stable capability before either owner submits."""
+        """Retain one replay-stable capability before the journal owner submits."""
 
         self._require_profile(request, profile)
         script = Path(script_path)
@@ -1087,13 +1101,23 @@ class SQLiteReadyStageSubmissions:
         current = self.prepare(request, profile, script_path)
         if current.state is not ReadyStageState.INTENT:
             return current
-        submitting = self._compare_and_set(
-            request.operation_id,
-            expected=ReadyStageState.INTENT,
-            value=replace(current, state=ReadyStageState.SUBMITTING),
-        )
-        if submitting.state is not ReadyStageState.SUBMITTING:
-            return submitting
+        submitting = replace(current, state=ReadyStageState.SUBMITTING)
+        with self._transaction() as conn:
+            claimed = (
+                conn.execute(
+                    f"UPDATE {_SUBMISSION_TABLE} SET state = ?, value_json = ? "
+                    "WHERE operation_id = ? AND state = ?",
+                    (
+                        submitting.state.value,
+                        _submission_json(submitting),
+                        request.operation_id,
+                        ReadyStageState.INTENT.value,
+                    ),
+                ).rowcount
+                == 1
+            )
+        if not claimed:
+            return self.read(request.operation_id)
         if before_runner is not None and before_runner(submitting) is False:
             return self._record_outcome(
                 request.operation_id,

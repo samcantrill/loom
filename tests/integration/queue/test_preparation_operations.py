@@ -1880,7 +1880,8 @@ def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_
             daemon.start_run(RunRequest(_request(), "target-admission"), principal_id="caller")
         else:
             daemon.prepare_run(_request(), principal_id="caller")
-        completed = daemon.wait_operation("prepare-1", timeout=25).operation
+        # The oversized receipt fixture composes 800 stages under coverage.
+        completed = daemon.wait_operation("prepare-1", timeout=90).operation
         assert completed.state == ("applied" if large == "preflight" else "failed"), (
             completed
         )

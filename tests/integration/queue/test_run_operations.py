@@ -597,3 +597,130 @@ def test_publication_budget_refusal_still_allows_bounded_cancellation(tmp_path):
         assert len(stable_json_bytes(original.to_dict())) <= 64 * 1024
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("grant_before_cancel", [False, True])
+def test_public_run_inspection_and_cancel_use_the_agent_slurm_job(
+    tmp_path, grant_before_cancel
+):
+    import base64
+    import time
+    from loom.queue import LocalDaemonPrincipal, LocalDaemonRole
+    from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+    from tests.integration.queue.test_slurm_ready_stage import (
+        _profile,
+        _positive_containment_helper,
+    )
+
+    service = _service(tmp_path)
+    worker = service.daemon.resident_worker_launch_profile
+    assert worker is not None
+    runner = FakeSlurmCommandRunner()
+    profile = replace(
+        _profile(
+            runner,
+            capability_path=tmp_path / "job-capability",
+            containment_helper=_positive_containment_helper(),
+        ),
+        **{
+            key: worker.descriptor[key]
+            for key in (
+                "project_fingerprint",
+                "environment_fingerprint",
+                "executor_fingerprint",
+            )
+        },
+    )
+    service = replace(
+        service, daemon=replace(service.daemon, slurm_profiles=(profile,))
+    )
+    source = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(source.read_text())
+    stage = authored["pipeline"]["stages"][0]
+    stage["placement"] = {
+        "execution_route": {"kind": "slurm", "profile": profile.profile_id}
+    }
+    stage["resources"]["entries"]["gpu"] = {
+        "kind": "gpu",
+        "amount": 2,
+        "unit": "count",
+        "attributes": {"allocation_mode": "exclusive"},
+    }
+    source.write_text(json.dumps(authored))
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    inspection = RunInspectionProjection(
+        run_store=LocalRunStore(service.daemon.run_store_root), daemon=daemon
+    )
+    server = LocalDaemonSocketServer(
+        daemon,
+        service.daemon.endpoint,
+        inspect_run=lambda uri: inspection.inspect(uri).to_dict(),
+    )
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            operation = client.start_run(RunRequest(_request(), "slurm-public"))
+            deadline = time.monotonic() + 30
+            while (
+                not any(call[0] == "sbatch" for call in runner.calls)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+            assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+            observed = client.observe_run(operation.operation_id, wait=False)
+            assert observed.admission is not None
+            assert observed.inspection is not None
+            execution = daemon._execution
+            assert execution is not None
+            record = execution.slurm_assignments.list_unreleased()[0]
+            assert record.assignment.agent_id == execution.agent_id
+            assert record.fence is None, "submission does not grant project execution"
+            assert not service.daemon.gpu_devices
+            assert "--gres=gpu:2" in str(record.request["script"])
+            assert daemon._lifetime.retained()
+            bootstrap = daemon.slurm_bootstrap_view(
+                LocalDaemonPrincipal(
+                    profile.bootstrap_principal_id,
+                    LocalDaemonRole.SLURM_BOOTSTRAP,
+                    profile.credential_reference,
+                )
+            )
+            assert record.job_id is not None
+            bootstrap.register(
+                operation_id=record.assignment.operation_id,
+                request_digest=record.assignment.request_digest,
+                job_id=record.job_id,
+                cluster=record.cluster,
+                incarnation="queued-bootstrap",
+                capability=base64.b64encode(
+                    Path(profile.job_private_file_provider.fixed_path).read_bytes()
+                ).decode(),
+            )
+            bootstrap.inputs_ready(record.assignment.assignment_id, "queued-bootstrap")
+            fence = None
+            if grant_before_cancel:
+                fence = bootstrap.grant(
+                    record.assignment.assignment_id, "queued-bootstrap"
+                )
+            control = client.cancel_run_operation(operation.operation_id)
+            settled = client.wait_operation(control.operation_id, 15).operation
+            assert settled.state == "applied"
+            if grant_before_cancel:
+                assert fence is not None
+                assert (
+                    bootstrap.start_permit(
+                        record.assignment.assignment_id, "queued-bootstrap", fence
+                    )
+                    is False
+                )
+            else:
+                with pytest.raises(QueueConflictError):
+                    bootstrap.grant(record.assignment.assignment_id, "queued-bootstrap")
+            assert not execution.slurm_assignments.list_unreleased()
+            assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+            assert any(call[0] == "scancel" for call in runner.calls)
+    finally:
+        server.stop()
+        daemon.stop()

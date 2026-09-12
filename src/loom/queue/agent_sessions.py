@@ -66,7 +66,8 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "11"
+PROTOCOL_VERSION = "12"
+SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -388,7 +389,17 @@ class AgentPrincipalPolicy:
     capabilities: tuple[str, ...] = ()
     gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
 
+    external_slurm_profiles: tuple[tuple[str, str], ...] = ()
+
     def __post_init__(self) -> None:
+        profiles = tuple(tuple(item) for item in self.external_slurm_profiles)
+        if any(
+            len(item) != 2
+            or any(not isinstance(value, str) or not value for value in item)
+            for item in profiles
+        ) or len(set(profiles)) != len(profiles):
+            raise QueueServiceError("external SLURM profile inventory is invalid")
+        object.__setattr__(self, "external_slurm_profiles", profiles)
         for name in ("credential_id", "principal_id", "agent_id"):
             _identifier(getattr(self, name), name)
         _identifiers(self.pools, "pools", non_empty=True)
@@ -687,7 +698,17 @@ class AgentOffer:
     capacity_atoms: tuple[CapacityAtom, ...] = ()
     resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
+    external_slurm_profiles: tuple[tuple[str, str], ...] = ()
+
     def __post_init__(self) -> None:
+        profiles = tuple(tuple(item) for item in self.external_slurm_profiles)
+        if any(
+            len(item) != 2
+            or any(not isinstance(value, str) or not value for value in item)
+            for item in profiles
+        ) or len(set(profiles)) != len(profiles):
+            raise QueueServiceError("external SLURM profile inventory is invalid")
+        object.__setattr__(self, "external_slurm_profiles", profiles)
         for name in (
             "session_id",
             "coordinator_epoch",
@@ -778,7 +799,12 @@ class AgentOffer:
             not isinstance(item, AgentProviderDescriptor) for item in providers
         ) or len({item.descriptor.key for item in providers}) != len(providers):
             raise QueueServiceError("offer provider composition is invalid")
-        if not providers:
+        if not providers and (
+            not self.external_slurm_profiles
+            or capacity_atoms
+            or self.gpu_devices
+            or self.resident_profiles
+        ):
             raise QueueServiceError("offer provider composition is required")
         provider_kinds = {item.descriptor.kind for item in providers}
         if any(
@@ -894,6 +920,9 @@ class AgentOffer:
 
     def value(self) -> dict[str, PlainData]:
         return {
+            "external_slurm_profiles": [
+                list(item) for item in self.external_slurm_profiles
+            ],
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
             "config_revision": self.config_revision,
@@ -913,7 +942,11 @@ class AgentOffer:
 
     @classmethod
     def from_value(cls, value: object) -> "AgentOffer":
+        # An earlier native-only offer has exactly the same resource meaning.
+        if isinstance(value, Mapping) and "external_slurm_profiles" not in value:
+            value = {"external_slurm_profiles": [], **value}
         expected = {
+            "external_slurm_profiles",
             "session_id",
             "coordinator_epoch",
             "config_revision",
@@ -991,6 +1024,9 @@ class AgentOffer:
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
+            external_slurm_profiles=tuple(
+                tuple(item) for item in value["external_slurm_profiles"]
+            ),
             session_id=cast(str, value["session_id"]),
             coordinator_epoch=cast(str, value["coordinator_epoch"]),
             config_revision=cast(str, value["config_revision"]),
@@ -1575,6 +1611,17 @@ class AgentSessionView:
             expected, coordinator_epoch, idempotency_key=idempotency_key
         )
 
+    def slurm_work(
+        self,
+        session_id: str,
+        coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).slurm_work(
+            session_id, coordinator_epoch, evidence, cursor
+        )
+
     def publish_offer(
         self,
         offer: AgentOffer,
@@ -1592,12 +1639,20 @@ class AgentSessionView:
         return AgentSessionService(self._daemon, self._principal).renew_offer(renewal)
 
     def recover_poll(
-        self, session_id: str, availability_revision: str, *,
-        sequence: int, wait_timeout_ms: int, coordinator_epoch: str,
+        self,
+        session_id: str,
+        availability_revision: str,
+        *,
+        sequence: int,
+        wait_timeout_ms: int,
+        coordinator_epoch: str,
     ) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).recover_poll(
-            session_id, availability_revision, sequence=sequence,
-            wait_timeout_ms=wait_timeout_ms, coordinator_epoch=coordinator_epoch,
+            session_id,
+            availability_revision,
+            sequence=sequence,
+            wait_timeout_ms=wait_timeout_ms,
+            coordinator_epoch=coordinator_epoch,
         )
 
     def wait_for_work(
@@ -1780,8 +1835,12 @@ class AgentSessionView:
             provider_release_proof=provider_release_proof,
         )
 
-    def service_lifetime(self, session_id: str, coordinator_epoch: str, generation: str, action: str) -> Mapping[str, PlainData]:
-        return AgentSessionService(self._daemon, self._principal).service_lifetime(session_id, coordinator_epoch, generation, action)
+    def service_lifetime(
+        self, session_id: str, coordinator_epoch: str, generation: str, action: str
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).service_lifetime(
+            session_id, coordinator_epoch, generation, action
+        )
 
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
@@ -1838,6 +1897,61 @@ class AgentSessionService:
             policy.revision,
         )
 
+    @_serialized_session_operation
+    def slurm_work(
+        self,
+        session_id: str,
+        coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, PlainData]:
+        rule, revision = self._authorize("poll")
+        with self._daemon._connection() as conn:
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id=?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(session, rule, coordinator_epoch, revision)
+            if SLURM_SUBMISSION_CAPABILITY not in session.capabilities:
+                raise QueueServiceError(
+                    "agent session lacks SLURM submission capability"
+                )
+        execution = self._daemon._execution
+        if execution is None:
+            raise QueueServiceError("SLURM assignment owner is unavailable")
+        if evidence is not None:
+            return execution.acknowledge_slurm_agent(
+                session.agent_id, session.agent_root_id, evidence
+            )
+        tasks = sorted(
+            execution.slurm_agent_tasks(session.agent_id, session.agent_root_id),
+            key=lambda task: cast(
+                str, cast(Mapping[str, PlainData], task["assignment"])["assignment_id"]
+            ),
+        )
+        if cursor is not None:
+            tasks = [
+                task
+                for task in tasks
+                if cast(
+                    str,
+                    cast(Mapping[str, PlainData], task["assignment"])["assignment_id"],
+                )
+                > cursor
+            ]
+        selected = tasks[:1]
+        return {
+            "tasks": cast(PlainData, selected),
+            "next_cursor": None
+            if len(tasks) <= 1
+            else cast(Mapping[str, PlainData], selected[0]["assignment"])[
+                "assignment_id"
+            ],
+        }
+
     def handshake(self) -> Mapping[str, PlainData]:
         self._authorize("handshake")
         coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
@@ -1845,7 +1959,8 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v11",
+                    "agent-sessions-v12",
+                    SLURM_SUBMISSION_CAPABILITY,
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -2592,6 +2707,19 @@ class AgentSessionService:
                 raise QueueConflictError(
                     "agent offer pools do not match its effective scope"
                 )
+            if (
+                offer.external_slurm_profiles
+                and SLURM_SUBMISSION_CAPABILITY not in session.capabilities
+            ):
+                raise QueueServiceError(
+                    "agent session lacks SLURM submission capability"
+                )
+            if not set(offer.external_slurm_profiles).issubset(
+                rule.external_slurm_profiles
+            ):
+                raise QueueConflictError(
+                    "agent external SLURM inventory is not authorized"
+                )
             if offer.gpu_devices != rule.gpu_devices:
                 raise QueueConflictError(
                     "agent offer GPU inventory does not match protected policy"
@@ -2730,32 +2858,45 @@ class AgentSessionService:
         return freeze_plain_data(value, path="agent offer receipt")
 
     def recover_poll(
-        self, session_id: str, availability_revision: str, *,
-        sequence: int, wait_timeout_ms: int, coordinator_epoch: str,
+        self,
+        session_id: str,
+        availability_revision: str,
+        *,
+        sequence: int,
+        wait_timeout_ms: int,
+        coordinator_epoch: str,
     ) -> Mapping[str, PlainData]:
         """Read an exact abandoned-epoch poll's committed or fenced outcome."""
         rule, policy_revision = self._authorize("poll")
-        for value, name in ((session_id, "session_id"),
-                            (availability_revision, "availability_revision"),
-                            (coordinator_epoch, "coordinator_epoch")):
+        for value, name in (
+            (session_id, "session_id"),
+            (availability_revision, "availability_revision"),
+            (coordinator_epoch, "coordinator_epoch"),
+        ):
             _identifier(value, name)
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise QueueServiceError("work poll sequence must be positive")
-        if (isinstance(wait_timeout_ms, bool) or not isinstance(wait_timeout_ms, int)
-            or not 1 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS):
+        if (
+            isinstance(wait_timeout_ms, bool)
+            or not isinstance(wait_timeout_ms, int)
+            or not 1 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS
+        ):
             raise QueueServiceError("work poll wait is outside the permitted range")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         if coordinator_epoch == epoch:
             raise QueueConflictError("current-epoch poll must use ordinary replay")
         request: dict[str, PlainData] = {
-            "session_id": session_id, "availability_revision": availability_revision,
-            "sequence": sequence, "wait_timeout_ms": wait_timeout_ms,
+            "session_id": session_id,
+            "availability_revision": availability_revision,
+            "sequence": sequence,
+            "wait_timeout_ms": wait_timeout_ms,
             "coordinator_epoch": coordinator_epoch,
         }
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             session = _session_from_row(
-                conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?",
-                             (session_id,)).fetchone(),
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
                 self._daemon._require_started(),  # type: ignore[attr-defined]
                 expected_principal=rule.principal_id,
             )
@@ -2773,10 +2914,15 @@ class AgentSessionService:
             if int(row["sequence"]) == sequence - 1:
                 # The sole outstanding next request never reached this owner.
                 return {"state": "absent"}
-            if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(request):
+            if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(
+                request
+            ):
                 raise QueueConflictError("retained poll identity conflicts")
             if row["result_json"] is not None:
-                return {**_plain_result(row["result_json"], "agent poll receipt"), "state": "committed"}
+                return {
+                    **_plain_result(row["result_json"], "agent poll receipt"),
+                    "state": "committed",
+                }
             if bool(row["active"]):
                 raise AgentPollActiveError("work poll is already active")
             return {"state": "fenced"}
@@ -3306,7 +3452,8 @@ class AgentSessionService:
                     row["next_availability_revision"] != availability_revision
                     or self._remote_execution().coordinator.read_decline_reason(
                         assignment_id
-                    ) != reason_code
+                    )
+                    != reason_code
                 ):
                     raise QueueConflictError("remote decline replay conflicts")
                 return AgentSession(
@@ -4040,7 +4187,9 @@ class AgentSessionService:
         return execution
 
     @_serialized_session_operation
-    def service_lifetime(self, session_id: str, coordinator_epoch: str, generation: str, action: str) -> Mapping[str, PlainData]:
+    def service_lifetime(
+        self, session_id: str, coordinator_epoch: str, generation: str, action: str
+    ) -> Mapping[str, PlainData]:
         """Authorize this process generation's retirement from accepted work."""
         rule, policy_revision = self._authorize("retire")
         daemon = self._daemon
@@ -4048,20 +4197,43 @@ class AgentSessionService:
             raise QueueConflictError("service retirement generation is stale")
         _identifier(generation, "service generation")
         with daemon._connection() as conn:
-            session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), daemon._require_started(), expected_principal=rule.principal_id)
-            if session.agent_id != rule.agent_id or session.coordinator_epoch != coordinator_epoch:
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                daemon._require_started(),
+                expected_principal=rule.principal_id,
+            )
+            if (
+                session.agent_id != rule.agent_id
+                or session.coordinator_epoch != coordinator_epoch
+            ):
                 raise QueueConflictError("service retirement session is stale")
             key = "service-agent:" + session.agent_root_id
-            prior = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", (key,)).fetchone()
+            prior = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
+            ).fetchone()
             record = {} if prior is None else json.loads(prior[0])
-            identity = {"session_id": session_id, "coordinator_epoch": coordinator_epoch, "generation": generation}
+            identity = {
+                "session_id": session_id,
+                "coordinator_epoch": coordinator_epoch,
+                "generation": generation,
+            }
             if action == "closed":
-                if any(record.get(k) != v for k, v in identity.items()) or record.get("state") != "authorized" or session.state is not AgentSessionState.RETIRED_CLEAN:
-                    raise QueueConflictError("service retirement acknowledgement conflicts")
+                if (
+                    any(record.get(k) != v for k, v in identity.items())
+                    or record.get("state") != "authorized"
+                    or session.state is not AgentSessionState.RETIRED_CLEAN
+                ):
+                    raise QueueConflictError(
+                        "service retirement acknowledgement conflicts"
+                    )
                 state = "closed"
             else:
                 daemon._lifetime.require_accepting()
-                if record.get("state") == "authorized" and all(record.get(k) == v for k, v in identity.items()):
+                if record.get("state") == "authorized" and all(
+                    record.get(k) == v for k, v in identity.items()
+                ):
                     # Assignment eligibility was already closed atomically. New
                     # startup work waits for a fresh eligible incarnation.
                     state = "authorized"
@@ -4071,13 +4243,31 @@ class AgentSessionService:
                     state = "retained"
                 else:
                     if not _coordinator_references_empty(conn, session_id):
-                        raise QueueConflictError("agent session has unresolved references")
-                    conn.execute("UPDATE agent_offers SET current = 0 WHERE session_id = ?", (session_id,))
-                    conn.execute("UPDATE agent_poll_state SET active = 0 WHERE session_id = ?", (session_id,))
-                    conn.execute("UPDATE agent_sessions SET state = ? WHERE session_id = ?", (AgentSessionState.RETIRING.value, session_id))
+                        raise QueueConflictError(
+                            "agent session has unresolved references"
+                        )
+                    conn.execute(
+                        "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    conn.execute(
+                        "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    conn.execute(
+                        "UPDATE agent_sessions SET state = ? WHERE session_id = ?",
+                        (AgentSessionState.RETIRING.value, session_id),
+                    )
                     state = "authorized"
-            result = {**identity, "coordinator_id": daemon._require_started(), "state": state}
-            conn.execute("INSERT INTO daemon_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, _canonical_json(result)))
+            result = {
+                **identity,
+                "coordinator_id": daemon._require_started(),
+                "state": state,
+            }
+            conn.execute(
+                "INSERT INTO daemon_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, _canonical_json(result)),
+            )
             conn.commit()
         return result
 
@@ -5310,8 +5500,12 @@ def _target_remote_delivery(
             supported = (
                 PREPARATION_STAGED_INPUT_CAPABILITY in session.capabilities
                 if isinstance(preparation.input_receipt, StagedInputReceipt)
-                else bool({PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY}
-                          .intersection(session.capabilities))
+                else bool(
+                    {
+                        PREPARATION_INPUT_CAPABILITY,
+                        PREPARATION_STAGED_INPUT_CAPABILITY,
+                    }.intersection(session.capabilities)
+                )
             )
             if not supported:
                 required = (

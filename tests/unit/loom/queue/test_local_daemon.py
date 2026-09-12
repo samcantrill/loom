@@ -2129,7 +2129,7 @@ def test_failed_execution_construction_releases_daemon_ownership(
     restarted.stop()
 
 
-def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
+def test_slurm_cancellation_fanout_defers_external_calls_to_the_agent() -> None:
     """An epoch request is not mistaken for scheduler containment."""
 
     known = SimpleNamespace(
@@ -2174,44 +2174,37 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     subject = cast(Any, execution)
     subject.slurm_assignments = _Assignments()
     subject.slurm_submissions = _Submissions()
+    subject._slurm_agent = None
     subject.daemon = None
     subject._slurm_profile = lambda profile_id, fingerprint: (
         f"resolved:{profile_id}:{fingerprint}"
     )
 
     assert execution._fan_out_slurm_cancellation("run://example") is True
-    assert calls == [("known", "resolved:profile-a:config-a")]
+    assert calls == [], "the coordinator cannot call scancel, even for a known job"
 
 
-def test_slurm_cancellation_waits_for_exact_provider_release() -> None:
+def test_slurm_cancellation_waits_for_the_agent_release_acknowledgement() -> None:
     record = SimpleNamespace(
         state="logical_released",
-        assignment=SimpleNamespace(
-            assignment_id="assignment-1",
-            operation_id="operation-1",
-            attempt_id="attempt-1",
-        ),
+        assignment=SimpleNamespace(assignment_id="assignment-1"),
     )
+    retained = [record]
     execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
     subject = cast(Any, execution)
     subject.slurm_assignments = SimpleNamespace(
-        list_run_unreleased=lambda _run_uri: (record,)
-    )
-    subject.slurm_submissions = SimpleNamespace(
-        find=lambda _operation_id: SimpleNamespace()
+        list_run_unreleased=lambda _run_uri: tuple(retained)
     )
     subject.daemon = None
-
-    def unavailable(_assignment_id: str) -> None:
-        raise QueueConflictError("provider release is unavailable")
-
-    subject._release_slurm_assignment = unavailable
+    subject._drive_local_slurm = lambda _record: None
     assert execution._fan_out_slurm_cancellation("run://example") is True
 
-    released: list[str] = []
-    subject._release_slurm_assignment = released.append
+    def acknowledged(candidate: object) -> None:
+        assert candidate is record
+        retained.clear()
+
+    subject._drive_local_slurm = acknowledged
     assert execution._fan_out_slurm_cancellation("run://example") is False
-    assert released == ["assignment-1"]
 
 
 def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
@@ -2298,7 +2291,8 @@ def test_live_owner_loss_degrades_service_and_blocks_scheduling(
 
 @pytest.mark.parametrize("version", [0, 14])
 def test_schema_mismatch_requires_fresh_root_without_migration(
-    tmp_path: Path, version: int,
+    tmp_path: Path,
+    version: int,
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)

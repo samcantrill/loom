@@ -61,7 +61,10 @@ from .resident_readiness import (
 )
 from .gpu.occupancy import GpuOccupancyPolicy
 from ._preparation_policy import PreparationPolicy, load_preparation_policy
-from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
+from .preparation import (
+    PREPARATION_INPUT_CAPABILITY,
+    PREPARATION_STAGED_INPUT_CAPABILITY,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,7 +405,7 @@ def load_outbound_agent_service_config(
             "registration",
             "reconnect_seconds",
         },
-        {"provider_factory", "resources"},
+        {"provider_factory", "resources", "slurm_profiles"},
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
@@ -424,8 +427,10 @@ def load_outbound_agent_service_config(
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
-    if not profiles:
-        raise QueueConfigError("resident_profiles must not be empty")
+    if not profiles and not payload.get("slurm_profiles"):
+        raise QueueConfigError(
+            "resident_profiles must not be empty without external SLURM profiles"
+        )
     authored_profiles = _sequence(payload, "resident_profiles")
     payload = {
         **payload,
@@ -500,6 +505,9 @@ def load_outbound_agent_service_config(
         certificate_path=_path(payload, "certificate_path", base),
         private_key_path=_path(payload, "private_key_path", base),
         agent_root=_path(payload, "agent_root", base),
+        slurm_profiles=cast(
+            Any, _slurm_profile_composition(payload.get("slurm_profiles"))
+        ),
         resident_profiles=profiles,
         resource_inventory=resource_inventory,
         gpu_occupancy_policy=occupancy_policy,
@@ -627,15 +635,20 @@ def run_outbound_agent_service(
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
-            if expected_coordinator_id is not None and coordinator_id != expected_coordinator_id:
-                raise QueueConflictError("outbound agent coordinator identity conflicts")
+            if (
+                expected_coordinator_id is not None
+                and coordinator_id != expected_coordinator_id
+            ):
+                raise QueueConflictError(
+                    "outbound agent coordinator identity conflicts"
+                )
             session = client.active_session()
             if session is None:
                 operation_id = _operation_id(
                     "register",
                     client.agent_root_id,
                     active.registration.config_revision,
-                    *( (generation,) if lifetime == "run" else () ),
+                    *((generation,) if lifetime == "run" else ()),
                 )
                 session = client.register(
                     AgentRegistration(
@@ -659,22 +672,52 @@ def run_outbound_agent_service(
                     ),
                 )
             if lifetime != "run" and active.client.agent_root is not None:
-                record_process(active.client.agent_root, stopped=False, coordinator_id=coordinator_id, session_id=session.session_id)
+                record_process(
+                    active.client.agent_root,
+                    stopped=False,
+                    coordinator_id=coordinator_id,
+                    session_id=session.session_id,
+                )
             while not stop.is_set():
                 if lifetime == "run":
-                    retirement = {"session_id": session.session_id, "coordinator_epoch": coordinator_epoch, "generation": generation, "action": "observe"}
+                    retirement = {
+                        "session_id": session.session_id,
+                        "coordinator_epoch": coordinator_epoch,
+                        "generation": generation,
+                        "action": "observe",
+                    }
                     decision = client._call("service_lifetime", retirement)
                     if decision.get("state") == "authorized":
-                        if decision.get("coordinator_id") != coordinator_id or any(decision.get(key) != retirement[key] for key in ("session_id", "coordinator_epoch", "generation")):
-                            raise QueueConflictError("service retirement evidence is stale")
-                        client.retire_clean(session.session_id, idempotency_key="service-retire-" + generation)
+                        if decision.get("coordinator_id") != coordinator_id or any(
+                            decision.get(key) != retirement[key]
+                            for key in ("session_id", "coordinator_epoch", "generation")
+                        ):
+                            raise QueueConflictError(
+                                "service retirement evidence is stale"
+                            )
+                        client.retire_clean(
+                            session.session_id,
+                            idempotency_key="service-retire-" + generation,
+                        )
                         client.shutdown_clean()
-                        client._call("service_lifetime", {**retirement, "action": "closed"})
+                        client._call(
+                            "service_lifetime", {**retirement, "action": "closed"}
+                        )
                         if active.client.agent_root is not None:
-                            record_process(active.client.agent_root, stopped=True, coordinator_id=coordinator_id, session_id=session.session_id)
+                            record_process(
+                                active.client.agent_root,
+                                stopped=True,
+                                coordinator_id=coordinator_id,
+                                session_id=session.session_id,
+                            )
                         return
                     if active.client.agent_root is not None:
-                        record_process(active.client.agent_root, stopped=False, coordinator_id=coordinator_id, session_id=session.session_id)
+                        record_process(
+                            active.client.agent_root,
+                            stopped=False,
+                            coordinator_id=coordinator_id,
+                            session_id=session.session_id,
+                        )
                 client.poll_control(session.session_id)
                 session = client.active_session()
                 if session is None:
@@ -1288,6 +1331,7 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
         "qos",
         "cluster",
         "available",
+        "poll_interval_seconds",
         "containment_helper",
     }
     for index, item in enumerate(value):
@@ -1467,6 +1511,7 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "reconnect_seconds": payload["reconnect_seconds"],
                 "resident_profiles": profiles,
                 "provider_factory": payload.get("provider_factory"),
+                "slurm_profiles": payload.get("slurm_profiles"),
             }
         ),
     )
@@ -1676,6 +1721,7 @@ def _agent_policy(value: Mapping[str, object]) -> AgentPolicyConfig:
     agents: list[AgentPrincipalPolicy] = []
     for index, item in enumerate(_sequence(value, "agents")):
         agent = _mapping_value(item, f"agent_policy.agents[{index}]")
+        agent = {"external_slurm_profiles": [], **agent}
         _exact(
             agent,
             {
@@ -1685,6 +1731,7 @@ def _agent_policy(value: Mapping[str, object]) -> AgentPolicyConfig:
                 "pools",
                 "capabilities",
                 "gpu_devices",
+                "external_slurm_profiles",
             },
             f"agent_policy.agents[{index}]",
         )
@@ -1700,6 +1747,13 @@ def _agent_policy(value: Mapping[str, object]) -> AgentPolicyConfig:
                         _mapping_value(device, "agent GPU descriptor")
                     )
                     for device in _sequence(agent, "gpu_devices")
+                ),
+                external_slurm_profiles=cast(
+                    tuple[tuple[str, str], ...],
+                    tuple(
+                        tuple(cast(Sequence[str], item))
+                        for item in _sequence(agent, "external_slurm_profiles")
+                    ),
                 ),
             )
         )

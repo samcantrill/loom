@@ -2231,19 +2231,50 @@ coordinator reconciles authoritative plan and statuses
 ```
 
 The assignment target is a closed tagged value. A managed target retains exact
-agent/session/offer/resource-claim identities. A SLURM target retains exactly
-one named profile, request fingerprint, and stable submission operation while
-holding no agent claim. Both consume the run's atomic stage-concurrency slot and
+agent/session/offer/resource-claim identities. A SLURM target retains its exact
+submit-agent/root identity, protected profile revision, request fingerprint and
+stable submission operation. It holds an external profile reservation without
+reserving the submit host's CPU, memory or GPU resources. Both consume the run's atomic stage-concurrency slot and
 bind the same authority-owned `PENDING` attempt. A missing agent offer never
 changes an explicit SLURM route, and an unavailable profile never falls back to
 an agent or another profile.
 
-The SLURM route persists immutable request/script evidence and `SUBMITTING`
-before invoking `sbatch` at most once. Its only submission outcomes are accepted
+The assigned agent persists immutable request/script evidence and `SUBMITTING`
+in its own journal before invoking `sbatch` at most once. The coordinator keeps
+assignment intent and acknowledged evidence; it has no scheduler invocation path.
+Co-located and outbound agents use the same assignment/acknowledgement contract. Its only submission outcomes are accepted
 with an exact job ID, definitely rejected with positive non-acceptance evidence,
 or unknown. Crash, timeout, malformed output, or lost response after
 `SUBMITTING` stays unknown and reconciles by a stable scheduler-visible
 operation ID; it never invokes `sbatch` again automatically.
+
+Submit agents advertise `external_slurm_profiles` separately from resident
+profiles. Each entry is `[profile_id, configuration_fingerprint]`; the protected
+coordinator agent policy must authorize that exact pair and the
+`slurm-agent-jobs-v1` capability. A submission-only outbound service may have an
+empty `resident_profiles` list. Preparation still requires its own qualified
+resident worker. All agents offering one profile share its `max_outstanding`
+limit, including retained work under earlier profile revisions.
+
+The agent observes live/accounting evidence using bounded `squeue`/`sacct` calls.
+The protected profile sets `poll_interval_seconds` (default 1 second); cancellation
+can issue an initial exact cancel promptly while unavailable discovery backs off.
+A helper exit, missing queue entry, accounting delay or scheduler `COMPLETED`
+cannot establish a valid Loom result. Cancellation records authority intent
+first, then the assigned agent suppresses an unissued call or discovers and
+cancels the exact job. A successful `scancel` is not containment. Release requires
+the authority's terminal/unbind acknowledgement, exact positive protected
+containment evidence when a job was issued, and acknowledged capability
+revocation. Missing containment keeps reservations and service lifetime retained.
+
+The agent session wire protocol is version 12; Slurm assignments use version 2
+and require the exact agent/root identity. An agent restart reopens `slurm.sqlite`
+under the same protected root. A missing
+expected journal/operation remains unresolved; no other agent may take over.
+Agent outbox replay also covers the final release acknowledgement after the
+coordinator has already released its assignment. Incompatible retained SLURM
+assignments require settlement under their original installation before new
+owner initialization. Native-only owners retain their existing schema contract.
 
 The submitted script runs a fixed assignment-scoped Loom bootstrap rather than
 authored code directly. It authenticates the exact assignment/submission/job/
@@ -2252,6 +2283,14 @@ grant creates the current fence may it consume one start permit and call the
 same execution-only stage worker. A duplicate or scheduler-requeued bootstrap
 cannot receive a second permit. The bootstrap is not an agent, owns no offer or
 agent session, and has no direct authority credential.
+Protected bootstrap configuration sets `bootstrap_deadline_seconds` (default
+300) and `reconnect_seconds` (default 1). The first bootstrap retains its deadline
+across restarts; ungranted work reconnects only until that deadline and retains
+a diagnostic on expiry. A job that registers before the agent acknowledges
+submission waits at input readiness within that same deadline; pending readiness
+cannot obtain a grant or start permit. It never creates an offline grant. Already
+permitted work can execute during observer loss. Connected typed result relay is retained;
+completed-job delivery after compute storage disappears is not guaranteed.
 
 The flow can place successive or independent pipeline stages on different
 agents or explicit targets, but one managed-agent stage attempt remains wholly

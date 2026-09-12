@@ -501,3 +501,29 @@ cannot authorize it.
 
 These contracts are tested with local native workers and local authenticated
 transport fixtures. Physical fleet/site qualification remains separate.
+
+
+### Agent-owned Slurm submission
+
+Install the complete protected ready-stage profile under the outbound agent's
+`slurm_profiles`, including its command runner, job-private capability provider,
+container/Apptainer options, bootstrap binding and containment helper. Authorize
+its exact `[profile_id, configuration_fingerprint]` in that agent's coordinator
+`agent_policy.agents[].external_slurm_profiles` and grant the
+`slurm-agent-jobs-v1` capability in both policy and registration. Coordinator
+`slurm_profiles` supplies the matching authorized route binding. A co-located
+agent uses the protected profile installed with its coordinator composition.
+
+A submit host need not advertise compute GPUs, or any resident execution profile.
+Slurm enforces the allocation; the coordinator shares outstanding quota across
+all authorized agents using the stable profile ID. Use a separate qualified
+resident profile for preparation. Initialize an outbound root with its complete
+profile set before starting the service. Reopen the same root and exact profile
+revision after restart; missing expected submission state stays unresolved.
+
+The assigned agent owns submission, discovery, observation and cancellation.
+Coordinator inspection projects acknowledged source/time evidence. Cancellation
+and accepted outputs do not release capacity without containment and provider
+release acknowledgements. A site without qualifying containment evidence retains
+the unresolved reservation. Fake-scheduler tests do not qualify physical Slurm,
+container setup or durable completed-job result storage.

@@ -52,6 +52,7 @@ from loom.queue import (
     prepare_managed_local_runtime_record,
 )
 from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
+from loom.queue.agent_session_transport import _dispatch_application
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
@@ -327,6 +328,23 @@ def test_slurm_containment_timeout_is_part_of_retained_profile_identity() -> Non
     assert first.configuration_fingerprint != second.configuration_fingerprint
 
 
+def _agent_observation(execution, *args, **kwargs):
+    agent = execution._slurm_agent
+    assert agent is not None
+    submission = agent.journal._record_observation(*args, **kwargs)
+    assignment = execution.slurm_assignments.read_operation(
+        submission.request.operation_id
+    ).assignment
+    agent._publish(
+        assignment,
+        submission,
+        lambda evidence: execution.acknowledge_slurm_agent(
+            assignment.agent_id, assignment.agent_root_id, evidence
+        ),
+    )
+    return submission
+
+
 def _exercise_mixed_route_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -337,7 +355,7 @@ def _exercise_mixed_route_run(
     container_options: Mapping[str, object] | None = None,
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
-    containment_helper = _positive_containment_helper() if guarded_recovery else None
+    containment_helper = _positive_containment_helper()
     profile = _profile(
         runner,
         containment_helper=containment_helper,
@@ -479,6 +497,30 @@ def _exercise_mixed_route_run(
                     Path(profile.job_private_file_provider.fixed_path).read_bytes()
                 ).decode(),
             )
+            # A fast compute bootstrap can finish inputs before sbatch responds.
+            response = _dispatch_application(
+                daemon,
+                LocalDaemonPrincipal(
+                    "slurm-principal",
+                    LocalDaemonRole.SLURM_BOOTSTRAP,
+                    "slurm-credential",
+                ),
+                "slurm_bootstrap",
+                "inputs_ready",
+                {
+                    "assignment_id": retained.assignment.assignment_id,
+                    "incarnation": "bootstrap-1",
+                },
+            )
+            assert response == {"state": "awaiting_submission_ack"}
+            pending = execution.slurm_assignments.read(
+                retained.assignment.assignment_id
+            )
+            assert pending.state == "submitting"
+            assert pending.input_ready is False
+            assert pending.fence is None
+            with pytest.raises(QueueConflictError, match="durable inputs"):
+                bootstrap.grant(retained.assignment.assignment_id, "bootstrap-1")
             return original_sbatch(*args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(runner, "sbatch", register_inside_sbatch)
@@ -710,7 +752,15 @@ def _exercise_mixed_route_run(
                 if final:
                     break
         workspace.accept_inputs()
-        view.inputs_ready(assignment_id, incarnation)
+        assert _dispatch_application(
+            daemon,
+            LocalDaemonPrincipal(
+                "slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP, "slurm-credential"
+            ),
+            "slurm_bootstrap",
+            "inputs_ready",
+            {"assignment_id": assignment_id, "incarnation": incarnation},
+        ) == {"state": "input_ready"}
         fence = view.grant(assignment_id, incarnation)
         assert view.start_permit(assignment_id, incarnation, fence) is True
         assert view.start_permit(assignment_id, incarnation, fence) is False
@@ -768,51 +818,59 @@ def _exercise_mixed_route_run(
             operator = daemon.operator_view(
                 LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
             )
-            execution.slurm_submissions._record_observation(  # noqa: SLF001
-                record.assignment.operation_id,
-                expected_job_id="1200",
-                scheduler_state="RUNNING",
-                scheduler_source="squeue",
-                observed_at="2030-01-01T00:00:00+00:00",
-            )
-            with pytest.raises(
-                QueueConflictError, match="not in an exact unknown state"
-            ):
-                operator.recover_unknown(
-                    replace(
-                        recovery_request,
-                        recovery_id="slurm-active-recovery",
-                        reason="must not close an observed running job",
+            with daemon._cycle_lock:
+                _agent_observation(
+                    execution,  # noqa: SLF001
+                    record.assignment.operation_id,
+                    expected_job_id="1200",
+                    scheduler_state="RUNNING",
+                    scheduler_source="squeue",
+                    observed_at="2030-01-01T00:00:00+00:00",
+                )
+                with pytest.raises(
+                    QueueConflictError, match="not in an exact unknown state"
+                ):
+                    operator.recover_unknown(
+                        replace(
+                            recovery_request,
+                            recovery_id="slurm-active-recovery",
+                            reason="must not close an observed running job",
+                        )
                     )
+                with sqlite3.connect(config.control_database) as conn:
+                    assert (
+                        conn.execute(
+                            "SELECT COUNT(*) FROM recovery_operations"
+                        ).fetchone()[0]
+                        == 0
+                    )
+                assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+                    assignment_id
                 )
-            with sqlite3.connect(config.control_database) as conn:
-                assert (
-                    conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[
-                        0
-                    ]
-                    == 0
-                )
-            assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
-                assignment_id
-            )
 
-            unknown_observation = execution.slurm_submissions._record_observation(  # noqa: SLF001
-                record.assignment.operation_id,
-                expected_job_id="1200",
-                scheduler_state=None,
-                scheduler_source="unavailable",
-                observed_at="2030-01-01T00:00:01+00:00",
-            )
-            assert unknown_observation.scheduler_source == "unavailable"
-            assert unknown_observation.scheduler_state is None
-            recovery_receipt = operator.recover_unknown(recovery_request)
-            assert recovery_receipt["state"] == "closed"
-            assert recovery_receipt["retry_allowed"] is False
-            assert recovery_receipt["physical_ownership"] == "retained"
-            recovery_evidence = cast(dict[str, object], recovery_receipt["evidence"])
-            assert recovery_evidence["kind"] == "slurm_helper"
-            assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
-            assert authority.open_run(run_uri).stages[1].status is StageStatus.CANCELLED
+                unknown_observation = _agent_observation(
+                    execution,  # noqa: SLF001
+                    record.assignment.operation_id,
+                    expected_job_id="1200",
+                    scheduler_state=None,
+                    scheduler_source="unavailable",
+                    observed_at="2030-01-01T00:00:01+00:00",
+                )
+                assert unknown_observation.scheduler_source == "unavailable"
+                assert unknown_observation.scheduler_state is None
+                recovery_receipt = operator.recover_unknown(recovery_request)
+                assert recovery_receipt["state"] == "closed"
+                assert recovery_receipt["retry_allowed"] is False
+                assert recovery_receipt["physical_ownership"] == "retained"
+                recovery_evidence = cast(
+                    dict[str, object], recovery_receipt["evidence"]
+                )
+                assert recovery_evidence["kind"] == "slurm_helper"
+                assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
+                assert (
+                    authority.open_run(run_uri).stages[1].status
+                    is StageStatus.CANCELLED
+                )
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
             workspace_root=workspace.root,
@@ -973,6 +1031,14 @@ def _exercise_mixed_route_run(
                 assert scheduler["mode"] == "ready"
                 assert scheduler["job_id"] == record.job_id
                 assert scheduler["input_ready"] is True
+                assert scheduler["agent_id"] == record.assignment.agent_id
+                assert (
+                    scheduler["submission_operation_id"]
+                    == record.assignment.operation_id
+                )
+                assert scheduler["agent_evidence_accepted_at"] is not None
+                observation = cast(Mapping[str, object], scheduler["observation"])
+                assert "scheduler_source" in observation
                 assert (
                     execution.slurm_assignments.read(assignment_id).input_ready is True
                 )
@@ -984,7 +1050,9 @@ def _exercise_mixed_route_run(
                     profile.job_private_file_provider.fixed_path
                 ) not in json.dumps(container)
             script = (
-                config.slurm_script_root / f"{record.assignment.assignment_id}.sh"
+                cast(Path, config.agent_root)
+                / "slurm-scripts"
+                / f"{record.assignment.assignment_id}.sh"
             ).read_text(encoding="utf-8")
             assert run_uri not in script
             assert profile.credential_reference not in script
