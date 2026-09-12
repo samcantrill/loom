@@ -364,12 +364,17 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native/container profile, worker, supervisor, report and example
-  changes implemented; final validation is in progress. The delegated executor
+  changes implemented; both required final gates passed. The delegated executor
   terminated at a service usage limit before its final handoff. The manager
   verified its committed work, failed terminal gate and process inventory, then
   continued locally without a replacement executor or overlapping writes.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed on 2026-09-12. The manager checked the committed scope,
+  protected installed-profile selection, execution-only worker boundary, Docker
+  durable ownership/containment/recovery, native qualification and exact output
+  predecessor, report metadata, changed examples/removals and fresh validation.
+  No qualified implementation blocker remains. Independent actual-PR review and
+  delivery remain required.
 - Independent implementation review: required for process/resource ownership and launch removal
 - Blocker corrections: 2/3; named Docker source/contract preparation correction,
   then the manager's Docker example socket-path correction. The config-extra
@@ -380,14 +385,50 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   passed together (4 passed) in `build/phase-4/socket-regression.log`.
 - PR and merge: not started
 
+### Final validation receipt
+
+- Validated implementation revision: `feed35902ab06db541f4f1028cc1e35da91dd2f7`;
+  tree: `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`. Both commands ran on this
+  same clean revision. Subsequent edits are execution metadata only.
+- `make validate-pr`: exit 0; Ruff passed, Pyright reported zero errors/warnings;
+  baseline 3,320 passed / 2 skipped / 294 deselected; config-extra 254 passed /
+  18 skipped / 3,361 deselected; MCP 36 passed / 3,580 deselected; sdist and wheel
+  built. Command elapsed time: 2,443.69 seconds.
+- `make test-summary`: exit 0; 3,612 passed, zero failures/errors, 18 skipped,
+  7,214 row-summed deselections. Suite passes: package 127, unit 2,330, contract
+  302, integration 516, e2e 47, config-extra 254, MCP 36. Report duration:
+  2,788.91 seconds; command elapsed time: 2,902.27 seconds.
+- Evidence: `build/phase-4/{validate-pr-final,test-summary-final}.log`,
+  `build/test-summary.md` and seven suite `junit.xml` files. The manager parsed
+  all seven XML files (3,630 test cases, including 18 skips) and byte-verified
+  their copies, the summary and selected/failed/final logs: 23 archived files
+  under `/tmp/loom-stage41-p4-summary-evidence/`. Archived logs are in `phase-4/`.
+- Superseded evidence remains inspectable: recovery work interrupted the first
+  run; the native metadata merge failure was corrected; the later config-extra
+  Docker socket failures were corrected. An additional full baseline encountered
+  two ten-second waits in the persisted preprocess/train test. Both roots retained
+  successful contained zero-exit workers; all five variants passed unchanged in
+  the direct recheck. The unchanged full retry and required summary both passed.
+  These earlier runs are not the final passing receipt, and no timeout or
+  assertion was relaxed to obtain it.
+- The 18 summary skips are opt-in physical acceptance: 13 namespace lifecycle,
+  plus Docker smoke, Apptainer smoke, SIF build, CPU/memory and scheduling-only
+  acceptance. Local daemon/namespace fixtures establish logical behavior only.
+  No physical container, fleet or Slurm qualification, image pull/build or
+  external experiment workload is claimed.
+- Process cleanup: both manager validation commands are terminal. Final inventory
+  found no phase-owned test, worker, fixture or supervisor process. Four older
+  supervisors belonging to unrelated work were preserved. No stage branch
+  transition has occurred; review/delivery remain pending.
+
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Installed container profiles and readiness, existing agent/supervisor backend evidence, result metadata, native/container public examples; manager completion and final gates in progress |
+| Implementation and changed paths | Complete: installed container profiles and readiness, existing agent/supervisor backend evidence and recovery, result metadata, native/container public examples; manager pre-submit passed |
 | Tests added, updated or intentionally removed | Stateful Docker effect/recovery tests, container binding/resources, native/Docker/Apptainer public replay, existing finalizer crash/predecessor assertions with Docker, native regression preservation and converted example assertions |
-| Validated revision/tree and evidence | No passing final gate yet. `build/phase-4/validate-pr-interrupted.log` records the superseded recovery run; `validate-pr-native-metadata-failure.log` records the corrected native report regression; `validate-pr.log` currently records the later config-extra socket failures. Selected recovery/native metadata/example logs are under `build/phase-4/`; final receipt pending |
-| Validation-relevant changes after evidence | Recovery correction retains exact Docker epoch after unclean supervisor loss and preserves native refusal; container report projection preserves native metadata; manager socket correction passes the four affected journeys. Both required gates remain binding |
+| Validated revision/tree and evidence | Both required commands passed on `feed35902ab06db541f4f1028cc1e35da91dd2f7`, tree `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
+| Validation-relevant changes after evidence | None; phase/manifest receipt updates only |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Physical container/runtime qualification remains unavailable and unclaimed. Executor-owned gate is terminal; takeover inventory found no remaining phase test processes. Final validation/process cleanup pending |
+| Residual risk and cleanup | No current implementation blocker. Physical runtime qualification remains unavailable and unclaimed; all phase-owned processes terminal; PR/review/delivery and branch retirement pending |
