@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 5 merges; record exact SHA at execution preparation
+- Base revision: `f180843347b822448c7fd873a513846acc05a911` (published Phase 5 completion metadata after PR 312)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 6: Slurm Result Recovery
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 5 remotely merged, metadata synchronized and exact phase branches retired
 
 ## Objective And Context
 
@@ -276,7 +276,66 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed in the manifest's persistent stage worktree at the
+  Base revision above. Phase 5 PR 312 merged as
+  `5e4237d1fe5165152dc2e7f296edb574dfea6463`; completion metadata is published.
+  Synchronization verified matching stage/local/fetched/advertised develop;
+  exact local/remote Phase 5 branches are retired. All predecessor agents and
+  phase-owned processes are terminal. Successor start and clean preflight passed.
+- Source reconciliation: `_agent_slurm.py::AgentSlurmJobs` now owns the exact
+  agent/root journal, ordered outbox, scheduler and containment/provider release;
+  coordinator `SlurmSubmissionProjection` has no external-call capability.
+  Agent protocol 12 and assignment version 2 retain the current ownership.
+  The early-bootstrap readiness correction waits for acknowledged submission
+  within the original deadline without granting pending work; preserve it.
+- Current result boundary: `SlurmBootstrapWorkspace.retain_result` creates report
+  version 3 and retained output bytes in compute workspace; `run_slurm_bootstrap`
+  then synchronously calls report/output/result/release. No attempt-bound shared
+  publication/ingestion owner exists. Extend these owners with manifest-last
+  durable bytes, exact compute/agent mapping and finite protected retention quota;
+  do not make disappearance of compute-local workspace lose acknowledged work.
+- Finalizer and bounds: `local_daemon_execution.py::slurm_commit_result` validates
+  the accepted fence, calls the authority commit/terminal owner, persists the
+  typed result with scheduler/container redaction and marks the assignment
+  terminal. Reuse this finalization path for authenticated original-agent relay,
+  preserving exact admitted output predecessor/replay wherever the authority
+  requires it. `_remote_stage_execution.py::MAX_TRANSFER_BYTES` is 64 MiB;
+  report decoders and declared artifact bounds remain authoritative. Shared
+  storage adds no larger-transfer claim, new success database or offline grant.
+- Retirement and removal: connect result acknowledgement/cleanup to the existing
+  retained-work predicates and keep containment/provider release separate.
+  Replace callback-only delivery assumptions here; callbacks may only remain as
+  useful notification/current transport hooks. Preserve native/container proof,
+  profile fingerprint and version-3 metadata. Broader legacy-engine removal
+  remains Phase 9; update obsolete Slurm storage/qualification claims owned here.
+- Named refinement: none required at preparation. The existing card fixes the
+  durable identity, trust, bounds, ordering and acknowledgement semantics; private
+  storage layout, mapping/configuration wiring and finite quota representation
+  remain implementation discretion. Stop for a demonstrated missing public or
+  durable decision instead of narrowing the finish-during-outage journey.
+- Coverage selection: existing ready-stage/bootstrap, agent journal/transport and
+  public run-operation tests, plus new causal shared-result and compute-exit
+  cases. Cover manifest-last interruption, regular-file/path/content validation,
+  stale fences/foreign ownership, aggregate bound/quota refusal, lost commit
+  acknowledgement with exact predecessor, metadata preservation, no early cleanup
+  and no release from report validity alone. Shared protocol/lifetime changes
+  expand to native/container consumers; both required make gates remain binding.
+- Qualification inventory: sbatch/squeue/sacct/scancel/srun and Apptainer are
+  unavailable, and no opt-in Slurm acceptance/root is configured. Docker command
+  availability alone is not runtime/site qualification. No scheduler job,
+  allocation, image pull/build, external workload or provisioning is authorized
+  by this preparation. Use local fixtures for implementation evidence and retain
+  the missing live-site/storage/container qualification explicitly.
+  `tests/slurm_acceptance/test_real_slurm_live_operations.py` currently exercises
+  legacy single-job/afterok CLI paths, so it does not prove this phase's unified
+  outage result journey. Update/add the current opt-in qualification owner and
+  documentation without claiming its execution here. All referenced local test
+  paths exist. No active Loom improvement-log entry intersects this phase.
+- Execution delegation: one executor is justified by the coupled bootstrap
+  publisher, shared filesystem reader, authenticated relay, authority commit and
+  retirement boundary. It owns phase implementation/tests/current docs and this
+  card's execution evidence; the manager owns manifest, PR, review and delivery.
+  No children or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
