@@ -1591,6 +1591,15 @@ class AgentSessionView:
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).renew_offer(renewal)
 
+    def recover_poll(
+        self, session_id: str, availability_revision: str, *,
+        sequence: int, wait_timeout_ms: int, coordinator_epoch: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).recover_poll(
+            session_id, availability_revision, sequence=sequence,
+            wait_timeout_ms=wait_timeout_ms, coordinator_epoch=coordinator_epoch,
+        )
+
     def wait_for_work(
         self,
         session_id: str,
@@ -2720,6 +2729,53 @@ class AgentSessionService:
             conn.commit()
         return freeze_plain_data(value, path="agent offer receipt")
 
+    def recover_poll(
+        self, session_id: str, availability_revision: str, *,
+        sequence: int, wait_timeout_ms: int, coordinator_epoch: str,
+    ) -> Mapping[str, PlainData]:
+        """Read an exact abandoned-epoch poll's committed or fenced outcome."""
+        rule, policy_revision = self._authorize("poll")
+        for value, name in ((session_id, "session_id"),
+                            (availability_revision, "availability_revision"),
+                            (coordinator_epoch, "coordinator_epoch")):
+            _identifier(value, name)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("work poll sequence must be positive")
+        if (isinstance(wait_timeout_ms, bool) or not isinstance(wait_timeout_ms, int)
+            or not 1 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS):
+            raise QueueServiceError("work poll wait is outside the permitted range")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        if coordinator_epoch == epoch:
+            raise QueueConflictError("current-epoch poll must use ordinary replay")
+        request: dict[str, PlainData] = {
+            "session_id": session_id, "availability_revision": availability_revision,
+            "sequence": sequence, "wait_timeout_ms": wait_timeout_ms,
+            "coordinator_epoch": coordinator_epoch,
+        }
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            session = _session_from_row(
+                conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?",
+                             (session_id,)).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(session, rule, epoch, policy_revision)
+            row = conn.execute(
+                "SELECT sequence, digest, active, result_json FROM agent_poll_state "
+                "WHERE principal_id = ? AND session_id = ?",
+                (rule.principal_id, session_id),
+            ).fetchone()
+            if row is None:
+                # No request committed before the former process epoch ended.
+                return {"state": "absent"}
+            if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(request):
+                raise QueueConflictError("retained poll identity conflicts")
+            if row["result_json"] is not None:
+                return {**_plain_result(row["result_json"], "agent poll receipt"), "state": "committed"}
+            if bool(row["active"]):
+                raise AgentPollActiveError("work poll is already active")
+            return {"state": "fenced"}
+
     def wait_for_work(
         self,
         session_id: str,
@@ -2936,14 +2992,19 @@ class AgentSessionService:
         epoch: str,
         digest: str,
     ) -> Mapping[str, PlainData] | None:
-        """Consume only an already-CAS-targeted delivery for this exact poll."""
+        """Consume only an already-CAS-targeted delivery for this exact session.
+
+        Target ownership survives a coordinator epoch change. Its original
+        delivery/assignment issuer evidence remains unchanged; the current poll
+        still commits under its own current epoch and exact request digest.
+        """
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT assignment_id, request_json FROM agent_deliveries "
-                "WHERE session_id = ? AND coordinator_epoch = ? AND "
+                "WHERE session_id = ? AND "
                 "state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
-                (session_id, epoch),
+                (session_id,),
             ).fetchone()
             if row is None:
                 conn.commit()

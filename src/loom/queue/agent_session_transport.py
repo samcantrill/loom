@@ -951,6 +951,15 @@ class _RemoteAgentJournal:
             return None
         return str(row["session_id"]), str(row["availability_revision"]), int(row["sequence"])
 
+    def discard_absent_poll(self, session_id: str, sequence: int) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM agent_poll_state_local WHERE session_id = ? "
+                "AND sequence = ? AND state = 'PENDING'",
+                (session_id, sequence),
+            )
+            conn.commit()
+
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
             session.agent_root_id != self.root_id
@@ -3987,7 +3996,20 @@ class LocalDaemonAgentHttpClient:
             "wait_timeout_ms": wait_timeout_ms,
         }
         journal.prepare_poll(session_id, revision, sequence, value)
-        result = self._call("poll", value)
+        prior_epoch = journal.session(session_id).coordinator_epoch
+        if self.handshake()["coordinator_epoch"] != prior_epoch:
+            recovery = self._call("recover_poll", {**value, "coordinator_epoch": prior_epoch})
+            if recovery.get("state") == "absent":
+                journal.discard_absent_poll(session_id, sequence)
+                return
+            if recovery.get("state") == "fenced":
+                journal.fence_poll(session_id, sequence)
+                return
+            if recovery.get("state") != "committed":
+                raise QueueServiceError("retained poll recovery result is invalid")
+            result = {key: item for key, item in recovery.items() if key != "state"}
+        else:
+            result = self._call("poll", value)
         journal.complete_poll(session_id, sequence, result)
         if result.get("result") == "assignment":
             request = _ResidentAssignmentBundle.from_remote_dict(result.get("request"))
@@ -5084,6 +5106,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "offer",
                     "renew",
                     "poll",
+                    "recover_poll",
                     "authorize",
                     "input",
                     "accept",
@@ -5271,6 +5294,14 @@ def _dispatch(
         if not isinstance(renewal, Mapping):
             raise QueueServiceError("agent offer renewal is invalid")
         return view.renew_offer(AgentOfferRenewal.from_value(renewal))
+    if operation == "recover_poll":
+        _exact(value, {"session_id", "availability_revision", "sequence", "wait_timeout_ms", "coordinator_epoch"})
+        return view.recover_poll(
+            _string(value, "session_id"), _string(value, "availability_revision"),
+            sequence=_integer(value, "sequence"),
+            wait_timeout_ms=_integer(value, "wait_timeout_ms"),
+            coordinator_epoch=_string(value, "coordinator_epoch"),
+        )
     if operation == "poll":
         _exact(
             value,

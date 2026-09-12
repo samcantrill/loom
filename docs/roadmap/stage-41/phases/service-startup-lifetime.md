@@ -444,7 +444,23 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   guidance, including normalized multiline commands, returned zero matches.
   Affected documentation/catalog checks: 12 passed, 17 deselected in 2.62 s.
   Historical roadmap artifacts and P4/P6/P9 delivery remain untouched.
-- Blocker corrections: 1/3
+- Manager correction 2/3: prior-epoch outstanding polls now recover their exact
+  committed, fenced or absent outcome from the native poll owner before new
+  capacity. Committed delivery contents and request digests are retained; only
+  an explicit former-epoch absent receipt permits dropping the unaccepted local
+  intent. Already-targeted delivery remains owned by its stable session across
+  epochs, with original assignment/issuer evidence unchanged. Native fault
+  fixtures cover loss before receipt, after committed active intent, and after
+  committed assignment response; all three passed (3 passed, 7 deselected in 119.83 s).
+  Reinstalling only the fc266b7 startup method in the fixture reproduced the
+  lost-committed-reply failure (1 failed, 9 deselected in 50.26 s); the working
+  tree was never reverted. Ruff and affected Pyright passed. Explicit native
+  row-state and timeout/digest mismatch assertions were added before final gates.
+  Configured timeout mismatch and ordinary indeterminate-poll capacity barriers
+  remain enforced. The fc266b7 gate was interrupted for this correction:
+  exit 2, baseline 596 passed, 2 skipped, 287 deselected in 305.93 s; no full-gate
+  claim is made from it. Final gates must validate the corrected tree.
+- Blocker corrections: 2/3
 - PR and merge: not started
 
 ## Completion Record
