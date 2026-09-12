@@ -250,3 +250,60 @@ def test_cancel_before_effect_replays_only_owned_identity(owner, monkeypatch):
     assert [call for call in daemon.calls if call[0] == "kill"] == [
         ["kill", "immutable-id"]
     ]
+
+
+def test_supervisor_recovers_daemon_ownership_without_native_epoch_rotation(
+    tmp_path,
+    monkeypatch,
+):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from loom.queue._agent_process_supervisor import (
+        AgentProcessSupervisor,
+        ResidentWorkerLaunch,
+        SupervisorLaunchState,
+    )
+    from tests.unit.loom.queue.test_agent_process_supervisor import _profile, _launch
+    from tests.unit.loom.queue.test_container_worker import _binding
+
+    daemon = Daemon()
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: daemon(argv))
+    monkeypatch.setattr(
+        ResidentWorkerLaunch,
+        "container_command",
+        property(
+            lambda self: SimpleNamespace(
+                argv=("/docker", "run", "image", "python"), metadata={}
+            )
+        ),
+    )
+    profile = replace(_profile(), container=_binding())
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    original = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(profile,)
+    )
+    launch = replace(_launch(original, workspace), profile=profile)
+    running = original.launch(launch)
+    assert running.process_id is None and running.backend_id == "immutable-id"
+    assert not running.qualified_success
+
+    recovered = AgentProcessSupervisor(
+        original.root, agent_id="agent-A", profiles=(profile,)
+    )
+    recovered.rotate_clean_continuity()
+    assert recovered.continuity_epoch == original.continuity_epoch
+    daemon.unavailable = True
+    assert recovered.query(launch).state is SupervisorLaunchState.UNKNOWN
+    assert not recovered.quiescent()
+    daemon.unavailable = False
+    assert recovered.query(launch).state is SupervisorLaunchState.RUNNING
+    daemon.finish()
+    result = recovered.contain(launch)
+    assert result.state is SupervisorLaunchState.CONTAINED
+    assert result.qualified_success and not result.successful_exit
+    assert recovered.quiescent()
+    assert sum(call[0] == "create" for call in daemon.calls) == 1
+    assert sum(call[0] == "start" for call in daemon.calls) == 1

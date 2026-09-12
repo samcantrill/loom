@@ -56,6 +56,9 @@ Docker ownership is retained by the supervisor before daemon effects. It binds
 the assignment, authorization, installed profile, endpoint and unique labelled
 container identity, then retains the immutable container ID. Lost create/start
 responses reconcile that same object; uncertainty never authorizes a new one.
+After supervisor loss, daemon-owned launches retain their existing epoch for
+reconciliation. Uncontained native or Apptainer launches still prohibit such a
+restart; native PID adoption and successful-exit rules remain unchanged.
 Cancellation is durable before daemon calls. Only verified stopped workload with
 restart disabled establishes containment. Successful execution also requires a
 zero terminal daemon outcome and the ordinary successful fenced worker result.

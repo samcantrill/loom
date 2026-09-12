@@ -160,6 +160,9 @@ def test_reopened_supervisor_does_not_adopt_nonterminal_pid(tmp_path: Path) -> N
     )
 
     assert reopened.query(launch).state is SupervisorLaunchState.UNKNOWN
+    with pytest.raises(AgentProcessSupervisorError, match="requires clean shutdown"):
+        reopened.rotate_clean_continuity()
+    assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
 
 
 def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(

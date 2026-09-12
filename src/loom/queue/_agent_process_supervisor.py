@@ -791,7 +791,7 @@ class AgentProcessSupervisor:
                 self.contain(launch)
 
     def rotate_clean_continuity(self) -> None:
-        """Start a fresh epoch only after a persisted clean terminal cut."""
+        """Recover daemon ownership or rotate after a persisted clean terminal cut."""
 
         with self._connect() as conn:
             launches = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
@@ -801,6 +801,22 @@ class AgentProcessSupervisor:
             if marker is None:
                 if not launches:
                     # A process-free root has no predecessor epoch to retire.
+                    return
+                retained = tuple(
+                    conn.execute("SELECT launch_json, state FROM launches")
+                )
+                kinds = tuple(
+                    _launch_from_value(json.loads(str(row["launch_json"]))).backend_kind
+                    for row in retained
+                )
+                if "docker" in kinds and all(
+                    kind == "docker"
+                    or row["state"] == SupervisorLaunchState.CONTAINED.value
+                    for kind, row in zip(kinds, retained, strict=True)
+                ):
+                    # Daemon identity is recoverable without native PID adoption.
+                    # Keep the epoch: exact retained launch/fence bindings still own
+                    # every effect. Unknown daemon observations still hold capacity.
                     return
                 raise AgentProcessSupervisorError(
                     "managed supervisor continuity requires clean shutdown"
@@ -1241,7 +1257,7 @@ class AgentProcessSupervisorService:
     def start_empty_initialized(
         cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
     ) -> AgentProcessSupervisorClient:
-        """Start relocated initialized state only before its first launch."""
+        """Start initialized state after a clean cut or recover daemon ownership."""
 
         root = Path(agent_root).resolve() / "supervisor"
         persisted = _service_configuration(root)
