@@ -9,6 +9,7 @@ from pathlib import Path
 import socketserver
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 from uuid import uuid4
 
@@ -16,7 +17,6 @@ from uuid import uuid4
 @contextmanager
 def fake_docker(root: Path):
     root.mkdir(parents=True, exist_ok=True)
-    endpoint = root / "daemon.sock"
     executable = root / "docker"
     executable.write_text(f"""#!{sys.executable}
 import json, socket, sys
@@ -131,31 +131,32 @@ sys.exit(result['code'])
                 ).encode()
             )
 
-    server = socketserver.ThreadingUnixStreamServer(str(endpoint), Handler)
-    thread = Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        yield (
-            {
-                "kind": "docker",
-                "container": {"image": {"reference": "sha256:" + "a" * 64}},
-                "options": {"command": str(executable)},
-                "python_executable": sys.executable,
-                "daemon_endpoint": "unix://" + str(endpoint),
-            },
-            calls,
-        )
-    finally:
-        # This fixture is the daemon owner and reaps every worker it created.
-        for child in children:
-            if child.poll() is None:
-                child.terminate()
-            child.wait(timeout=20)
-        for watcher in watchers:
-            watcher.join(timeout=20)
-            assert not watcher.is_alive()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=20)
-        assert not thread.is_alive()
-        endpoint.unlink()
+    # Example output paths may exceed the Unix socket address limit.
+    with TemporaryDirectory(prefix="loom-docker-") as service_root:
+        endpoint = Path(service_root) / "daemon.sock"
+        with socketserver.ThreadingUnixStreamServer(str(endpoint), Handler) as server:
+            thread = Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                yield (
+                    {
+                        "kind": "docker",
+                        "container": {"image": {"reference": "sha256:" + "a" * 64}},
+                        "options": {"command": str(executable)},
+                        "python_executable": sys.executable,
+                        "daemon_endpoint": "unix://" + str(endpoint),
+                    },
+                    calls,
+                )
+            finally:
+                # This fixture is the daemon owner and reaps every worker it created.
+                for child in children:
+                    if child.poll() is None:
+                        child.terminate()
+                    child.wait(timeout=20)
+                for watcher in watchers:
+                    watcher.join(timeout=20)
+                    assert not watcher.is_alive()
+                server.shutdown()
+                thread.join(timeout=20)
+                assert not thread.is_alive()

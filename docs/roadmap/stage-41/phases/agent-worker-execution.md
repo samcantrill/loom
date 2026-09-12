@@ -363,21 +363,31 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   independent review and delivery ownership; no child delegation or overlapping
   source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: prepared; execution pending
+- Implementation: native/container profile, worker, supervisor, report and example
+  changes implemented; final validation is in progress. The delegated executor
+  terminated at a service usage limit before its final handoff. The manager
+  verified its committed work, failed terminal gate and process inventory, then
+  continued locally without a replacement executor or overlapping writes.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for process/resource ownership and launch removal
-- Blocker corrections: 1/3; named Docker source/contract preparation correction
+- Blocker corrections: 2/3; named Docker source/contract preparation correction,
+  then the manager's Docker example socket-path correction. The config-extra
+  smoke producer supplies a long output root; locating the fixture socket there
+  failed before either Docker journey could start. The fixture now owns a short
+  temporary socket directory, independent of output location. Both failed smoke
+  cases, the paired success/failure e2e journey and configured Docker replay
+  passed together (4 passed) in `build/phase-4/socket-regression.log`.
 - PR and merge: not started
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Implementation and changed paths | Installed container profiles and readiness, existing agent/supervisor backend evidence, result metadata, native/container public examples; manager completion and final gates in progress |
+| Tests added, updated or intentionally removed | Stateful Docker effect/recovery tests, container binding/resources, native/Docker/Apptainer public replay, existing finalizer crash/predecessor assertions with Docker, native regression preservation and converted example assertions |
+| Validated revision/tree and evidence | No passing final gate yet. `build/phase-4/validate-pr-interrupted.log` records the superseded recovery run; `validate-pr-native-metadata-failure.log` records the corrected native report regression; `validate-pr.log` currently records the later config-extra socket failures. Selected recovery/native metadata/example logs are under `build/phase-4/`; final receipt pending |
+| Validation-relevant changes after evidence | Recovery correction retains exact Docker epoch after unclean supervisor loss and preserves native refusal; container report projection preserves native metadata; manager socket correction passes the four affected journeys. Both required gates remain binding |
+| Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Real container/runtime qualification pending |
+| Residual risk and cleanup | Physical container/runtime qualification remains unavailable and unclaimed. Executor-owned gate is terminal; takeover inventory found no remaining phase test processes. Final validation/process cleanup pending |
