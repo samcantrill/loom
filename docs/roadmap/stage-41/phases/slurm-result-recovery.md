@@ -360,14 +360,18 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   could prevent the existing positive containment/release path. Delivery now
   defers to cancellation and cleanup requires the acknowledged existing terminal
   rejection; lost rejection acknowledgement retains bytes. The focused regression
-  and fresh committed final gates cover the correction.
+  and fresh committed final gates cover the correction. The next exploratory
+  final gate was stopped to include the related pre-submission quota case:
+  cancellation must suppress an unissued job even while another retained attempt
+  exhausts shared storage. That suppression now skips a new result reservation;
+  it never removes the other attempt's bytes.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
-- Blocker corrections: 1/3 (published-result cancellation/retirement race; executor-local correction, no refiner)
+- Blocker corrections: 2/3 (published-result cancellation and quota-blocked unissued cancellation; executor-local corrections, no refiner)
 - PR and merge: not started
 
 ## Completion Record

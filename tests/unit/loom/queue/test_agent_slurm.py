@@ -273,3 +273,32 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
     AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
     assert not transport.path.exists()
     assert not agent.has_retained_work()
+
+
+def test_quota_refusal_cannot_prevent_cancellation_of_unissued_job(tmp_path):
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+    from loom.queue.errors import QueueServiceError
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    assert profile.result_storage is not None
+    storage = {**profile.result_storage, "retention_bytes": 65 * 1024 * 1024}
+    profile = replace(profile, result_storage=storage)
+    task = _task(profile)
+    occupied = SharedSlurmResult(storage, "another-retained-attempt")
+    occupied.reserve(
+        {**task["assignment"], "assignment_id": "another-retained-attempt"}
+    )
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": True}
+
+    with pytest.raises(QueueServiceError, match="quota exhausted"):
+        agent.step(task, acknowledge)
+    assert not runner.calls
+    agent.step({**task, "cancel_requested": True}, acknowledge)
+    assert not agent.has_retained_work()
+    assert occupied.path.exists()
+    assert not any(call[0] == "sbatch" for call in runner.calls)

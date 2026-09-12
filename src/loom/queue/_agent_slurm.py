@@ -306,7 +306,7 @@ class AgentSlurmJobs:
             return
         current = self.journal.find(request.operation_id)
         transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
-        if current is None:
+        if current is None and task.get("cancel_requested") is not True:
             transport.reserve(assignment.to_dict())
         now = monotonic()
         urgent_cancel = (
