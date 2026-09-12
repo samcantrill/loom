@@ -1917,7 +1917,7 @@ def test_slurm_target_is_prepared_by_resident_child_without_dispatch(
     assert worker is not None
     runner = FakeSlurmCommandRunner()
     profile = replace(
-        _profile(runner),
+        _profile(runner, capability_path=tmp_path / "slurm-capability"),
         **{
             key: worker.descriptor[key]
             for key in (

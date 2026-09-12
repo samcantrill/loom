@@ -379,6 +379,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   fenced result before retrying cleanup. This uses the same admitted predecessor
   and adds no acknowledgement database or filesystem-success authority. All 37
   affected storage/agent/Slurm integration checks pass; fresh full gates follow.
+- Optional consumer reconciliation: gate 6 passed all 3346 default tests (two
+  skipped), then 255 config-extra tests (18 skipped) with one preparation fixture
+  failure. The preparation-only consumer now supplies its own qualified fixture
+  path to the shared profile helper; every cross-module helper consumer is
+  reconciled. Its focused regression passes. Library behavior is unchanged by
+  this fixture correction, and the fresh complete gate is rerun below.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.
