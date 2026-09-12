@@ -106,10 +106,16 @@ def _profile(
     capability_path: Path | None = None,
     container_options: Mapping[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
+    result_root = (
+        _RESULT_ROOT
+        if capability_path is None
+        else capability_path.parent / "shared-results"
+    )
+    result_root.mkdir(parents=True, exist_ok=True)
     return SlurmReadyStageProfile(
         result_storage={
-            "agent_root": str(_RESULT_ROOT),
-            "compute_root": str(_RESULT_ROOT),
+            "agent_root": str(result_root),
+            "compute_root": str(result_root),
             "retention_bytes": 1024 * 1024 * 1024,
         },
         profile_id="training",

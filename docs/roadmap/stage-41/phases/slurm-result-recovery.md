@@ -365,6 +365,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   cancellation must suppress an unissued job even while another retained attempt
   exhausts shared storage. That suppression now skips a new result reservation;
   it never removes the other attempt's bytes.
+- Broad consumer reconciliation: committed gate 4 passed Ruff/types and 3343
+  default cases (two skipped); two fixture/example consumers failed. The imported
+  Slurm profile fixture now derives its shared root from the supplied capability
+  fixture location, and the Python example thaws its local protected response
+  before publication and accurately lists its invoked surfaces. Focused consumer
+  checks pass; these corrections do not change library behavior. A fresh complete
+  gate follows and retains the failed receipt.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.

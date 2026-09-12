@@ -15,9 +15,13 @@ and calls; the coordinator projects its acknowledged evidence. The first `sbatch
 the journey observes the retained rejection and physical assignment release
 without falsely turning that scheduler decision into run failure. It restarts
 the daemon and proves that operation is retained without resubmission. A second
-run is accepted and completed through the public bootstrap view, including
-registration, input readiness, grant/start fences, output transfer, result
-commit, capability revocation, and release.
+run registers through the bootstrap view, receives the input-ready grant/start
+fence, then publishes output bytes and a manifest to the configured shared
+result root. Its original submit agent ingests the result through the existing
+authority finalizer. Cleanup follows the final acknowledgement; capability
+revocation and execution containment remain separate release obligations.
+The fixture configures a finite 256 MiB retention quota, reserving 65 MiB per
+attempt while retaining the 64 MiB aggregate artifact transfer ceiling.
 
 Operators observe the same durable assignment operation through the CLI:
 
@@ -40,10 +44,12 @@ waiting includes the required result settlement and provider release. Guarded
 recovery can intentionally retain capacity when safe release has not been
 established. See the shared [cancellation and settlement contract](../../../docs/features/queue.md#status-and-cancellation).
 
-This journey retains its explicit Slurm preparation path. The composed-run
-`prepare_managed_run()` helper currently excludes Slurm profiles. The fake
-scheduler provides deterministic lifecycle evidence without claiming real
-cluster acceptance coverage.
+This fixture keeps explicit preparation to expose the individual boundaries;
+ordinary configured runs use the unified preparation/run path. The fake scheduler
+provides deterministic lifecycle evidence without qualifying a real submit host,
+shared filesystem, installed worker or container runtime. The compute-exit/outage
+regression and separate site qualification requirements are described in the
+[Slurm feature contract](../../../docs/features/slurm.md#durable-ready-stage-results).
 
 ## Variants
 

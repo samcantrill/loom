@@ -58,7 +58,7 @@ from loom.queue.slurm_ready_stage import (  # noqa: E402
     SlurmBootstrapWorkspace,
     SlurmStageDelivery,
 )
-from loom.serialization import json_dumps_pretty  # noqa: E402
+from loom.serialization import json_dumps_pretty, thaw_plain_data  # noqa: E402
 
 
 class ProduceStage:
@@ -295,13 +295,13 @@ def main() -> None:
         report = workspace.retain_result(worker_result)
         from loom.queue._slurm_result_transport import SharedSlurmResult
 
-        identity = dict(registration["result_identity"])
+        identity = thaw_plain_data(
+            registration["result_identity"], path="SLURM result identity"
+        )
+        assert isinstance(identity, dict)
         identity["fence"] = fence
-        recorder.python(
-            "SharedSlurmResult.publish",
-            lambda: SharedSlurmResult(
-                profile.result_storage, assignment_id, compute=True
-            ).publish(identity, report, workspace.output_chunk),
+        SharedSlurmResult(profile.result_storage, assignment_id, compute=True).publish(
+            identity, report, workspace.output_chunk
         )
         completed = recorder.cli(
             "queue",
