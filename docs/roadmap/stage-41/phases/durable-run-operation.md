@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 2
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p2-durable-run-operation
@@ -14,7 +14,7 @@
 - Dependencies: Phase 1 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none; Phase 1 merged, metadata published and stage/control/live develop synchronized
+- Blockers: none; Phase 2 validation, review and remote merge passed
 
 ## Objective And Context
 
@@ -333,8 +333,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native run acceptance/continuation, independent cancellation,
   bounded projections and existing-service observation are implemented. Owner-level
-  checks and both required full commands passed; manager pre-submit and delivery
-  remain pending.
+  checks, both required full commands, manager pre-submit and independent review
+  passed. PR 309 is remotely merged.
 - Durable ownership: schema 15 extends preparation rows with kind and exact queue
   identity; the native cancellation table holds independent control progress.
   Publication is retained before admission, and the immutable admission receipt
@@ -357,7 +357,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   reports. The tested runtime tree is unchanged; the only subsequent changes
   are execution metadata. `git diff --check` passed. No implementation blocker
   remains; independent review of the actual PR is still required.
-- Independent implementation review: required for durable continuation and cancellation boundary
+- Independent implementation review: passed on 2026-09-12 at actual PR head
+  `8f63e74a8947f33eb55476772470459d89b2ae06`; no product blockers or required
+  corrections. The reviewer checked the accepted durable/transport/observation
+  contracts, PR identity, both command receipts and all seven archived JUnit
+  reports, and reconciled the metadata-only changes after validated code.
+  The same-head review receipt is retained in the PR body.
 - Blocker corrections: 2/3. Manager reproduced caller preparation stealing the
   stable `cancel-run-` identity after run acceptance. Reserve that native control
   namespace at public preparation and management-operation acceptance boundaries;
@@ -418,10 +423,16 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   passed; five phase-owned temporary edit scripts were removed. Validation logs
   and the harness report/JUnit artifacts remain for the manager. The persistent
   stage worktree and branch remain in place for the manager's delivery workflow.
-- PR and merge: [PR 309](https://github.com/samcantrill/loom/pull/309) is open
-  against develop with this card's exact canonical title and phase branch.
-  Target, title, non-draft state and mergeability were verified after creation.
-  Independent review and delivery remain pending.
+- PR and merge: [PR 309](https://github.com/samcantrill/loom/pull/309) squash-merged
+  into develop at `5a624d11ca5c777765fb35583a628bc57562f419` on
+  2026-09-12T00:55:33Z. The delivery helper verified exact title/target/head,
+  mergeability, remote merge and leased remote phase-branch retirement.
+- Transition: executor and reviewer are terminal, owned validation processes
+  completed, and the manager found no remaining process in the stage cwd.
+  The shared gate moved this clean persistent worktree to `agent/stage-41`
+  and fast-forwarded published state and local develop to the verified merge.
+  This coordination record is awaiting publication/synchronization and exact
+  local phase-branch retirement before successor startup.
 
 ## Completion Record
 
@@ -432,5 +443,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both `make validate-pr` and `make test-summary` passed on `7f343c90b9f79bf14a731d75979c03638f02c196`, tree `78bcc2d8f9d4619b528a1c0aa605d4f49795f078`. Exact outcomes, logs, skipped qualification and report/JUnit paths are in the final validation receipt above. |
 | Validation-relevant changes after evidence | None. Only this card's execution/completion metadata changed after the tested commit. |
 | Replaced-code removal / retained primitive consumers | Existing coordinator facade and raw CLI contained no production prepare/wait/submit orchestration chain to remove. Preparation-only and explicit prepared submission/retry remain separate native primitives and retain their tests. The old in-process execution RunRequest remains with its Phase 9 removal owner. |
-| PR, review and merge | Manager pre-submit passed; [PR 309](https://github.com/samcantrill/loom/pull/309) open; independent review and delivery pending. |
-| Residual risk and cleanup | No unresolved implementation blocker. Evidence is local synthetic services and mutual TLS fixtures; physical qualification remains with its owning phases. Owned validation processes completed, fixture cleanup passed, and temporary edit scripts were removed. Logs and harness artifacts remain available; stage worktree/branch are retained for manager delivery. |
+| PR, review and merge | Manager pre-submit and independent review passed; [PR 309](https://github.com/samcantrill/loom/pull/309) merged as `5a624d11ca5c777765fb35583a628bc57562f419`. Reviewed head and exact receipts are above. |
+| Residual risk and cleanup | No unresolved implementation blocker. Physical qualification remains with its owning phases. Owned agents/processes are terminal, fixture cleanup passed, and temporary edit scripts were removed. Logs plus archived summary/JUnit evidence remain available. Remote phase branch retired; coordination metadata publication/sync and exact local branch retirement precede successor startup. |
