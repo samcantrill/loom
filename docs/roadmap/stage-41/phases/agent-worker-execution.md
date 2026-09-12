@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p4-agent-worker-execution
@@ -383,7 +383,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   temporary socket directory, independent of output location. Both failed smoke
   cases, the paired success/failure e2e journey and configured Docker replay
   passed together (4 passed) in `build/phase-4/socket-regression.log`.
-- PR and merge: not started
+- PR and merge: [PR 311](https://github.com/samcantrill/loom/pull/311) is open,
+  non-draft and mergeable, targeting develop with the canonical phase title and
+  branch. Independent actual-head review and gated merge remain pending.
 
 ### Final validation receipt
 
@@ -430,5 +432,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both required commands passed on `feed35902ab06db541f4f1028cc1e35da91dd2f7`, tree `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
 | Validation-relevant changes after evidence | None; phase/manifest receipt updates only |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
-| PR, review and merge | Pending |
+| PR, review and merge | PR 311 open with verified canonical title, branch and develop target; independent review and merge pending |
 | Residual risk and cleanup | No current implementation blocker. Physical runtime qualification remains unavailable and unclaimed; all phase-owned processes terminal; PR/review/delivery and branch retirement pending |
