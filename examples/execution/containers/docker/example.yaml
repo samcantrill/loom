@@ -19,7 +19,7 @@ validation_command: uv run pytest tests/integration/docs/test_v0_python_examples
 entrypoints:
   - path: run_docker_pipeline.py
     kind: python
-    description: Run the example pipeline through loom run --executor docker with a daemon-free fake Docker command.
+    description: Run the example pipeline through the existing library runner and Docker executor with a daemon-free fake Docker command.
   - path: run_preflight.py
     kind: python
     description: Inspect selected-Docker preflight pass and fail diagnostics.

@@ -2,40 +2,37 @@
 
 ## 0. Implementation Status
 
-V7 implements both the cluster-free SLURM dry-run planning layer and optional
-live SLURM submission. The dry-run commands remain:
+The existing library retains cluster-free Slurm planning and optional low-level
+submission/inspection primitives. Ordinary `loom run` now requires a protected
+deployment selection and has no executor or dry-run bypass flags. Complete
+managed Slurm delivery and live-site qualification remain with the Slurm phases;
+this document's retained backend contracts do not establish that journey.
+
+Run the bounded planning demonstrations from the repository root:
 
 ```bash
-loom run experiment.yaml --executor slurm-single-job --dry-run
-loom run experiment.yaml --executor slurm-afterok --dry-run
+uv run python examples/execution/slurm/dry-run-basics/run_dry_run_basics.py
+uv run python examples/execution/slurm/afterok-diamond/run_afterok_diamond.py
 ```
 
-These commands create deterministic run-directory artifacts without calling
-`sbatch`: root `plan.json`, `prepared_run.json`, a
-`slurm/submissions/<planning_id>/manifest.json`, a SLURM dry-run plan, generated
-scripts, and stable wrapper stdout/stderr log paths. Missing `sbatch` is a
-warning in dry-run preflight output.
+These scripts call existing library primitives to create deterministic planning
+artifacts without `sbatch`. The unchanged physical acceptance hook remains
+opt-in and requires a qualified site; local fixtures do not qualify it.
 
-The live commands are:
+For already-submitted work, existing operations remain:
 
 ```bash
-loom run experiment.yaml --executor slurm-single-job
-loom run experiment.yaml --executor slurm-afterok
 loom status RUN_URI --jobs
 loom cancel RUN_URI --jobs
 ```
 
-Live submission uses `sbatch --parsable`, records scheduler job IDs in the same
-`slurm/submissions/<submission_id>/manifest.json` artifact, marks submitted work
-as `SUBMITTED`, and stores command records, status snapshots, cancellation
-attempts, partial submission facts, and safe scheduler metadata. Missing
-`sbatch` is a live-submission error. Missing `squeue`, `sacct`, or `scancel`
-is a preflight warning, while the operation that needs the command fails clearly
-at use time.
+The retained submission primitives use `sbatch --parsable` and persist job IDs,
+manifest/command records and scheduler observations. Missing scheduler commands
+remain explicit operation-specific failures.
 
 ### Delayed afterok resource intent
 
-The CLI's afterok preparation retains inner execution resource settings separately
+The retained afterok preparation primitives retain inner execution resource settings separately
 from display summaries and the outer SBATCH allocation. The private
 `slurm/submissions/<planning_id>/execution-resources.json` document contains the
 full normalized resources (including attributes), resolved resource policy, and
@@ -220,7 +217,7 @@ visible only when authority reconciliation validates the recorded submission and
 attempt, rejects stale/cancelled/superseded evidence, and commits through the
 authority store with reconciler-held fencing material.
 
-V9-post command generation carries authority selection explicitly. `loom run`,
+Retained command generation carries authority selection explicitly.
 `loom prepared-run continue`, `loom stage run`, `loom stage-job run`,
 `loom status --jobs`, `loom cancel --jobs`, preflight, and backend diagnostics
 all accept the shared authority flags used by the runtime store adapter. Dry-run
@@ -821,13 +818,7 @@ loom prepared-run continue --run-uri RUN_URI --executor local
 
 V7 live submission can submit the same script shape.
 
-Older designs used commands such as:
-
-```bash
-loom run CONFIG --run-dir RUN_DIR --executor local
-```
-
-or an equivalent resolved-config command. V6 rejects that shape for generated
+Older designs replayed the authoring command or an equivalent resolved-config command. V6 rejects that shape for generated
 scripts because unredacted resolved config can contain resolver outputs and
 secrets.
 
@@ -1056,11 +1047,7 @@ Implemented v6 command body:
 loom prepared-run continue --run-uri RUN_URI --executor local
 ```
 
-Rejected older shape:
-
-```bash
-loom run --resolved-config RUN_DIR/config/resolved.yaml --run-dir RUN_DIR --executor local --resume
-```
+Replaying resolved authoring configuration is rejected.
 
 Generated v6 scripts should not replay unredacted resolved config. They read
 the prepared run from durable run-store state.
@@ -2434,97 +2421,21 @@ This makes tests independent of a real cluster.
 
 ## 21. CLI Integration
 
-### 21.1 V6 Dry-Run Single Job
+### 21.1 Retained Planning Demonstrations
 
-Implemented command:
+The dry-run-basics and afterok-diamond scripts above invoke the library planner
+and write its manifest, plan, scripts and wrapper-log paths. Single-job scripts
+retain `loom prepared-run continue --run-uri RUN_URI --executor local`; afterok
+scripts retain `loom stage-job run --run-uri RUN_URI --stage STAGE --executor local`.
+Those worker/continuation entrypoints have separate cutover owners.
 
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-single-job \
-  --dry-run
-```
+### 21.2 Submission Qualification
 
-The CLI prints or serializes:
-
-```text
-run URI
-planning ID
-manifest path
-dry-run plan path
-script path
-wrapper stdout/stderr log paths
-preflight warnings
-```
-
-The generated script calls `loom prepared-run continue --run-uri RUN_URI
---executor local`.
-
-### 21.2 V6 Dry-Run Afterok DAG
-
-Implemented command:
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-afterok \
-  --dry-run
-```
-
-The CLI prints or serializes:
-
-```text
-number of planned jobs
-number of logical afterok dependencies
-manifest path
-script directory and per-stage script paths
-wrapper stdout/stderr log paths
-generated command argv
-preflight warnings
-```
-
-The generated scripts call `loom stage-job run --run-uri RUN_URI --stage STAGE
---executor local`. They do not call `loom stage run`.
-
-### 21.3 V7 Submit Single Job
-
-Implemented command:
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-single-job
-```
-
-The CLI prints or serializes:
-
-```text
-run directory
-submission manifest path
-job ID
-stdout/stderr paths
-status command hint
-```
-
-### 21.4 V7 Submit Afterok DAG
-
-Implemented command:
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-afterok
-```
-
-The CLI prints or serializes:
-
-```text
-number of jobs submitted
-root job IDs
-final job IDs
-submission manifest path
-partial submission warning, if any
-```
+Existing low-level submission APIs remain for their mapped consumers. There is
+currently no ordinary-run executor flag for invoking those older submission
+paths. Native managed Slurm startup, delivery and public examples require their
+own phase implementation and a qualified site. The existing inspection and
+cancellation commands below apply to already-submitted records.
 
 ### 21.5 V7 Status
 

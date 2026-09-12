@@ -1,14 +1,18 @@
 # Container Example Coverage
 
 This document tracks user-facing coverage for the implemented v17 Docker
-container executor workflow. Examples stay domain-neutral, use public CLI
+container executor workflow. Examples stay domain-neutral, use existing library execution and public diagnostic CLI
 surfaces, and keep daemon-dependent behavior outside default validation.
+
+Ordinary managed runs use a configured deployment. These retained library/fake-command
+journeys preserve backend assertions; they do not qualify a physical container
+runtime or claim the complete managed container journey.
 
 ## Covered User-Facing Behaviors
 
 | Behavior | Coverage | Examples |
 | --- | --- | --- |
-| Docker stage workers | `loom run CONFIG --executor docker` runs normal Loom pipelines whose selected stage attempts launch through Docker. | `execution.containers.docker` |
+| Docker stage workers | The retained library runner/executor demonstration launches prepared stage attempts through a fake Docker command. | `execution.containers.docker` |
 | Docker adapter options | Runtime profiles use `adapter_options.container` for image and environment handoff plus `adapter_options.docker` for Docker-owned flags. | `execution.containers.docker` |
 | Selected-Docker preflight | `loom preflight` reports stable Docker check IDs for command, config, image, environment, filesystem, and resources without daemon, registry, pull, or network probes. | `execution.containers.docker` |
 | Failure inspection | Docker failures are visible through existing `loom status` and `loom logs` surfaces. | `execution.containers.docker` |
@@ -22,7 +26,7 @@ Representative e2e evidence for this feature now includes:
 
 | Example | Version | Status | Validation | Functionality covered | Implementation notes |
 | --- | --- | --- | --- | --- | --- |
-| `execution.containers.docker` | v17 | runnable | e2e (`tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`) | Runs a two-stage synthetic pipeline through `loom run --executor docker`, inspects selected-Docker preflight pass/fail diagnostics, and inspects a persisted Docker failure. | Default validation installs a fake `docker` command on `PATH` so the public Docker executor path is exercised without a daemon. README guidance covers prepared-stage command shape and optional live Docker smoke. |
+| `execution.containers.docker` | v17 | runnable | e2e (`tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`) | Runs a two-stage synthetic pipeline through the existing library runner and Docker executor, inspects selected-Docker preflight pass/fail diagnostics, and inspects a persisted Docker failure. | Default validation installs a fake `docker` command on `PATH` so the public Docker executor path is exercised without a daemon. README guidance covers prepared-stage command shape and optional live Docker smoke. |
 
 ## Example Coverage Checks
 

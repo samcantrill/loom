@@ -1011,7 +1011,7 @@ Command shape for v2:
 
 ```bash
 loom plan experiment.yaml --run-uri file:///abs/project/runs/example --resume
-loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
+
 ```
 
 ### 14.2 Future Lenient Mode
@@ -1158,21 +1158,22 @@ evaluate        RUN     upstream changed: train.best_checkpoint
 report          RUN     upstream changed: evaluate.metrics
 ```
 
-### 17.2 `loom run --resume`
+### 17.2 Managed Run and Retained Resume Primitives
 
-Should use the same plan as `loom plan --resume`, then execute runnable stages.
-
-The runner should persist the plan before execution starts.
+Ordinary run uses a configured deployment and exact native operation replay.
+It does not expose the former resume/run-URI bypass. Explicit failed-admission
+retry remains a native control. The retained library runner's strict-resume
+behavior described here has a separate remaining-consumer cutover owner.
 
 ### 17.3 Selector Commands
 
 Supported shapes:
 
 ```bash
-loom run experiment.yaml --resume --from-stage train
-loom run experiment.yaml --resume --only-stage evaluate
-loom run experiment.yaml --resume --force-stage train
-loom run experiment.yaml --resume --skip-stage analyze
+loom run experiment.yaml --deployment deployment.yaml --from-stage train
+loom run experiment.yaml --deployment deployment.yaml --only-stage evaluate
+loom run experiment.yaml --deployment deployment.yaml --force-stage train
+loom run experiment.yaml --deployment deployment.yaml --skip-stage analyze
 ```
 
 Multiple `--force-stage` and `--skip-stage` values may be useful. V0 can start

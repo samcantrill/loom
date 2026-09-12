@@ -411,10 +411,30 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   evidence. Three native fixture supervisors left by interrupted baseline cases
   were shut down through their authenticated private test-shutdown protocol and
   observed exited; no fixture workloads or processes remain from those attempts.
+- Completed baseline feedback: `make validate-pr` at
+  `f96de461888d95f24f96b73f22d74d91eb016094` exited 2: Ruff/Pyright passed;
+  baseline 3292 passed, 2 skipped, 286 deselected, 4 failed in 1194.87 s.
+  The failures were stale public-export and mocked-dispatch expectations, now
+  corrected to include root `run` and the required deployment argument. Their
+  package/CLI selection passed (18 passed in 0.96 s). No runtime changes followed
+  that completed baseline. Config-extra feedback is being collected before the
+  final complete rerun; documentation-only edits did not restart that healthy
+  selection.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover
-- Blocker corrections: 0/3
+- Manager correction 1/3: corrected stale current ordinary-run guidance in
+  docs/features/cli.md, slurm.md, container-example-coverage.md and testing.md,
+  the Docker/Apptainer entrypoint descriptions, active resume examples and the
+  retained live-Slurm template. Ordinary command guidance now requires deployment
+  selection; retained examples describe library execution/planning and explicitly
+  separate physical/native-backend qualification. Restored accurate workflow,
+  variants, preflight and offline-import explanations for current catalog checks.
+  Exact removed-flag searches over current README/features/operations/example
+  guidance, including normalized multiline commands, returned zero matches.
+  Affected documentation/catalog checks: 12 passed, 17 deselected in 2.62 s.
+  Historical roadmap artifacts and P4/P6/P9 delivery remain untouched.
+- Blocker corrections: 1/3
 - PR and merge: not started
 
 ## Completion Record
