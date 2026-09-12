@@ -9,7 +9,9 @@ uv run python examples/operations/managed-ready-stage-slurm/run_managed_ready_st
 ```
 
 The script configures one explicit ready-stage SLURM profile and uses Loom's
-fake command gateway, so no cluster is required. The first `sbatch` is rejected;
+fake command gateway and a fixture-only positive containment helper, so no
+cluster is required. The assigned co-located agent owns the scheduler journal
+and calls; the coordinator projects its acknowledged evidence. The first `sbatch` is rejected;
 the journey observes the retained rejection and physical assignment release
 without falsely turning that scheduler decision into run failure. It restarts
 the daemon and proves that operation is retained without resubmission. A second

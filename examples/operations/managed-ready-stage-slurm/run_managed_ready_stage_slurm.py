@@ -30,6 +30,7 @@ from loom.pipeline.executors.slurm.commands import (  # noqa: E402
     SlurmCommandResult,
 )
 from loom.pipeline.executors.slurm.ready_stage import (  # noqa: E402
+    SlurmContainmentHelper,
     SlurmJobPrivateFileProvider,
     SlurmReadyStageProfile,
 )
@@ -102,6 +103,16 @@ def main() -> None:
             ),
         ),
         cluster="example-cluster",
+        # The fake gateway creates no scheduler process; this fixture supplies
+        # the separate positive containment receipt required for final release.
+        containment_helper=SlurmContainmentHelper(
+            "example-fake-containment-v1",
+            (
+                sys.executable,
+                "-c",
+                "import json,sys; value=json.load(sys.stdin); print(json.dumps({'state':'CONTAINED','evidence_id':'example-proof','evidence_revision':'1','echo':value}))",
+            ),
+        ),
     )
     run_root = root / "runs"
     rejected_uri = _prepare_run(recorder, run_root, "rejected", profile)
@@ -407,7 +418,9 @@ def _prepare_run(
     )
     recorder.python(
         "publish_prepared_run",
-        lambda: publish_prepared_run(embedded_coordinator_authority, run_uri, runtime_digest),
+        lambda: publish_prepared_run(
+            embedded_coordinator_authority, run_uri, runtime_digest
+        ),
     )
     return run_uri
 

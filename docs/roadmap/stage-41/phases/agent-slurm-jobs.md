@@ -387,6 +387,16 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   gates. Diagnostic receipts are /tmp/loom-p5-affected.log,
   /tmp/loom-p5-corrections2.log and /tmp/loom-p5-public-final.log; these are interim
   evidence, not final gate receipts. No tests were removed.
+- First committed gate: `make validate-pr` on
+  `ee472a2ca566b706c769cd41de531d86590dd370`, tree
+  `40c99db976cdb93a9637e91a6a5898921215dd4b`, passed Ruff/Pyright but the baseline
+  suite reported 3 failures, 3326 passed, 2 skipped and 296 deselected
+  (`/tmp/loom-p5-validate-pr-ee472a2.log`). Two obsolete coordinator-cancel unit
+  seams now assert agent ownership and final acknowledgement. The existing fake
+  Slurm CLI journey now explicitly supplies fixture containment; result validity
+  alone no longer releases the assignment. Corrected tests passed (two unit
+  cases and the E2E journey); receipts `/tmp/loom-p5-gate-corrections.log` and
+  `/tmp/loom-p5-example-final.log`. Full gates will rerun on the correction commit.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for external-call ownership, fencing and capacity
