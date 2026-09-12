@@ -1445,7 +1445,7 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
         {
             key: item
             for key, item in _mapping_value(value, "resident profile").items()
-            if key not in {"readiness", "preparation_shared_roots"}
+            if key not in {"readiness", "preparation_shared_roots", "container"}
         }
         for value in _sequence(payload, "resident_profiles")
     ]
@@ -1538,7 +1538,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
-        {"readiness", "preparation_shared_roots"},
+        {"readiness", "preparation_shared_roots", "container"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1572,6 +1572,7 @@ def _resident_profile(
         tuple(devices),
         cast(Mapping[str, str], environment),
         requirements,
+        container=cast(Mapping[str, PlainData] | None, value.get("container")),
         preparation_shared_roots={
             alias: _path({"root": path}, "root", base)
             for alias, path in _mapping_value(

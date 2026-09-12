@@ -67,6 +67,11 @@ def run_resident_probe(
     ):
         raise ValueError("resident probe device environment is invalid")
 
+    if profile.container is not None:
+        return _container_probe(
+            profile, script, request, float(timeout_seconds), device_environment
+        )
+
     try:
         temporary = tempfile.TemporaryDirectory(prefix="loom-resident-probe-")
     except OSError:
@@ -243,3 +248,111 @@ def _drain_and_contain(
         oversized,
         contained,
     )
+
+
+def _container_probe(profile, script, request, timeout_seconds, device_environment):
+    """Use the same daemon evidence owner for installed-environment probes.
+
+    Unknown Docker effects retain scratch and evidence for operator recovery; they
+    never qualify an installation or cause an unsafe automatic cleanup.
+    """
+    import hashlib
+    import shutil
+    import sqlite3
+    from ._container_worker import build_container_worker
+    from ._docker_worker import DockerWorker
+    from ._managed_local import _worker_environment
+
+    scratch = Path(tempfile.mkdtemp(prefix="loom-resident-probe-"))
+    workspace = scratch / "assignments" / "probe"
+    workspace.mkdir(parents=True)
+    output = workspace / "probe.json"
+    binding = profile.container
+    assert binding is not None
+    wrapper = (
+        "import sys, json; from pathlib import Path; "
+        "sys.stdout = Path(sys.argv.pop(1)).open('w'); "
+        "exec(json.loads(sys.argv.pop(1)))"
+    )
+    environment = _worker_environment(profile, workspace, (), {})
+    environment.update(device_environment or {})
+    try:
+        command = build_container_worker(
+            profile,
+            workspace=workspace,
+            environment=environment,
+            worker=(
+                str(binding["python_executable"]),
+                "-c",
+                wrapper,
+                str(output),
+                json.dumps(script),
+                json.dumps(request, sort_keys=True, separators=(",", ":")),
+            ),
+        )
+    except (ValueError, OSError):
+        shutil.rmtree(scratch)
+        return ResidentProbeResult(
+            None, "installed container probe command is invalid", True
+        )
+    contained = False
+    succeeded = False
+    try:
+        if binding["kind"] == "docker":
+            with sqlite3.connect(scratch / "supervisor.sqlite") as conn:
+                DockerWorker.initialize(conn)
+                owner = DockerWorker(
+                    conn,
+                    operation_id="probe",
+                    ownership=hashlib.sha256(str(scratch).encode()).hexdigest(),
+                    command=command.argv,
+                    endpoint=str(binding["daemon_endpoint"]),
+                    environment=environment,
+                )
+                observation = owner.launch()
+                deadline = monotonic() + timeout_seconds
+                while not observation.contained and monotonic() < deadline:
+                    sleep(0.05)
+                    observation = owner.observe()
+                if not observation.contained:
+                    owner.cancel()
+                    observation = owner.observe()
+                contained = observation.contained
+                succeeded = observation.successful
+                if contained:
+                    owner.remove()
+        else:
+            from loom.pipeline.executors.apptainer.commands import (
+                ApptainerExecCommand,
+                SubprocessApptainerExecRunner,
+            )
+
+            result = SubprocessApptainerExecRunner().run(
+                cast(ApptainerExecCommand, command), timeout_seconds=timeout_seconds
+            )
+            # The built-in timeout runner owns the qualified namespace barrier.
+            contained = result.error is None
+            succeeded = contained and result.returncode == 0 and not result.timed_out
+        if not contained:
+            return ResidentProbeResult(
+                None, "installed container probe containment is unknown", False
+            )
+        if (
+            not succeeded
+            or not output.is_file()
+            or output.stat().st_size > _MAX_OUTPUT_BYTES
+        ):
+            return ResidentProbeResult(None, "installed container probe failed", True)
+        value = json.loads(output.read_text())
+        if not isinstance(value, Mapping):
+            return ResidentProbeResult(
+                None, "installed container probe returned invalid data", True
+            )
+        return ResidentProbeResult(
+            cast(Mapping[str, PlainData], thaw_plain_data(freeze_plain_data(value))),
+            None,
+            True,
+        )
+    finally:
+        if contained:
+            shutil.rmtree(scratch)

@@ -2,16 +2,17 @@
 
 ## Workflow
 
-The runnable script uses the existing library execution or planning primitives
-directly. Ordinary runs use the [configured service lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). Backend demonstrations here retain their
-current process, artifact, and diagnostic assertions.
+The run entrypoints use public `loom.run` with a protected installed agent
+profile. Preparation, execution, fenced results and owned-service cleanup follow
+the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
+typed materialized worker results supply output and diagnostic details after
+owned services stop. The short deployment root printed by the script is retained
+for inspection; artifacts default to this example's `runs/` directory. Set
+`LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to relocate artifacts.
 
-This example demonstrates v4 runtime configuration through `runtime` and
-`runtime_profiles`, local preflight diagnostics for requested resources, explicit Python invocation
-tags/notes, explicit authority-backed execution, and the safe persisted
-`runtime.json` summary.
-
-Run from the repository root:
+This example preserves authored runtime tags, notes and per-stage resources,
+adds invocation tags/notes, and reads the persisted safe `runtime.json` summary.
+The installed agent profile selects the worker environment.
 
 ```sh
 uv run python examples/execution/runtime-profile/run_runtime_profile.py
@@ -19,10 +20,8 @@ uv run python examples/execution/runtime-profile/run_runtime_profile.py
 
 ## Variants
 
-The scripts preserve their existing library/backend demonstrations. Ordinary
-managed execution uses a protected deployment selection, with backend and
-lifetime policy owned by that selection. Existing status and log commands can
-inspect a matching retained run. For a run created with co-located service
-authority, pass `--authority-backend co_located_service` and
-`--authority-profile co_located` to those diagnostic commands; these are not
-ordinary-run overrides.
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

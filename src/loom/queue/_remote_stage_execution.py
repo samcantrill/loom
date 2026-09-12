@@ -445,8 +445,21 @@ class ResidentExecutionProfile:
     readiness_identity: str | None = None
     readiness_result: "ResidentReadinessResult | None" = None
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
+    container: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
+        from ._container_worker import container_binding
+        object.__setattr__(self, "container", container_binding(self.container))
+        if self.container is not None:
+            options = cast(Mapping[str, PlainData], self.container["options"])
+            if not Path(str(options["command"])).is_file():
+                raise QueueServiceError("resident container runtime is unavailable")
+            if self.container["kind"] == "apptainer":
+                container = cast(Mapping[str, PlainData], self.container["container"])
+                image = cast(Mapping[str, PlainData], container["image"])
+                if not Path(str(image["reference"])).is_file():
+                    raise QueueServiceError("resident container image is unavailable")
+
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
             raise QueueServiceError("resident execution descriptor is invalid")
         project_root = Path(self.project_root).resolve()
@@ -512,6 +525,7 @@ class ResidentExecutionProfile:
     def launch_profile(self) -> ResidentWorkerLaunchProfile:
         """The immutable process-launch binding, separate from capacity."""
         return ResidentWorkerLaunchProfile(
+            container=self.container,
             project_root=self.project_root,
             python_executable=self.python_executable,
             descriptor=self.descriptor.to_dict(),
@@ -1628,9 +1642,9 @@ class _ResidentAssignmentWorkspace:
                 (fence,),
             )
 
-    def mark_process_started(self, execution_id: str, process_id: int) -> None:
+    def mark_process_started(self, execution_id: str, process_id: int | None) -> None:
         _identifier(execution_id, "process_execution_id")
-        if (
+        if process_id is not None and (
             isinstance(process_id, bool)
             or not isinstance(process_id, int)
             or process_id < 1
@@ -1645,7 +1659,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError("remote launch requires a durable grant")
             if row["process_execution_id"] is not None and (
                 str(row["process_execution_id"]) != execution_id
-                or int(row["process_id"]) != process_id
+                or row["process_id"] != process_id
             ):
                 raise QueueConflictError("remote process identity conflicts")
             conn.execute(
@@ -2026,10 +2040,17 @@ class _ResidentAssignmentWorkspace:
             launch = _launch_from_value(
                 json.loads(str(process_row["supervisor_launch_json"]))
             )
+            if launch.profile.container is not None:
+                command = launch.container_command
+                route_metadata.update(command.metadata)
+                route_metadata["resource_controls"] = with_resource_control_disposition(
+                    {"resource_controls": command.metadata["resource_controls"]}, "applied"
+                )["resource_controls"]
             route_metadata.update(
                 {
                     "execution_kind": "resident_stage_worker",
-                    "command": list(launch.command_argv),
+                    "command": list(launch.command_argv if launch.profile.container is None
+                                    else cast(Sequence[str], launch.container_command.redacted_argv)),
                     "cwd": str(launch.profile.project_root),
                 }
             )

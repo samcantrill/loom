@@ -1,6 +1,6 @@
 id: execution.containers.slurm-apptainer
 title: Apptainer Container Executor
-summary: Run a prepared stage through a fake Apptainer command that records the selected exec flags and worker invocation.
+summary: Run a public managed pipeline through installed Apptainer workers using an explicit fake namespace fixture.
 capability: execution
 level: advanced
 introduced_in: v30
@@ -17,7 +17,7 @@ validation_path: tests/e2e/test_example_journeys.py::test_e2e_example_apptainer_
 entrypoints:
   - path: run_apptainer_pipeline.py
     kind: python
-    description: Run a pipeline through the existing library runner and Apptainer executor with a local fake command.
+    description: Prepare and execute a public managed pipeline with an installed Apptainer profile.
 tags:
   - apptainer
   - singularity

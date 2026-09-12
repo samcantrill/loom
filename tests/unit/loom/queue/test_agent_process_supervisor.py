@@ -160,6 +160,9 @@ def test_reopened_supervisor_does_not_adopt_nonterminal_pid(tmp_path: Path) -> N
     )
 
     assert reopened.query(launch).state is SupervisorLaunchState.UNKNOWN
+    with pytest.raises(AgentProcessSupervisorError, match="requires clean shutdown"):
+        reopened.rotate_clean_continuity()
+    assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
 
 
 def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
@@ -219,6 +222,64 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
             os.close(child_fd)
     finally:
         supervisor.contain(launch)
+
+
+@pytest.mark.parametrize("signal_error", [ProcessLookupError, PermissionError])
+def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signal_error: type[OSError]
+) -> None:
+    import select
+    import signal
+    from types import SimpleNamespace
+
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+
+    with fake_apptainer() as binding:
+        profile = replace(_profile(), container=binding)
+        monkeypatch.setattr(
+            ResidentWorkerLaunch,
+            "container_command",
+            property(
+                lambda self: SimpleNamespace(
+                    argv=(sys.executable, "-c", "import time; time.sleep(60)"),
+                    metadata={},
+                )
+            ),
+        )
+        (tmp_path / "agent").mkdir()
+        supervisor = AgentProcessSupervisor.initialize(
+            tmp_path / "agent", agent_id="agent-A", profiles=(profile,)
+        )
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        launch = replace(_launch(supervisor, workspace), profile=profile)
+        supervisor.launch(launch)
+        send_signal = signal.pidfd_send_signal
+
+        def fail_after_observation(namespace: int, signum: int) -> None:
+            if signal_error is ProcessLookupError:
+                # The observed live namespace exits before the attempted signal.
+                send_signal(namespace, signum)
+                assert select.select([namespace], [], [], 2)[0]
+            raise signal_error("namespace changed after observation")
+
+        monkeypatch.setattr(signal, "pidfd_send_signal", fail_after_observation)
+        try:
+            receipt = supervisor.contain(launch)
+            expected = (
+                SupervisorLaunchState.CONTAINED
+                if signal_error is ProcessLookupError
+                else SupervisorLaunchState.UNKNOWN
+            )
+            assert receipt.state is expected
+            assert not receipt.qualified_success
+            if signal_error is PermissionError:
+                assert supervisor.query(launch).state is SupervisorLaunchState.RUNNING
+                assert not supervisor.quiescent()
+        finally:
+            monkeypatch.setattr(signal, "pidfd_send_signal", send_signal)
+            assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+        assert supervisor.quiescent()
 
 
 def test_clean_shutdown_accepts_an_exited_group_that_is_gone(

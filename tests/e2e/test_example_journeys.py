@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -153,8 +154,22 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(
     payload = _parse_summary(_run_example_script(script, output_root))
 
     assert payload["run_status"] == "SUCCEEDED"
-    assert payload["seed_executor"] == "docker"
-    assert payload["container_image"] == "python:3.12-slim"
+    assert payload["coordinator_cleanup"] == "stopped"
+    assert payload["runtime_qualification"] == "local daemon fixture"
+    run_path = _run_uri_path(payload["run_uri"])
+    summary = json.loads((run_path / "artifacts/summarize/summary.json").read_text())
+    assert summary == {
+        "count": 3,
+        "total": 30,
+        "mean": 10,
+        "container_mode": "docker-pipeline",
+    }
+    worker = json.loads((run_path / "stages/seed/worker_result.json").read_text())[
+        "worker_result"
+    ]
+    assert worker["executor_metadata"]["executor"] == "docker"
+    assert worker["executor_metadata"]["managed_backend_success"] is True
+    assert "managed_successful_exit" not in worker["executor_metadata"]
     assert _require_int(payload["artifact_count"]) >= 1
     assert _require_int(payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(payload["run_uri"]).is_dir()
@@ -162,9 +177,20 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(
     failure_payload = _parse_summary(_run_example_script(failure_script, output_root))
 
     assert failure_payload["run_status"] == "FAILED"
-    assert failure_payload["failure_executor"] == "docker"
-    assert failure_payload["failure_exit_code"] == 1
-    assert failure_payload["stderr_available"] is True
+    assert failure_payload["coordinator_cleanup"] == "stopped"
+    assert failure_payload["artifact_count"] == 0
+    failed = json.loads(
+        (
+            _run_uri_path(failure_payload["run_uri"]) / "stages/fail/worker_result.json"
+        ).read_text()
+    )["worker_result"]
+    assert failed["status"] == "FAILED"
+    assert failed["failure"] is not None
+    assert failed["executor_metadata"]["executor"] == "docker"
+    assert (
+        "docker example is failing intentionally"
+        in Path(failed["stderr_path"]).read_text()
+    )
     assert _require_int(failure_payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
 
@@ -180,11 +206,14 @@ def test_e2e_example_apptainer_executor_runs_with_fake_command(tmp_path: Path) -
     payload = _parse_summary(_run_example_script(script, tmp_path / "apptainer"))
 
     assert payload["run_status"] == "SUCCEEDED"
-    assert payload["executor"] == "apptainer"
-    assert payload["image"] == "analysis-example.sif"
-    assert {"--cleanenv", "--nv"} <= set(str(payload["flags"]).split(","))
-    assert _require_int(payload["artifact_count"]) == 1
-    assert _require_int(payload["fake_call_count"]) >= 1
+    assert payload["coordinator_cleanup"] == "stopped"
+    assert payload["runtime_qualification"] == "fake namespace fixture"
+    summary = json.loads(
+        (
+            _run_uri_path(payload["run_uri"]) / "artifacts/analyze/summary.json"
+        ).read_text()
+    )
+    assert summary == {"count": 2, "total": 13, "container_mode": "apptainer-pipeline"}
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 

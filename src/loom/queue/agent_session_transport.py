@@ -3857,7 +3857,7 @@ class LocalDaemonAgentHttpClient:
                         SupervisorLaunchState.NOT_ACCEPTED,
                         SupervisorLaunchState.UNKNOWN,
                     }
-                    or receipt.process_id is None
+                    or not receipt.started
                 ):
                     raise QueueConflictError(
                         "remote supervisor has not established whether a process root was created"
@@ -4163,7 +4163,7 @@ class LocalDaemonAgentHttpClient:
                 AssignmentState.START_UNKNOWN,
                 AssignmentState.PROCESS_STARTED,
             }
-            if needs_start_join and receipt.process_id is not None:
+            if needs_start_join and receipt.started:
                 self._join_retained_supervised_start(
                     session,
                     request,
@@ -4181,7 +4181,7 @@ class LocalDaemonAgentHttpClient:
                 self.poll_assignment_control(session_id)
                 sleep(0.05)
                 receipt = supervisor.query(launch)
-                if needs_start_join and receipt.process_id is not None:
+                if needs_start_join and receipt.started:
                     self._join_retained_supervised_start(
                         session,
                         request,
@@ -4272,7 +4272,7 @@ class LocalDaemonAgentHttpClient:
         workspace: _ResidentAssignmentWorkspace,
         execution_journal: SQLiteAgentJournal,
         launch: ResidentWorkerLaunch,
-        process_id: int,
+        process_id: int | None,
     ) -> None:
         """Join one exact accepted launch across the application crash barrier."""
 
@@ -4332,6 +4332,28 @@ class LocalDaemonAgentHttpClient:
             )
             workspace.persist_failed_before_start(result, fence=fence)
         if persist_result:
+            retained = workspace.worker_result()
+            if retained is not None:
+                result = retained
+            elif workspace.supervisor_launch_json() is not None:
+                launch = _launch_from_value(json.loads(cast(str, workspace.supervisor_launch_json())))
+                if self._supervisor is None:
+                    raise QueueConflictError("remote completion lost its supervisor")
+                evidence = self._supervisor.query(launch)
+                if evidence.state is not SupervisorLaunchState.CONTAINED:
+                    raise QueueConflictError("remote completion lacks containment")
+                if result.status is StageStatus.SUCCEEDED and not evidence.qualified_success:
+                    result = _managed_root_failed_worker_result(
+                        workspace.worker_request(), ManagedLocalError("worker backend success is unqualified"),
+                        process_exit_code=evidence.exit_code,
+                    )
+                metadata = dict(result.executor_metadata)
+                metadata.pop("managed_successful_exit", None)
+                metadata.pop("managed_backend_success", None)
+                if result.status is StageStatus.SUCCEEDED:
+                    metadata["managed_backend_success" if launch.backend_kind == "docker"
+                             else "managed_successful_exit"] = evidence.qualified_success
+                result = replace(result, executor_metadata=metadata)
             workspace.persist_worker_result(result)
             result = cast(StageWorkerResult, workspace.worker_result())
             execution_journal.record_result(assignment.assignment_id, result.to_dict())

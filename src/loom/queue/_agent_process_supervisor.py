@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from threading import Thread
 from time import monotonic, sleep
 from typing import Mapping, cast
@@ -55,11 +56,15 @@ class ResidentWorkerLaunchProfile:
     environment: Mapping[str, str] = field(default_factory=dict)
     readiness_identity: str | None = None
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
+    container: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
+        from ._container_worker import container_binding
+
+        object.__setattr__(self, "container", container_binding(self.container))
         root = Path(self.project_root).resolve()
         executable = Path(os.path.abspath(self.python_executable))
-        if not root.is_dir() or not executable.is_file():
+        if not root.is_dir() or (self.container is None and not executable.is_file()):
             raise AgentProcessSupervisorError(
                 "resident worker launch profile is unavailable"
             )
@@ -161,12 +166,46 @@ class ResidentWorkerLaunch:
     @property
     def command_argv(self) -> tuple[str, ...]:
         """Exact resident command shared by spawn and its retained receipt."""
+        if self.profile.container is not None:
+            return tuple(self.container_command.argv)
         return (
             str(self.profile.python_executable),
             "-m",
             "loom.queue._resident_stage_worker",
             "--workspace",
             str(self.workspace_root),
+        )
+
+    @property
+    def container_command(self):
+        from ._container_worker import build_container_worker
+        from ._remote_stage_execution import _ResidentAssignmentWorkspace
+
+        binding = self.profile.container
+        assert binding is not None
+        workspace = _ResidentAssignmentWorkspace(
+            self.workspace_root.parent.parent, self.assignment_id
+        )
+        return build_container_worker(
+            self.profile,
+            workspace=self.workspace_root,
+            worker=(
+                str(binding["python_executable"]),
+                "-m",
+                "loom.queue._resident_stage_worker",
+                "--workspace",
+                str(self.workspace_root),
+            ),
+            environment=self.environment,
+            runtime=workspace.worker_request().resolved_runtime,
+        )
+
+    @property
+    def backend_kind(self) -> str:
+        return (
+            "native"
+            if self.profile.container is None
+            else str(self.profile.container["kind"])
         )
 
     def __post_init__(self) -> None:
@@ -211,6 +250,10 @@ class ResidentWorkerLaunch:
             controls = _validated_resource_controls(self.resource_controls)
         except ValueError as exc:
             raise AgentProcessSupervisorError(str(exc)) from exc
+        if self.profile.container is not None:
+            controls = _validated_resource_controls(
+                self.container_command.metadata.get("resource_controls")
+            )
         object.__setattr__(self, "resource_controls", controls)
 
     @property
@@ -245,6 +288,20 @@ class SupervisorReceipt:
     exit_code: int | None = None
     worker_result_digest: str | None = None
     successful_exit: bool = False
+    backend_id: str | None = None
+    backend_successful: bool = False
+
+    @property
+    def started(self) -> bool:
+        return self.process_id is not None or self.backend_id is not None
+
+    @property
+    def qualified_success(self) -> bool:
+        return (
+            self.backend_successful
+            if self.launch.backend_kind == "docker"
+            else self.successful_exit
+        )
 
 
 class AgentProcessSupervisor:
@@ -269,6 +326,7 @@ class AgentProcessSupervisor:
         self._configuration = SupervisorLaunchConfiguration(agent_id, profiles)
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
+        self._namespace_inits: dict[str, int] = {}
         self._path = self.root / "supervisor.sqlite"
         if initialize:
             self._initialize()
@@ -304,6 +362,13 @@ class AgentProcessSupervisor:
               successful_exit INTEGER NOT NULL DEFAULT 0
             );
             """)
+            if any(
+                profile.container is not None and profile.container["kind"] == "docker"
+                for profile in self._configuration.profiles
+            ):
+                from ._docker_worker import DockerWorker
+
+                DockerWorker.initialize(conn)
             conn.executemany(
                 "INSERT INTO metadata(key, value) VALUES (?, ?)",
                 (
@@ -332,7 +397,8 @@ class AgentProcessSupervisor:
                 if (
                     values.get("schema_version") == "2"
                     and values.get("agent_id") == self._agent_id
-                    and values.get("configuration_fingerprint") == self._configuration.fingerprint
+                    and values.get("configuration_fingerprint")
+                    == self._configuration.fingerprint
                 ):
                     conn.execute(
                         "ALTER TABLE launches ADD COLUMN successful_exit INTEGER NOT NULL DEFAULT 0"
@@ -364,6 +430,8 @@ class AgentProcessSupervisor:
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
+        if launch.backend_kind == "docker":
+            return self._docker_reconcile(launch, start=True)
         require_group_wait_support()
         encoded = _launch_json(launch)
         with self._connect() as conn:
@@ -391,7 +459,8 @@ class AgentProcessSupervisor:
         # identity.  Do not merge ambient service state at the spawn boundary.
         environment = dict(launch.environment)
         gate = launch.workspace_root / "run.grant"
-        gate.write_text("granted\n", encoding="utf-8")
+        if launch.backend_kind != "apptainer":
+            gate.write_text("granted\n", encoding="utf-8")
         try:
             child = subprocess.Popen(
                 launch.command_argv,
@@ -411,11 +480,29 @@ class AgentProcessSupervisor:
                 conn.commit()
             raise AgentProcessSupervisorError("resident root was not created") from exc
         self._children[launch.launch_operation_id] = OwnedProcessGroup(child)
+        if launch.backend_kind == "apptainer":
+            from loom.pipeline.executors.apptainer._timeout import _capture_init
+
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                init = _capture_init(child, child.pid)
+                if init is not None:
+                    self._namespace_inits[launch.launch_operation_id] = init
+                    gate.write_text("granted\n", encoding="utf-8")
+                    break
+                if self._children[launch.launch_operation_id].root_status() is not None:
+                    break
+                time.sleep(0.01)
         with self._connect() as conn:
             conn.execute(
                 "UPDATE launches SET state = ?, pid = ?, revision = revision + 1 WHERE operation_id = ?",
                 (
-                    SupervisorLaunchState.RUNNING.value,
+                    (
+                        SupervisorLaunchState.UNKNOWN.value
+                        if launch.backend_kind == "apptainer"
+                        and launch.launch_operation_id not in self._namespace_inits
+                        else SupervisorLaunchState.RUNNING.value
+                    ),
                     child.pid,
                     launch.launch_operation_id,
                 ),
@@ -429,6 +516,8 @@ class AgentProcessSupervisor:
 
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
+        if launch.backend_kind == "docker":
+            return self._docker_reconcile(launch)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM launches WHERE operation_id = ?",
@@ -481,6 +570,8 @@ class AgentProcessSupervisor:
             return self._receipt(launch, row)
 
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        if launch.backend_kind == "docker":
+            return self._docker_reconcile(launch, contain=True)
         receipt = self.query(launch)
         child = self._children.get(launch.launch_operation_id)
         if receipt.state is SupervisorLaunchState.CONTAINED:
@@ -500,10 +591,40 @@ class AgentProcessSupervisor:
         if child is None:
             return receipt
         successful_exit = child.successful_exit()
+        namespace = self._namespace_inits.get(launch.launch_operation_id)
+        if launch.backend_kind == "apptainer":
+            from loom.pipeline.executors.apptainer._timeout import _ready
+
+            if namespace is None:
+                return SupervisorReceipt(
+                    SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
+                )
+            successful_exit = successful_exit and _ready(namespace)
+            if not _ready(namespace):
+                import signal
+
+                try:
+                    signal.pidfd_send_signal(namespace, signal.SIGKILL)
+                except ProcessLookupError:
+                    # Exit raced with the signal; positive containment is checked below.
+                    pass
+                except OSError:
+                    return SupervisorReceipt(
+                        SupervisorLaunchState.UNKNOWN,
+                        launch,
+                        receipt.supervisor_revision,
+                    )
         try:
             contained = child.contain()
         except OSError:
             contained = False
+        if launch.backend_kind == "apptainer" and namespace is not None:
+            import select
+
+            contained = contained and bool(select.select([namespace], [], [], 2)[0])
+            if contained:
+                os.close(namespace)
+                self._namespace_inits.pop(launch.launch_operation_id, None)
         if not contained:
             return SupervisorReceipt(
                 SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
@@ -526,6 +647,103 @@ class AgentProcessSupervisor:
                 (launch.launch_operation_id,),
             ).fetchone()
         return self._receipt(launch, row)
+
+    def _docker_reconcile(
+        self,
+        launch: ResidentWorkerLaunch,
+        *,
+        start: bool = False,
+        cancel: bool = False,
+        contain: bool = False,
+    ) -> SupervisorReceipt:
+        from ._docker_worker import DockerWorker
+
+        self._validate_launch(launch)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM launches WHERE operation_id = ?",
+                (launch.launch_operation_id,),
+            ).fetchone()
+            if row is None:
+                if not start:
+                    return SupervisorReceipt(
+                        SupervisorLaunchState.NOT_ACCEPTED, launch, 0
+                    )
+                conn.execute(
+                    "INSERT INTO launches(operation_id, digest, launch_json, state, revision) "
+                    "VALUES (?, ?, ?, ?, 1)",
+                    (
+                        launch.launch_operation_id,
+                        launch.spec_digest,
+                        _launch_json(launch),
+                        SupervisorLaunchState.STARTING.value,
+                    ),
+                )
+                conn.commit()
+            elif row["digest"] != launch.spec_digest:
+                raise AgentProcessSupervisorError(
+                    "Docker launch conflicts with durable identity"
+                )
+            binding = launch.profile.container
+            assert binding is not None
+            owner = DockerWorker(
+                conn,
+                operation_id=launch.launch_operation_id,
+                ownership=launch.spec_digest,
+                command=launch.command_argv,
+                endpoint=str(binding["daemon_endpoint"]),
+                environment=launch.environment,
+            )
+            # Authority granted this exact launch before the durable supervisor call.
+            (launch.workspace_root / "run.grant").write_text(
+                "granted\n", encoding="utf-8"
+            )
+            observation = owner.cancel() if cancel else owner.launch()
+            state = {
+                "not_accepted": SupervisorLaunchState.STARTING,
+                "starting": SupervisorLaunchState.RUNNING,
+                "running": SupervisorLaunchState.RUNNING,
+                "terminal": SupervisorLaunchState.EXITED,
+                "unknown": SupervisorLaunchState.UNKNOWN,
+            }[observation.state]
+            if observation.contained and (
+                contain or row is not None and row["state"] == "contained"
+            ):
+                state = SupervisorLaunchState.CONTAINED
+            result = launch.workspace_root / "worker-result.json"
+            digest = (
+                str(row["result_digest"])
+                if row is not None and row["result_digest"] is not None
+                else _file_digest(result)
+                if observation.contained and result.is_file()
+                else None
+            )
+            conn.execute(
+                "UPDATE launches SET state = ?, exit_code = ?, result_digest = ?, "
+                "revision = revision + 1 WHERE operation_id = ?",
+                (
+                    state.value,
+                    observation.exit_code,
+                    digest,
+                    launch.launch_operation_id,
+                ),
+            )
+            conn.commit()
+            revision = conn.execute(
+                "SELECT revision FROM launches WHERE operation_id = ?",
+                (launch.launch_operation_id,),
+            ).fetchone()[0]
+            if state is SupervisorLaunchState.CONTAINED:
+                owner.remove()
+            return SupervisorReceipt(
+                state,
+                launch,
+                revision,
+                exit_code=observation.exit_code,
+                worker_result_digest=digest,
+                backend_id=observation.container_id,
+                backend_successful=observation.successful,
+            )
 
     def quiescent(self) -> bool:
         """Return positive local evidence that no launch needs this service."""
@@ -583,7 +801,7 @@ class AgentProcessSupervisor:
                 self.contain(launch)
 
     def rotate_clean_continuity(self) -> None:
-        """Start a fresh epoch only after a persisted clean terminal cut."""
+        """Recover daemon ownership or rotate after a persisted clean terminal cut."""
 
         with self._connect() as conn:
             launches = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
@@ -593,6 +811,22 @@ class AgentProcessSupervisor:
             if marker is None:
                 if not launches:
                     # A process-free root has no predecessor epoch to retire.
+                    return
+                retained = tuple(
+                    conn.execute("SELECT launch_json, state FROM launches")
+                )
+                kinds = tuple(
+                    _launch_from_value(json.loads(str(row["launch_json"]))).backend_kind
+                    for row in retained
+                )
+                if "docker" in kinds and all(
+                    kind == "docker"
+                    or row["state"] == SupervisorLaunchState.CONTAINED.value
+                    for kind, row in zip(kinds, retained, strict=True)
+                ):
+                    # Daemon identity is recoverable without native PID adoption.
+                    # Keep the epoch: exact retained launch/fence bindings still own
+                    # every effect. Unknown daemon observations still hold capacity.
                     return
                 raise AgentProcessSupervisorError(
                     "managed supervisor continuity requires clean shutdown"
@@ -654,6 +888,7 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "descriptor": profile.descriptor,
         "environment": dict(profile.environment),
         "readiness_identity": profile.readiness_identity,
+        **({"container": profile.container} if profile.container is not None else {}),
         **(
             {
                 "preparation_shared_roots": {
@@ -678,7 +913,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     if (
         not isinstance(value, Mapping)
         or not required.issubset(value)
-        or not set(value).issubset(required | {"preparation_shared_roots"})
+        or not set(value).issubset(required | {"preparation_shared_roots", "container"})
     ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
@@ -687,6 +922,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),
         environment=cast(Mapping[str, str], value["environment"]),
         readiness_identity=cast(str | None, value["readiness_identity"]),
+        container=cast(Mapping[str, PlainData] | None, value.get("container")),
         preparation_shared_roots=cast(
             Mapping[str, Path], value.get("preparation_shared_roots", {})
         ),
@@ -799,19 +1035,29 @@ def _receipt_value(receipt: SupervisorReceipt) -> dict[str, object]:
         "exit_code": receipt.exit_code,
         "worker_result_digest": receipt.worker_result_digest,
         "successful_exit": receipt.successful_exit,
+        "backend_id": receipt.backend_id,
+        "backend_successful": receipt.backend_successful,
     }
 
 
 def _receipt_from_value(value: object) -> SupervisorReceipt:
-    if not isinstance(value, Mapping) or set(value) != {
-        "state",
-        "launch",
-        "supervisor_revision",
-        "process_id",
-        "exit_code",
-        "worker_result_digest",
-        "successful_exit",
-    } or not isinstance(value.get("successful_exit"), bool):
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {
+            "state",
+            "launch",
+            "supervisor_revision",
+            "process_id",
+            "exit_code",
+            "worker_result_digest",
+            "successful_exit",
+            "backend_id",
+            "backend_successful",
+        }
+        or not isinstance(value.get("successful_exit"), bool)
+        or not isinstance(value.get("backend_successful"), bool)
+    ):
         raise AgentProcessSupervisorError("supervisor receipt is invalid")
     return SupervisorReceipt(
         SupervisorLaunchState(cast(str, value["state"])),
@@ -821,6 +1067,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         cast_int(value["exit_code"]),
         cast(str | None, value["worker_result_digest"]),
         cast(bool, value["successful_exit"]),
+        cast(str | None, value["backend_id"]),
+        cast(bool, value["backend_successful"]),
     )
 
 
@@ -1019,7 +1267,7 @@ class AgentProcessSupervisorService:
     def start_empty_initialized(
         cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
     ) -> AgentProcessSupervisorClient:
-        """Start relocated initialized state only before its first launch."""
+        """Start initialized state after a clean cut or recover daemon ownership."""
 
         root = Path(agent_root).resolve() / "supervisor"
         persisted = _service_configuration(root)
@@ -1166,7 +1414,13 @@ def _serve(root: Path) -> None:
                         supervisor.query(cast(ResidentWorkerLaunch, launch))
                     )
                 elif operation == "request_stop":
-                    current = supervisor.query(cast(ResidentWorkerLaunch, launch))
+                    current = (
+                        supervisor._docker_reconcile(
+                            cast(ResidentWorkerLaunch, launch), cancel=True
+                        )
+                        if cast(ResidentWorkerLaunch, launch).backend_kind == "docker"
+                        else supervisor.query(cast(ResidentWorkerLaunch, launch))
+                    )
                     child = supervisor._children.get(
                         cast(ResidentWorkerLaunch, launch).launch_operation_id
                     )

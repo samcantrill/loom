@@ -1,6 +1,6 @@
 id: execution.subprocess
 title: Subprocess Pipeline Run
-summary: Run synthetic pipelines with local and subprocess executors, inspect subprocess failures, and invoke a prepared stage worker directly.
+summary: Run synthetic pipelines through installed native agent workers, inspect failures, and separately invoke a prepared stage worker directly.
 capability: execution
 level: intermediate
 introduced_in: v5
@@ -20,7 +20,7 @@ validation_command: uv run pytest tests/integration/docs/test_v0_python_examples
 entrypoints:
   - path: run_subprocess_pipeline.py
     kind: python
-    description: Run the same success pipeline locally and through subprocess workers.
+    description: Run a successful public managed pipeline through installed native workers.
   - path: run_failure_diagnostics.py
     kind: python
     description: Run a failing subprocess stage and inspect status and stderr logs.

@@ -20,7 +20,7 @@ validation_command: uv run pytest tests/integration/docs/test_v0_python_examples
 entrypoints:
   - path: run_diagnostics.py
     kind: python
-    description: Run the successful diagnostics workflow through CLI entrypoints.
+    description: Run preflight and public managed execution, then inspect materialized outputs and cleanup.
 tags:
   - preflight
   - status
