@@ -910,10 +910,13 @@ class SQLiteSlurmStageAssignments:
             )
         return self.read(assignment.assignment_id)
 
-    def mark_input_ready(self, assignment_id: str, incarnation: str) -> None:
+    def mark_input_ready(self, assignment_id: str, incarnation: str) -> bool:
+        """Return false until the registered job has the agent's submission acknowledgement."""
         with self._transaction() as conn:
             row = self._row(conn, assignment_id)
             self._incarnation(row, incarnation)
+            if str(row["state"]) in {"submitting", "unknown"}:
+                return False
             if str(row["state"]) not in {
                 "accepted",
                 "granted",
@@ -927,6 +930,7 @@ class SQLiteSlurmStageAssignments:
                 f"UPDATE {_ASSIGNMENT_TABLE} SET input_ready = 1 WHERE assignment_id = ?",
                 (assignment_id,),
             )
+        return True
 
     def mark_granted(self, assignment_id: str, incarnation: str, fence: str) -> str:
         _identifier(fence, "SLURM fence")

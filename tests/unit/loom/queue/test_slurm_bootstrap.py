@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,14 +85,22 @@ def test_job_private_capability_is_regular_bounded_and_unlinked(tmp_path: Path) 
         _read_job_private_capability(tmp_path / "link")
 
 
+@pytest.mark.parametrize("pending_responses", [0, 2, None])
 def test_bootstrap_passes_outer_boundary_containment_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_responses: int | None
 ) -> None:
     config_path = tmp_path / "bootstrap.json"
     config_path.write_text(json.dumps(_config_value(tmp_path)), encoding="utf-8")
     config_path.chmod(0o600)
     config = SlurmBootstrapClientConfig.from_file(config_path)
+    config = replace(config, bootstrap_deadline_seconds=3, reconnect_seconds=1)
     captured: dict[str, object] = {}
+    actions: list[str] = []
+    now = [10.0]
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
+    )
 
     class FakeClient:
         def handshake(self, *, role: str) -> dict[str, object]:
@@ -107,6 +116,14 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             self, role: str, action: str, payload: dict[str, object]
         ) -> dict[str, object]:
             assert role == "slurm_bootstrap"
+            actions.append(action)
+            if action == "inputs_ready":
+                if (
+                    pending_responses is None
+                    or actions.count(action) <= pending_responses
+                ):
+                    return {"state": "awaiting_submission_ack"}
+                return {"state": "input_ready"}
             if action == "register":
                 return {"assignment_id": "assignment-1", "delivery": {}}
             if action == "grant":
@@ -175,13 +192,31 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
         lambda **kwargs: captured.update(kwargs) or object(),
     )
 
-    run_slurm_bootstrap(
-        operation_id="operation-1", request_digest="digest-1", config=config
-    )
-
-    assert (
-        captured["process_containment_owner"] is ProcessContainmentOwner.OUTER_BOUNDARY
-    )
+    if pending_responses is None:
+        with pytest.raises(
+            QueueServiceError, match="deadline expired; no offline grant"
+        ):
+            run_slurm_bootstrap(
+                operation_id="operation-1", request_digest="digest-1", config=config
+            )
+        assert actions == ["register", "inputs_ready", "inputs_ready", "inputs_ready"]
+        assert captured == {}
+        (diagnostic,) = config.workspace_root.glob("bootstrap-failure-*.json")
+        assert json.loads(diagnostic.read_text())["offline_grant"] is False
+    else:
+        run_slurm_bootstrap(
+            operation_id="operation-1", request_digest="digest-1", config=config
+        )
+        assert actions[: pending_responses + 4] == [
+            "register",
+            *(["inputs_ready"] * (pending_responses + 1)),
+            "grant",
+            "start",
+        ]
+        assert (
+            captured["process_containment_owner"]
+            is ProcessContainmentOwner.OUTER_BOUNDARY
+        )
 
 
 def test_prestart_reconnect_deadline_never_grants_offline(

@@ -5871,11 +5871,11 @@ def _dispatch_application(
             return {"data": _encode_chunk(data), "final": final}
         if operation == "inputs_ready":
             _exact(value, {"assignment_id", "incarnation"})
-            view.inputs_ready(
+            ready = view.inputs_ready(
                 _string(value, "assignment_id"),
                 _string(value, "incarnation"),
             )
-            return {"state": "input_ready"}
+            return {"state": "input_ready" if ready else "awaiting_submission_ack"}
         if operation == "grant":
             _exact(value, {"assignment_id", "incarnation"})
             return {

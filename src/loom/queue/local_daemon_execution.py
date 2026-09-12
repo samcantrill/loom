@@ -5566,11 +5566,11 @@ class LocalDaemonExecution:
         credential_id: str | None,
         assignment_id: str,
         incarnation: str,
-    ) -> None:
+    ) -> bool:
         self._slurm_authorized_record(
             principal_id, credential_id, assignment_id, incarnation
         )
-        self.slurm_assignments.mark_input_ready(assignment_id, incarnation)
+        return self.slurm_assignments.mark_input_ready(assignment_id, incarnation)
 
     def slurm_grant(
         self,

@@ -403,8 +403,21 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   physical-container skips. Existing monitor teardown warnings remain visible
   in the passing unit receipt. No phase-owned process remained; unrelated
   processes and checkouts are preserved. Independent PR review remains required.
-- Independent implementation review: required for external-call ownership, fencing and capacity
-- Blocker corrections: 0/3
+- Independent implementation review: one qualified fast-bootstrap blocker; correction and same-reviewer confirmation pending
+- Blocker corrections: 1/3. Independent review at
+  `285fa7f5e07cc3e23f146f14de939e7d10b1d210` found a fast registered bootstrap
+  could reach input readiness before agent submission acknowledgement and exit
+  on the conflict. Manager correction preserves agent ownership: exact pending
+  readiness now waits within the retained bootstrap deadline without input-ready
+  mutation or an authority grant. The early-registration fixture reaches this
+  boundary inside sbatch; bootstrap tests cover delayed acknowledgement and
+  deadline expiry without authored effects. Before-fix receipts show the two new
+  bootstrap cases and the early-registration journey failing; logs are
+  `/tmp/loom-p5-review-bootstrap-before.log` and
+  `/tmp/loom-p5-review-early-registration-before.log`. All 140 affected bootstrap,
+  ready-stage, authenticated agent transport, agent Slurm and public run-operation
+  cases passed (`/tmp/loom-p5-review-bootstrap-affected.log`). Both fresh final
+  gates are pending; the same reviewer must confirm this correction.
 - PR and merge: [PR 312](https://github.com/samcantrill/loom/pull/312) is open,
   non-draft and mergeable with the canonical title, exact phase branch and develop
   base verified. Independent review and gated delivery are pending.

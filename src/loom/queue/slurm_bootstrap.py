@@ -323,10 +323,17 @@ def run_slurm_bootstrap(
                 if final:
                     break
         workspace.accept_inputs()
-        prestart(
-            "inputs_ready",
-            {"assignment_id": assignment_id, "incarnation": incarnation},
-        )
+        while True:
+            readiness = prestart(
+                "inputs_ready",
+                {"assignment_id": assignment_id, "incarnation": incarnation},
+            )
+            if readiness.get("state") == "input_ready":
+                break
+            if readiness.get("state") != "awaiting_submission_ack":
+                raise QueueServiceError("SLURM input-readiness response is invalid")
+            # A fast job can register before sbatch returns to its owning agent.
+            time.sleep(min(selected.reconnect_seconds, max(0, deadline - time.time())))
         grant = prestart(
             "grant",
             {"assignment_id": assignment_id, "incarnation": incarnation},

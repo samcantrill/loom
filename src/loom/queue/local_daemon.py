@@ -4236,8 +4236,9 @@ class LocalDaemonSlurmBootstrapView:
             offset=offset,
         )
 
-    def inputs_ready(self, assignment_id: str, incarnation: str) -> None:
-        self._execution().slurm_inputs_ready(
+    def inputs_ready(self, assignment_id: str, incarnation: str) -> bool:
+        """Acknowledge durable inputs, or return false while submission is pending."""
+        return self._execution().slurm_inputs_ready(
             principal_id=self._principal.subject,
             credential_id=self._principal.credential_id,
             assignment_id=assignment_id,

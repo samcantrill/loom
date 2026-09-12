@@ -2286,8 +2286,10 @@ agent session, and has no direct authority credential.
 Protected bootstrap configuration sets `bootstrap_deadline_seconds` (default
 300) and `reconnect_seconds` (default 1). The first bootstrap retains its deadline
 across restarts; ungranted work reconnects only until that deadline and retains
-a diagnostic on expiry. It never creates an offline grant. Already permitted
-work can execute during observer loss. Connected typed result relay is retained;
+a diagnostic on expiry. A job that registers before the agent acknowledges
+submission waits at input readiness within that same deadline; pending readiness
+cannot obtain a grant or start permit. It never creates an offline grant. Already
+permitted work can execute during observer loss. Connected typed result relay is retained;
 completed-job delivery after compute storage disappears is not guaranteed.
 
 The flow can place successive or independent pipeline stages on different

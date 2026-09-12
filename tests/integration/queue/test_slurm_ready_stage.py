@@ -52,6 +52,7 @@ from loom.queue import (
     prepare_managed_local_runtime_record,
 )
 from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
+from loom.queue.agent_session_transport import _dispatch_application
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
@@ -496,6 +497,30 @@ def _exercise_mixed_route_run(
                     Path(profile.job_private_file_provider.fixed_path).read_bytes()
                 ).decode(),
             )
+            # A fast compute bootstrap can finish inputs before sbatch responds.
+            response = _dispatch_application(
+                daemon,
+                LocalDaemonPrincipal(
+                    "slurm-principal",
+                    LocalDaemonRole.SLURM_BOOTSTRAP,
+                    "slurm-credential",
+                ),
+                "slurm_bootstrap",
+                "inputs_ready",
+                {
+                    "assignment_id": retained.assignment.assignment_id,
+                    "incarnation": "bootstrap-1",
+                },
+            )
+            assert response == {"state": "awaiting_submission_ack"}
+            pending = execution.slurm_assignments.read(
+                retained.assignment.assignment_id
+            )
+            assert pending.state == "submitting"
+            assert pending.input_ready is False
+            assert pending.fence is None
+            with pytest.raises(QueueConflictError, match="durable inputs"):
+                bootstrap.grant(retained.assignment.assignment_id, "bootstrap-1")
             return original_sbatch(*args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(runner, "sbatch", register_inside_sbatch)
@@ -727,7 +752,15 @@ def _exercise_mixed_route_run(
                 if final:
                     break
         workspace.accept_inputs()
-        view.inputs_ready(assignment_id, incarnation)
+        assert _dispatch_application(
+            daemon,
+            LocalDaemonPrincipal(
+                "slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP, "slurm-credential"
+            ),
+            "slurm_bootstrap",
+            "inputs_ready",
+            {"assignment_id": assignment_id, "incarnation": incarnation},
+        ) == {"state": "input_ready"}
         fence = view.grant(assignment_id, incarnation)
         assert view.start_permit(assignment_id, incarnation, fence) is True
         assert view.start_permit(assignment_id, incarnation, fence) is False
