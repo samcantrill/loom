@@ -560,6 +560,7 @@ def qualify_resident_profile(
             {
                 "worker": "loom.queue._resident_stage_worker",
                 "protocol": "resident-v3",
+                **({"container": profile.container} if profile.container is not None else {}),
                 "python": python,
             }
         ),

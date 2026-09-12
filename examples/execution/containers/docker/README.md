@@ -1,86 +1,35 @@
-# Docker Container Executor Example
+# Docker Agent Worker Example
 
-## Workflow
+The run entrypoints use public `loom.run` with a protected installed agent
+profile. Preparation, execution, fenced results and owned-service cleanup follow
+the [configured lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
+typed materialized worker results supply output and diagnostic details after
+owned services stop. The short deployment root printed by the script is retained
+for inspection; artifacts default to this example's `runs/` directory. Set
+`LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to relocate artifacts.
 
-The runnable script uses the existing library execution or planning primitives
-directly. Ordinary runs use the [configured service lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). Backend demonstrations here retain their
-current process, artifact, and diagnostic assertions.
-
-This example demonstrates Stage 17 Docker execution with domain-neutral stages:
-
-1. Run a normal Loom pipeline with the existing Python execution primitives.
-2. Inspect selected-Docker preflight pass and fail diagnostics.
-3. Run a failing Docker stage, then inspect persisted status and stderr logs.
-4. Review the prepared-stage `docker run` command shape used by the executor.
-
-The preflight script calls `loom preflight CONFIG --executor docker` with its
-fixture command; executor selection here belongs to preflight. Its diagnostics
-include `executor.docker.command` and
-`filesystem.docker.artifact_root_visible` for the selected command and artifact
-path visibility.
-
-Default validation uses a small fake `docker` command on `PATH`. It runs the
-prepared worker command locally while preserving the Docker executor, command
-builder, preflight, status, log, and provenance paths. It does not require a
-Docker daemon, image pull, registry, network access, or Docker SDK.
-
-Docker can improve environment reproducibility, but this example does not make
-Docker a security sandbox for untrusted project code or untrusted images.
-
-Run from the repository root:
+The two run scripts bind an explicit local fake daemon endpoint and an absolute
+runtime command in the installed profile. The stateful fixture runs the real
+execution-only worker and retains container state independently of each CLI
+helper. It tests native admission, Docker metadata, numerical outputs, failure
+logs and cleanup; it does not qualify a physical Docker installation.
 
 ```sh
 uv run python examples/execution/containers/docker/run_docker_pipeline.py
-uv run python examples/execution/containers/docker/run_preflight.py
 uv run python examples/execution/containers/docker/run_failure_diagnostics.py
+uv run python examples/execution/containers/docker/run_preflight.py
 ```
 
-The scripts write run state under `examples/execution/containers/docker/runs/`
-by default. Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` or
-`LOOM_EXAMPLE_RUN_ROOT=/tmp/loom-example-runs` to write somewhere else.
+The separate preflight script keeps its pure command fixture and authored Docker
+adapter options. The managed run records `runtime.profile=null` as a preparation
+override: its installed agent profile owns container selection. The shared YAML
+remains available for standalone preflight consumers.
 
-## Prepared Stage Shape
+The supervisor creates an exactly named/labelled container with `--restart=no`
+and `--pull=never`, captures the immutable ID, starts it once, and observes daemon
+terminal evidence before removal. No `--rm` erases evidence at exit. Worker mounts
+preserve host/container paths and the image must already contain the selected
+Python, Loom, Weave and project dependencies. See the [installed profile contract](../../../../docs/features/container-executors.md#managed-agent-workers).
 
-The Docker executor still runs one prepared stage attempt at a time. The parent
-runner prepares the run-store state, then Docker launches the same public worker
-command a subprocess executor would use:
-
-```sh
-docker run --rm \
-  --network none \
-  --env LOOM_CONTAINER_EXAMPLE=[redacted] \
-  --mount type=bind,src=/tmp/loom-example-runs/docker-pipeline,target=/tmp/loom-example-runs/docker-pipeline \
-  python:3.12-slim \
-  python -c "from loom.cli.main import main; raise SystemExit(main())" \
-  stage run --run-uri file:///tmp/loom-example-runs/docker-pipeline \
-  --stage seed \
-  --attempt 1 \
-  --format json
-```
-
-Actual run-directory and artifact-root mounts are added by the executor with
-Stage 17 path parity: the host path and container path must match.
-
-## Optional Live Docker Smoke
-
-Default validation intentionally stays daemon-free. For a manual live smoke,
-use an image that already contains `loom`, `weave`, their config authoring
-dependencies, and the example stage module, or mount the repository at the same
-absolute path in the container. Then run the canonical command above in an
-environment where
-`docker run` can access the selected run directory and artifact root through
-path-parity mounts.
-
-Image builds, registry authentication, automatic pulls, Docker Compose,
-Kubernetes, Apptainer/Singularity, and controller-in-container workflows are
-outside Stage 17.
-
-## Variants
-
-The scripts preserve their existing library/backend demonstrations. Ordinary
-managed execution uses a protected deployment selection, with backend and
-lifetime policy owned by that selection. Existing status and log commands can
-inspect a matching retained run. For a run created with co-located service
-authority, pass `--authority-backend co_located_service` and
-`--authority-profile co_located` to those diagnostic commands; these are not
-ordinary-run overrides.
+Physical acceptance remains opt-in under `tests/container_acceptance`; fixture
+results do not qualify an image or site. No image build or pull is performed.

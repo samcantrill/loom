@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack
+from tempfile import TemporaryDirectory
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import replace
@@ -134,7 +136,13 @@ _ResidentOwner: TypeAlias = tuple[
 
 
 @pytest.fixture
-def resident_owner() -> Iterator[Callable[[Path, str], _ResidentOwner]]:
+def resident_owner(request) -> Iterator[Callable[[Path, str], _ResidentOwner]]:
+    stack = ExitStack()
+    binding = None
+    if getattr(request, "param", None) == "docker":
+        from examples.execution.containers.docker.daemon_fixture import fake_docker
+        root = Path(stack.enter_context(TemporaryDirectory(prefix="loom-daemon-")))
+        binding, _ = stack.enter_context(fake_docker(root))
     clients: list[AgentProcessSupervisorClient] = []
 
     def create(agent_root: Path, agent_id: str) -> _ResidentOwner:
@@ -149,6 +157,7 @@ def resident_owner() -> Iterator[Callable[[Path, str], _ResidentOwner]]:
                 "test-environment",
                 "test-executor",
             ).to_dict(),
+            container=binding,
         )
         client = AgentProcessSupervisorService.initialize(
             agent_root,
@@ -163,6 +172,7 @@ def resident_owner() -> Iterator[Callable[[Path, str], _ResidentOwner]]:
             client.shutdown_for_test()
         except Exception:
             pass
+    stack.close()
 
 
 def _spec(*, counter_path: Path | None = None, terminal_mode: str = "clean") -> PipelineSpec:
@@ -544,7 +554,10 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     replay = execute()
 
     assert receipt.worker_result.status is StageStatus.SUCCEEDED
-    assert receipt.worker_result.executor_metadata["managed_successful_exit"] is True
+    marker = "managed_backend_success" if launch_profile.container else "managed_successful_exit"
+    assert receipt.worker_result.executor_metadata[marker] is True
+    if launch_profile.container:
+        assert "managed_successful_exit" not in receipt.worker_result.executor_metadata
     assert replay == receipt
     with sqlite3.connect(agent_root / "supervisor" / "supervisor.sqlite") as conn:
         assert int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]) == 1
@@ -1332,3 +1345,16 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
         "left": StageStatus.SUCCEEDED,
         "right": StageStatus.SUCCEEDED,
     }
+
+
+@pytest.mark.parametrize("resident_owner", ["docker"], indirect=True)
+@pytest.mark.parametrize("terminal_mode", ["clean", "replacement"])
+def test_docker_result_acknowledgement_and_exact_predecessor_replay(
+    tmp_path, resident_owner, monkeypatch, terminal_mode,
+):
+    # Reuse the finalizer's causal crash/release assertions with a daemon-owned
+    # worker and a new supervisor continuity epoch after terminal evidence.
+    test_managed_local_assignment_commits_accessible_output_then_releases(
+        tmp_path, resident_owner, monkeypatch, "final_event_acknowledged", None,
+        terminal_mode,
+    )

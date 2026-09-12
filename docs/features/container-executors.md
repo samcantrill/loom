@@ -15,6 +15,65 @@ Loom provides Docker and Apptainer/Singularity executor paths with inspectable
 command and provenance records. Their external runtimes remain optional and are
 validated before live execution.
 
+## Managed agent workers
+
+Public `loom.run(request, deployment=...)` selects an installed resident profile.
+An optional `container` field on that protected profile selects Docker or
+Apptainer; omission retains native Python. The container executes exactly one
+assignment through `loom.queue._resident_stage_worker`. Preparation and target
+execution use the selected installed interpreter and imports. Neither worker
+owns run lifecycle or output publication.
+
+A Docker binding has this shape (replace the example image digest and paths):
+
+```json
+{
+  "kind": "docker",
+  "container": {"image": {"reference": "sha256:<installed-image-id>"}},
+  "options": {"command": "/usr/bin/docker", "network": "none"},
+  "python_executable": "python3",
+  "daemon_endpoint": "unix:///var/run/docker.sock"
+}
+```
+
+The resident profile's host `python_executable` remains the native installation
+field; `container.python_executable` selects Python inside the image. Docker
+requires an immutable installed image reference and explicit daemon endpoint.
+There is no image pull/build step. Apptainer uses `kind: apptainer`, a qualified
+absolute runtime command and installed absolute SIF reference, and a null
+`daemon_endpoint`. Its foreground PID-namespace init is observed through the
+existing namespace owner; missing namespace evidence cannot release capacity.
+
+The worker workspace is mounted read/write at the identical absolute path;
+installed project and configured shared preparation roots are read-only mounts.
+Conflicting mounts are rejected. Existing container command builders own resource
+projection: Docker supports selected CPU/memory controls; Apptainer additionally
+supports the existing selected NVIDIA visibility binding. Unsupported selected
+controls fail before worker effects. Accounting remains with authorized agent
+claims, independently of runtime enforcement.
+
+Docker ownership is retained by the supervisor before daemon effects. It binds
+the assignment, authorization, installed profile, endpoint and unique labelled
+container identity, then retains the immutable container ID. Lost create/start
+responses reconcile that same object; uncertainty never authorizes a new one.
+Cancellation is durable before daemon calls. Only verified stopped workload with
+restart disabled establishes containment. Successful execution also requires a
+zero terminal daemon outcome and the ordinary successful fenced worker result.
+Local helper status cannot supply these facts or the native
+`managed_successful_exit` qualification. Terminal evidence is saved before
+removal, so removal/result-reply loss cannot erase the completion proof.
+
+Readiness probes use the selected environment. Uncertain probe containment keeps
+its evidence and blocks qualification. Public reports retain safe executor,
+resource and container metadata through the existing report-v3 redaction owner;
+raw environment values and host paths are not a public execution interface.
+
+The Docker and Apptainer examples exercise complete public runs using explicit
+stateful daemon/namespace fixtures. Those fixtures do not qualify physical
+runtimes. Existing opt-in acceptance hooks remain required for claims about a
+particular installed runtime/site; container execution inside Slurm allocations
+is not qualified by these local journeys.
+
 ## Quick Start
 
 Run the hermetic fake-Apptainer walkthrough:

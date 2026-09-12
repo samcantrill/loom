@@ -7,8 +7,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, cast
-from uuid import uuid4
 
 REPO_ROOT = next(
     parent
@@ -18,15 +16,8 @@ REPO_ROOT = next(
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from examples.execution.agent_workers import run_example, print_outcome, worker_records
 from examples.support import run_cli_json
-from examples.support import started_authority_session
-from loom.pipeline.stores import (
-    LocalRunArtifactStore,
-    WorkspaceIdentity,
-    create_authority_client,
-    path_to_run_uri,
-)
-
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,58 +25,32 @@ HERE = Path(__file__).resolve().parent
 def main() -> None:
     sys.path.insert(0, str(HERE))
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
-    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    run_uri = path_to_run_uri(run_root / f"runtime-profile-{uuid4().hex[:8]}")
-    config_path = HERE / "pipeline.yaml"
-
-    preflight = _run_cli(
-        [
-            "preflight",
-            str(config_path),
-            "--check",
-            "runtime",
-            "--check",
-            "resources",
-            "--format",
-            "json",
-        ]
+    config = HERE / "pipeline.yaml"
+    preflight = run_cli_json(["preflight", str(config), "--format", "json"])
+    outcome = run_example(
+        config,
+        output_root,
+        run_options={
+            "tags": {"invocation": "example"},
+            "notes": ["runtime example executed"],
+        },
     )
-    with started_authority_session(output_root) as authority:
-        client = create_authority_client(authority.authority_config)
-        workspace = client.create_workspace(
-            WorkspaceIdentity(
-                workspace_id=authority.workspace_id,
-                root_uri=authority.workspace_root.resolve().as_uri(),
-                metadata={"example": "execution.runtime-profile"},
-            ),
-            request_id="runtime-profile-workspace-create",
-            service_generation=authority.generation,
-        )
-        if workspace.result is None or workspace.result.workspace is None:
-            raise RuntimeError("expected authority workspace creation to succeed")
-        from weave import compose_config
-        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
-        from loom.pipeline.runtime import merge_config_run_options
-        from loom.pipeline.executors import LocalExecutor
-        composed = compose_config(str(config_path))
-        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'local', "tags": {'invocation': 'cli'}, "notes": ['runtime example executed']})
-        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
-        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
-    raw_metadata = LocalRunArtifactStore(run_root).read_runtime_metadata(run_uri)
-    if raw_metadata is None:
-        raise RuntimeError("runtime metadata was not written")
-    metadata = cast(dict[str, Any], raw_metadata)
-
-    print(f"run_uri: {run_uri}")
+    print_outcome(outcome)
     print(f"preflight_status: {preflight['result']['status']}")
-    print(f"run_status: {run.status.value}")
+    artifact_count = sum(
+        len(record.outputs) for record in worker_records(outcome).values()
+    )
+    print(f"artifact_count: {artifact_count}")
+
+    from loom.pipeline.stores import LocalRunArtifactStore
+    from loom.io.uris import uri_to_path
+
+    uri = outcome.observation.admission.run_uri
+    metadata = LocalRunArtifactStore(uri_to_path(uri).parent).read_runtime_metadata(uri)
+    assert metadata is not None
     print(f"runtime_executor: {metadata['executor']}")
     print(f"runtime_tags: {','.join(sorted(metadata['tags']))}")
     print(f"runtime_stage_count: {len(metadata['stages'])}")
-
-
-def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    return run_cli_json(argv, expected=expected)
 
 
 if __name__ == "__main__":

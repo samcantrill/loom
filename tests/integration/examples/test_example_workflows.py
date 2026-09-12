@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -310,3 +311,34 @@ def _run_uri_path(run_uri: str) -> Path:
     if parsed.scheme != "file":
         raise AssertionError(f"expected file URI run URI, got {run_uri!r}")
     return Path(parsed.path)
+
+
+@pytest.mark.parametrize(
+    "relative,status,total",
+    [
+        ("execution/subprocess/run_subprocess_pipeline.py", "SUCCEEDED", 18),
+        ("execution/subprocess/run_failure_diagnostics.py", "FAILED", None),
+        ("execution/runtime-profile/run_runtime_profile.py", "SUCCEEDED", 30),
+        ("operations/local-diagnostics/run_diagnostics.py", "SUCCEEDED", 18),
+    ],
+)
+def test_installed_native_examples_settle_and_preserve_results(tmp_path, relative, status, total):
+    fields = _summary_fields(_run_example_script(
+        script=EXAMPLES_ROOT / relative, tmp_path=tmp_path,
+    ))
+    assert fields["run_status"] == status
+    assert fields["coordinator_cleanup"] == "stopped"
+    root = _run_uri_path(fields["run_uri"])
+    if total is not None:
+        summary = json.loads((root / "artifacts/summarize/summary.json").read_text())
+        assert summary["total"] == total
+        record = json.loads((root / "stages/summarize/worker_result.json").read_text())["worker_result"]
+        assert record["executor_metadata"]["managed_successful_exit"] is True
+    else:
+        record = json.loads((root / "stages/fail/worker_result.json").read_text())["worker_result"]
+        assert record["failure"] is not None
+        assert record["status"] == "FAILED"
+        assert Path(record["stderr_path"]).read_text()
+    if "runtime-profile" in relative:
+        assert fields["runtime_tags"] == "configured,invocation"
+        assert fields["runtime_stage_count"] == "2"

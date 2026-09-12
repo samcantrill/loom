@@ -3455,7 +3455,8 @@ def run_managed_local_assignment(
     input_refs: dict[str, ArtifactRef] = {}
     total_input_bytes = 0
     transfer_refs = _resident_input_refs(
-        worker_request.inputs, cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
+        worker_request.inputs,
+        cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
     )
     for logical_name, ref in sorted(transfer_refs.items()):
         transfer_id = (
@@ -3666,7 +3667,13 @@ def run_managed_local_assignment(
     ) -> ManagedExecutionReceipt:
         if (
             worker_result.status is StageStatus.SUCCEEDED
-            and worker_result.executor_metadata.get("managed_successful_exit") is not True
+            and worker_result.executor_metadata.get(
+                "managed_backend_success"
+                if resident_launch_profile.container is not None
+                and resident_launch_profile.container["kind"] == "docker"
+                else "managed_successful_exit"
+            )
+            is not True
         ):
             raise ManagedLocalError(
                 "successful result has no successful owned-group exit"
@@ -3911,7 +3918,7 @@ def run_managed_local_assignment(
         if (
             receipt.state
             in {SupervisorLaunchState.NOT_ACCEPTED, SupervisorLaunchState.UNKNOWN}
-            or receipt.process_id is None
+            or not receipt.started
         ):
             raise ManagedLocalError(
                 "supervisor has not established whether a process root was created"
@@ -3947,7 +3954,7 @@ def run_managed_local_assignment(
         receipt = supervisor.query(launch)
         if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
             receipt = supervisor.launch(launch)
-        if receipt.state is SupervisorLaunchState.UNKNOWN or receipt.process_id is None:
+        if receipt.state is SupervisorLaunchState.UNKNOWN or not receipt.started:
             raise ManagedLocalError("supervisor process outcome is unknown")
         workspace.mark_process_started(process_id, receipt.process_id)
         journal.confirm_supervised_start(assignment.assignment_id, process_id)
@@ -4016,10 +4023,15 @@ def run_managed_local_assignment(
         child_result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
         workspace.persist_worker_result(child_result)
         child_result = cast(StageWorkerResult, workspace.worker_result())
-        if child_result.status is StageStatus.SUCCEEDED and not contained.successful_exit:
+        if (
+            child_result.status is StageStatus.SUCCEEDED
+            and not contained.qualified_success
+        ):
             worker_result = _managed_root_failed_worker_result(
                 worker_request,
-                ManagedLocalError("worker success lacks successful complete owned-group exit"),
+                ManagedLocalError(
+                    "worker success lacks successful complete owned-group exit"
+                ),
                 process_exit_code=contained.exit_code,
                 worker_result_state="unqualified_success",
             )
@@ -4036,8 +4048,13 @@ def run_managed_local_assignment(
         # Result replay survives clean supervisor continuity rotation.
         metadata = dict(worker_result.executor_metadata)
         metadata.pop("managed_successful_exit", None)
+        metadata.pop("managed_backend_success", None)
         if worker_result.status is StageStatus.SUCCEEDED:
-            metadata["managed_successful_exit"] = contained.successful_exit
+            metadata[
+                "managed_backend_success"
+                if launch.backend_kind == "docker"
+                else "managed_successful_exit"
+            ] = contained.qualified_success
         worker_result = replace(worker_result, executor_metadata=metadata)
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
     return finalize_result(worker_result, coordinator_expected="running")
@@ -4183,6 +4200,17 @@ def _project_resident_result(
             created_at=item.created_at,
             metadata=item.metadata,
         )
+    metadata = {**result.executor_metadata, **dict(report.executor_metadata or {})}
+    failure = cast(ExecutionFailure | None, result.failure)
+    result = replace(
+        result,
+        executor_metadata=metadata,
+        failure=None
+        if failure is None
+        else replace(
+            failure, executor_metadata={**failure.executor_metadata, **metadata}
+        ),
+    )
     return _map_resident_result_identity(
         result, worker_request=worker_request, outputs=outputs
     )
@@ -4777,6 +4805,8 @@ def _worker_environment(
     ):
         raise ManagedLocalError("worker resource selection is invalid")
     enforced_kinds = None if enforce is None else frozenset(enforce)
+    if profile.container is not None and enforced_kinds is not None:
+        enforced_kinds = enforced_kinds - {"cpu", "memory"}
     commands_by_kind = {command.claim.resource_kind: command for command in commands}
     if enforced_kinds is not None:
         for kind in sorted(enforced_kinds):
@@ -4817,6 +4847,25 @@ def _worker_environment(
                 "correct the provider binding or remove this control from enforce"
             )
         environment.update(contribution)
+    if profile.container is not None and resource_selection is not None:
+        from ._container_worker import build_container_worker
+        from ._remote_stage_execution import _ResidentAssignmentWorkspace
+
+        try:
+            request = _ResidentAssignmentWorkspace(
+                workspace.parent.parent, workspace.name
+            ).worker_request()
+            build_container_worker(
+                profile,
+                workspace=workspace,
+                worker=(str(profile.container["python_executable"]),),
+                environment=environment,
+                runtime=request.resolved_runtime,
+            )
+        except ValueError as exc:
+            raise ManagedProcessStartError(
+                "selected container resource control is unavailable"
+            ) from exc
     return environment
 
 
@@ -5136,7 +5185,8 @@ def _managed_root_failed_worker_result(
         exit_code=exit_code,
         signal=process_signal,
         details=_capture_exception_details(
-            error, details={"process_created": True, "worker_result": worker_result_state}
+            error,
+            details={"process_created": True, "worker_result": worker_result_state},
         ),
     )
     return StageWorkerResult(
