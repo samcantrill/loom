@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 5
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p5-agent-slurm-jobs
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 4 merges; record exact SHA at execution preparation
+- Base revision: `86ed646f8f7dd6ffebea9f9baec9be3174217066` (published Phase 4 completion metadata after PR 311)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 5: Agent-Owned Slurm Jobs
 - Dependencies: Phase 4 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 4 remotely merged, metadata published/synchronized and exact phase branches retired
 
 ## Objective And Context
 
@@ -309,9 +309,65 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on 2026-09-12 in the manifest's persistent stage
+  worktree on this phase branch. Phase 4 PR 311 merged as
+  `243c86a76f7af171c361283766f67d6102fa5dd0`; its completion metadata is the Base
+  revision above. Synchronization verified matching stage, local develop and
+  fetched/advertised develop. Exact local/remote Phase 4 branches were retired;
+  predecessor agents and phase-owned processes are terminal. Successor start and
+  preflight passed on the clean base. Unrelated checkouts and runtime processes
+  remain preserved.
+- Source reconciliation: the published native/container execution boundary now
+  selects installed profiles, retains backend identity/evidence and distinguishes
+  Docker success from native successful-exit qualification. Slurm must retain its
+  external-job semantics. Current LocalDaemonExecution still opens
+  SQLiteReadyStageSubmissions in the coordinator execution database and calls
+  its submit/reconcile/observe/cancel operations. `_submit_slurm_ready` publishes
+  capability and submission-eligibility facts before the current runner callback;
+  bootstrap register/start-permit/release also use that journal. Relocate this
+  complete external-call owner and preserve the capability/grant/acknowledgement
+  handoff, not just its initial sbatch call.
+- Current contract boundaries: AgentOffer exposes resident profiles but no
+  external submit inventory; SlurmStageAssignment explicitly lacks agent/claim
+  identity. Extend and version these affected producer/reader boundaries for
+  the accepted agent/profile ownership; incompatible state fails before mutation.
+  Deployment composition currently constructs full SlurmReadyStageProfile values
+  at the coordinator. Move protected runner/provider/environment access to the
+  assigned agent while retaining authorized placement, shared stable-profile
+  quota and acknowledged projections at the coordinator. Do not advertise or
+  reserve submit-host GPUs for Slurm compute demand.
+- Reuse and removal: ready_stage.py supplies exact request/marker, durable intent,
+  outcome/discovery, bounded scheduler commands and container script/resource
+  helpers. Keep one serialized invocation owner per operation at the assigned
+  agent. Remove the replaced coordinator submit/observe/cancel path and orphan
+  dispatch helpers in this phase. Preserve restricted bootstrap/current typed
+  result relay, report-v3 redaction, exact profile fingerprint and existing sole
+  finalizer; shared completed-job result retention belongs to Phase 6.
+- Named refinement: none required at manager preparation. Accepted ownership,
+  recovery, quota and delivery contracts are explicit; private wiring remains
+  implementation discretion. Stop for a demonstrated missing public/durable
+  decision rather than silently narrowing the connected Slurm journey.
+- Coverage selection: retain the four existing ready-stage/agent-transport files
+  named in Test And Validation Plan, plus `tests/unit/loom/queue/test_slurm_bootstrap.py`
+  for grant/deadline changes. Add causal agent/coordinator/joint restart, lost
+  response/uncertain discovery, authorized shared quota, no local GPU debit,
+  cancellation/grant and public run/inspect/cancel checks. Verify current native/
+  container consumers when shared inventory, transport or service quiescence
+  changes. Expand for changed contracts or observed failures; both make gates
+  remain required. No broad validation is claimed by preparation.
+- Environment and qualification: current read-only command inventory finds no
+  sbatch, squeue, sacct or scancel on this host. Use existing bounded fake scheduler
+  and local authenticated transport seams for the required connected journey;
+  no external experiment workload, allocation, image pull/build or provisioning.
+  Physical HPC result/storage qualification stays with Phase 6 and remains
+  explicit. The improvement-log scan found no intersecting active Slurm entry
+  that changes this accepted scope or its gates.
+- Execution delegation: one executor is justified by the coupled submission
+  owner, agent inventory/transport, protected profile, bootstrap, quota, recovery
+  and removal changes. The manager retains manifest, pre-submit, PR, independent
+  review and delivery ownership; no children or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: prepared; execution pending
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for external-call ownership, fencing and capacity

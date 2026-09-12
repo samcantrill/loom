@@ -404,8 +404,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   `c7e71f98525359b119650c1434a5a34433ed56ca`. The delivery gate reverified the
   canonical identity, local validation, independent approval, live merge and
   leased deletion of the exact remote phase branch. Transition to the named
-  coordination branch passed; publication/synchronization and exact local branch
-  retirement are required before Phase 5 starts.
+  coordination branch passed; completion metadata was published as
+  `86ed646f8f7dd6ffebea9f9baec9be3174217066` and synchronization verified matching
+  stage/local/remote develop. The exact local reviewed phase branch was retired
+  after remote deletion and merge ancestry were verified. Phase 5 started in
+  the same persistent worktree after those gates passed.
 
 ### Final validation receipt
 
@@ -444,7 +447,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   external experiment workload is claimed.
 - Process cleanup: both manager validation commands are terminal. Final inventory
   found no phase-owned test, worker, fixture or supervisor process. Four older
-  supervisors belonging to unrelated work were preserved. No stage branch
+  supervisors belonging to unrelated work were preserved. Stage branch
   transition occurred only after independent review and verified remote merge.
 
 ## Completion Record
@@ -457,4 +460,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | None; execution metadata only after both gates passed with the review correction |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
 | PR, review and merge | PR 311 merged as `243c86a76f7af171c361283766f67d6102fa5dd0`; independent reviewed head `c7e71f98525359b119650c1434a5a34433ed56ca`, no remaining blockers; both full gates and gated delivery passed |
-| Residual risk and cleanup | No implementation blocker. Physical runtime qualification remains unavailable and unclaimed; phase-owned processes terminal; exact remote branch deleted; completion metadata and local retirement use the synchronization gate before Phase 5 |
+| Residual risk and cleanup | No implementation blocker. Physical runtime qualification unavailable and unclaimed; phase-owned processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired; Phase 5 started in the same stage worktree |
