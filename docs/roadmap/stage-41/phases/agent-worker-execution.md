@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p4-agent-worker-execution
@@ -375,7 +375,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   durable ownership/containment/recovery, native qualification and exact output
   predecessor, report metadata, changed examples/removals and fresh validation.
   No qualified implementation blocker remains. Independent actual-PR review and
-  delivery remain required.
+  gated remote delivery subsequently passed.
 - Independent implementation review: actual PR head
   `52c273df0757800ab9bb086ff74bff5958ff6a6b` reviewed on 2026-09-12. One product
   blocker: Apptainer namespace exit can race with pidfd signaling, allowing an
@@ -386,8 +386,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   error cases before correction; 36 supervisor, Docker, public backend and
   Apptainer example checks passed afterward. Evidence:
   `build/phase-4/apptainer-signal-race-{before,after}.log`. Both fresh final gates
-  passed as recorded below; affected confirmation by the same reviewer remains
-  pending. Manager pre-submit acceptance includes this bounded correction.
+  passed as recorded below. The same reviewer confirmed the correction at
+  `c7e71f98525359b119650c1434a5a34433ed56ca`: no remaining blockers, merge eligible.
+  Manager pre-submit acceptance includes this bounded correction.
 - Blocker corrections: 3/3; named Docker source/contract preparation correction,
   then the manager's Docker example socket-path correction. The config-extra
   smoke producer supplies a long output root; locating the fixture socket there
@@ -397,9 +398,14 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   passed together (4 passed) in `build/phase-4/socket-regression.log`.
   The third correction is the independent review's Apptainer signaling race above;
   the refiner remains unused. No accepted contract or phase scope changed.
-- PR and merge: [PR 311](https://github.com/samcantrill/loom/pull/311) is open,
-  non-draft and mergeable, targeting develop with the canonical phase title and
-  branch. Independent actual-head review and gated merge remain pending.
+- PR and merge: [PR 311](https://github.com/samcantrill/loom/pull/311) remotely
+  squash-merged into develop on 2026-09-12T12:11:32Z as
+  `243c86a76f7af171c361283766f67d6102fa5dd0`, from reviewed head
+  `c7e71f98525359b119650c1434a5a34433ed56ca`. The delivery gate reverified the
+  canonical identity, local validation, independent approval, live merge and
+  leased deletion of the exact remote phase branch. Transition to the named
+  coordination branch passed; publication/synchronization and exact local branch
+  retirement are required before Phase 5 starts.
 
 ### Final validation receipt
 
@@ -439,7 +445,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Process cleanup: both manager validation commands are terminal. Final inventory
   found no phase-owned test, worker, fixture or supervisor process. Four older
   supervisors belonging to unrelated work were preserved. No stage branch
-  transition has occurred; review/delivery remain pending.
+  transition occurred only after independent review and verified remote merge.
 
 ## Completion Record
 
@@ -450,5 +456,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both required commands passed on `1196926f92285c6857842198936e97f59369ed14`, tree `fd5e4240609f6f46946632566d26809e6cafba24`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
 | Validation-relevant changes after evidence | None; execution metadata only after both gates passed with the review correction |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
-| PR, review and merge | PR 311 open with verified canonical identity; bounded containment correction and fresh final gates passed; same-reviewer confirmation and merge pending |
-| Residual risk and cleanup | No current implementation blocker. Physical runtime qualification remains unavailable and unclaimed; all phase-owned processes terminal; PR/review/delivery and branch retirement pending |
+| PR, review and merge | PR 311 merged as `243c86a76f7af171c361283766f67d6102fa5dd0`; independent reviewed head `c7e71f98525359b119650c1434a5a34433ed56ca`, no remaining blockers; both full gates and gated delivery passed |
+| Residual risk and cleanup | No implementation blocker. Physical runtime qualification remains unavailable and unclaimed; phase-owned processes terminal; exact remote branch deleted; completion metadata and local retirement use the synchronization gate before Phase 5 |
