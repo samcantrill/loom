@@ -603,7 +603,17 @@ class AgentProcessSupervisor:
             if not _ready(namespace):
                 import signal
 
-                signal.pidfd_send_signal(namespace, signal.SIGKILL)
+                try:
+                    signal.pidfd_send_signal(namespace, signal.SIGKILL)
+                except ProcessLookupError:
+                    # Exit raced with the signal; positive containment is checked below.
+                    pass
+                except OSError:
+                    return SupervisorReceipt(
+                        SupervisorLaunchState.UNKNOWN,
+                        launch,
+                        receipt.supervisor_revision,
+                    )
         try:
             contained = child.contain()
         except OSError:

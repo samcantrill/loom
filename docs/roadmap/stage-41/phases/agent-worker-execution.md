@@ -364,7 +364,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native/container profile, worker, supervisor, report and example
-  changes implemented; both required final gates passed. The delegated executor
+  changes implemented; review correction passed affected checks and awaits fresh
+  final gates. The delegated executor
   terminated at a service usage limit before its final handoff. The manager
   verified its committed work, failed terminal gate and process inventory, then
   continued locally without a replacement executor or overlapping writes.
@@ -375,23 +376,36 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   predecessor, report metadata, changed examples/removals and fresh validation.
   No qualified implementation blocker remains. Independent actual-PR review and
   delivery remain required.
-- Independent implementation review: required for process/resource ownership and launch removal
-- Blocker corrections: 2/3; named Docker source/contract preparation correction,
+- Independent implementation review: actual PR head
+  `52c273df0757800ab9bb086ff74bff5958ff6a6b` reviewed on 2026-09-12. One product
+  blocker: Apptainer namespace exit can race with pidfd signaling, allowing an
+  uncaught OSError to terminate the shared supervisor. The manager's bounded
+  correction follows the existing namespace owner's behavior: tolerate
+  ProcessLookupError while still requiring positive containment; other signaling
+  errors return UNKNOWN and retain ownership. The new regression failed for both
+  error cases before correction; 36 supervisor, Docker, public backend and
+  Apptainer example checks passed afterward. Evidence:
+  `build/phase-4/apptainer-signal-race-{before,after}.log`. Fresh final gates and
+  affected confirmation by the same reviewer remain pending.
+- Blocker corrections: 3/3; named Docker source/contract preparation correction,
   then the manager's Docker example socket-path correction. The config-extra
   smoke producer supplies a long output root; locating the fixture socket there
   failed before either Docker journey could start. The fixture now owns a short
   temporary socket directory, independent of output location. Both failed smoke
   cases, the paired success/failure e2e journey and configured Docker replay
   passed together (4 passed) in `build/phase-4/socket-regression.log`.
+  The third correction is the independent review's Apptainer signaling race above;
+  the refiner remains unused. No accepted contract or phase scope changed.
 - PR and merge: [PR 311](https://github.com/samcantrill/loom/pull/311) is open,
   non-draft and mergeable, targeting develop with the canonical phase title and
   branch. Independent actual-head review and gated merge remain pending.
 
 ### Final validation receipt
 
-- Validated implementation revision: `feed35902ab06db541f4f1028cc1e35da91dd2f7`;
+- Prior validated implementation revision: `feed35902ab06db541f4f1028cc1e35da91dd2f7`;
   tree: `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`. Both commands ran on this
-  same clean revision. Subsequent edits are execution metadata only.
+  same clean revision. The subsequent narrow Apptainer signaling correction has
+  affected regression coverage above; fresh required gate receipts are pending.
 - `make validate-pr`: exit 0; Ruff passed, Pyright reported zero errors/warnings;
   baseline 3,320 passed / 2 skipped / 294 deselected; config-extra 254 passed /
   18 skipped / 3,361 deselected; MCP 36 passed / 3,580 deselected; sdist and wheel
@@ -430,7 +444,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Implementation and changed paths | Complete: installed container profiles and readiness, existing agent/supervisor backend evidence and recovery, result metadata, native/container public examples; manager pre-submit passed |
 | Tests added, updated or intentionally removed | Stateful Docker effect/recovery tests, container binding/resources, native/Docker/Apptainer public replay, existing finalizer crash/predecessor assertions with Docker, native regression preservation and converted example assertions |
 | Validated revision/tree and evidence | Both required commands passed on `feed35902ab06db541f4f1028cc1e35da91dd2f7`, tree `fb74f2c0ced2860a6d30f367b1ab446c7104aabd`; exact counts, failed-run dispositions and verified archive in Final validation receipt |
-| Validation-relevant changes after evidence | None; phase/manifest receipt updates only |
+| Validation-relevant changes after evidence | Review correction handles the Apptainer namespace signaling race; before/after regression evidence recorded above, fresh full gates and same-reviewer confirmation pending |
 | Replaced-code removal / retained primitive consumers | Unused Apptainer fake launcher removed; old Docker fixture retains only version preflight. Assigned native/container examples now use public run. Existing command/resource/namespace helpers remain current backend consumers; Slurm and remaining full-run removals retain P6/P9 ownership |
-| PR, review and merge | PR 311 open with verified canonical title, branch and develop target; independent review and merge pending |
+| PR, review and merge | PR 311 open with verified canonical identity; independent review found one containment blocker, bounded correction awaiting final gates and same-reviewer confirmation; merge pending |
 | Residual risk and cleanup | No current implementation blocker. Physical runtime qualification remains unavailable and unclaimed; all phase-owned processes terminal; PR/review/delivery and branch retirement pending |
