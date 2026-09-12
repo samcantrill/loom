@@ -397,6 +397,21 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   alone no longer releases the assignment. Corrected tests passed (two unit
   cases and the E2E journey); receipts `/tmp/loom-p5-gate-corrections.log` and
   `/tmp/loom-p5-example-final.log`. Full gates will rerun on the correction commit.
+- Coverage-only gate correction: `make validate-pr` passed on `f39513467fc8d10d2cec84f677a7e33efec8203a`,
+  tree `0fd36f91c86318f0c90afcecf3f1cec24cebbc6d`; receipt
+  `/tmp/loom-p5-validate-pr-f395134.log`. The first `make test-summary` reported
+  two existing oversized-preparation-receipt tests still pending at their 25-second
+  observation deadline. Their retained native worker results succeeded; both
+  operations subsequently reached `failed/result_too_large`, report preflight
+  was PASS and target publication remained absent. Receipt inspection is retained
+  at `/tmp/loom-p5-preparation-timeout-evidence.log`; failed summary XML/coverage
+  and Markdown are copied under `/tmp/loom-p5-test-summary-f395134-first-artifacts`
+  and `/tmp/loom-p5-test-summary-f395134-first.md`.
+  The fixture still composes all 800 stages and keeps every behavior assertion;
+  its finite observation wait is now 90 seconds. Targeted coverage passes all four
+  cases, including the two receipt cases at 41.67/40.66 seconds total call time
+  (`/tmp/loom-p5-preparation-coverage-correction.log`). This is test observation
+  tolerance, with no production timeout or acceptance-contract change.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for external-call ownership, fencing and capacity
