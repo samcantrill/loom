@@ -86,13 +86,13 @@ class _RemoteWork:
     supervisor: AgentProcessSupervisorClient
     services: list[_AgentService] = field(default_factory=list)
 
-    def start_agent(self) -> _AgentService:
+    def start_agent(self, *, lifetime: str = "persistent") -> _AgentService:
         stop = Event()
         errors: list[BaseException] = []
 
         def serve() -> None:
             try:
-                run_outbound_agent_service(self.service_config, stop=stop)
+                run_outbound_agent_service(self.service_config, stop=stop, lifetime=lifetime)
             except BaseException as exc:
                 errors.append(exc)
 
@@ -418,3 +418,150 @@ def _kill_worker(work: _RemoteWork, launch: ResidentWorkerLaunch) -> None:
         assert select.select([descriptor], [], [], 3)[0]
     finally:
         os.close(descriptor)
+
+
+def test_run_owned_agent_does_not_retire_on_unavailable_or_stale_decision(remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch) -> None:
+    work = remote_owner
+    reached = Event()
+    original = LocalDaemonAgentHttpClient._call
+    decisions = []
+
+    def intercepted(self, operation, value, **kwargs):
+        if operation == "service_lifetime":
+            decisions.append(dict(value))
+            reached.set()
+            if len(decisions) == 1:
+                raise QueueServiceError("coordinator unavailable")
+            return {**value, "state": "authorized", "coordinator_id": "stale-owner"}
+        return original(self, operation, value, **kwargs)
+
+    from loom.queue.errors import QueueServiceError
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", intercepted)
+    service = work.start_agent(lifetime="run")
+    assert reached.wait(10)
+    _wait_until(lambda: len(decisions) >= 2)
+    assert service.thread.is_alive()
+    assert work.supervisor.status()["service_process_id"] == work.supervisor.service_process_id
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_retirement_proofs").fetchone()[0] == 0
+
+
+def test_retirement_replay_stays_authorized_after_new_startup_hold(remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+    work = remote_owner
+    original = LocalDaemonAgentHttpClient._call
+    decisions = []
+    def interrupted_reply(self, operation, value, **kwargs):
+        decision = original(self, operation, value, **kwargs)
+        if operation == "service_lifetime" and value["action"] == "observe" and decision["state"] == "authorized" and not decisions:
+            work.daemon._lifetime.attach("racing-starter", time.time() + 20)
+            replay = original(self, operation, value, **kwargs)
+            decisions.extend([decision, replay])
+        return decision
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", interrupted_reply)
+    service = work.start_agent(lifetime="run")
+    service.thread.join(15)
+    assert not service.thread.is_alive()
+    assert not service.errors
+    assert len(decisions) == 2 and decisions[0] == decisions[1]
+    assert decisions[1]["state"] == "authorized"
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT state FROM agent_sessions").fetchone()[0] == "RETIRED_CLEAN"
+        record = json.loads(conn.execute("SELECT value FROM daemon_metadata WHERE key LIKE 'service-agent:%'").fetchone()[0])
+    assert record["state"] == "closed"
+    assert not work.daemon._lifetime.retire_if_idle()
+    work.daemon._lifetime.release("racing-starter")
+
+
+@pytest.mark.parametrize("loss", ["absent", "later-absent", "fenced", "committed"])
+def test_outstanding_poll_recovery_across_coordinator_epoch(
+    remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch, loss: str,
+) -> None:
+    work = remote_owner
+    lost = Event()
+    original_call = LocalDaemonAgentHttpClient._call
+
+    class LostApplication(BaseException):
+        pass
+
+    def lose_response(client, operation, value, **kwargs):
+        if operation == "poll" and not lost.is_set():
+            if loss == "later-absent" and value["sequence"] == 1:
+                result = original_call(client, operation, value, **kwargs)
+                assert result["result"] == "wait"
+                coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+                return result
+            if loss == "fenced":
+                with pytest.raises(QueueServiceError):
+                    original_call(client, operation, value, **kwargs)
+            if loss == "committed":
+                result = original_call(client, operation, value, **kwargs)
+                if result.get("result") != "assignment":
+                    return result
+            lost.set()
+            raise LostApplication()
+        return original_call(client, operation, value, **kwargs)
+
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.errors import QueueServiceError
+
+    original_delivery = AgentSessionService._take_targeted_delivery
+
+    def lose_before_delivery(service, **kwargs):
+        if loss == "fenced" and not lost.is_set():
+            raise QueueServiceError("fixture interruption after poll intent")
+        return original_delivery(service, **kwargs)
+
+    monkeypatch.setattr(AgentSessionService, "_take_targeted_delivery", lose_before_delivery)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", lose_response)
+    coordinator = work.daemon.client_view(
+        LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+    )
+    if loss != "later-absent":
+        coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+    first = work.start_agent()
+    assert lost.wait(15)
+    first.thread.join(timeout=10)
+    assert not first.thread.is_alive()
+    assert len(first.errors) == 1 and isinstance(first.errors[0], LostApplication)
+    root = work.service_config.client.agent_root
+    assert root is not None
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        assert conn.execute("SELECT state FROM agent_poll_state_local").fetchone()[0] == "PENDING"
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        poll = conn.execute("SELECT active, result_json FROM agent_poll_state").fetchone()
+    if loss == "absent":
+        assert poll is None
+    elif loss == "later-absent":
+        assert poll is not None and poll[0] == 0
+        assert json.loads(poll[1])["sequence"] == 1
+        assert json.loads(poll[1])["result"] == "wait"
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert conn.execute("SELECT sequence FROM agent_poll_state_local").fetchone()[0] == 2
+    elif loss == "fenced":
+        assert poll == (1, None)
+    else:
+        assert poll is not None and poll[0] == 0
+        assert json.loads(poll[1])["result"] == "assignment"
+    from loom.queue.errors import QueueConflictError
+
+    probe = LocalDaemonAgentHttpClient(work.service_config.client)
+    try:
+        with pytest.raises(QueueConflictError, match="different content"):
+            probe._resume_pending_poll(wait_timeout_ms=1000)
+    finally:
+        probe.close()
+    old_epoch = work.daemon._epoch
+    work.daemon.stop()
+    work.daemon.start()
+    assert work.daemon._epoch != old_epoch
+    second = work.start_agent()
+    deadline = monotonic() + 45
+    while not work.released():
+        assert monotonic() < deadline, "recovered delivery did not release"
+        assert not second.errors
+        sleep(0.05)
+    assert not second.errors
+    assert len(work.launches()) == 1
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0] == 1

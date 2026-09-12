@@ -99,59 +99,19 @@ def _run_pipeline(
     suffix = f"{executor}-{'failed' if failing else 'ok'}"
     run_uri = path_to_run_uri(tmp_path / "runs" / suffix)
     _write_pipeline_config(config_path, failing=failing)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    expected = 5 if failing else 0
-
-    argv = [
-        "run",
-        str(config_path),
-        "--run-uri",
-        run_uri,
-    ]
-    if executor != "local":
-        argv.extend(["--executor", executor])
-    argv.extend([*authority_args, "--format", "json"])
-    assert (
-        main(
-            argv,
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == expected
-    )
-    assert stderr.getvalue() == ""
+    from tests.support.executed_run_fixture import execute_fixture, authority_from_args
+    result, _ = execute_fixture(config_path, run_uri, authority_config=authority_from_args(authority_args), executor=executor)
+    assert result.status.value == ("FAILED" if failing else "SUCCEEDED")
     return run_uri
 
 
-def _run_two_stage_pipeline(
-    tmp_path: Path,
-    *,
-    authority_args: tuple[str, ...],
-) -> str:
+def _run_two_stage_pipeline(tmp_path: Path, *, authority_args: tuple[str, ...]) -> str:
+    from tests.support.executed_run_fixture import execute_fixture, authority_from_args
     config_path = tmp_path / "pipeline.yaml"
     run_uri = path_to_run_uri(tmp_path / "runs" / "ok")
     _write_two_stage_pipeline_config(config_path)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                *authority_args,
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == 0
-    )
-    assert stderr.getvalue() == ""
+    result, _ = execute_fixture(config_path, run_uri, authority_config=authority_from_args(authority_args))
+    assert result.status.value == "SUCCEEDED"
     return run_uri
 
 

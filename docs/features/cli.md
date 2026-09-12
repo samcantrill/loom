@@ -4,16 +4,17 @@
 
 `loom.cli` is the command-line interface for `loom`.
 
-For v5, `loom.cli` exposes a functional local/subprocess command surface:
-`loom validate`, `loom plan`, `loom run`, and direct `loom stage run` worker
-execution. The commands are thin `argparse` wrappers over config, pipeline,
-planning, store, and execution APIs. They do not introduce a separate runtime
-model.
+Ordinary execution uses `loom run CONFIG --deployment PATH`, the CLI wrapper
+around the lazy `loom.run` facade and native durable run operation. CONFIG and
+overlays are relative to the selected preparation source. The deployment owns
+connection/identity, permitted local startup, preparation profile and service
+lifetime. See [configured startup](../downstream-operations.md#configured-startup-and-ordinary-run).
 
-V7 adds optional live SLURM operations through the same general command surface:
-`loom run CONFIG --executor slurm-single-job`,
-`loom run CONFIG --executor slurm-afterok`, `loom status RUN_URI --jobs`, and
-`loom cancel RUN_URI --jobs`.
+Validation, hypothetical planning, inspection and prepared-worker commands retain
+their own library owners. Existing scheduler inspection and cancellation remain
+available for already-submitted work. The retained Slurm and container library
+demonstrations do not establish a complete managed backend journey or live-site
+qualification; their native delivery remains with the backend phases.
 
 V11 adds a narrow queue operations group: `loom queue preflight`,
 `loom queue start`, `loom queue status`, `loom queue cancel`, and
@@ -258,8 +259,8 @@ Owns runner lifecycle and worker entry points.
 CLI responsibilities:
 
 ```text
-construct RunRequest or StageExecutionRequest from parsed args
-call PipelineRunner.run
+construct the native RunRequest or a worker StageExecutionRequest
+call the shared managed run facade for ordinary execution
 call stage-worker API for `loom stage run`
 print concise summaries
 ```
@@ -291,10 +292,9 @@ Owns SLURM dry-run planning in v6 and live submission mechanics in v7/later.
 CLI responsibilities:
 
 ```text
-expose executor selection flags
-call public SLURM dry-run APIs for --dry-run
-print generated manifest/script/log/command summaries
-print submitted job IDs and status hints for live submission
+retain the existing planning/submission library APIs for mapped consumers
+keep ordinary run selection in the configured deployment
+report generated/submitted evidence through the owning backend consumers
 call scheduler-aware status and cancellation APIs for --jobs
 ```
 
@@ -317,12 +317,8 @@ loom --help
 loom --version
 loom validate CONFIG
 loom plan CONFIG
-loom run CONFIG
-loom run CONFIG --executor subprocess
-loom run CONFIG --executor slurm-single-job --dry-run
-loom run CONFIG --executor slurm-afterok --dry-run
-loom run CONFIG --executor slurm-single-job
-loom run CONFIG --executor slurm-afterok
+loom run CONFIG --deployment PATH
+loom run CONFIG --deployment PATH --operation-id ID --detach
 loom status RUN_URI
 loom status RUN_URI --jobs
 loom cancel RUN_URI --jobs
@@ -339,9 +335,9 @@ basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
-local and serial subprocess executor execution
+configured native execution and retained library executor demonstrations
 machine-readable JSON output for validate, plan, run, stage run, prepared-run,
-stage-job, SLURM dry-run/live submission/status/cancel, run catalog and bundle
+stage-job, scheduler status/cancel, run catalog and bundle
 exchange commands, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
@@ -470,7 +466,7 @@ Examples:
 ```bash
 loom validate experiment.yaml
 loom plan experiment.yaml --run-uri file:///abs/project/runs/example --resume
-loom run experiment.yaml --run-uri file:///abs/project/runs/example
+loom run experiment.yaml --deployment deployment.yaml
 loom status file:///abs/project/runs/example
 ```
 
@@ -526,7 +522,7 @@ Short aliases can be added later for common options, but they are not required.
 Allow repeated options where natural:
 
 ```bash
-loom run experiment.yaml \
+loom run experiment.yaml --deployment deployment.yaml \
   --overlay local.yaml \
   --overlay debug.yaml \
   --set run.seed=1 \
@@ -565,32 +561,15 @@ CONFIG
 `--set` should pass raw dot-path override strings to `weave`. The CLI
 should not reimplement override parsing beyond collecting strings.
 
-### 7.2 Run Selection Options
+### 7.2 Run Identity and Planning
 
-Shared by:
+Ordinary run selects `--deployment PATH`, an optional stable `--operation-id ID`,
+and optional `--queue-item-id ID` and `--run-name NAME`. Exact replay observes the
+same native intent; it does not authorize failed-admission retry. The coordinator
+owns target allocation and publication.
 
-```text
-plan
-run
-```
-
-Recommended:
-
-```text
---run-uri RUN_URI
---resume
---dry-run
-```
-
-For v2, `--run-uri` replaces the earlier `--run-dir` and `--run-id` forms.
-Explicit run URIs must use strict local `file://` syntax until remote stores
-exist. If omitted for `loom run`, store/runtime APIs own default local run URI
-allocation. `loom plan` does not allocate a default run URI.
-
-The composed `runtime.run_store.root` may select the CLI-created collection.
-It must be an absolute canonical local path; omission preserves `runs`. A
-selected runtime profile may provide the same field, and it applies uniformly
-to fresh, resume, plan, SLURM, and offline-first run paths.
+`loom plan` retains its read-only `--run-uri RUN_URI` and `--resume` options.
+Those options are not accepted by ordinary managed run.
 
 ### 7.3 Stage Selector Options
 
@@ -613,25 +592,12 @@ Recommended:
 The CLI should convert these into structured selector options, then pass them to
 planner/runner APIs.
 
-### 7.4 Executor Options
+### 7.4 Execution Profile
 
-Shared by:
-
-```text
-run
-```
-
-Recommended:
-
-```text
---executor NAME
---executor-config PATH, optional later
-```
-
-The current run command supports `local` and serial `subprocess`. The run
-handler rejects unsupported executor names with the executor exit code instead
-of relying on an argparse usage error. Executor-specific options should be
-minimal at the top level. Complex settings belong in config.
+Ordinary run uses the deployment's authorized preparation/execution profile.
+Executor, authority and plugin selection are not ordinary-run CLI overrides.
+Existing worker, preflight and library APIs retain their separately documented
+options for their current consumers.
 
 ### 7.5 Output Format Options
 
@@ -693,7 +659,7 @@ V2 supports JSON for automation-facing commands:
 ```bash
 loom plan experiment.yaml --format json
 loom validate experiment.yaml --format json
-loom run experiment.yaml --format json
+loom run experiment.yaml --deployment deployment.yaml --format json
 ```
 
 Machine output should come from structured API results, not by parsing human
@@ -705,14 +671,12 @@ V2 JSON output is always a versioned envelope with top-level `warnings`:
 {"schema_version":"loom.cli.plan.v2","ok":true,"warnings":[],"result":{}}
 ```
 
-Generic dry-run output from `loom run --dry-run --format json` uses the plan
-schema because no run occurred. SLURM dry-run output from
-`loom run --executor slurm-single-job --dry-run --format json` and
-`loom run --executor slurm-afterok --dry-run --format json` uses
-`loom.cli.slurm_dry_run.v1` and reports generated manifest, plan, script, log,
-command, dependency, and warning summaries. When a command parses successfully
-and JSON format is known, structured errors are written to stdout in the error
-envelope. Argparse usage errors remain text on stderr.
+Ordinary run emits `loom.cli.run.v3` with native operation, admission and
+inspection facts, connection identity and separate per-role cleanup evidence.
+Use `loom plan` for hypothetical planning. Retained Slurm planning examples
+report the existing library planner's artifacts; they are not ordinary-run dry
+runs. Parsed command errors use the error envelope on stdout when JSON is known;
+argparse usage errors remain text on stderr.
 
 ### 8.3 Color
 
@@ -1001,129 +965,37 @@ Detailed diffing belongs to planning APIs. The CLI formats the result.
 
 ## 13. `loom run`
 
-### 13.1 Purpose
-
-Run a pipeline.
-
-Command:
+The ordinary command starts or reuses explicitly selected services, accepts one
+native RunRequest, and observes its durable operation/admission.
 
 ```bash
-loom run CONFIG
+loom run pipeline.yaml --deployment deployment.yaml
+loom run pipeline.yaml --deployment deployment.yaml --operation-id experiment-001 --detach
+loom run pipeline.yaml --deployment deployment.yaml --operation-id experiment-001 --timeout-seconds 30 --format json
 ```
 
-### 13.2 Options
+CONFIG and repeated `--overlay` paths must be contained in the deployment's
+selected preparation project and source closure. Repeated `--set` overrides,
+`--profile`, stage selectors, `--max-parallel-stages`, `--failure-policy`, tags
+and notes become the native preparation intent. `--operation-id` supports exact
+replay; `--queue-item-id` and `--run-name` select the corresponding native names.
 
-Recommended:
+Default wait returns native terminal facts. `--detach`, bounded observation and
+interruption preserve accepted identities without cancellation. Retry and
+cancellation remain explicit native controls. Cleanup reports stopped,
+persistent/borrowed, retained-for-other-work or cleanup-blocked independently of
+scientific success/failure. A cleanup refusal never authorizes killing unresolved
+work.
 
-```text
---overlay PATH, repeatable
---set KEY=VALUE, repeatable
---run-uri RUN_URI
---executor NAME
---resume
---dry-run
---from-stage STAGE
---only-stage STAGE
---force-stage STAGE, repeatable
---skip-stage STAGE, repeatable
---format text|json
-```
+The deployment owns expected coordinator identity, bound local creation/opening,
+per-role persistent/run lifetime and startup/observation policy. Executor,
+run-URI/resume, dry-run, authority and plugin bypass flags were removed from this
+command. See [configured startup](../downstream-operations.md#configured-startup-and-ordinary-run)
+for the protected selection schema, mixed roles and qualification limits.
 
-### 13.3 Behavior
-
-Should:
-
-```text
-compose and resolve config
-persist resolved config through run APIs
-build PipelineSpec
-construct RunRequest
-select executor through public executor registry/API
-call PipelineRunner.run
-print concise run summary
-return non-zero on run failure
-```
-
-If `--run-uri` is omitted, `loom run` should request a default local run URI
-from store/runtime APIs. Non-resume execution should fail if the target run URI
-already exists. Resume should require an existing valid run URI and use strict
-resume behavior.
-
-On failure, text output should remain compact and include the failed stage,
-message, attempt when known, executor, exit code or signal, and persisted
-failure/log/traceback paths when available. JSON output should carry the same
-facts in `failure_summary` using optional scalar/string fields so local,
-subprocess, and future executors can omit unavailable values.
-
-Should not:
-
-```text
-execute stage code directly in the command module
-write status files directly
-compute resume decisions directly
-generate SLURM scripts directly
-```
-
-### 13.4 Local Example
-
-```bash
-loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor local
-```
-
-### 13.5 Resume Example
-
-```bash
-loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
-```
-
-### 13.6 Subprocess Example
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor subprocess
-```
-
-This runs each planned stage as one prepared `loom stage run` worker process.
-The parent runner still owns final output validation, failure persistence,
-provenance, artifact indexes, stage status, and run status.
-
-### 13.7 SLURM Executor Example
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-afterok
-```
-
-Without `--dry-run`, this submits to SLURM with `sbatch --parsable`, records
-job IDs in the submission manifest, and marks submitted work `SUBMITTED`. The
-dry-run form creates scripts and manifests without calling `sbatch`:
-
-```bash
-loom run experiment.yaml \
-  --run-uri file:///abs/project/runs/example \
-  --executor slurm-afterok \
-  --dry-run
-```
-
-Live submission output includes:
-
-```text
-run directory
-submission manifest path
-job IDs
-status command hint
-```
-
-### 13.8 Dry Run
-
-`--dry-run` should call the same planning/submission dry-run APIs used by tests.
-
-It should not fake behavior in CLI code.
-
-For SLURM dry-runs, the CLI prepares artifact-safe durable state and calls the
-SLURM dry-run planner. It must not build scripts directly.
+The command does not execute stages, allocate run stores, generate scheduler
+scripts or recompute resume decisions in its own handler. The native coordinator
+and existing worker/backend owners perform those operations.
 
 ---
 
@@ -1813,10 +1685,10 @@ For v2, test through the console entry point or `main(argv)`:
 ```text
 loom validate example config
 loom plan example config
-loom run with local executor
+configured native run
 loom validate leaves project targets as data; loom run reports construction failures
-loom run --dry-run
-loom run --resume
+hypothetical planning through loom plan
+exact native operation replay and explicit retry controls
 JSON output and JSON error envelopes
 ```
 
@@ -2055,7 +1927,7 @@ not initially
 Use:
 
 ```bash
-loom run CONFIG --executor slurm-afterok
+loom run CONFIG --deployment PATH
 ```
 
 Add `loom submit` later only if submission semantics diverge clearly from run

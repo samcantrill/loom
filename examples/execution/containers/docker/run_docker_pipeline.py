@@ -1,4 +1,4 @@
-"""Run a pipeline through ``loom run --executor docker`` without a Docker daemon."""
+"""Run the Docker library executor without a Docker daemon."""
 
 from __future__ import annotations
 
@@ -39,19 +39,14 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"docker-pipeline-{uuid4().hex[:8]}")
 
     with started_authority_session(output_root) as authority:
-        run = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--executor",
-                "docker",
-                *authority.authority_args,
-                "--format",
-                "json",
-            ]
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import DockerExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'docker'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=DockerExecutor(run_store=execution_store)).run(RunRequest(config=composed, options=execution_options))
 
     store = LocalRunArtifactStore(run_root)
     provenance = store.stage_artifacts(run_uri, "seed").read_stage_provenance()
@@ -70,8 +65,8 @@ def main() -> None:
     ]
 
     print(f"run_uri: {run_uri}")
-    print(f"run_status: {run['result']['status']}")
-    print(f"artifact_count: {run['result']['artifact_count']}")
+    print(f"run_status: {run.status.value}")
+    print(f"artifact_count: {len(run.artifact_index)}")
     print(f"seed_executor: {executor_metadata.get('executor')}")
     print(f"container_image: {container.get('image')}")
     print(f"fake_docker_call_count: {len(calls)}")

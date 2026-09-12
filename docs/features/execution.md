@@ -1719,7 +1719,7 @@ commit or fail the stage
 ```
 
 Current subprocess execution follows this flow for
-`loom run CONFIG --executor subprocess`. The runner prepares the durable worker
+the existing `SubprocessExecutor` library composition. The runner prepares the durable worker
 request, marks the stage running, invokes `SubprocessExecutor`, reads the
 worker handoff through store APIs, and then uses the normal parent-owned
 success/failure finalization path.
@@ -1824,7 +1824,7 @@ module invocation
 
 The executor records redacted command and process metadata. Availability
 preflight for the Python executable and worker command is handled by selected
-subprocess executor checks before `loom run` invokes user stage code.
+subprocess executor checks before the library runner invokes user stage code.
 
 ### 15.8 Current v5 Guarantees And Boundaries
 
@@ -2640,25 +2640,15 @@ the public package boundary.
 
 ### 21.1 `loom run`
 
-Functional CLI commands are post-v0. V0 provides only import-safe CLI modules
-and unsupported stubs.
-
-`loom run` should:
-
-```text
-load and resolve config
-construct PipelineSpec
-select executor
-construct RunRequest
-call PipelineRunner.run
-print concise run summary
-return non-zero on failure
-```
-
-Example:
+Ordinary runs use the shared Python/native run composition and an explicit
+protected deployment selection. Configuration is relative to the selected
+preparation source; worker/backend selection belongs to its execution profile.
+The coordinator owns preparation, exact admission, observation and service
+lifetime. See [configured startup](../downstream-operations.md#configured-startup-and-ordinary-run)
+for creation, binding, deadlines and per-role cleanup outcomes.
 
 ```bash
-loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor local
+loom run experiment.yaml --deployment deployment.yaml
 ```
 
 ### 21.2 `loom stage run`

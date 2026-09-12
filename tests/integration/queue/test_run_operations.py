@@ -237,6 +237,9 @@ def test_crash_recovery_never_replans_after_admission(tmp_path, boundary):
         def publish_target(self, *args, **kwargs):
             receipt = super().publish_target(*args, **kwargs)
             if boundary == "published":
+                with daemon._cycle_lock:
+                    assert daemon._lifetime.retained()
+                    assert not daemon._lifetime.retire_if_idle()
                 reached.set()
                 raise RuntimeError("lost publication receipt")
             return receipt
@@ -348,6 +351,8 @@ def test_cancellation_serializes_and_settles_its_own_control(tmp_path, boundary)
                 release.set()
             cancellation = pending.result(timeout=5)
         assert cancellation.kind == "cancel_run" and cancellation.state == "pending"
+        with daemon._cycle_lock:
+            assert daemon._lifetime.retained()
         if boundary == "capture":
             daemon._preparations._reconcile_lock.release()
         release.set()

@@ -75,7 +75,14 @@ def test_command_errors_are_text_by_default(monkeypatch: pytest.MonkeyPatch) -> 
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", "pipeline.yaml"], stdout=stdout, stderr=stderr) == 1
+    assert (
+        main(
+            ["run", "pipeline.yaml", "--deployment", "deployment.yaml"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 1
+    )
     assert stdout.getvalue() == ""
     assert "command failed" in stderr.getvalue()
 
@@ -91,7 +98,18 @@ def test_command_errors_are_json_when_command_format_is_known(
     stderr = io.StringIO()
 
     assert (
-        main(["run", "pipeline.yaml", "--format", "json"], stdout=stdout, stderr=stderr)
+        main(
+            [
+                "run",
+                "pipeline.yaml",
+                "--deployment",
+                "deployment.yaml",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
         == 1
     )
     assert stderr.getvalue() == ""
@@ -117,7 +135,15 @@ def test_traceback_is_accepted_before_or_after_command(
 
     assert (
         main(
-            ["--traceback", "run", "pipeline.yaml", "--format", "json"],
+            [
+                "--traceback",
+                "run",
+                "pipeline.yaml",
+                "--deployment",
+                "deployment.yaml",
+                "--format",
+                "json",
+            ],
             stdout=before_stdout,
             stderr=before_stderr,
         )
@@ -125,7 +151,15 @@ def test_traceback_is_accepted_before_or_after_command(
     )
     assert (
         main(
-            ["run", "pipeline.yaml", "--format", "json", "--traceback"],
+            [
+                "run",
+                "pipeline.yaml",
+                "--deployment",
+                "deployment.yaml",
+                "--format",
+                "json",
+                "--traceback",
+            ],
             stdout=after_stdout,
             stderr=after_stderr,
         )

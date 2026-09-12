@@ -1,5 +1,7 @@
 # SLURM Live Operations Example
 
+## Workflow
+
 This example is a small template for a real SLURM cluster. It assumes the run
 directory is on a shared filesystem visible to both the submit host and compute
 nodes.
@@ -7,80 +9,22 @@ nodes.
 Run commands from this directory so the `stages.py` module is importable by the
 submitted jobs.
 
-## Workflow
+## Current Qualification
 
-This workflow uses:
+This is a retained site-configuration and operations template. The previous
+ordinary-run Slurm submission flags were removed. Complete managed submission
+and this live journey require the Slurm phase and qualified site evidence; the
+cluster-free planning demonstrations do not provide that qualification.
 
-- `loom preflight CONFIG --executor slurm-afterok`
-- `loom run CONFIG --run-uri RUN_URI --executor slurm-afterok`
-- `loom status RUN_URI --jobs`
-- `loom cancel RUN_URI --jobs`
-
-## Variants
-
-Canonical live submit:
+From the repository root, inspect the existing library planning examples:
 
 ```sh
-uv run loom run pipeline.yaml \
-  --run-uri file:///shared/loom-runs/slurm-live-example \
-  --executor slurm-afterok
+uv run python examples/execution/slurm/dry-run-basics/run_dry_run_basics.py
+uv run python examples/execution/slurm/afterok-diamond/run_afterok_diamond.py
 ```
 
-Whole-pipeline single-job variant:
-
-```sh
-uv run loom run pipeline.yaml \
-  --run-uri file:///shared/loom-runs/slurm-live-single \
-  --executor slurm-single-job
-```
-
-Persisted-only status view:
-
-```sh
-uv run loom status file:///shared/loom-runs/slurm-live-example
-```
-
-## Preflight
-
-Check the configuration and SLURM command availability from the submit host:
-
-```sh
-uv run loom preflight pipeline.yaml \
-  --executor slurm-afterok
-```
-
-Missing `sbatch` is a live-submission error. Missing `squeue`, `sacct`, or
-`scancel` may still allow submission, but later status or cancellation commands
-will report operation-specific failures if the required command is unavailable.
-
-## Dry Run
-
-Generate scripts, logs, and a submission manifest without calling `sbatch`:
-
-```sh
-uv run loom run pipeline.yaml \
-  --run-uri file:///shared/loom-runs/slurm-live-example \
-  --executor slurm-afterok \
-  --dry-run
-```
-
-## Live Submit
-
-Submit one SLURM job per runnable stage:
-
-```sh
-uv run loom run pipeline.yaml \
-  --run-uri file:///shared/loom-runs/slurm-live-example \
-  --executor slurm-afterok
-```
-
-For one allocation that runs the whole pipeline, use:
-
-```sh
-uv run loom run pipeline.yaml \
-  --run-uri file:///shared/loom-runs/slurm-live-single \
-  --executor slurm-single-job
-```
+The unchanged physical Slurm acceptance hook remains available to its owning
+phase. The operations below apply to already-submitted work.
 
 ## Status
 
@@ -140,3 +84,13 @@ runtime:
 Do not put secrets or resolved environment values in pipeline configs. Prefer
 site modules, activation commands, or scheduler-managed environment setup in
 trusted project code.
+
+## Variants
+
+The scripts preserve their existing library/backend demonstrations. Ordinary
+managed execution uses a protected deployment selection, with backend and
+lifetime policy owned by that selection. Existing status and log commands can
+inspect a matching retained run. For a run created with co-located service
+authority, pass `--authority-backend co_located_service` and
+`--authority-profile co_located` to those diagnostic commands; these are not
+ordinary-run overrides.

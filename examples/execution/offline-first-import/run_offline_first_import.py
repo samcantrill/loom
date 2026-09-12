@@ -36,18 +36,17 @@ def main() -> None:
 
     authority = start_authority_session(output_root)
     try:
-        offline = run_cli_json(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--offline-first",
-                "--format",
-                "json",
-            ]
-        )
-        evidence = require_mapping(offline["result"]["offline_evidence"])
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, create_offline_evidence_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'local'})
+        execution_store = create_offline_evidence_run_store(run_root)
+        offline = PipelineRunner(run_store=execution_store, executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
+        assert offline.status.value == "SUCCEEDED"
+        offline_evidence = execution_store.offline_evidence_summary(run_uri)
+        evidence = require_mapping(offline_evidence)
         pre_import_status = run_cli_json(
             ["status", run_uri, *authority.authority_args, "--format", "json"],
             expected=int(ExitCode.RUN_STATE),

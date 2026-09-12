@@ -553,6 +553,8 @@ def run_outbound_agent_service(
     *,
     stop: Event,
     trusted_config_loader: Callable[[], OutboundAgentServiceConfig] | None = None,
+    lifetime: str | None = None,
+    expected_coordinator_id: str | None = None,
 ) -> None:
     """Run a foreground agent, preserving supervised work on service stop.
 
@@ -561,6 +563,9 @@ def run_outbound_agent_service(
     transport operations retain their configured timeouts before suspension.
     """
 
+    from uuid import uuid4
+
+    generation = str(uuid4())
     active = config
     pending: OutboundAgentServiceConfig | None = None
 
@@ -591,6 +596,17 @@ def run_outbound_agent_service(
         trusted_config_loader=None if trusted_config_loader is None else load_client,
         prepare_role_reload=prepare_install,
     )
+    from ._service_lifetime import record_process, retained_lifetime
+
+    if active.client.agent_root is not None:
+        try:
+            lifetime = retained_lifetime(active.client.agent_root, lifetime)
+            record_process(active.client.agent_root, stopped=False)
+        except BaseException:
+            client.close()
+            raise
+    else:
+        lifetime = lifetime or "persistent"
     while True:
         try:
             if stop.is_set():
@@ -603,16 +619,23 @@ def run_outbound_agent_service(
                     ),
                     prepare_role_reload=prepare_install,
                 )
+            client._resume_pending_poll(
+                wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+                suspend_requested=stop.is_set,
+            )
             client.resume_retained_work(suspend_requested=stop.is_set)
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
+            if expected_coordinator_id is not None and coordinator_id != expected_coordinator_id:
+                raise QueueConflictError("outbound agent coordinator identity conflicts")
             session = client.active_session()
             if session is None:
                 operation_id = _operation_id(
                     "register",
                     client.agent_root_id,
                     active.registration.config_revision,
+                    *( (generation,) if lifetime == "run" else () ),
                 )
                 session = client.register(
                     AgentRegistration(
@@ -635,7 +658,23 @@ def run_outbound_agent_service(
                         "reconcile", session.session_id, coordinator_epoch
                     ),
                 )
+            if lifetime != "run" and active.client.agent_root is not None:
+                record_process(active.client.agent_root, stopped=False, coordinator_id=coordinator_id, session_id=session.session_id)
             while not stop.is_set():
+                if lifetime == "run":
+                    retirement = {"session_id": session.session_id, "coordinator_epoch": coordinator_epoch, "generation": generation, "action": "observe"}
+                    decision = client._call("service_lifetime", retirement)
+                    if decision.get("state") == "authorized":
+                        if decision.get("coordinator_id") != coordinator_id or any(decision.get(key) != retirement[key] for key in ("session_id", "coordinator_epoch", "generation")):
+                            raise QueueConflictError("service retirement evidence is stale")
+                        client.retire_clean(session.session_id, idempotency_key="service-retire-" + generation)
+                        client.shutdown_clean()
+                        client._call("service_lifetime", {**retirement, "action": "closed"})
+                        if active.client.agent_root is not None:
+                            record_process(active.client.agent_root, stopped=True, coordinator_id=coordinator_id, session_id=session.session_id)
+                        return
+                    if active.client.agent_root is not None:
+                        record_process(active.client.agent_root, stopped=False, coordinator_id=coordinator_id, session_id=session.session_id)
                 client.poll_control(session.session_id)
                 session = client.active_session()
                 if session is None:
@@ -667,7 +706,8 @@ def run_outbound_agent_service(
                 closing = client
                 client = None
                 try:
-                    closing.shutdown_clean()
+                    if lifetime != "run" or stop.is_set():
+                        closing.shutdown_clean()
                 except (QueueConflictError, QueueServiceError):
                     # Retained or uncertain work deliberately keeps its process
                     # owner alive so the next service incarnation can join it.

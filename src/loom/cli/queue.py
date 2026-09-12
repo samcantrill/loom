@@ -568,111 +568,20 @@ def handle_daemon_init(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_serve(namespace: argparse.Namespace) -> int:
-    """Run the persistent coordinator and its configured endpoints."""
-
+    """Run the shared foreground coordinator composition."""
     from threading import Event
-
-    from loom.diagnostics.run_inspection import projection_callable
-    from loom.preparation import CoordinatorPreparation
-    from loom.pipeline.stores import LocalRunStore
-    from loom.queue import LocalDaemon, LocalDaemonSocketServer
-    from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
     from loom.queue.deployment import load_coordinator_service_config
+    from loom.service_runtime import serve_coordinator
 
     try:
-        service = load_coordinator_service_config(
-            namespace.config, env_file=namespace.env_file
-        )
+        service = load_coordinator_service_config(namespace.config, env_file=namespace.env_file)
+
+        def ready(status, port):  # type: ignore[no-untyped-def]
+            _emit_daemon_payload(namespace, {"operation": "serve", "endpoint": str(service.daemon.endpoint), "agent_port": port, "coordinator_id": status.coordinator_id, "coordinator_epoch": status.coordinator_epoch})
+
+        serve_coordinator(service, stop=Event(), ready=ready)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    config = service.daemon
-    active_service = service
-    pending_service = None
-    agent_server = None
-
-    def load_replacement():  # type: ignore[no-untyped-def]
-        nonlocal pending_service
-        pending_service = load_coordinator_service_config(
-            service.source_path,
-            env_file=service.environment_path,
-            current=active_service,
-        )
-        return pending_service.daemon
-
-    def prepare_role_reload(replacement):  # type: ignore[no-untyped-def]
-        nonlocal pending_service
-        prepared = pending_service
-        if prepared is None or prepared.daemon is not replacement:
-            raise QueueServiceError("trusted coordinator role snapshot is unavailable")
-        if agent_server is None:
-            if prepared.agent_server is not None:
-                raise QueueServiceError("agent TLS listener cannot be added by reload")
-
-            def install_absent() -> None:
-                nonlocal active_service, pending_service
-                active_service = prepared
-                pending_service = None
-
-            return install_absent
-        if prepared.agent_server is None:
-            raise QueueServiceError("agent TLS listener cannot be removed by reload")
-        install_server = agent_server.prepare_reload(prepared.agent_server)
-
-        def install() -> None:
-            nonlocal active_service, pending_service
-            install_server()
-            active_service = prepared
-            pending_service = None
-
-        return install
-
-    daemon = LocalDaemon(
-        config,
-        trusted_scheduling_loader=load_replacement,
-        prepare_role_reload=prepare_role_reload,
-        preparation=CoordinatorPreparation(service),
-    )
-    server = LocalDaemonSocketServer(
-        daemon,
-        config.endpoint,
-        inspect_run=projection_callable(
-            run_store=LocalRunStore(config.run_store_root), daemon=daemon
-        ),
-    )
-    agent_server = (
-        None
-        if service.agent_server is None
-        else LocalDaemonAgentHttpServer(
-            daemon,
-            service.agent_server,
-            inspect_run=projection_callable(
-                run_store=LocalRunStore(config.run_store_root), daemon=daemon
-            ),
-        )
-    )
-    try:
-        status = daemon.start()
-        server.start()
-        if agent_server is not None:
-            agent_server.start()
-        _emit_daemon_payload(
-            namespace,
-            {
-                "operation": "serve",
-                "endpoint": str(config.endpoint),
-                "agent_port": None if agent_server is None else agent_server.port,
-                "coordinator_id": status.coordinator_id,
-                "coordinator_epoch": status.coordinator_epoch,
-            },
-        )
-        Event().wait()
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    finally:
-        if agent_server is not None:
-            agent_server.stop()
-        server.stop()
-        daemon.stop()
     return int(ExitCode.SUCCESS)
 
 

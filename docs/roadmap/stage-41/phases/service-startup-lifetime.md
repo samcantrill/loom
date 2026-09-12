@@ -2,19 +2,20 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 41 / 3
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p3-service-startup-lifetime
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 2 merges; record exact SHA at execution preparation
+- Base revision: `4e3635b706f6406cca4861f97f846914ad3dcae1` (published Phase 2 completion metadata after PR 309)
 - PR target: develop
+- PR: [310](https://github.com/samcantrill/loom/pull/310)
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 3: Service Startup And Lifetime
 - Dependencies: Phase 2 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 2 merged, metadata published and stage/control/live develop synchronized
 
 ## Objective And Context
 
@@ -312,23 +313,224 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on 2026-09-12 in the manifest's persistent stage
+  worktree and this phase branch. Phase 2 PR 309 merged as
+  `5a624d11ca5c777765fb35583a628bc57562f419`; completion metadata was published
+  as the Base revision above. Synchronization verified matching stage, local
+  develop, fetched origin/develop and advertised develop revisions. Exact local
+  and remote Phase 2 branch refs were retired; the stage worktree was retained.
+  All predecessor agents/validation processes are terminal. Successor `start`
+  and `preflight` passed on the clean prepared branch.
+- Source reconciliation: published Phase 2 supplies native RunRequest,
+  start_run/cancel_run_operation, durable publication/admission linkage and
+  bounded observation. Coordinator schema is 15; worker schema remains 12.
+  Existing protected role loaders and outbound agent service remain in
+  queue/deployment.py; coordinator foreground composition remains in
+  cli/queue.py. Ordinary cli/run.py still dispatches the old execution paths.
+  Local retained-work checks and low-level stop remain insufficient for the
+  global quiescence decision, as this card already specifies. Reuse those owners
+  and the predecessor's unchanged run/cancel contract.
+- Named refinement: none needed. The reviewed behavior, phase boundary, trust
+  and identity contracts, and required validation remain unchanged. Protected
+  deployment key layout and private composition/helper choices remain execution
+  discretion; no new discovery, provisioning or compatibility path is approved.
+- Coverage selection: protected relative paths and creation/open binding;
+  concurrent startup and interrupted initialization; cumulative startup/dispatch
+  budgets; acceptance/retirement barriers including waiting preparation,
+  continuation and explicit retry; mixed-role lifetime and stale retirement
+  evidence; cold run, detach and actual process exit; ordinary CLI cutover and
+  cheap root imports. Use the listed native service/transport and CLI fixtures.
+  Physical fleet qualification remains separate. Expand only for changed shared
+  contracts, relevant failures or unresolved accepted concerns. Both required
+  full commands remain binding.
+- Execution delegation: one executor is justified by the coupled durable
+  creation/startup/quiescence, independent role lifetime and public CLI/Python
+  cutover. The manager retains manifest, pre-submit, PR/review and delivery
+  ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: complete; required validation passed. Protected selection
+  and external binding now retain every role creation intent before initializing
+  roots. Native role locks preserve identity and immutable lifetime on foreground
+  or automatic restart. Coordinator cycle serialization owns startup attachments,
+  accepted-work retention and final retirement; independent agents require current
+  coordinator/session/process-generation authorization and clean native retirement.
+  The lazy root facade and ordinary CLI share startup, exact native acceptance,
+  bounded observation and separate cleanup evidence.
+- Development coverage: added cold/replay and actual process exit; concurrent
+  starters; missing-bound-root and interrupted multi-role creation; all independent
+  mixed lifetime combinations; foreground restart; abandoned startup expiry and
+  losing acceptance; waiting preparation/detach; shared-run and cancellation
+  retention; history-only idle; unavailable/stale agent retirement; borrowed
+  Unix/HTTPS source parity; configured observation handshake timeout; and clean
+  shutdown refusal preserving committed success. Existing publication/continuation
+  and retry-recovery fixtures now assert retention at their native barriers.
+  Existing Phase 2 zero-timeout detach assertions remain unchanged.
+- Removal reconciliation: ordinary direct CLI dispatch/builders and executor,
+  run-uri, dry-run, authority and plugin bypass controls were removed. Obsolete
+  CLI dispatch tests were replaced by managed-path tests; authority/diagnostic
+  setup now uses bounded test-local existing-library fixtures. The manager
+  explicitly authorized bounded example-local primitive wiring to preserve the
+  existing executable backend/container assertions. No production compatibility
+  adapter or old ordinary CLI branch remains.
+- Exact retained consumers and successor owners (paths below are relative to
+  `examples/`):
+  - Phase 4: `execution/subprocess/run_subprocess_pipeline.py`,
+    `execution/subprocess/run_failure_diagnostics.py`,
+    `execution/containers/docker/run_docker_pipeline.py`,
+    `execution/containers/docker/run_failure_diagnostics.py`,
+    `execution/containers/slurm-apptainer/run_apptainer_pipeline.py`,
+    `execution/runtime-profile/run_runtime_profile.py`,
+    `operations/failing-run/run_failure_diagnostics.py`, and
+    `operations/local-diagnostics/run_diagnostics.py`.
+  - Phase 6: `execution/slurm/dry-run-basics/run_dry_run_basics.py`,
+    `execution/slurm/afterok-diamond/run_afterok_diamond.py`, and the unchanged
+    physical `tests/slurm_acceptance` hook (repository-relative).
+  - Phase 9: `execution/offline-first-import/run_offline_first_import.py`,
+    `operations/offline-import-rejections/run_offline_import_rejections.py`,
+    `operations/authority-backend-diagnostics/run_backend_diagnostics.py`, and
+    `tests/support/executed_run_fixture.py` (repository-relative), together with
+    final remaining PipelineRunner consumers. Existing generic runtime, sweep,
+    prepared-run, stage-worker, Slurm, artifact and authority primitives remain
+    for their accepted owners. The physical Slurm acceptance hook was preserved
+    unchanged; default fixtures do not qualify it.
+- Validation preparation correction: the initial `make validate-pr` at
+  `1aa60f9f599d8bdd8328284f9b526b01bda0f903` passed Ruff/Pyright but was
+  intentionally interrupted during the baseline lane (exit 130) after the cleanup
+  audit found retained fixture supervisors. The mixed-role fixture now uses the
+  existing authenticated `shutdown_for_test` owner and verifies process exit.
+  Its three role combinations passed (79.46 s). Three earlier orphaned fixture
+  supervisors whose temporary state had already been removed were identified by
+  exact command/root and absence of children, interrupted, and observed exited;
+  unrelated supervisors were untouched.
+- Final retirement race correction: already-issued agent retirement authorization
+  remains replayable after a new startup hold. The selected run-agent readiness
+  check observes its exact native session's retained retirement record before
+  dispatch, so a closing incarnation cannot stand in for the next eligible one.
+  The deterministic authorization/replay/new-hold test passed (4.78 s).
+- Acceptance handoff completion: a new cancel-run control for an already
+  completed run is rejected before commitment when retirement wins; completed
+  existing controls remain replayable. Accepted preparation/run transactions
+  remove their matching startup attachment atomically, leaving native accepted
+  work as the lifetime owner. The complete lifetime file passed: 18 passed in
+  184.16 s, including cold fast replay, mixed roles, source/observation budgets,
+  cleanup refusal and this cancellation race.
+- Gate restart qualification: the second `make validate-pr` at
+  `76084c1bb16a92226f33f139450b111d898fb417` passed Ruff/Pyright and was
+  intentionally interrupted during baseline execution (exit 130) for the final
+  cancellation/handoff correction. Neither interrupted baseline is full-suite
+  evidence. Three native fixture supervisors left by interrupted baseline cases
+  were shut down through their authenticated private test-shutdown protocol and
+  observed exited; no fixture workloads or processes remain from those attempts.
+- Completed baseline feedback: `make validate-pr` at
+  `f96de461888d95f24f96b73f22d74d91eb016094` exited 2: Ruff/Pyright passed;
+  baseline 3292 passed, 2 skipped, 286 deselected, 4 failed in 1194.87 s.
+  The failures were stale public-export and mocked-dispatch expectations, now
+  corrected to include root `run` and the required deployment argument. Their
+  package/CLI selection passed (18 passed in 0.96 s). Config-extra feedback
+  completed with 242 passed, 18 skipped, 3337 deselected and four documentation
+  failures in 904.33 s (exit 2); all runtime selections passed. Those four catalog
+  failures were corrected and the affected documentation checks passed below.
+  MCP-extra passed: 36 passed, 3548 deselected in 58.12 s (exit 0).
+- Interrupted outbound restart: a new native fixture reproduced an outstanding
+  poll retained across agent interruption. Startup now replays that exact poll
+  through the existing journal/digest and coordinator delivery owner before new
+  capacity. The application entrypoint no longer writes clean-stop evidence on
+  return from interrupted observation; only authorized native retirement does.
+  The regression first failed (pending preparation after 40 s), then passed
+  (1 passed, 18 deselected in 23.38 s), retaining bound identity and observing
+  native success and actual authorized agent exit. These runtime changes require
+  the final complete gates; earlier partial evidence does not replace them.
+- Final validation: both required commands completed with exit 0 on commit
+  `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree
+  `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`, with a clean tracked tree throughout.
+  `make validate-pr` passed Ruff, Pyright, baseline (3300 passed, 2 skipped,
+  287 deselected; 1237.48 s), config-extra (247 passed, 18 skipped,
+  3341 deselected; 931.07 s), MCP-extra (36 passed, 3553 deselected; 68.24 s),
+  and source/wheel builds. Exact terminal log:
+  `/tmp/loom-p3-validate-pr-watermark-final.log`.
+  `make test-summary` passed all seven rows: package 127, unit 2312,
+  contract 302, integration 514, e2e 47, config-extra 247 and MCP-extra 36;
+  overall 3585 passed, zero failures/errors, 18 skipped, 7160 row-summed
+  deselections, 2965.94 s. Report: `build/test-summary.md`; per-row JUnit,
+  coverage and output evidence: `build/test-summary/`; exact terminal log:
+  `/tmp/loom-p3-test-summary-final.log`.
+- Qualification: baseline's two skips are no-extra dependency gates; the summary
+  runs the config-enabled e2e row. The 18 config-extra skips are opt-in real
+  Docker (1), Apptainer smoke/build/resource/scheduling (4), and Apptainer
+  namespace-lifecycle acceptance (13). Slurm/network/slow/optional markers use
+  the repository's ordinary lane selection, not physical fleet qualification.
+  No real fleet, scheduler, container installation or external workload was run.
+  Two unrelated existing Loom-monitor coroutine warnings appeared in the
+  baseline/unit evidence; builds warned that installed uv 0.12.3 differs from
+  the declared uv-build range, but both artifacts built successfully.
+- Final cleanup: process inventory after both gates showed no attempt-owned
+  service runtime, native supervisor or resident worker. Unrelated existing
+  supervisors were preserved. Fixture-authenticated shutdown and actual process
+  exit assertions cover persistent/mixed-role teardown. Validation artifacts
+  remain under ignored `build/` and `dist/`; no validation process is running.
+  Only this phase card's receipt was updated after the validated code tree;
+  `git diff --check` passed for that metadata-only delta.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed on 2026-09-12 at `e84faacfe33808c1664320844999d7331545220f`.
+  Manager verified scope, accepted startup/lifetime contracts, removal and
+  successor ownership, both terminal gate logs, all seven JUnit reports and
+  their actual skip reasons. The only delta from the validated revision is
+  this card's execution evidence. No product blocker remains; corrections 1
+  and 2 are resolved. The process inventory confirms no phase-owned service,
+  worker or validation process remains. Independent PR review is still required.
+- Evidence archive: the summary, seven per-suite `junit.xml` reports and both
+  final gate logs were copied and byte-verified under
+  `/tmp/loom-stage41-p3-summary-evidence/`. This preserves the Phase 3 evidence
+  before a successor reuses ignored build paths. No runtime checks were repeated
+  for the manager's metadata-only acceptance record.
 - Independent implementation review: required for durable startup/lifetime and public cutover
-- Blocker corrections: 0/3
-- PR and merge: not started
+- Manager correction 1/3: corrected stale current ordinary-run guidance in
+  docs/features/cli.md, slurm.md, container-example-coverage.md and testing.md,
+  the Docker/Apptainer entrypoint descriptions, active resume examples and the
+  retained live-Slurm template. Ordinary command guidance now requires deployment
+  selection; retained examples describe library execution/planning and explicitly
+  separate physical/native-backend qualification. Restored accurate workflow,
+  variants, preflight and offline-import explanations for current catalog checks.
+  Exact removed-flag searches over current README/features/operations/example
+  guidance, including normalized multiline commands, returned zero matches.
+  Affected documentation/catalog checks: 12 passed, 17 deselected in 2.62 s.
+  Historical roadmap artifacts and P4/P6/P9 delivery remain untouched.
+- Manager correction 2/3: prior-epoch outstanding polls now recover their exact
+  committed, fenced or absent outcome from the native poll owner before new
+  capacity. Committed delivery contents and request digests are retained; only
+  an explicit former-epoch absent receipt permits dropping the unaccepted local
+  intent. Already-targeted delivery remains owned by its stable session across
+  epochs, with original assignment/issuer evidence unchanged. Native fault
+  fixtures cover loss before receipt, after committed active intent, and after
+  committed assignment response; all three passed (3 passed, 7 deselected in 119.83 s).
+  Reinstalling only the fc266b7 startup method in the fixture reproduced the
+  lost-committed-reply failure (1 failed, 9 deselected in 50.26 s); the working
+  tree was never reverted. Ruff and affected Pyright passed. Explicit native
+  row-state and timeout/digest mismatch assertions were added before final gates.
+  Configured timeout mismatch and ordinary indeterminate-poll capacity barriers
+  remain enforced. The fc266b7 gate was interrupted for this correction:
+  exit 2, baseline 596 passed, 2 skipped, 287 deselected in 305.93 s; no full-gate
+  claim is made from it. Final gates must validate the corrected tree.
+- Correction 2 later-sequence completion: when the next poll was lost before
+  acceptance, the native owner may retain its completed predecessor. Recovery
+  now recognizes that exact one-step absence and restores the local predecessor
+  watermark instead of resetting to sequence 1. The discriminating sequence-2
+  fixture passed (1 passed, 10 deselected in 43.12 s), including native success
+  and one assignment/worker. The 1aa2141 gate was interrupted for this fix:
+  exit 2, baseline 447 passed, 2 skipped, 287 deselected in 146.42 s.
+- Blocker corrections: 2/3
+- PR: [310](https://github.com/samcantrill/loom/pull/310), opened on 2026-09-12;
+  canonical title, develop target, selected phase branch, non-draft/open state
+  and mergeability verified. Independent review is pending; no merge is claimed.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Live fleet qualification and mixed-role process evidence pending |
+| Implementation and changed paths | Shared deployment/facade/runtime; coordinator acceptance/lifetime and agent retirement owners; ordinary CLI; corresponding tests and current docs/examples. |
+| Tests added, updated or intentionally removed | Coverage and removal rationale recorded in Workflow State; replaced ordinary bypass tests removed, underlying backend/authority assertions retained through local fixtures. |
+| Validated revision/tree and evidence | Both required gates exited 0 at `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`; terminal logs, summary and row artifacts recorded above. |
+| Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
+| Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
+| PR, review and merge | PR 310 open against develop; manager pre-submit passed; independent review and delivery remain. |
+| Residual risk and cleanup | Native mixed-role/process evidence passed; no attempt-owned services remain. Physical fleet/container/Slurm qualification remains explicitly excluded and mapped to successor owners above. |

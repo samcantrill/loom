@@ -40,6 +40,7 @@ from .local_daemon import (
 )
 from .preparation import PrepareRunRequest
 from .run import RunRequest
+from ._service_lifetime import ServiceRetiring
 from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
 
@@ -60,6 +61,9 @@ CONTROL_OPERATIONS = frozenset(
         "wait_operation",
         "prepare_run",
         "start_run",
+        "startup_attach",
+        "startup_release",
+        "service_lifetime",
         "cancel_run_operation",
         "cancel_preparation",
         "submit",
@@ -69,7 +73,7 @@ CONTROL_OPERATIONS = frozenset(
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
 MUTATION_OPERATIONS = frozenset(
-    {"submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation"}
+    {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation"}
 )
 
 
@@ -375,6 +379,8 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return AdmissionWaitResult(
             AdmissionWaitKind(kind), LocalDaemonAdmission.from_dict(admission), revision
         )
+    if operation in {"startup_attach", "startup_release", "service_lifetime"}:
+        return value
     if operation == "inspect_run":
         return value  # The diagnostic union decoder belongs above queue.
     raise ValueError("control result operation is unsupported")
@@ -412,6 +418,9 @@ def validate_request(
         "cancel": {"queue_item_id"},
         "prepare_run": {"request"},
         "start_run": {"request"},
+        "startup_attach": {"attachment_id", "expires_at"},
+        "startup_release": {"attachment_id"},
+        "service_lifetime": {"agent_root_id"},
         "cancel_run_operation": {"operation_id"},
         "cancel_preparation": {"operation_id"},
         "admissions": {"limit", "cursor"},
@@ -428,6 +437,9 @@ def validate_request(
         raise control_error("unsupported", operation, payload)
     value = dict(payload)
     value.pop("expected_coordinator_id", None)
+    if operation == "service_lifetime":
+        value.setdefault("agent_root_id", None)
+        optional_id(value["agent_root_id"])
     if legacy and operation in {"admissions", "agents"}:
         value.setdefault("limit", 100)
         value.setdefault("cursor", None)
@@ -438,6 +450,13 @@ def validate_request(
     for key in ("admission_id", "queue_item_id", "agent_id", "operation_id", "run_uri"):
         if key in value and (not isinstance(value[key], str) or not value[key]):
             raise ValueError(f"control {key} is invalid")
+    if "attachment_id" in value:
+        if not isinstance(value["attachment_id"], str) or not value["attachment_id"]:
+            raise ValueError("startup attachment identity is invalid")
+    if "expires_at" in value:
+        expiry = value["expires_at"]
+        if isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
+            raise ValueError("startup attachment expiry is invalid")
     if "limit" in value:
         limit, cursor = value["limit"], value["cursor"]
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -536,6 +555,17 @@ def dispatch_control(
                 (() if preparation is None else preparation.effective_profiles),
                 (() if preparation is None else preparation.effective_roots),
             )
+        elif operation == "startup_attach":
+            result = daemon._lifetime.attach(cast(str, value["attachment_id"]), cast(float, value["expires_at"]))
+        elif operation == "startup_release":
+            result = daemon._lifetime.release(cast(str, value["attachment_id"]))
+        elif operation == "service_lifetime":
+            with daemon._cycle_lock:
+                result = {"coordinator_id": daemon._require_started(), "coordinator_epoch": daemon._epoch, "retiring": daemon._lifetime.retiring, "retained": daemon._lifetime.retained(), "cleanup_blocked": daemon._lifetime.cleanup_blocked}
+                if value["agent_root_id"] is not None:
+                    with daemon._connection() as conn:
+                        row = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("service-agent:" + cast(str, value["agent_root_id"]),)).fetchone()
+                    result["agent"] = None if row is None else json.loads(row[0])
         elif operation == "status":
             result = view.status()
         elif operation == "admissions":
@@ -632,6 +662,8 @@ def dispatch_control(
                 applied=applied,
             )
         return cast(Mapping[str, PlainData], plain)
+    except ServiceRetiring as exc:
+        raise control_error("unavailable", operation, payload, boundary="coordinator", dispatched=False) from exc
     except (PreparationNotAccepted, PreparationChildReserved) as exc:
         raise control_error(
             exc.code,

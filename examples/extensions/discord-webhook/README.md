@@ -100,15 +100,13 @@ is available:
 uv run python examples/extensions/discord-webhook/run_discord_webhook.py
 ```
 
-## CLI Selection
+## Execution Selection
 
-Select the installed entry point explicitly; the webhook URL remains only in
-the lifecycle-owning process environment.
-
-```sh
-cd examples/extensions/discord-webhook
-loom run pipeline.yaml --plugin loom.event_sinks:notifications.discord
-```
+The runnable script selects the installed event-sink entry point through the
+existing library composition. The webhook URL remains in the lifecycle owner's
+environment. Ordinary managed `loom run` uses the deployment selection and does
+not accept the former `--plugin` control. Native terminal-event integration has
+its own later cutover owner.
 
 For a prepared run or SLURM continuation, inject the secret only into the
 parent, `stage-job`, or continuation process that commits the relevant terminal

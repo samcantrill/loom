@@ -38,20 +38,14 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"docker-failure-{uuid4().hex[:8]}")
 
     with started_authority_session(output_root) as authority:
-        run = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--executor",
-                "docker",
-                *authority.authority_args,
-                "--format",
-                "json",
-            ],
-            expected=5,
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import DockerExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'docker'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=DockerExecutor(run_store=execution_store)).run(RunRequest(config=composed, options=execution_options))
         status = _run_cli(
             ["status", run_uri, *authority.authority_args, "--format", "json"]
         )
@@ -68,7 +62,7 @@ def main() -> None:
     ]
 
     print(f"run_uri: {run_uri}")
-    print(f"run_status: {run['result']['status']}")
+    print(f"run_status: {run.status.value}")
     print(f"failure_executor: {failure['executor']}")
     print(f"failure_exit_code: {failure['exit_code']}")
     print(f"stderr_available: {stderr_stream['available']}")

@@ -17,7 +17,7 @@ validation_path: tests/e2e/test_example_journeys.py::test_e2e_example_apptainer_
 entrypoints:
   - path: run_apptainer_pipeline.py
     kind: python
-    description: Run a pipeline through loom run --executor apptainer with a local fake command.
+    description: Run a pipeline through the existing library runner and Apptainer executor with a local fake command.
 tags:
   - apptainer
   - singularity

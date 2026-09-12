@@ -941,6 +941,34 @@ class _RemoteAgentJournal:
             ).fetchone()
         return 1 if row is None else int(row["sequence"]) + 1
 
+    def pending_poll(self) -> tuple[str, str, int] | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT session_id, availability_revision, sequence "
+                "FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["session_id"]), str(row["availability_revision"]), int(row["sequence"])
+
+    def discard_absent_poll(self, session_id: str, sequence: int) -> None:
+        with self._connection() as conn:
+            if sequence == 1:
+                conn.execute(
+                    "DELETE FROM agent_poll_state_local WHERE session_id = ? "
+                    "AND sequence = ? AND state = 'PENDING'",
+                    (session_id, sequence),
+                )
+            else:
+                # Preserve the proven predecessor watermark so the same next
+                # sequence is submitted after current-session reconciliation.
+                conn.execute(
+                    "UPDATE agent_poll_state_local SET sequence = ?, state = 'FENCED' "
+                    "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
+                    (sequence - 1, session_id, sequence),
+                )
+            conn.commit()
+
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
             session.agent_root_id != self.root_id
@@ -3953,6 +3981,51 @@ class LocalDaemonAgentHttpClient:
             suspend_requested=suspend_requested if launch is not None else None,
         )
 
+    def _resume_pending_poll(
+        self,
+        *,
+        wait_timeout_ms: int,
+        suspend_requested: Callable[[], bool] | None = None,
+    ) -> None:
+        """Replay the service's exact outstanding delivery before new capacity.
+
+        The retained request digest validates the configured timeout as well as
+        session/revision/sequence. An incompatible restart keeps work retained.
+        """
+        journal = self._require_journal()
+        pending = journal.pending_poll()
+        if pending is None:
+            return
+        _raise_if_application_suspended(suspend_requested)
+        session_id, revision, sequence = pending
+        value: dict[str, PlainData] = {
+            "session_id": session_id,
+            "availability_revision": revision,
+            "sequence": sequence,
+            "wait_timeout_ms": wait_timeout_ms,
+        }
+        journal.prepare_poll(session_id, revision, sequence, value)
+        prior_epoch = journal.session(session_id).coordinator_epoch
+        if self.handshake()["coordinator_epoch"] != prior_epoch:
+            recovery = self._call("recover_poll", {**value, "coordinator_epoch": prior_epoch})
+            if recovery.get("state") == "absent":
+                journal.discard_absent_poll(session_id, sequence)
+                return
+            if recovery.get("state") == "fenced":
+                journal.fence_poll(session_id, sequence)
+                return
+            if recovery.get("state") != "committed":
+                raise QueueServiceError("retained poll recovery result is invalid")
+            result = {key: item for key, item in recovery.items() if key != "state"}
+        else:
+            result = self._call("poll", value)
+        journal.complete_poll(session_id, sequence, result)
+        if result.get("result") == "assignment":
+            request = _ResidentAssignmentBundle.from_remote_dict(result.get("request"))
+            self._execute_delivered_assignment(
+                session_id, request, suspend_requested=suspend_requested
+            )
+
     def resume_retained_work(
         self, *, suspend_requested: Callable[[], bool] | None = None
     ) -> tuple[Mapping[str, PlainData], ...]:
@@ -5035,12 +5108,14 @@ class _Handler(BaseHTTPRequestHandler):
             )
             if role_name == "agent":
                 if operation not in {
+                    "service_lifetime",
                     "handshake",
                     "register",
                     "reconcile",
                     "offer",
                     "renew",
                     "poll",
+                    "recover_poll",
                     "authorize",
                     "input",
                     "accept",
@@ -5193,6 +5268,9 @@ def _dispatch(
     if operation == "handshake":
         _exact(value, set())
         return view.handshake()
+    if operation == "service_lifetime":
+        _exact(value, {"session_id", "coordinator_epoch", "generation", "action"})
+        return view.service_lifetime(_string(value, "session_id"), _string(value, "coordinator_epoch"), _string(value, "generation"), _string(value, "action"))
     if operation == "register":
         return view.register(_registration(value)).value()
     if operation == "reconcile":
@@ -5225,6 +5303,14 @@ def _dispatch(
         if not isinstance(renewal, Mapping):
             raise QueueServiceError("agent offer renewal is invalid")
         return view.renew_offer(AgentOfferRenewal.from_value(renewal))
+    if operation == "recover_poll":
+        _exact(value, {"session_id", "availability_revision", "sequence", "wait_timeout_ms", "coordinator_epoch"})
+        return view.recover_poll(
+            _string(value, "session_id"), _string(value, "availability_revision"),
+            sequence=_integer(value, "sequence"),
+            wait_timeout_ms=_integer(value, "wait_timeout_ms"),
+            coordinator_epoch=_string(value, "coordinator_epoch"),
+        )
     if operation == "poll":
         _exact(
             value,

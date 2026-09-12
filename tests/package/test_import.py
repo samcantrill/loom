@@ -19,6 +19,7 @@ def test_package_imports() -> None:
 def test_package_declares_public_exports() -> None:
     assert loom.__all__ == [
         "__version__",
+        "run",
         "ResourceRef",
         "InMemoryManifest",
         "ManifestView",

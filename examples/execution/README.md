@@ -15,7 +15,7 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 | Example | Demonstrates |
 | --- | --- |
 | `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics, and invoking a prepared stage through `loom stage run`. |
-| `execution.containers.docker` | Running stage attempts through `loom run --executor docker`, selected-Docker preflight diagnostics, Docker failure inspection, and optional live Docker smoke guidance. |
+| `execution.containers.docker` | Running stage attempts through the existing Docker executor library, selected-Docker preflight diagnostics, Docker failure inspection, and optional live Docker smoke guidance. |
 | `execution.containers.slurm-apptainer` | Hermetic fake-Apptainer execution with `--cleanenv --nv`, plus optional live and SLURM composition guidance. |
 | `execution.runtime-profile` | Configured runtime profile, CLI tags/notes, resource diagnostics, local run, and safe `runtime.json`. |
 | `execution.offline-first-import` | Explicit `--offline-first` execution, pre-import status behavior, authority import, and post-import authoritative status. |

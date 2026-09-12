@@ -25,7 +25,7 @@ SLURM examples should follow the same split:
 
 | Roadmap area | User-facing behavior to show |
 | --- | --- |
-| v6 dry-run basics | `loom run CONFIG --executor slurm-single-job --dry-run` and `loom run CONFIG --executor slurm-afterok --dry-run` create reviewable artifacts without calling `sbatch`. |
+| v6 dry-run basics | The dry-run-basics and afterok-diamond scripts call existing planning primitives to create reviewable artifacts without calling `sbatch`. Ordinary managed run no longer exposes these dry-run executor controls. |
 | v6 generated artifacts | Dry-run output includes a root `plan.json`, `prepared_run.json`, `slurm/submissions/<planning_id>/manifest.json`, a SLURM dry-run plan, generated scripts, and wrapper log paths. |
 | v6 continuation commands | Single-job scripts call `loom prepared-run continue`; afterok scripts call `loom stage-job run`; generated afterok scripts do not call `loom stage run`. |
 | v6 dependency planning | Afterok dry-runs map RUN stages to logical job keys and render logical `afterok` dependencies in topological order. |

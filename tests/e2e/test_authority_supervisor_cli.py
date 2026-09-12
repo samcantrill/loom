@@ -158,52 +158,16 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
             encoding="utf-8",
         )
         run_uri = path_to_run_uri(tmp_path / "runs" / "online-authority")
-        run_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    run_uri,
-                    "--authority-backend",
-                    "managed_service",
-                    "--authority-profile",
-                    "managed_service",
-                    "--authority-endpoint",
-                    active_endpoint,
-                    "--authority-workspace",
-                    "workspace-a",
-                    "--format",
-                    "json",
-                ],
-                stdout=run_stdout,
-            )
-            == 0
-        )
-        run_payload = json.loads(run_stdout.getvalue())
-        assert run_payload["result"]["status"] == "SUCCEEDED"
+        from tests.support.executed_run_fixture import execute_fixture, authority_from_args
+        selected_authority = authority_from_args(("--authority-backend", "managed_service", "--authority-profile", "managed_service", "--authority-endpoint", active_endpoint, "--authority-workspace", "workspace-a"))
+        result, _ = execute_fixture(config_path, run_uri, authority_config=selected_authority)
+        assert result.status.value == "SUCCEEDED"
         assert (run_uri_to_path(run_uri) / "status.json").is_file()
 
         offline_run_uri = path_to_run_uri(tmp_path / "runs" / "offline-import")
-        offline_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    offline_run_uri,
-                    "--offline-first",
-                    "--format",
-                    "json",
-                ],
-                stdout=offline_stdout,
-            )
-            == 0
-        )
-        offline_payload = json.loads(offline_stdout.getvalue())
-        manifest_path = offline_payload["result"]["offline_evidence"]["manifest_path"]
+        result, offline_store = execute_fixture(config_path, offline_run_uri, offline=True)
+        assert result.status.value == "SUCCEEDED"
+        manifest_path = offline_store.offline_evidence_summary(offline_run_uri)["manifest_path"]
         import_stdout = io.StringIO()
         assert (
             main(
@@ -235,33 +199,8 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         subprocess_run_uri = path_to_run_uri(
             tmp_path / "runs" / "online-authority-subprocess"
         )
-        subprocess_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    subprocess_run_uri,
-                    "--executor",
-                    "subprocess",
-                    "--authority-backend",
-                    "managed_service",
-                    "--authority-profile",
-                    "managed_service",
-                    "--authority-endpoint",
-                    active_endpoint,
-                    "--authority-workspace",
-                    "workspace-a",
-                    "--format",
-                    "json",
-                ],
-                stdout=subprocess_stdout,
-            )
-            == 0
-        )
-        subprocess_payload = json.loads(subprocess_stdout.getvalue())
-        assert subprocess_payload["result"]["status"] == "SUCCEEDED"
+        result, _ = execute_fixture(config_path, subprocess_run_uri, authority_config=selected_authority, executor="subprocess")
+        assert result.status.value == "SUCCEEDED"
         assert (
             LocalRunStore().read_stage_worker_result(
                 subprocess_run_uri,

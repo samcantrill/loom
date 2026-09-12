@@ -52,98 +52,45 @@ loom plan pipeline.yaml --format json
 loom plan pipeline.yaml --run-uri file://./runs/example --explain build
 ```
 
-Run locally through the runtime:
+Run through an explicitly configured deployment:
 
 ```sh
-loom run pipeline.yaml
-loom run pipeline.yaml --run-uri file://./runs/example
-loom run pipeline.yaml --run-uri file://./runs/example --resume
-loom run pipeline.yaml --dry-run --format json
+loom run pipeline.yaml --deployment deployment.yaml
+loom run pipeline.yaml --deployment deployment.yaml --operation-id experiment-001 --detach
 ```
 
-If `loom run` is called without `--run-uri`, the local run store allocates a
-timestamped run URI under its default root. `loom plan` is read-only and never
-allocates a default run URI. `loom run --dry-run` emits the same plan schema as
-`loom plan` because no run happened.
-
-Local run commands accept explicit local run URI forms:
-
-```text
-file:///absolute/run
-file://./relative/run
-file://../relative/run
-```
-
-Relative run URIs resolve against the current working directory and are displayed
-and persisted as absolute `file:///...` URIs. Plain paths, `file://localhost`,
-queries, fragments, and non-local schemes are rejected.
+`pipeline.yaml` is relative to the deployment's selected preparation project.
+The protected deployment selects coordinator/agent role configs, preparation
+source/profile and each role's persistent or run-owned lifetime. Configured
+local services start or reopen the same durable identities; remote services
+are never silently replaced. See [configured startup](docs/downstream-operations.md#configured-startup-and-ordinary-run)
+for the file format and copyable selection.
 
 ## Quickstart (Python API)
 
 ```python
-from pathlib import Path
+import loom
+from loom.coordinator import RunRequest
+from loom.queue.preparation import PreparationSource, PrepareRunRequest
 
-from weave import compose_config
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.stores import path_to_run_uri
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-run_root = Path("tmp/runs")
-config_path = Path("tmp/demo_pipeline.yaml")
-config_path.parent.mkdir(parents=True, exist_ok=True)
-config_path.write_text(
-    """
-pipeline:
-  name: demo
-  stages:
-    - name: build
-      factory:
-        _target_: tests.support.pipeline_execution_stages.JsonProducerStage
-      config:
-        value: 1
-      outputs:
-        data:
-          artifact_type: json
-          codec_key: json.v1
-    - name: report
-      factory:
-        _target_: tests.support.pipeline_execution_stages.TextConsumerStage
-      inputs:
-        data: build.data
-      outputs:
-        text:
-          artifact_type: text
-          codec_key: text.v1
-"""
+request = RunRequest(
+    PrepareRunRequest(
+        "experiment-001", "experiment-001",
+        PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
+        "pipeline.yaml", "existing-project",
+    ),
+    queue_item_id="experiment-001",
 )
-run_store = create_authority_backed_serial_run_store(
-    run_root,
-    authority_store=SQLitePerRunAuthorityStore(),
-)
-runner = PipelineRunner(run_store=run_store)
-run_uri = path_to_run_uri(run_root / "run1")
-
-composed = compose_config(config_path)
-result = runner.run(
-    RunRequest(config=composed, run_uri=run_uri)
-)
-assert result.stage_results["build"].status.name == "SUCCEEDED"
+outcome = loom.run(request, deployment="deployment.yaml")
+print(outcome.to_dict())
 ```
 
-## Same-Run Resume
-
-```python
-resume = runner.run(
-    RunRequest(config=composed, run_uri=run_uri, open_existing=True)
-)
-assert resume.stage_results["build"].action == "REUSE"
-assert resume.stage_results["report"].action == "REUSE"
-```
-
-Artifacts from prior stages are reused only when status, fingerprint, and required
-outputs match. `RUNNING`, failed, missing, corrupt, or checksum-mismatch state is
-not reused.
+The request's preparation selection must match the deployment. Repeating the
+same accepted intent reconciles its original admission; a new experiment needs
+new identities. Timeout, Ctrl-C and detached waiting leave accepted work owned
+by services. Cancel explicitly through the native coordinator client. Cleanup is
+reported separately from execution, preserving persistent services and services
+needed by other accepted work.
 
 ## Run Directory Layout
 
