@@ -534,9 +534,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Transition: executor and independent reviewer are terminal; validation and
   phase-owned service/worker processes completed. The shared gate moved the
   clean persistent stage worktree to `agent/stage-41` and synchronized published
-  state and local develop to the verified merge. This coordination-branch
-  completion metadata must be published and synchronized before the exact local
-  phase branch is retired and Phase 4 starts.
+  state and local develop to the verified merge. Completion metadata was
+  published as `fcaf20b25e48ff8c4f1e06f9dfbe1e9f969604d3`; synchronization
+  verified matching stage, local develop, fetched origin/develop and advertised
+  develop. The exact local phase branch was retired after its reviewed head and
+  published merge were verified, and the remote ref was confirmed absent.
+  Phase 4 then started in the retained worktree from that synchronized base.
 
 ## Completion Record
 
@@ -548,4 +551,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
 | Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
 | PR, review and merge | Manager pre-submit and independent review passed; PR 310 merged as `a4bedaa2624750de2b3c28a42e9a950065d16bb6`; exact reviewed head and evidence recorded above. |
-| Residual risk and cleanup | No implementation blocker; native mixed-role/process evidence passed and no phase-owned services remain. Physical qualification and retained consumers remain with successor owners. Evidence archived; remote phase branch retired; coordination metadata publication/synchronization and exact local branch retirement precede Phase 4. |
+| Residual risk and cleanup | No implementation blocker; native mixed-role/process evidence passed and no phase-owned services remain. Physical qualification and retained consumers remain with successor owners. Evidence archived; completion metadata published/synchronized; exact remote/local phase branches retired; persistent stage worktree retained for Phase 4. |

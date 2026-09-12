@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 4
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p4-agent-worker-execution
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 3 merges; record exact SHA at execution preparation
+- Base revision: `fcaf20b25e48ff8c4f1e06f9dfbe1e9f969604d3` (published Phase 3 completion metadata after PR 310)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 4: Agent Worker Execution
 - Dependencies: Phase 3 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; Phase 3 merged, completion metadata published and stage/control/live develop synchronized
 
 ## Objective And Context
 
@@ -29,7 +29,8 @@ Validation ownership: VAL-41-06, VAL-41-05 (containment), VAL-41-03 (authorized 
 
 - `src/loom/queue/_remote_stage_execution.py`: ResidentExecutionProfile and execution-only stage requests/results.
 - `src/loom/queue/_agent_process_supervisor.py`, `agent_sessions.py`, `local_daemon_execution.py`: durable supervision, authorized offers and release evidence.
-- `src/loom/pipeline/executors/containers.py`, `_container_resources.py` and Slurm container launch primitives only where reused by actual consumers.
+- `src/loom/pipeline/executors/containers.py`, `_container_resources.py`, `docker/{executor,commands}.py`, `apptainer/{executor,commands,_timeout}.py` and Slurm container launch primitives only where reused by actual consumers.
+- `src/loom/queue/deployment.py`, `resident_readiness.py`, `_resident_stage_worker.py` and `src/loom/pipeline/execution/stage_worker.py`: protected installed profile, readiness and exact execution-only child construction.
 - Published resource contracts, worker/supervisor tests, container executor contracts and opt-in Docker/Apptainer hooks. Include #301 report metadata and #306 supervisor schema 3/native terminal qualification, not only the original Stage 39 evidence.
 
 ## Scope
@@ -225,9 +226,57 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on 2026-09-12 in the manifest's persistent stage
+  worktree and this phase branch. Phase 3 PR 310 merged as
+  `a4bedaa2624750de2b3c28a42e9a950065d16bb6`; completion metadata is the Base
+  revision above. Synchronization verified matching stage, local develop,
+  fetched origin/develop and advertised develop. Exact local and remote Phase 3
+  branches were retired, all predecessor agents/processes are terminal, and
+  successor start/preflight passed on the clean branch.
+- Source reconciliation: published Phase 3 supplies protected deployment
+  availability, immutable per-role lifetime, native run composition and exact
+  outstanding-poll recovery. ResidentExecutionProfile/ResidentWorkerLaunchProfile
+  currently bind installed project/Python/environment; ResidentWorkerLaunch
+  starts `_resident_stage_worker`, which constructs one request with
+  `execute_resident_stage_worker_request` and LocalExecutor. Embedded and outbound
+  execution both retain launch intent through the existing supervisor. Docker
+  and Apptainer have existing command/resource/containment owners; consolidate
+  their actual resident consumer rather than adding another execution engine.
+  Published native successful-exit qualification, exact output predecessor,
+  report-v3 metadata and transport bounds remain binding at their existing owners.
+- Named refinement: none needed. Accepted native/container ownership, result,
+  resource and installed-environment contracts remain unchanged. Private backend
+  handle/profile layout is implementation discretion. Record any changed durable
+  format interpretation with its producer/reader and preserve fail-before-mutation
+  behavior for incompatible retained state; no new registry or build service.
+- Coverage selection: exact installed code/environment and assignment identity;
+  authorized profile/resource binding; native and fake Docker/Apptainer public
+  run journeys; observer loss, timeout and surviving descendants; native parent
+  success qualification and exact output-predecessor replay; report-v3 safe
+  metadata and removal/import boundaries. Preserve existing publication, run,
+  lifetime and supervisor tests when their consumers change. Expand for changed
+  shared contracts, new failures or unresolved accepted concerns. Both full
+  commands below remain required; predecessor evidence is reused only for
+  unchanged contracts and is not this phase's completion evidence.
+- Retained-consumer handoff: Phase 3's Exact retained consumers and successor
+  owners assigns this phase the subprocess, Docker, Apptainer, runtime-profile,
+  failing-run and local-diagnostics executable examples. Convert those actual
+  journeys and their assertions to public managed runs; preserve the separate
+  Phase 6 Slurm and Phase 9 remaining-owner boundaries.
+- Environment qualification: local version queries find Docker 29.8.0 and
+  Singularity-CE 3.10.4-focal; no `apptainer` or Slurm commands, enabled physical
+  acceptance flags or configured approved SIF are available. Version discovery
+  does not qualify actual execution or containment. Required fake-container and
+  native public journeys remain executable; physical runtime/site gaps must stay
+  explicit under this card's environment-dependent qualification row. Do not
+  pull/build an image or introduce an alternative backend to erase that gap.
+- Execution delegation: one executor is justified by the coupled installed
+  profile, native/container launch, durable supervision, resource/result and
+  executable-example changes. The manager retains manifest, pre-submit, PR,
+  independent review and delivery ownership; no child delegation or overlapping
+  source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: prepared; execution pending
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for process/resource ownership and launch removal
