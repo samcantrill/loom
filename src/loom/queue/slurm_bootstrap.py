@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import base64
 import hashlib
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 from typing import Mapping, cast
 from uuid import uuid4
 
@@ -23,6 +25,7 @@ from ._remote_stage_execution import _decode_chunk
 from .agent_session_transport import (
     AgentTlsClientConfig,
     LocalDaemonAgentHttpClient,
+    _IndeterminateAgentProtocolError,
 )
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
@@ -50,8 +53,17 @@ class SlurmBootstrapClientConfig:
     executor_fingerprint: str
     executor_name: str
     capability_file_path: Path
+    bootstrap_deadline_seconds: float = 300.0
+    reconnect_seconds: float = 1.0
 
     def __post_init__(self) -> None:
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in (self.reconnect_seconds, self.bootstrap_deadline_seconds)
+        ) or not (
+            0 < self.reconnect_seconds <= self.bootstrap_deadline_seconds <= 86400
+        ):
+            raise QueueServiceError("SLURM bootstrap deadline policy is invalid")
         for name in (
             "profile_id",
             "profile_configuration_fingerprint",
@@ -118,7 +130,8 @@ class SlurmBootstrapClientConfig:
         }
         if (
             not isinstance(value, Mapping)
-            or set(value) != expected
+            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds"}
+            != expected
             or any(
                 not isinstance(value[key], str) or not value[key] for key in expected
             )
@@ -141,6 +154,10 @@ class SlurmBootstrapClientConfig:
             executor_fingerprint=cast(str, value["executor_fingerprint"]),
             executor_name=cast(str, value["executor_name"]),
             capability_file_path=Path(cast(str, value["capability_file_path"])),
+            bootstrap_deadline_seconds=cast(
+                float, value.get("bootstrap_deadline_seconds", 300.0)
+            ),
+            reconnect_seconds=cast(float, value.get("reconnect_seconds", 1.0)),
         )
 
 
@@ -149,6 +166,37 @@ def load_slurm_bootstrap_config() -> SlurmBootstrapClientConfig:
     if not value:
         raise QueueServiceError("protected SLURM bootstrap config is unavailable")
     return SlurmBootstrapClientConfig.from_file(value)
+
+
+def _before_start_retry(
+    operation: Callable[[], Mapping[str, PlainData]],
+    *,
+    deadline: float,
+    delay: float,
+    diagnostic: Path,
+) -> Mapping[str, PlainData]:
+    while True:
+        if time.time() >= deadline:
+            atomic_write_bytes(
+                diagnostic,
+                b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+            )
+            raise QueueServiceError(
+                "SLURM bootstrap deadline expired; no offline grant"
+            )
+        try:
+            return operation()
+        except _IndeterminateAgentProtocolError:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                atomic_write_bytes(
+                    diagnostic,
+                    b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+                )
+                raise QueueServiceError(
+                    "SLURM bootstrap deadline expired; no offline grant"
+                ) from None
+            time.sleep(min(delay, remaining))
 
 
 def run_slurm_bootstrap(
@@ -169,8 +217,44 @@ def run_slurm_bootstrap(
     cluster = os.environ.get("SLURM_CLUSTER_NAME")
     incarnation = _operation_incarnation(selected.workspace_root, operation_id)
     client = LocalDaemonAgentHttpClient(selected.tls)
+    deadline_path = selected.workspace_root / (
+        "bootstrap-deadline-" + _sha256(operation_id) + ".json"
+    )
+    if not deadline_path.exists():
+        atomic_write_bytes(
+            deadline_path,
+            json.dumps(
+                {
+                    "operation_id": operation_id,
+                    "deadline": time.time() + selected.bootstrap_deadline_seconds,
+                }
+            ).encode(),
+        )
+    deadline_value = json.loads(deadline_path.read_text())
+    if deadline_value.get("operation_id") != operation_id:
+        raise QueueConflictError("SLURM bootstrap deadline identity conflicts")
+    deadline = float(deadline_value["deadline"])
+    diagnostic = selected.workspace_root / (
+        "bootstrap-failure-" + _sha256(operation_id) + ".json"
+    )
+
+    def prestart(
+        operation: str, value: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData]:
+        return _before_start_retry(
+            lambda: client.call_application(_ROLE, operation, value),
+            deadline=deadline,
+            delay=selected.reconnect_seconds,
+            diagnostic=diagnostic,
+        )
+
     try:
-        handshake = client.handshake(role=_ROLE)
+        handshake = _before_start_retry(
+            lambda: client.handshake(role=_ROLE),
+            deadline=deadline,
+            delay=selected.reconnect_seconds,
+            diagnostic=diagnostic,
+        )
         capabilities = handshake.get("capabilities")
         descriptor = SchedulingComponentDescriptor.from_dict(
             thaw_plain_data(
@@ -189,8 +273,7 @@ def run_slurm_bootstrap(
             raise QueueConflictError("SLURM bootstrap profile handshake conflicts")
         capability_path = selected.capability_file_path
         capability = _read_job_private_capability(capability_path)
-        registration = client.call_application(
-            _ROLE,
+        registration = prestart(
             "register",
             {
                 "operation_id": operation_id,
@@ -221,8 +304,7 @@ def run_slurm_bootstrap(
         for item in delivery.inputs:
             offset = 0
             while True:
-                response = client.call_application(
-                    _ROLE,
+                response = prestart(
                     "input",
                     {
                         "assignment_id": assignment_id,
@@ -241,19 +323,16 @@ def run_slurm_bootstrap(
                 if final:
                     break
         workspace.accept_inputs()
-        client.call_application(
-            _ROLE,
+        prestart(
             "inputs_ready",
             {"assignment_id": assignment_id, "incarnation": incarnation},
         )
-        grant = client.call_application(
-            _ROLE,
+        grant = prestart(
             "grant",
             {"assignment_id": assignment_id, "incarnation": incarnation},
         )
         fence = _string(grant, "fence")
-        permit = client.call_application(
-            _ROLE,
+        permit = prestart(
             "start",
             {
                 "assignment_id": assignment_id,
@@ -268,16 +347,21 @@ def run_slurm_bootstrap(
             process_execution_id = "slurm-root-" + _sha256(
                 assignment_id + "\0" + incarnation
             )
-            client.call_application(
-                _ROLE,
-                "started",
-                {
-                    "assignment_id": assignment_id,
-                    "incarnation": incarnation,
-                    "fence": fence,
-                    "process_execution_id": process_execution_id,
-                },
-            )
+            try:
+                client.call_application(
+                    _ROLE,
+                    "started",
+                    {
+                        "assignment_id": assignment_id,
+                        "incarnation": incarnation,
+                        "fence": fence,
+                        "process_execution_id": process_execution_id,
+                    },
+                )
+            except _IndeterminateAgentProtocolError:
+                # The current start permit was consumed before observer loss.
+                # Result relay remains separately replayable from this workspace.
+                pass
             os.chdir(selected.project_root)
             if str(selected.project_root) not in sys.path:
                 sys.path.insert(0, str(selected.project_root))

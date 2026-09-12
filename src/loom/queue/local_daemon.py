@@ -81,8 +81,7 @@ if TYPE_CHECKING:
 
 _COORDINATOR_SCHEMA_VERSION = 15
 _AGENT_SCHEMA_VERSION = 12
-# Kept for the outbound-session transport, whose retained worker journal stays
-# at schema 12 through the coordinator-only migration.
+# Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
@@ -684,7 +683,9 @@ class LocalDaemonConfig:
         if type(self.resident_preparation_ready) is not bool:
             raise QueueServiceError("resident preparation readiness must be boolean")
         if type(self.resident_preparation_staged_ready) is not bool:
-            raise QueueServiceError("resident staged preparation readiness must be boolean")
+            raise QueueServiceError(
+                "resident staged preparation readiness must be boolean"
+            )
         if self.preparation_policy is not None and not isinstance(
             self.preparation_policy, PreparationPolicy
         ):
@@ -1035,10 +1036,6 @@ class LocalDaemonConfig:
     @property
     def slurm_transfer_root(self) -> Path:
         return self.coordinator_root / "slurm-transfers"
-
-    @property
-    def slurm_script_root(self) -> Path:
-        return self.coordinator_root / "slurm-scripts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2059,7 +2056,7 @@ class LocalDaemon:
                 running += int(
                     execution.execute(
                         "SELECT COUNT(*) FROM slurm_stage_assignments "
-                        "WHERE state NOT IN ('rejected', 'released')"
+                        "WHERE state != 'released'"
                     ).fetchone()[0]
                 )
             if self.config.agent_root is not None:
@@ -2312,11 +2309,15 @@ class LocalDaemon:
         """Accept one durable intent; capture and publication reconcile separately."""
         return self._preparations.accept(request, principal_id)
 
-    def start_run(self, request: "RunRequest", *, principal_id: str) -> LocalDaemonOperation:
+    def start_run(
+        self, request: "RunRequest", *, principal_id: str
+    ) -> LocalDaemonOperation:
         """Retain preparation and its exact admission continuation atomically."""
         return self._preparations.accept_run(request, principal_id)
 
-    def cancel_run_operation(self, operation_id: str, *, principal_id: str) -> LocalDaemonOperation:
+    def cancel_run_operation(
+        self, operation_id: str, *, principal_id: str
+    ) -> LocalDaemonOperation:
         """Retain independent cancellation, serialized against target admission."""
         return self._preparations.cancel_run(operation_id, principal_id)
 
@@ -2675,9 +2676,14 @@ class LocalDaemon:
                     ),
                 )
                 if run_operation_id is not None:
-                    admitted = conn.execute("SELECT * FROM managed_admissions WHERE admission_id = ?", (admission_id,)).fetchone()
+                    admitted = conn.execute(
+                        "SELECT * FROM managed_admissions WHERE admission_id = ?",
+                        (admission_id,),
+                    ).fetchone()
                     assert admitted is not None
-                    self._preparations.retain_admission(conn, run_operation_id, _admission_from_row(admitted))
+                    self._preparations.retain_admission(
+                        conn, run_operation_id, _admission_from_row(admitted)
+                    )
                 conn.commit()
         self._wake.set()
         return self._admission(admission_id)
@@ -4074,7 +4080,9 @@ class LocalDaemonClientView:
 
     def cancel_run_operation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon.cancel_run_operation(operation_id, principal_id=self._principal.subject)
+        return self._daemon.cancel_run_operation(
+            operation_id, principal_id=self._principal.subject
+        )
 
     def cancel_preparation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)

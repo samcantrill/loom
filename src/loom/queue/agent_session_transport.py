@@ -58,6 +58,8 @@ from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.status import StageStatus
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+from ._agent_slurm import AgentSlurmJobs
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.pipeline.stores.errors import InvalidRunURIError
 from loom.pipeline.stores.run_uri import validate_run_uri
@@ -236,7 +238,17 @@ class AgentTlsClientConfig:
     resource_inventory: AgentResourceInventory | None = None
     gpu_occupancy_policy: GpuOccupancyPolicy | None = None
 
+    slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
+
     def __post_init__(self) -> None:
+        slurm_profiles = tuple(self.slurm_profiles)
+        if any(
+            not isinstance(item, SlurmReadyStageProfile) for item in slurm_profiles
+        ) or len({item.profile_id for item in slurm_profiles}) != len(slurm_profiles):
+            raise QueueServiceError("agent SLURM profiles are invalid")
+        if slurm_profiles and self.agent_root is None:
+            raise QueueServiceError("SLURM submission requires an agent root")
+        object.__setattr__(self, "slurm_profiles", slurm_profiles)
         parsed = urlsplit(self.url)
         try:
             port = parsed.port
@@ -949,7 +961,11 @@ class _RemoteAgentJournal:
             ).fetchone()
         if row is None:
             return None
-        return str(row["session_id"]), str(row["availability_revision"]), int(row["sequence"])
+        return (
+            str(row["session_id"]),
+            str(row["availability_revision"]),
+            int(row["sequence"]),
+        )
 
     def discard_absent_poll(self, session_id: str, sequence: int) -> None:
         with self._connection() as conn:
@@ -2182,11 +2198,17 @@ class LocalDaemonAgentHttpClient:
         ) = None,
     ) -> None:
         self._config = config
+        self._slurm_cursor: str | None = None
         self._resource_maintenance_enabled = False
         self._next_resource_maintenance = 0.0
         self._trusted_config_loader = trusted_config_loader
         self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
+        self._slurm_agent = (
+            AgentSlurmJobs(Path(config.agent_root), config.slurm_profiles)
+            if config.agent_root is not None and config.slurm_profiles
+            else None
+        )
         self._supervisor: AgentProcessSupervisorClient | None = None
         # The journal validates the durable deployment binding and obtains the
         # exclusive application lock before an empty supervisor can be started.
@@ -2287,7 +2309,9 @@ class LocalDaemonAgentHttpClient:
         the one place where the full resident profile set becomes durable.
         Opening an existing root never fills in or upgrades that identity.
         """
-        if config.agent_root is None or not config.resident_profiles:
+        if config.agent_root is None or not (
+            config.resident_profiles or config.slurm_profiles
+        ):
             raise QueueServiceError(
                 "remote agent initialization requires resident profiles"
             )
@@ -2299,6 +2323,8 @@ class LocalDaemonAgentHttpClient:
         journal: _RemoteAgentJournal | None = None
         try:
             LocalDaemon.initialize_agent_root(staging)
+            if config.slurm_profiles:
+                AgentSlurmJobs.initialize(staging)
             with sqlite3.connect(staging / "control.sqlite") as conn:
                 stable_row = conn.execute(
                     "SELECT value FROM root_metadata WHERE key = 'stable_id'"
@@ -2348,11 +2374,14 @@ class LocalDaemonAgentHttpClient:
                     config
                 ),
             )
-            profiles = tuple(item.launch_profile for item in config.resident_profiles)
-            configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
-            AgentProcessSupervisorService.initialize_process_free(
-                staging, configuration=configuration
-            )
+            if config.resident_profiles:
+                profiles = tuple(
+                    item.launch_profile for item in config.resident_profiles
+                )
+                configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
+                AgentProcessSupervisorService.initialize_process_free(
+                    staging, configuration=configuration
+                )
             journal.close()
             journal = None
             if target.exists():
@@ -2418,10 +2447,10 @@ class LocalDaemonAgentHttpClient:
         """Stop the resident supervisor only after both agent owners are empty."""
 
         supervisor = self._supervisor
-        if supervisor is None:
-            return
         if self._has_retained_agent_work():
             raise QueueConflictError("agent has retained work")
+        if supervisor is None:
+            return
         try:
             supervisor.shutdown_clean()
         except AgentProcessSupervisorError as exc:
@@ -2445,7 +2474,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v11",
+                    "agent-sessions-v12",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -2457,10 +2486,15 @@ class LocalDaemonAgentHttpClient:
         return result
 
     def register(self, request: AgentRegistration) -> AgentSession:
-        from .preparation import PREPARATION_INPUT_CAPABILITY, PREPARATION_STAGED_INPUT_CAPABILITY
+        from .preparation import (
+            PREPARATION_INPUT_CAPABILITY,
+            PREPARATION_STAGED_INPUT_CAPABILITY,
+        )
 
         staged = PREPARATION_STAGED_INPUT_CAPABILITY in request.declared_capabilities
-        if (PREPARATION_INPUT_CAPABILITY in request.declared_capabilities or staged) and (
+        if (
+            PREPARATION_INPUT_CAPABILITY in request.declared_capabilities or staged
+        ) and (
             not self._profiles
             or any(
                 profile.readiness_result is None
@@ -2581,6 +2615,13 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError(
                     "offer provider identity differs from resident configuration"
                 )
+        if offer.external_slurm_profiles and (
+            self._slurm_agent is None
+            or not set(offer.external_slurm_profiles).issubset(
+                self._slurm_agent.offered_profiles()
+            )
+        ):
+            raise QueueConflictError("offer names an unavailable SLURM profile")
         journal = self._require_journal()
         journal.prepare_offer(offer, idempotency_key, expected_availability_revision)
         result = self._call(
@@ -2619,16 +2660,20 @@ class LocalDaemonAgentHttpClient:
             return None
         self._replay_pending_resource_mutation(session.session_id)
         session = journal.session(session.session_id)
-        profile = self._config.capacity_profile
-        self._provider_composition(session.agent_id, profile)
-        for provider in self._configured_provider_members or ():
-            if isinstance(provider, GpuResourceProvider):
-                provider.refresh_occupancy()
-        descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
-            session_id=session.session_id,
-            availability_revision=session.availability_revision,
-            capacity_profile=profile,
-        )
+        if not self._config.resident_profiles:
+            profile = None
+            descriptors, atoms, claims, statuses = (), (), (), ()
+        else:
+            profile = self._config.capacity_profile
+            self._provider_composition(session.agent_id, profile)
+            for provider in self._configured_provider_members or ():
+                if isinstance(provider, GpuResourceProvider):
+                    provider.refresh_occupancy()
+            descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
+                session_id=session.session_id,
+                availability_revision=session.availability_revision,
+                capacity_profile=profile,
+            )
         offer = AgentOffer(
             session_id=session.session_id,
             coordinator_epoch=session.coordinator_epoch,
@@ -2649,10 +2694,15 @@ class LocalDaemonAgentHttpClient:
             provider_composition=descriptors,
             pools=session.pools,
             reflected_claim_ids=claims,
+            external_slurm_profiles=()
+            if self._slurm_agent is None
+            else self._slurm_agent.offered_profiles(),
             resident_profiles=tuple(
                 item.descriptor for item in self._config.resident_profiles
             ),
-            gpu_devices=tuple(item.descriptor for item in profile.gpu_devices),
+            gpu_devices=()
+            if profile is None
+            else tuple(item.descriptor for item in profile.gpu_devices),
             gpu_atoms=tuple(
                 atom for atom in atoms if atom.owner_resource_kind == "gpu"
             ),
@@ -2896,6 +2946,11 @@ class LocalDaemonAgentHttpClient:
                 )
                 journal.complete_reload(control, plan.replacement, effect)
                 self._config = plan.replacement
+                if self._slurm_agent is not None:
+                    self._slurm_agent.profiles = {
+                        (item.profile_id, item.configuration_fingerprint): item
+                        for item in plan.replacement.slurm_profiles
+                    }
                 plan.install_role()
                 self._profiles = dict(plan.profiles)
                 self._retained_profiles = dict(plan.retained_profiles)
@@ -3017,6 +3072,10 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "agent reload cannot replace its live transport or owner root"
             )
+        if replacement.slurm_profiles and self._slurm_agent is None:
+            raise QueueConflictError(
+                "installing SLURM submission requires fresh agent-root initialization"
+            )
         if _resident_launch_profile_set(replacement) != _resident_launch_profile_set(
             self._config
         ):
@@ -3046,14 +3105,20 @@ class LocalDaemonAgentHttpClient:
                     )
 
     def _has_retained_agent_work(self) -> bool:
-        return bool(
-            self._execution_journal.retained_claim_commands()
-            if self._execution_journal is not None
-            else ()
-        ) or bool(
-            self._journal.has_unresolved_assignment_references()
-            if self._journal is not None
-            else False
+        return (
+            bool(
+                self._slurm_agent is not None and self._slurm_agent.has_retained_work()
+            )
+            or bool(
+                self._execution_journal.retained_claim_commands()
+                if self._execution_journal is not None
+                else ()
+            )
+            or bool(
+                self._journal.has_unresolved_assignment_references()
+                if self._journal is not None
+                else False
+            )
         )
 
     def _reset_runtime_providers(self) -> None:
@@ -3569,6 +3634,40 @@ class LocalDaemonAgentHttpClient:
             availability_revision=availability_revision,
         )
 
+    def drive_slurm_jobs(self) -> None:
+        if self._slurm_agent is None:
+            return
+        session = self.active_session()
+        if session is None:
+            return
+        binding = {
+            "session_id": session.session_id,
+            "coordinator_epoch": session.coordinator_epoch,
+            "cursor": self._slurm_cursor,
+        }
+        self._slurm_agent.replay_pending(
+            lambda evidence: self._call(
+                "slurm_work", {**binding, "evidence": dict(evidence)}
+            )
+        )
+        response = self._call("slurm_work", {**binding, "evidence": None})
+        cursor = response.get("next_cursor")
+        if cursor is not None and not isinstance(cursor, str):
+            raise QueueServiceError("SLURM task cursor is invalid")
+        self._slurm_cursor = cursor
+        tasks = response.get("tasks")
+        if not isinstance(tasks, (list, tuple)):
+            raise QueueServiceError("SLURM task response is invalid")
+        for task in tasks:
+            if not isinstance(task, Mapping):
+                raise QueueServiceError("SLURM task is invalid")
+            self._slurm_agent.step(
+                task,
+                lambda evidence: self._call(
+                    "slurm_work", {**binding, "evidence": dict(evidence)}
+                ),
+            )
+
     def execute_one(
         self,
         session_id: str,
@@ -3586,6 +3685,7 @@ class LocalDaemonAgentHttpClient:
         owner before suspension. Poll/network calls retain their bounded waits.
         """
 
+        self.drive_slurm_jobs()
         _raise_if_application_suspended(suspend_requested)
         delivery = self.wait_for_work(
             session_id,
@@ -4007,7 +4107,9 @@ class LocalDaemonAgentHttpClient:
         journal.prepare_poll(session_id, revision, sequence, value)
         prior_epoch = journal.session(session_id).coordinator_epoch
         if self.handshake()["coordinator_epoch"] != prior_epoch:
-            recovery = self._call("recover_poll", {**value, "coordinator_epoch": prior_epoch})
+            recovery = self._call(
+                "recover_poll", {**value, "coordinator_epoch": prior_epoch}
+            )
             if recovery.get("state") == "absent":
                 journal.discard_absent_poll(session_id, sequence)
                 return
@@ -4043,6 +4145,12 @@ class LocalDaemonAgentHttpClient:
         journal = self._require_journal()
         execution_journal = self._execution_journal
         supervisor = self._supervisor
+        if (
+            not self._config.resident_profiles
+            and not journal.unresolved_assignment_references()
+        ):
+            self._restart_with_retained_work = False
+            return ()
         if execution_journal is None or supervisor is None:
             raise QueueConflictError("remote restart has no supervisor journal")
         completed: list[Mapping[str, PlainData]] = []
@@ -4071,19 +4179,24 @@ class LocalDaemonAgentHttpClient:
             )
             providers, _ = self._runtime_owners(session)
             launch_json = workspace.supervisor_launch_json()
-            if (launch_json is None
+            if (
+                launch_json is None
                 and execution_journal.read_grant_fence(assignment_id) is None
-                and execution_journal.read_state(assignment_id) in {
+                and execution_journal.read_state(assignment_id)
+                in {
                     AssignmentState.REQUEST_DURABLE,
                     AssignmentState.PREPARED,
                     AssignmentState.ACCEPTED,
-                }):
+                }
+            ):
                 # Continue this exact delivery; startup still forbids a new
                 # poll or offer while retained work is unresolved. Commands
                 # may not yet exist when the interruption was during input.
-                completed.append(self._execute_delivered_assignment(
-                    session_id, request, suspend_requested=suspend_requested
-                ))
+                completed.append(
+                    self._execute_delivered_assignment(
+                        session_id, request, suspend_requested=suspend_requested
+                    )
+                )
                 continue
             commands = execution_journal.assignment_claim_commands(assignment_id)
             if launch_json is None:
@@ -4336,23 +4449,32 @@ class LocalDaemonAgentHttpClient:
             if retained is not None:
                 result = retained
             elif workspace.supervisor_launch_json() is not None:
-                launch = _launch_from_value(json.loads(cast(str, workspace.supervisor_launch_json())))
+                launch = _launch_from_value(
+                    json.loads(cast(str, workspace.supervisor_launch_json()))
+                )
                 if self._supervisor is None:
                     raise QueueConflictError("remote completion lost its supervisor")
                 evidence = self._supervisor.query(launch)
                 if evidence.state is not SupervisorLaunchState.CONTAINED:
                     raise QueueConflictError("remote completion lacks containment")
-                if result.status is StageStatus.SUCCEEDED and not evidence.qualified_success:
+                if (
+                    result.status is StageStatus.SUCCEEDED
+                    and not evidence.qualified_success
+                ):
                     result = _managed_root_failed_worker_result(
-                        workspace.worker_request(), ManagedLocalError("worker backend success is unqualified"),
+                        workspace.worker_request(),
+                        ManagedLocalError("worker backend success is unqualified"),
                         process_exit_code=evidence.exit_code,
                     )
                 metadata = dict(result.executor_metadata)
                 metadata.pop("managed_successful_exit", None)
                 metadata.pop("managed_backend_success", None)
                 if result.status is StageStatus.SUCCEEDED:
-                    metadata["managed_backend_success" if launch.backend_kind == "docker"
-                             else "managed_successful_exit"] = evidence.qualified_success
+                    metadata[
+                        "managed_backend_success"
+                        if launch.backend_kind == "docker"
+                        else "managed_successful_exit"
+                    ] = evidence.qualified_success
                 result = replace(result, executor_metadata=metadata)
             workspace.persist_worker_result(result)
             result = cast(StageWorkerResult, workspace.worker_result())
@@ -4874,6 +4996,8 @@ class LocalDaemonAgentHttpClient:
     def retire_clean(
         self, session_id: str, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
+        if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
+            raise QueueConflictError("agent has retained SLURM work")
         journal = self._require_journal()
         proof = journal.fence_and_prove_empty(session_id)
         request: dict[str, PlainData] = {
@@ -5130,6 +5254,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             if role_name == "agent":
                 if operation not in {
+                    "slurm_work",
                     "service_lifetime",
                     "handshake",
                     "register",
@@ -5287,12 +5412,31 @@ class _Handler(BaseHTTPRequestHandler):
 def _dispatch(
     view: Any, operation: str, value: Mapping[str, object]
 ) -> Mapping[str, PlainData]:
+    if operation == "slurm_work":
+        _exact(value, {"session_id", "coordinator_epoch", "evidence", "cursor"})
+        evidence = value["evidence"]
+        if evidence is not None and not isinstance(evidence, Mapping):
+            raise QueueServiceError("SLURM evidence is invalid")
+        cursor = value["cursor"]
+        if cursor is not None and not isinstance(cursor, str):
+            raise QueueServiceError("SLURM task cursor is invalid")
+        return view.slurm_work(
+            _string(value, "session_id"),
+            _string(value, "coordinator_epoch"),
+            evidence,
+            cursor,
+        )
     if operation == "handshake":
         _exact(value, set())
         return view.handshake()
     if operation == "service_lifetime":
         _exact(value, {"session_id", "coordinator_epoch", "generation", "action"})
-        return view.service_lifetime(_string(value, "session_id"), _string(value, "coordinator_epoch"), _string(value, "generation"), _string(value, "action"))
+        return view.service_lifetime(
+            _string(value, "session_id"),
+            _string(value, "coordinator_epoch"),
+            _string(value, "generation"),
+            _string(value, "action"),
+        )
     if operation == "register":
         return view.register(_registration(value)).value()
     if operation == "reconcile":
@@ -5326,9 +5470,19 @@ def _dispatch(
             raise QueueServiceError("agent offer renewal is invalid")
         return view.renew_offer(AgentOfferRenewal.from_value(renewal))
     if operation == "recover_poll":
-        _exact(value, {"session_id", "availability_revision", "sequence", "wait_timeout_ms", "coordinator_epoch"})
+        _exact(
+            value,
+            {
+                "session_id",
+                "availability_revision",
+                "sequence",
+                "wait_timeout_ms",
+                "coordinator_epoch",
+            },
+        )
         return view.recover_poll(
-            _string(value, "session_id"), _string(value, "availability_revision"),
+            _string(value, "session_id"),
+            _string(value, "availability_revision"),
             sequence=_integer(value, "sequence"),
             wait_timeout_ms=_integer(value, "wait_timeout_ms"),
             coordinator_epoch=_string(value, "coordinator_epoch"),
@@ -6158,7 +6312,11 @@ def _agent_config_revision(config: AgentTlsClientConfig) -> str:
         {
             "profiles": [
                 _resident_profile_key(profile) for profile in config.resident_profiles
-            ]
+            ],
+            "slurm_profiles": [
+                [profile.profile_id, profile.configuration_fingerprint]
+                for profile in config.slurm_profiles
+            ],
         },
     )
 

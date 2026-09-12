@@ -182,3 +182,35 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
     assert (
         captured["process_containment_owner"] is ProcessContainmentOwner.OUTER_BOUNDARY
     )
+
+
+def test_prestart_reconnect_deadline_never_grants_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue.agent_session_transport import _IndeterminateAgentProtocolError
+
+    now = [10.0]
+    calls = []
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
+    )
+
+    def disconnected():
+        calls.append(now[0])
+        raise _IndeterminateAgentProtocolError("coordinator unavailable")
+
+    diagnostic = tmp_path / "failure.json"
+    with pytest.raises(QueueServiceError, match="no offline grant"):
+        slurm_bootstrap._before_start_retry(
+            disconnected, deadline=12, delay=1, diagnostic=diagnostic
+        )
+    assert calls == [10, 11]
+    assert json.loads(diagnostic.read_text())["offline_grant"] is False
+    with pytest.raises(QueueServiceError, match="deadline expired"):
+        slurm_bootstrap._before_start_retry(
+            lambda: {"fence": "must-not-be-used"},
+            deadline=12,
+            delay=1,
+            diagnostic=diagnostic,
+        )

@@ -631,27 +631,18 @@ def test_fresh_submission_store_never_reprepares_or_resubmits_after_submitting(
     request = _request(profile)
     path = tmp_path / "submissions.sqlite"
     first = SQLiteReadyStageSubmissions(path)
-    original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
 
-    def crash_after_submitting(
-        owner: SQLiteReadyStageSubmissions,
-        operation_id: str,
-        *,
-        expected: ReadyStageState,
-        value: SlurmReadyStageSubmission,
-    ) -> SlurmReadyStageSubmission:
-        result = original_compare_and_set(
-            owner, operation_id, expected=expected, value=value
-        )
-        if value.state is ReadyStageState.SUBMITTING:
-            raise OSError("crash after durable submitting")
-        return result
+    def crash_after_submitting(value: SlurmReadyStageSubmission) -> bool:
+        assert value.state is ReadyStageState.SUBMITTING
+        raise OSError("crash after durable submitting")
 
-    monkeypatch.setattr(
-        SQLiteReadyStageSubmissions, "_compare_and_set", crash_after_submitting
-    )
     with pytest.raises(OSError, match="durable submitting"):
-        first.submit(request, profile, _script(tmp_path, request))
+        first.submit(
+            request,
+            profile,
+            _script(tmp_path, request),
+            before_runner=crash_after_submitting,
+        )
 
     class FailingProvider(SlurmJobPrivateFileProvider):
         def prepare(self, **kwargs):  # type: ignore[no-untyped-def]
@@ -1173,3 +1164,32 @@ def test_rejected_scancel_does_not_claim_cancellation_was_requested(
     assert result.state is ReadyStageState.ACCEPTED
     assert result.cancel_requested is False
     assert result.evidence == "slurm_cancel_request_rejected"
+
+
+def test_two_callers_cannot_both_claim_one_automatic_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from threading import Barrier
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner)
+    request = _request(profile)
+    script = _script(tmp_path, request)
+    journal = SQLiteReadyStageSubmissions(tmp_path / "submissions.sqlite")
+    journal.prepare(request, profile, script)
+    prepared = Barrier(2)
+    original_prepare = journal.prepare
+
+    def simultaneous_prepare(*args, **kwargs):
+        result = original_prepare(*args, **kwargs)
+        assert result.state is ReadyStageState.INTENT
+        prepared.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(journal, "prepare", simultaneous_prepare)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(lambda _: journal.submit(request, profile, script), range(2))
+        )
+    assert any(result.state is ReadyStageState.ACCEPTED for result in results)
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1

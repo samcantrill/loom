@@ -2354,7 +2354,7 @@ class SQLiteCoordinatorAssignments:
             slurm_work = (
                 conn.execute(
                     "SELECT assignment_id FROM slurm_stage_assignments "
-                    "WHERE stage_work_id = ? AND state NOT IN ('rejected','released')",
+                    "WHERE stage_work_id = ? AND state != 'released'",
                     (assignment.stage_work_id,),
                 ).fetchone()
                 if has_slurm_assignments
@@ -3230,7 +3230,7 @@ def _run_active_assignment_count(
         active += int(
             conn.execute(
                 "SELECT COUNT(*) FROM slurm_stage_assignments WHERE run_uri = ? "
-                "AND state NOT IN ('rejected','released')",
+                "AND state != 'released'",
                 (run_uri,),
             ).fetchone()[0]
         )

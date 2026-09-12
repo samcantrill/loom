@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import base64
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -55,7 +56,7 @@ _OUTPUT_TABLE = "slurm_stage_outputs"
 
 @dataclass(frozen=True, slots=True)
 class SlurmStageAssignment:
-    """The closed SLURM target; it deliberately has no agent or claim identity."""
+    """One exact submit agent and protected profile bound to a stage attempt."""
 
     assignment_id: str
     operation_id: str
@@ -68,9 +69,16 @@ class SlurmStageAssignment:
     profile_descriptor: SchedulingComponentDescriptor
     profile_configuration_fingerprint: str
     request_digest: str
+    agent_id: str
+    agent_root_id: str
+    schema_version: int = 2
 
     def __post_init__(self) -> None:
+        if self.schema_version != 2:
+            raise QueueServiceError("SLURM assignment schema is unsupported")
         for name in (
+            "agent_id",
+            "agent_root_id",
             "assignment_id",
             "operation_id",
             "run_uri",
@@ -98,6 +106,9 @@ class SlurmStageAssignment:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
+            "schema_version": self.schema_version,
+            "agent_id": self.agent_id,
+            "agent_root_id": self.agent_root_id,
             "assignment_id": self.assignment_id,
             "operation_id": self.operation_id,
             "run_uri": self.run_uri,
@@ -119,6 +130,9 @@ class SlurmStageAssignment:
         _exact(
             mapping,
             {
+                "schema_version",
+                "agent_id",
+                "agent_root_id",
                 "assignment_id",
                 "operation_id",
                 "run_uri",
@@ -134,6 +148,9 @@ class SlurmStageAssignment:
             "SLURM assignment",
         )
         return cls(
+            schema_version=cast(int, mapping["schema_version"]),
+            agent_id=cast(str, mapping["agent_id"]),
+            agent_root_id=cast(str, mapping["agent_root_id"]),
             assignment_id=cast(str, mapping["assignment_id"]),
             operation_id=cast(str, mapping["operation_id"]),
             run_uri=cast(str, mapping["run_uri"]),
@@ -391,6 +408,8 @@ class SlurmStageRecord:
     fence: str | None
     process_execution_id: str | None
     report: _RemoteExecutionReport | None
+    start_consumed: bool
+    agent_evidence_accepted_at: str | None
 
 
 class SQLiteSlurmStageAssignments:
@@ -455,6 +474,13 @@ class SQLiteSlurmStageAssignments:
             separators=(",", ":"),
         )
         with self._transaction() as conn:
+            if "agent_sequence" not in {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
+            }:
+                raise QueueServiceError(
+                    "agent-bound SLURM assignment schema requires a freshly initialized owner"
+                )
             existing = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
                 (assignment.assignment_id,),
@@ -465,7 +491,6 @@ class SQLiteSlurmStageAssignments:
                     or str(existing["request_json"]) != request_value
                     or str(existing["delivery_json"]) != delivery_json
                     or str(existing["input_paths_json"]) != input_paths_json
-                    or str(existing["issuer_epoch"]) != issuer_epoch
                 ):
                     raise QueueConflictError("SLURM assignment replay conflicts")
                 return str(existing["state"])
@@ -499,7 +524,7 @@ class SQLiteSlurmStageAssignments:
             ).fetchone()
             slurm_work = conn.execute(
                 f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE stage_work_id = ? "
-                "AND state NOT IN ('rejected','released')",
+                "AND state != 'released'",
                 (assignment.stage_work_id,),
             ).fetchone()
             if managed_work is not None or slurm_work is not None:
@@ -514,7 +539,7 @@ class SQLiteSlurmStageAssignments:
             slurm_count = int(
                 conn.execute(
                     f"SELECT COUNT(*) FROM {_ASSIGNMENT_TABLE} WHERE run_uri = ? "
-                    "AND state NOT IN ('rejected','released')",
+                    "AND state != 'released'",
                     (assignment.run_uri,),
                 ).fetchone()[0]
             )
@@ -523,7 +548,7 @@ class SQLiteSlurmStageAssignments:
             profile_count = int(
                 conn.execute(
                     f"SELECT COUNT(*) FROM {_ASSIGNMENT_TABLE} WHERE profile_id = ? "
-                    "AND state NOT IN ('rejected','released')",
+                    "AND state != 'released'",
                     (assignment.profile_id,),
                 ).fetchone()[0]
             )
@@ -565,6 +590,56 @@ class SQLiteSlurmStageAssignments:
                 (_json(decided.to_dict()), assignment.stage_work_id),
             )
         return "reserved"
+
+    def consume_start(self, assignment_id: str) -> bool:
+        """Consume the authority's one start permit, independently of job observation."""
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            if row["job_id"] is None or row["fence"] is None:
+                raise QueueConflictError("SLURM start requires an exact granted handle")
+            return (
+                conn.execute(
+                    f"UPDATE {_ASSIGNMENT_TABLE} SET start_consumed=1 WHERE assignment_id=? AND start_consumed=0",
+                    (assignment_id,),
+                ).rowcount
+                == 1
+            )
+
+    def agent_evidence(
+        self, assignment_id: str
+    ) -> tuple[int, Mapping[str, PlainData] | None]:
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            return int(row["agent_sequence"]), None if row[
+                "agent_evidence_json"
+            ] is None else json.loads(str(row["agent_evidence_json"]))
+
+    def accept_agent_evidence(
+        self, assignment_id: str, sequence: int, evidence: Mapping[str, PlainData]
+    ) -> bool:
+        """Accept one ordered agent outbox entry or its exact replay."""
+        encoded = _json(evidence)
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            current = int(row["agent_sequence"])
+            if sequence == current:
+                if row["agent_evidence_json"] != encoded:
+                    raise QueueConflictError("SLURM agent evidence replay conflicts")
+                return False
+            if isinstance(sequence, bool) or sequence != current + 1:
+                raise QueueConflictError(
+                    "SLURM agent evidence sequence is stale or missing"
+                )
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET agent_sequence=?, agent_evidence_json=?, agent_evidence_accepted_at=? WHERE assignment_id=?",
+                (
+                    sequence,
+                    encoded,
+                    datetime.now(timezone.utc).isoformat(),
+                    assignment_id,
+                ),
+            )
+            return True
 
     def advance(self, assignment_id: str, *, expected: str, next_state: str) -> str:
         allowed = {
@@ -726,7 +801,7 @@ class SQLiteSlurmStageAssignments:
                 return "conflict"
             if current == "accepted":
                 # Bootstrap handle association can win the race with the
-                # coordinator-side sbatch response. A later weaker outcome must
+                # acknowledged agent sbatch response. A later weaker outcome must
                 # not discard that exact accepted handle.
                 if mapped in {"bound", "submitting", "unknown", "rejected"}:
                     return current
@@ -1174,6 +1249,17 @@ class SQLiteSlurmStageAssignments:
             )
         return record.report, outputs
 
+    def mark_contained_cancelled(self, assignment_id: str) -> None:
+        """Project cancellation only after authority fencing and agent containment."""
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            if str(row["state"]) == "released":
+                return
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET state='logical_released' WHERE assignment_id=?",
+                (assignment_id,),
+            )
+
     def mark_terminal(self, assignment_id: str) -> None:
         record = self.read(assignment_id)
         if record.state in {"logical_released", "released"}:
@@ -1221,7 +1307,8 @@ class SQLiteSlurmStageAssignments:
                     "bootstrap_incarnation TEXT, input_ready INTEGER NOT NULL, "
                     "fence TEXT, process_execution_id TEXT, report_json TEXT, "
                     "capability_verifier TEXT, submission_eligible INTEGER NOT NULL, "
-                    "capability_consumed INTEGER NOT NULL)"
+                    "capability_consumed INTEGER NOT NULL, start_consumed INTEGER NOT NULL DEFAULT 0, "
+                    "agent_sequence INTEGER NOT NULL DEFAULT 0, agent_evidence_json TEXT, agent_evidence_accepted_at TEXT)"
                 )
                 conn.execute(
                     f"CREATE TABLE IF NOT EXISTS {_OUTPUT_TABLE} ("
@@ -1284,6 +1371,10 @@ class SQLiteSlurmStageAssignments:
             fence=cast(str | None, row["fence"]),
             process_execution_id=cast(str | None, row["process_execution_id"]),
             report=report,
+            start_consumed=bool(row["start_consumed"]),
+            agent_evidence_accepted_at=cast(
+                str | None, row["agent_evidence_accepted_at"]
+            ),
         )
 
 
@@ -1541,6 +1632,10 @@ def _require_schema(
         "capability_verifier",
         "submission_eligible",
         "capability_consumed",
+        "start_consumed",
+        "agent_sequence",
+        "agent_evidence_json",
+        "agent_evidence_accepted_at",
     }
     columns = {
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
@@ -1549,9 +1644,21 @@ def _require_schema(
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_OUTPUT_TABLE})")
     }
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    legacy_native_only = (
+        columns
+        == expected
+        - {
+            "start_consumed",
+            "agent_sequence",
+            "agent_evidence_json",
+            "agent_evidence_accepted_at",
+        }
+        and conn.execute(f"SELECT 1 FROM {_ASSIGNMENT_TABLE} LIMIT 1").fetchone()
+        is None
+    )
     if (
         (version != 3 and not (allow_unversioned and version == 0))
-        or columns != expected
+        or (columns != expected and not legacy_native_only)
         or output_columns
         != {
             "assignment_id",

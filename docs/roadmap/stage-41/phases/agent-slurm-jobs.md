@@ -367,7 +367,26 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   and removal changes. The manager retains manifest, pre-submit, PR, independent
   review and delivery ownership; no children or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: prepared; execution pending
+- Implementation: complete in the executor working tree; mandatory committed-tree
+  validation pending. The exact agent/root assignment, external profile inventory,
+  authenticated ordered evidence and shared quota are connected to the public run
+  lifecycle. Only the assigned agent journal invokes scheduler, capability and
+  containment helpers; coordinator state is acknowledged evidence plus authority.
+- Execution coverage: affected Slurm/transport selection reported 165 passed and
+  two failures (release polling latency and default-profile fingerprint parity).
+  Both were corrected; focused correction checks then passed nine cases with one
+  public cancellation test timing error, corrected against settled authority intent.
+  Public queued cancellation now passes both pre-grant and pre-start orderings.
+  Authenticated two-agent tests cover unauthorized inventory/foreign evidence,
+  shared quota, agent/coordinator/joint restart, exact cancellation and retained
+  lifetime. Lost acknowledgement, missing original journal, uncertain discovery,
+  no host-GPU demand and atomic concurrent submission have causal coverage.
+- Validation expansion: preserve rejected assignments in native/mixed run-slot
+  and service-retirement counts until the agent's final provider-release receipt.
+  Full native/container consumer validation remains with both mandatory make
+  gates. Diagnostic receipts are /tmp/loom-p5-affected.log,
+  /tmp/loom-p5-corrections2.log and /tmp/loom-p5-public-final.log; these are interim
+  evidence, not final gate receipts. No tests were removed.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for external-call ownership, fencing and capacity
