@@ -342,18 +342,22 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   cancellation/start orderings, retained lifetime and guarded recovery. Existing
   native/container consumers remain covered by both full make gates. No tests
   were removed or acceptance assertions weakened.
-- Validation: both required gates passed on committed revision
-  `cbe5ae412936434d9bcadf1d5f0979fe3bd9b77a`, tree
-  `9f8325afe2f8c77ad64be27b6fa0265034586c55`.
-  `make validate-pr`: Ruff/Pyright, baseline 3329 passed/2 skipped/296 deselected,
-  config-extra 256 passed/18 skipped/3370 deselected, MCP 36 passed/3591 deselected,
-  and wheel/sdist builds passed. Receipt:
-  `/tmp/loom-p5-validate-pr-cbe5ae4.log`.
-  `make test-summary`: 3623 passed, zero failed/errors, 18 skipped; package 127,
-  unit 2338, contract 302, integration 517, E2E 47, config-extra 256 and MCP 36.
-  Receipt `/tmp/loom-p5-test-summary-cbe5ae4.log`, summary
-  `/tmp/loom-p5-test-summary-cbe5ae4.md`, retained XML/coverage under
-  `/tmp/loom-p5-test-summary-cbe5ae4-artifacts` (also `build/test-summary/`).
+- Validation: both required gates passed on review-correction revision
+  `8424df64537f3f6cc8c5810dd5c50948a039c408`, tree
+  `4fcc403091c17dd04e299082204b6294916c1c1f`.
+  `make validate-pr`: Ruff/Pyright, baseline 3331 passed/2 skipped/296 deselected,
+  config-extra 256 passed/18 skipped/3372 deselected, MCP 36 passed/3593 deselected,
+  and wheel/sdist builds passed (2456.54 seconds).
+  `make test-summary`: 3625 passed, zero failed/errors, 18 skipped; package 127,
+  unit 2340, contract 302, integration 517, E2E 47, config-extra 256 and MCP 36
+  (2929.75 seconds). Current receipts are
+  `/tmp/loom-stage41-p5-review-correction-evidence/phase-5/loom-p5-review-validate-pr-8424df6.log`
+  and `loom-p5-review-test-summary-8424df6-retry.log` in that directory.
+  The archive's `test-suite-summary.md` and seven XML/coverage suites are retained
+  with the regression/correction evidence (28 byte-verified files). Initial
+  pre-review passing evidence at `cbe5ae412936434d9bcadf1d5f0979fe3bd9b77a` /
+  `9f8325afe2f8c77ad64be27b6fa0265034586c55` remains in
+  `/tmp/loom-stage41-p5-summary-evidence`.
 - Failure corrections and retained evidence: the first committed validate gate
   on `ee472a2ca566b706c769cd41de531d86590dd370` (tree
   `40c99db976cdb93a9637e91a6a5898921215dd4b`) found two obsolete coordinator-cancel
@@ -392,17 +396,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: accepted contracts retained; source readiness is recorded in
   the manifest Quality Gate.
 - Refiner: not used
-- Pre-submit gate: passed. Manager verified the clean executor handoff
-  `88ea65bad743fea0b657042f0e5c8d87aa88037b`, accepted scope/removals, current
-  docs and bounded test correction, exact validated revision/tree, both required
-  gates and all seven JUnit suites. No product blocker was identified. Only this
-  card changed after validation; no runtime or test evidence was invalidated.
-  Summary, XML/coverage and eleven gate/correction logs are retained in
-  `/tmp/loom-stage41-p5-summary-evidence` (33 files verified byte-for-byte).
-  Summary has 3641 cases: 3623 passed, zero failed/errors and 18 explicitly gated
-  physical-container skips. Existing monitor teardown warnings remain visible
-  in the passing unit receipt. No phase-owned process remained; unrelated
-  processes and checkouts are preserved. Independent PR review remains required.
+- Pre-submit gate: passed; current correction evidence reconciled. Accepted
+  scope/removals, current docs, exact validated revision/tree, both required gates
+  and all seven JUnit suites are verified. Only evidence metadata follows the
+  final validated tree. Physical skips and existing monitor teardown warnings
+  remain explicit. All gate terminals are complete; unrelated work is preserved.
+  The same independent reviewer must confirm the bounded correction.
 - Independent implementation review: one qualified fast-bootstrap blocker; correction and same-reviewer confirmation pending
 - Blocker corrections: 1/3. Independent review at
   `285fa7f5e07cc3e23f146f14de939e7d10b1d210` found a fast registered bootstrap
@@ -417,7 +416,16 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   `/tmp/loom-p5-review-early-registration-before.log`. All 140 affected bootstrap,
   ready-stage, authenticated agent transport, agent Slurm and public run-operation
   cases passed (`/tmp/loom-p5-review-bootstrap-affected.log`). Both fresh final
-  gates are pending; the same reviewer must confirm this correction.
+  gates passed as recorded above. The first corrected-tree summary reached
+  logical release but missed the final agent acknowledgement within the existing
+  terminal-recovery test's two-second wait (516 integration passed/one failed).
+  The failed summary/XML/coverage are retained in
+  `/tmp/loom-stage41-p5-review-first-failed-evidence`; pytest had already removed
+  that fixture root, so no later durable-state claim is made for it. Both terminal
+  recovery variants passed unchanged under targeted coverage (22.77 seconds;
+  `/tmp/loom-p5-review-release-probe.log`), then the complete summary passed
+  unchanged. No timeout or assertion was relaxed for this retry. The same
+  reviewer must confirm the fast-bootstrap correction.
 - PR and merge: [PR 312](https://github.com/samcantrill/loom/pull/312) is open,
   non-draft and mergeable with the canonical title, exact phase branch and develop
   base verified. Independent review and gated delivery are pending.
@@ -428,7 +436,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Exact-agent Slurm backend and acknowledged coordinator projection in `src/loom/queue`, atomic claim in `pipeline/executors/slurm/ready_stage.py`; protected deployment, session inventory, bootstrap and shared lifetime/slot consumers; current execution/operations docs and fake-Slurm CLI example |
 | Tests added, updated or intentionally removed | Added agent journal and authenticated submit-agent tests; updated current Slurm/native/container/bootstrap and public run/cancel consumers; preserved all tests and behavior assertions; bounded the oversized-preparation fixture observation wait for coverage |
-| Validated revision/tree and evidence | Both make gates passed at `cbe5ae412936434d9bcadf1d5f0979fe3bd9b77a` / `9f8325afe2f8c77ad64be27b6fa0265034586c55`; exact logs, summary, XML/coverage, prior failures and correction evidence above |
+| Validated revision/tree and evidence | Both make gates passed at `8424df64537f3f6cc8c5810dd5c50948a039c408` / `4fcc403091c17dd04e299082204b6294916c1c1f`; 3625 summary passes; final archive `/tmp/loom-stage41-p5-review-correction-evidence`; prior failures/corrections retained above |
 | Validation-relevant changes after evidence | None; final commit updates only this phase card's Workflow State and Completion Record |
 | Replaced-code removal / retained primitive consumers | Coordinator external-call owner and `_submit_slurm_ready`, `_before_slurm_runner`, `_publish_slurm_verifier`, `_mirror_slurm_submission_eligibility` removed; `AgentSlurmJobs` alone drives the existing backend journal/helpers for agent-bound assignments; standalone backend utility/tests retain the primitive |
 | PR, review and merge | [PR 312](https://github.com/samcantrill/loom/pull/312) open; canonical identity verified; independent review and delivery pending |
