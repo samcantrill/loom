@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 5
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p5-agent-slurm-jobs
@@ -405,7 +405,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   processes and checkouts are preserved. Independent PR review remains required.
 - Independent implementation review: required for external-call ownership, fencing and capacity
 - Blocker corrections: 0/3
-- PR and merge: not started
+- PR and merge: [PR 312](https://github.com/samcantrill/loom/pull/312) is open,
+  non-draft and mergeable with the canonical title, exact phase branch and develop
+  base verified. Independent review and gated delivery are pending.
 
 ## Completion Record
 
@@ -416,5 +418,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both make gates passed at `cbe5ae412936434d9bcadf1d5f0979fe3bd9b77a` / `9f8325afe2f8c77ad64be27b6fa0265034586c55`; exact logs, summary, XML/coverage, prior failures and correction evidence above |
 | Validation-relevant changes after evidence | None; final commit updates only this phase card's Workflow State and Completion Record |
 | Replaced-code removal / retained primitive consumers | Coordinator external-call owner and `_submit_slurm_ready`, `_before_slurm_runner`, `_publish_slurm_verifier`, `_mirror_slurm_submission_eligibility` removed; `AgentSlurmJobs` alone drives the existing backend journal/helpers for agent-bound assignments; standalone backend utility/tests retain the primitive |
-| PR, review and merge | Manager handoff; independent review and delivery pending |
+| PR, review and merge | [PR 312](https://github.com/samcantrill/loom/pull/312) open; canonical identity verified; independent review and delivery pending |
 | Residual risk and cleanup | No implementation blocker. Unknown jobs retain capacity and original ownership. Physical Slurm/container qualification and Phase 6 completed-job storage guarantee remain explicit; executor-owned processes are finished and unrelated processes preserved |
