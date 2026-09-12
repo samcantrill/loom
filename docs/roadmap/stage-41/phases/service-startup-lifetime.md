@@ -470,7 +470,18 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Only this phase card's receipt was updated after the validated code tree;
   `git diff --check` passed for that metadata-only delta.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed on 2026-09-12 at `e84faacfe33808c1664320844999d7331545220f`.
+  Manager verified scope, accepted startup/lifetime contracts, removal and
+  successor ownership, both terminal gate logs, all seven JUnit reports and
+  their actual skip reasons. The only delta from the validated revision is
+  this card's execution evidence. No product blocker remains; corrections 1
+  and 2 are resolved. The process inventory confirms no phase-owned service,
+  worker or validation process remains. Independent PR review is still required.
+- Evidence archive: the summary, seven per-suite `junit.xml` reports and both
+  final gate logs were copied and byte-verified under
+  `/tmp/loom-stage41-p3-summary-evidence/`. This preserves the Phase 3 evidence
+  before a successor reuses ignored build paths. No runtime checks were repeated
+  for the manager's metadata-only acceptance record.
 - Independent implementation review: required for durable startup/lifetime and public cutover
 - Manager correction 1/3: corrected stale current ordinary-run guidance in
   docs/features/cli.md, slurm.md, container-example-coverage.md and testing.md,
@@ -518,5 +529,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both required gates exited 0 at `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`; terminal logs, summary and row artifacts recorded above. |
 | Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
 | Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
-| PR, review and merge | Not started; manager-owned pre-submit and independent review remain. |
+| PR, review and merge | Manager pre-submit passed; PR creation, independent review and delivery remain. |
 | Residual risk and cleanup | Native mixed-role/process evidence passed; no attempt-owned services remain. Physical fleet/container/Slurm qualification remains explicitly excluded and mapped to successor owners above. |
