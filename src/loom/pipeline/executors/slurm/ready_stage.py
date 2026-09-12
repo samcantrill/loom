@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from types import MappingProxyType
 from typing import cast
 
 from loom.pipeline.executors.apptainer import ApptainerExecOptions
@@ -350,6 +351,7 @@ class SlurmReadyStageProfile:
     environment_fingerprint: str
     executor_fingerprint: str
     job_private_file_provider: SlurmJobPrivateFileProvider
+    result_storage: Mapping[str, object] | None = None
     container_options: ContainerOptions | Mapping[str, object] | None = None
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None
     executor_name: str = "local"
@@ -434,6 +436,26 @@ class SlurmReadyStageProfile:
                 "ready-stage profile must invoke the fixed Loom bootstrap"
             )
         object.__setattr__(self, "bootstrap_argv", argv)
+        storage = self.result_storage
+        if storage is not None:
+            if set(storage) != {"agent_root", "compute_root", "retention_bytes"}:
+                raise SlurmPlanningError("SLURM result storage fields are invalid")
+            for key in ("agent_root", "compute_root"):
+                if (
+                    not isinstance(storage[key], str)
+                    or not Path(cast(str, storage[key])).is_absolute()
+                ):
+                    raise SlurmPlanningError(
+                        "SLURM result storage roots must be absolute"
+                    )
+            quota = storage["retention_bytes"]
+            if (
+                isinstance(quota, bool)
+                or not isinstance(quota, int)
+                or quota < 65 * 1024 * 1024
+            ):
+                raise SlurmPlanningError("SLURM result retention quota is invalid")
+            object.__setattr__(self, "result_storage", MappingProxyType(dict(storage)))
         payload = {
             "profile_id": self.profile_id,
             "partition": self.partition,
@@ -470,6 +492,8 @@ class SlurmReadyStageProfile:
                 else float(self.containment_helper.timeout_seconds)
             ),
         }
+        if storage is not None:
+            payload["result_storage"] = dict(storage)
         if self.poll_interval_seconds != 1.0:
             payload["poll_interval_seconds"] = float(self.poll_interval_seconds)
         if container is not None:

@@ -142,7 +142,11 @@ _MAX_JSON_COLLECTION = 64
 _MAX_FAILURE_JSON_DEPTH = 512
 _MAX_FAILURE_JSON_COLLECTION = 256
 _FAILURE_REPORT_OPERATIONS = frozenset(
-    {("agent", "output_manifest"), ("slurm_bootstrap", "report")}
+    {
+        ("agent", "output_manifest"),
+        ("agent", "slurm_work"),
+        ("slurm_bootstrap", "report"),
+    }
 )
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
@@ -6145,6 +6149,19 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
+    evidence = value.get("evidence")
+    if (
+        failure_report
+        and isinstance(evidence, Mapping)
+        and evidence.get("result_operation") == "report"
+    ):
+        # Validate the existing report at its existing depth budget; the extra
+        # authenticated Slurm relay envelope must not narrow report-v3 support.
+        _decode(
+            json.dumps({"report": evidence.get("report")}).encode(), failure_report=True
+        )
+        _bounded_json({**value, "evidence": {**evidence, "report": None}}, depth=0)
+        return value
     report = value.get("report") if failure_report else None
     if (
         isinstance(report, Mapping)

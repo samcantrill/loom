@@ -27,6 +27,7 @@ from .agent_session_transport import (
     LocalDaemonAgentHttpClient,
     _IndeterminateAgentProtocolError,
 )
+from ._slurm_result_transport import SharedSlurmResult
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
 
@@ -205,7 +206,7 @@ def run_slurm_bootstrap(
     request_digest: str,
     config: SlurmBootstrapClientConfig | None = None,
 ) -> None:
-    """Drive one exact bootstrap from registration through verified result commit."""
+    """Execute one granted attempt and publish its durable result before exit."""
 
     selected = config or load_slurm_bootstrap_config()
     # The protected path is bootstrap-only capability material. Authored stage
@@ -297,6 +298,8 @@ def run_slurm_bootstrap(
             or delivery.executor_name != selected.executor_name
         ):
             raise QueueConflictError("SLURM resident profile identity conflicts")
+        storage = cast(Mapping[str, object], registration.get("result_storage"))
+        transport = SharedSlurmResult(storage, assignment_id, compute=True)
         workspace = SlurmBootstrapWorkspace(selected.workspace_root, assignment_id)
         workspace.persist_registration(registration)
         _unlink_job_private_capability(capability_path)
@@ -377,59 +380,22 @@ def run_slurm_bootstrap(
                 workspace_root=workspace.root,
                 process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
             )
-            report = workspace.retain_result(result)
+            try:
+                report = workspace.retain_result(result)
+            except (QueueServiceError, QueueConflictError, OSError) as exc:
+                transport.failure(str(exc))
+                raise
         else:
             report = workspace.retained_report()
             if report is None:
                 raise QueueConflictError(
                     "SLURM authored-root permit is consumed without a retained result"
                 )
-        client.call_application(
-            _ROLE,
-            "report",
-            {
-                "assignment_id": assignment_id,
-                "incarnation": incarnation,
-                "fence": fence,
-                "report": report.to_dict(),
-            },
-        )
-        for output in report.outputs:
-            offset = 0
-            while True:
-                data, final = workspace.output_chunk(output.transfer_id, offset)
-                response = client.call_application(
-                    _ROLE,
-                    "output",
-                    {
-                        "assignment_id": assignment_id,
-                        "incarnation": incarnation,
-                        "transfer_id": output.transfer_id,
-                        "offset": offset,
-                        "data": _encode(data),
-                        "final": final,
-                    },
-                )
-                received = response.get("received")
-                if isinstance(received, bool) or not isinstance(received, int):
-                    raise QueueServiceError("SLURM output response is invalid")
-                offset = received
-                if final:
-                    break
-        client.call_application(
-            _ROLE,
-            "result",
-            {
-                "assignment_id": assignment_id,
-                "incarnation": incarnation,
-                "fence": fence,
-            },
-        )
-        client.call_application(
-            _ROLE,
-            "release",
-            {"assignment_id": assignment_id, "incarnation": incarnation},
-        )
+        identity = dict(cast(Mapping[str, PlainData], registration["result_identity"]))
+        identity["fence"] = fence
+        transport.publish(identity, report, workspace.output_chunk)
+        # Publication is sufficient for compute exit. The original submit agent
+        # authenticates delivery after reconnect; no callback can delete bytes.
     finally:
         client.close()
 

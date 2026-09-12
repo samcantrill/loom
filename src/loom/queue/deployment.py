@@ -1333,6 +1333,7 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
         "available",
         "poll_interval_seconds",
         "containment_helper",
+        "result_storage",
     }
     for index, item in enumerate(value):
         label = f"slurm_profiles[{index}]"

@@ -9,6 +9,8 @@ from pathlib import Path
 import base64
 import json
 import sqlite3
+import subprocess
+import shutil
 import sys
 import time
 from threading import Event
@@ -60,6 +62,14 @@ from loom.serialization import PlainData, json_dumps_pretty
 
 
 pytestmark = pytest.mark.integration
+_RESULT_ROOT = Path("/unconfigured-test-root")
+
+
+@pytest.fixture(autouse=True)
+def _result_root(tmp_path, monkeypatch):
+    root = tmp_path / "shared-results"
+    root.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "_RESULT_ROOT", root)
 
 
 def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
@@ -97,6 +107,11 @@ def _profile(
     container_options: Mapping[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(_RESULT_ROOT),
+            "compute_root": str(_RESULT_ROOT),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="gpu",
         max_outstanding=max_outstanding,
@@ -350,6 +365,7 @@ def _exercise_mixed_route_run(
     monkeypatch: pytest.MonkeyPatch,
     terminal_boundary: str | None = None,
     *,
+    finish_during_outage: bool = False,
     guarded_recovery: bool = False,
     native_failure: bool = False,
     container_options: Mapping[str, object] | None = None,
@@ -871,6 +887,92 @@ def _exercise_mixed_route_run(
                     authority.open_run(run_uri).stages[1].status
                     is StageStatus.CANCELLED
                 )
+        if finish_during_outage:
+            from loom.queue.local_daemon_execution import LocalDaemonExecution
+            from loom.queue._slurm_result_transport import SharedSlurmResult
+
+            identity = execution.slurm_result_identity(
+                execution.slurm_assignments.read(assignment_id)
+            )
+            with pytest.raises(QueueConflictError, match="another submit agent"):
+                execution.relay_slurm_result(
+                    "foreign-agent",
+                    "foreign-root",
+                    {
+                        "assignment_id": assignment_id,
+                        "identity": identity,
+                        "result_operation": "commit",
+                    },
+                )
+            daemon.stop()
+            # This is an actual compute process. It gets no coordinator transport
+            # and terminates before the submit agent/coordinator are reopened.
+            program = """
+import json, sys
+from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
+from loom.queue._slurm_result_transport import SharedSlurmResult
+from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
+from loom.pipeline.context import ProcessContainmentOwner
+identity = json.loads(sys.argv[3])
+workspace = SlurmBootstrapWorkspace(sys.argv[1], identity['assignment']['assignment_id'])
+result = execute_resident_stage_worker_request(worker_request=workspace.worker_request(), workspace_root=workspace.root, process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY)
+report = workspace.retain_result(result)
+SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).publish(identity, report, workspace.output_chunk)
+"""
+            completed_compute = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    str(tmp_path / "compute"),
+                    json.dumps(dict(profile.result_storage)),
+                    json.dumps(identity),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert completed_compute.returncode == 0, completed_compute.stderr
+            shutil.rmtree(tmp_path / "compute")
+            retained = SharedSlurmResult(profile.result_storage, assignment_id)
+            retained_report, output_bytes = retained.read(identity)
+            assert retained_report.schema_version == 3
+            assert output_bytes
+            assert execution.slurm_assignments.read(assignment_id).state == "running"
+            commits = []
+            original_finalize = LocalDaemonExecution._slurm_finalize_record
+
+            def lose_first_ack(owner, candidate, candidate_fence):
+                original_finalize(owner, candidate, candidate_fence)
+                committed = (
+                    owner._remote_authority(run_uri)
+                    .open_run(run_uri)
+                    .stages[1]
+                    .latest_commit
+                )
+                commits.append(committed.commit_id)
+                if len(commits) == 1:
+                    assert retained.path.exists()
+                    raise OSError("lost final result acknowledgement")
+
+            monkeypatch.setattr(
+                LocalDaemonExecution, "_slurm_finalize_record", lose_first_ack
+            )
+            daemon = LocalDaemon(reopened_config)
+            daemon.start()
+            client = daemon.client_view(
+                LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+            )
+            settled = client.wait("mixed-route", timeout_seconds=20)
+            assert settled.state is LocalDaemonAdmissionState.SUCCEEDED
+            assert len(commits) >= 2 and len(set(commits)) == 1
+            assert not retained.path.exists()
+            assert (
+                daemon._execution.slurm_assignments.read(assignment_id).state
+                == "released"
+            )
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
             workspace_root=workspace.root,
@@ -1622,3 +1724,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         assert all(stage.status is StageStatus.PENDING for stage in snapshot.stages)
     finally:
         daemon.stop()
+
+
+def test_compute_process_exits_during_outage_then_agent_replays_one_commit(
+    tmp_path, monkeypatch
+):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, finish_during_outage=True)

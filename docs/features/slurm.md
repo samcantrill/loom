@@ -380,7 +380,8 @@ SLURM starts bootstrap
   -> authority changes PENDING -> SUBMITTED and creates the fence
   -> record grant/start intent
   -> invoke at most one execution-only stage-worker root
-  -> upload exact-fence result and outputs
+  -> durably publish outputs, report and manifest last
+  -> exit; original submit agent relays the retained exact-fence result
 ```
 
 Bootstrap identity is assignment-scoped and least-privilege. It is not an agent:
@@ -415,6 +416,73 @@ inspects/reconciles the same stable operation, and never resubmits. A bootstrap
 that starts while the coordinator is unavailable waits with no authored effects
 until it can obtain the grant. Granted work may continue through coordinator
 loss and later replay its result within the profile's bounded retention model.
+
+### Durable ready-stage results
+
+Every executable protected profile requires `result_storage`:
+
+```python
+result_storage = {
+    "agent_root": "/site/shared/loom-results",
+    "compute_root": "/compute/shared/loom-results",
+    "retention_bytes": 1024 * 1024 * 1024,
+}
+```
+
+Both paths must denote the same existing private durable directory. Different
+mount prefixes are explicit; no project/output-directory scan or fallback is
+performed. The entire binding and finite quota participate in the protected
+profile fingerprint. A changed binding requires new prepared work. The submit
+agent reserves 65 MiB per attempt before submission (64 MiB aggregate artifact
+limit plus bounded report/manifest overhead). Quota exhaustion retains existing
+attempts and blocks new submission; it never evicts unacknowledged output.
+Larger checkpoints require separate transfer support. Worker scratch space is
+separate and is not the durable transport.
+
+The bootstrap writes complete output files and report version 3, fsyncs them,
+and atomically publishes manifest version 1 last. The manifest binds the stable
+coordinator, original agent/root, assignment, attempt, execution fence, bootstrap
+incarnation and submission operation, with paths, digests and byte counts. A
+compute process can exit while the coordinator is unavailable. After same-root
+restart the original submit agent verifies only that bound location and relays
+through the existing authenticated result/finalization path. Old session tokens
+are not required. Partial, stale, linked or corrupt evidence cannot commit and
+remains with a bounded `delivery-failure.json` diagnostic in the transport root.
+A worker result exceeding the existing transport bounds also records a retained
+delivery failure; it does not become success.
+
+The authority alone validates the accepted fence and exact admitted output
+predecessor and performs commit/replay. Losing its acknowledgement leaves shared
+bytes for replay of the same commit. Cleanup follows final acknowledgement;
+bootstrap/client exit never cleans transport evidence. Scheduler observation,
+result publication, authority acceptance and execution containment remain
+separate facts. Missing accounting is unknown. Unresolved assignments/delivery
+retain service lifetime, and accepted output alone does not release capacity.
+
+A qualified site must permit services on the selected submit host, provide a
+reachable grant endpoint and an installed worker environment, and qualify
+shared-root visibility, fsync, atomic rename and advisory locking across both
+mounts after compute exit. Shared artifacts do not qualify role SQLite storage.
+Role journals remain on their separately qualified roots; journal loss, copying
+role databases to another host and transparent failover are unsupported.
+Native Slurm workers are baseline. Container claims additionally require the
+selected runtime and a writable binding of the compute result root. An already
+granted allocation needs separately qualified native/container resource and
+`srun` step binding; this feature does not discover allocations, provision them
+or nest `sbatch` automatically.
+
+Local tests use a fake scheduler plus a real compute process that exits during
+coordinator loss; these fixtures do not qualify a physical site. The opt-in
+qualification owner is `tests/slurm_acceptance/test_slurm_result_recovery.py`.
+The site operator archives the public run/inspect, outage, scheduler, shared
+publication, commit/replay and cleanup/containment evidence using approved site
+service controls, then supplies `LOOM_SLURM_RESULT_QUALIFICATION_RECEIPT` to audit
+that receipt with `LOOM_RUN_SLURM_ACCEPTANCE=1`. The test states the receipt fields
+and requires nonempty evidence artifacts; it is an audit, not an automated live
+journey runner. Missing site access or receipt remains an explicit qualification
+gap. No physical Slurm/shared-filesystem/container qualification is claimed without
+its site receipt. The legacy single-job/afterok acceptance suite does not prove
+this result-recovery journey.
 
 Current `SlurmCommandRunner`, resource/directive mapping, deterministic script,
 job-ID parsing, `squeue`/`sacct`, and `scancel` seams are reused where their

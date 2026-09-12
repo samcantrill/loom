@@ -2267,7 +2267,7 @@ the authority's terminal/unbind acknowledgement, exact positive protected
 containment evidence when a job was issued, and acknowledged capability
 revocation. Missing containment keeps reservations and service lifetime retained.
 
-The agent session wire protocol is version 12; Slurm assignments use version 2
+The agent session wire protocol is version 13; Slurm assignments use version 2
 and require the exact agent/root identity. An agent restart reopens `slurm.sqlite`
 under the same protected root. A missing
 expected journal/operation remains unresolved; no other agent may take over.
@@ -2289,8 +2289,12 @@ across restarts; ungranted work reconnects only until that deadline and retains
 a diagnostic on expiry. A job that registers before the agent acknowledges
 submission waits at input readiness within that same deadline; pending readiness
 cannot obtain a grant or start permit. It never creates an offline grant. Already
-permitted work can execute during observer loss. Connected typed result relay is retained;
-completed-job delivery after compute storage disappears is not guaranteed.
+permitted work can execute during observer loss. Before compute exit the bootstrap
+publishes its report and outputs to the protected shared result root, manifest
+last. Its original submit agent delivers that exact attempt after reconnect and
+cleans transport bytes only after authority acknowledgement. See
+[Slurm result storage](slurm.md#durable-ready-stage-results) for configuration,
+limits and the separate physical qualification requirements.
 
 The flow can place successive or independent pipeline stages on different
 agents or explicit targets, but one managed-agent stage attempt remains wholly

@@ -337,7 +337,25 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   card's execution evidence; the manager owns manifest, PR, review and delivery.
   No children or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: complete; final committed validation pending. Protected profile
+  result_storage binds both mount roots and finite per-attempt reservations;
+  SharedSlurmResult owns version-1 manifest-last publication, strict bounded
+  regular-file ingestion and final-ack cleanup. Original-agent session protocol
+  13 relays through the existing Slurm finalizer with the admitted predecessor.
+  Bootstrap exit is independent of coordinator availability. Scheduler ownership,
+  containment/provider release and native/container report-v3 owners remain.
+- Focused evidence: real compute-process exit during coordinator loss and scratch
+  removal, same-root service restart, lost authority acknowledgement and one
+  replayed commit passed. Publication interruption, stale/foreign/path/digest
+  rejection, retained quota and 64 MiB aggregate bounds are covered. A report
+  nesting failure exposed the extra relay envelope; the existing decoder now
+  preserves its report budget separately from the strict session envelope.
+  Earlier full transport subset failure occurred while the protocol version
+  changed during that exploratory run; fresh final gates supersede that run.
+  All exploratory/correction logs will remain in the final evidence directory.
+- Physical qualification: unavailable and unclaimed. The opt-in site receipt
+  audit requires the unified public run/outage and separate storage/containment
+  evidence. It does not automate site service controls or execute a live journey.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary

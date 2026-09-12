@@ -25,6 +25,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
 )
 from loom.serialization import PlainData
 
+from ._slurm_result_transport import SharedSlurmResult
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmStageAssignment
 
@@ -206,6 +207,18 @@ class AgentSlurmJobs:
                 "UPDATE agent_slurm_operations SET acknowledged=1, released=? WHERE operation_id=? AND sequence=?",
                 (int(provider_released), assignment.operation_id, sequence),
             )
+        if provider_released:
+            profile = self.profiles[
+                (assignment.profile_id, assignment.profile_configuration_fingerprint)
+            ]
+            transport = SharedSlurmResult(
+                profile.result_storage, assignment.assignment_id
+            )
+            if (
+                transport.path.exists()
+                and not (transport.path / "manifest.json").exists()
+            ):
+                transport.cleanup()
         return response
 
     def replay_pending(
@@ -292,6 +305,9 @@ class AgentSlurmJobs:
         if released is not None and released[0]:
             return
         current = self.journal.find(request.operation_id)
+        transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
+        if current is None:
+            transport.reserve(assignment.to_dict())
         now = monotonic()
         urgent_cancel = (
             current is not None
@@ -347,6 +363,9 @@ class AgentSlurmJobs:
                 current = self.journal.request_cancel(request.operation_id, profile)
             current = self.journal.observe(request.operation_id, profile)
             self._publish(assignment, current, acknowledge)
+        identity = task.get("result_identity")
+        if isinstance(identity, Mapping) and identity.get("fence") is not None:
+            transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):
             receipt = resolve_slurm_containment(profile, recovery_request)

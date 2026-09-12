@@ -2240,6 +2240,7 @@ class LocalDaemonExecution:
                         request, record, profile
                     )
         return {
+            "result_identity": self.slurm_result_identity(record),
             "recovery_request": recovery_proof,
             "schema_version": 1,
             "assignment": record.assignment.to_dict(),
@@ -2282,9 +2283,76 @@ class LocalDaemonExecution:
             )
         )
 
+    def relay_slurm_result(
+        self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData]:
+        from ._slurm_result_transport import validate_identity
+        from ._remote_stage_execution import _decode_chunk
+
+        assignment_id = str(evidence.get("assignment_id"))
+        record = self.slurm_assignments.read(assignment_id)
+        if (record.assignment.agent_id, record.assignment.agent_root_id) != (
+            agent_id,
+            agent_root_id,
+        ):
+            raise QueueConflictError("SLURM result belongs to another submit agent")
+        validate_identity(evidence.get("identity"), self.slurm_result_identity(record))
+        if (
+            record.fence is None
+            or record.bootstrap_incarnation is None
+            or not record.start_consumed
+        ):
+            raise QueueConflictError("SLURM result has no consumed execution grant")
+        operation = evidence.get("result_operation")
+        if operation == "report":
+            report = _RemoteExecutionReport.from_dict(evidence.get("report"))
+            # A lost started notification does not revoke a consumed start permit.
+            if record.state == "granted":
+                self.slurm_assignments.mark_running(
+                    assignment_id,
+                    record.bootstrap_incarnation,
+                    record.fence,
+                    "slurm-root-"
+                    + hashlib.sha256(
+                        (assignment_id + "\0" + record.bootstrap_incarnation).encode()
+                    ).hexdigest(),
+                )
+            self.slurm_assignments.declare_report(
+                assignment_id, record.bootstrap_incarnation, record.fence, report
+            )
+            return {"accepted": True}
+        if operation == "output":
+            received = self.slurm_assignments.write_output_chunk(
+                assignment_id,
+                record.bootstrap_incarnation,
+                str(evidence.get("transfer_id")),
+                cast(int, evidence.get("offset")),
+                _decode_chunk(evidence.get("data")),
+                final=cast(bool, evidence.get("final")),
+            )
+            return {"received": received}
+        if operation == "commit":
+            self._slurm_finalize_record(record, record.fence)
+            return {"acknowledged": True}
+        raise QueueServiceError("SLURM result operation is invalid")
+
+    def slurm_result_identity(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+        return {
+            "coordinator_id": self.coordinator_id,
+            "assignment": record.assignment.to_dict(),
+            "incarnation": record.bootstrap_incarnation,
+            "fence": record.fence,
+        }
+
     def acknowledge_slurm_agent(
         self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData]
     ) -> Mapping[str, PlainData]:
+        if "result_operation" in evidence:
+            if self._recovery_retains_assignment(str(evidence.get("assignment_id"))):
+                raise QueueConflictError(
+                    "ordinary SLURM result is frozen by guarded recovery"
+                )
+            return self.relay_slurm_result(agent_id, agent_root_id, evidence)
         if (
             set(evidence)
             != {
@@ -3303,6 +3371,10 @@ class LocalDaemonExecution:
             ).hexdigest()
         )
         try:
+            if profile.result_storage is None:
+                raise QueueServiceError(
+                    "SLURM requires qualified durable result storage"
+                )
             request = map_ready_stage(
                 _check_commands=False,
                 placement=record.placement,
@@ -3334,7 +3406,17 @@ class LocalDaemonExecution:
                     produced_outputs=_produced_outputs(snapshot),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=_worker_runtime(intent, record.stage_name),
-                    metadata={},
+                    metadata={
+                        "managed_output_predecessor": next(
+                            (
+                                fact.latest_commit.commit_id
+                                for fact in snapshot.stages
+                                if fact.stage_name == record.stage_name
+                                and fact.latest_commit is not None
+                            ),
+                            None,
+                        ),
+                    },
                 )
             )
             if (
@@ -5723,6 +5805,11 @@ class LocalDaemonExecution:
         record = self._slurm_authorized_record(
             principal_id, credential_id, assignment_id, incarnation
         )
+        self._slurm_finalize_record(record, fence)
+
+    def _slurm_finalize_record(self, record: SlurmStageRecord, fence: str) -> None:
+        assignment_id = record.assignment.assignment_id
+        incarnation = cast(str, record.bootstrap_incarnation)
         report, outputs = self.slurm_assignments.committed_result(
             assignment_id, incarnation, fence
         )
@@ -5742,6 +5829,16 @@ class LocalDaemonExecution:
                 fencing_token=fence,
                 outputs=outputs,
                 assignment_id=assignment_id,
+                supersedes_commit_id=cast(
+                    str | None,
+                    StageWorkerRequest.from_dict(
+                        self.run_store.read_stage_worker_request(
+                            record.assignment.run_uri,
+                            record.assignment.stage_name,
+                            attempt=record.assignment.attempt,
+                        )
+                    ).metadata.get("managed_output_predecessor"),
+                ),
             )
         else:
             authority.record_managed_attempt_terminal(

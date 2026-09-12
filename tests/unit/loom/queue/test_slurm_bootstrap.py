@@ -125,7 +125,11 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
                     return {"state": "awaiting_submission_ack"}
                 return {"state": "input_ready"}
             if action == "register":
-                return {"assignment_id": "assignment-1", "delivery": {}}
+                return {
+                    "assignment_id": "assignment-1",
+                    "delivery": {},
+                    "result_identity": {},
+                }
             if action == "grant":
                 return {"fence": "fence-1"}
             if action == "start":
@@ -184,6 +188,16 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             executor_name="local",
             inputs=(),
         ),
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap,
+        "SharedSlurmResult",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            publish=lambda *_args: actions.append("publish")
+        ),
+    )
+    monkeypatch.setattr(
+        FakeWorkspace, "output_chunk", lambda *_args: (b"", True), raising=False
     )
     monkeypatch.setattr(slurm_bootstrap, "SlurmBootstrapWorkspace", FakeWorkspace)
     monkeypatch.setattr(

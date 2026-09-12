@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -10,7 +11,23 @@ from loom.pipeline.executors.slurm.ready_stage import ReadyStageState
 from loom.queue._agent_slurm import AgentSlurmJobs
 from loom.queue.errors import QueueConflictError
 from loom.queue.slurm_ready_stage import SlurmStageAssignment
-from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import _profile, _request
+from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import (
+    _profile as _base_profile,
+    _request,
+)
+
+
+def _profile(runner, tmp_path):
+    root = tmp_path / "shared-results"
+    root.mkdir(exist_ok=True)
+    return replace(
+        _base_profile(runner),
+        result_storage={
+            "agent_root": str(root),
+            "compute_root": str(root),
+            "retention_bytes": 128 * 1024 * 1024,
+        },
+    )
 
 
 def _task(profile, resources=None):
@@ -45,7 +62,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
     tmp_path: Path,
 ):
     runner = FakeSlurmCommandRunner()
-    profile = _profile(runner)
+    profile = _profile(runner, tmp_path)
     AgentSlurmJobs.initialize(tmp_path)
     agent = AgentSlurmJobs(tmp_path, (profile,))
     task = _task(profile)
@@ -79,7 +96,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
 
 
 def test_expected_agent_operation_cannot_be_reconstructed(tmp_path: Path):
-    profile = _profile(FakeSlurmCommandRunner())
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path)
     AgentSlurmJobs.initialize(tmp_path)
     agent = AgentSlurmJobs(tmp_path, (profile,))
     with pytest.raises(QueueConflictError, match="missing"):
@@ -88,7 +105,7 @@ def test_expected_agent_operation_cannot_be_reconstructed(tmp_path: Path):
 
 
 def test_suppressed_call_releases_only_after_authority_acknowledges(tmp_path: Path):
-    profile = _profile(FakeSlurmCommandRunner())
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path)
     AgentSlurmJobs.initialize(tmp_path)
     agent = AgentSlurmJobs(tmp_path, (profile,))
     seen = []
@@ -111,7 +128,6 @@ def test_suppressed_call_releases_only_after_authority_acknowledges(tmp_path: Pa
 def test_uncertain_agent_call_discovers_before_exact_cancel_without_host_gpu(
     tmp_path: Path,
 ):
-    from dataclasses import replace
     from loom.pipeline.executors.slurm.commands import SlurmCommandResult
     from loom.pipeline.executors.slurm.ready_stage import operation_marker
     from loom.pipeline.resources import ResourceRequest, ResourceEntry
@@ -119,7 +135,7 @@ def test_uncertain_agent_call_discovers_before_exact_cancel_without_host_gpu(
     runner = FakeSlurmCommandRunner(
         scripted_results={"sbatch": [TimeoutError("lost response")]}
     )
-    profile = _profile(runner)
+    profile = _profile(runner, tmp_path)
     task = _task(
         profile,
         ResourceRequest(
