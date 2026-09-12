@@ -347,7 +347,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   cutover. The manager retains manifest, pre-submit, PR/review and delivery
   ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: implemented; final validation is in progress. Protected selection
+- Implementation: complete; required validation passed. Protected selection
   and external binding now retain every role creation intent before initializing
   roots. Native role locks preserve identity and immutable lifetime on foreground
   or automatic restart. Coordinator cycle serialization owns startup attachments,
@@ -371,18 +371,27 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   explicitly authorized bounded example-local primitive wiring to preserve the
   existing executable backend/container assertions. No production compatibility
   adapter or old ordinary CLI branch remains.
-- Retained consumers and successor owners: Phase 4 owns native/container journeys
-  in execution/subprocess, execution/containers/docker,
-  execution/containers/slurm-apptainer, execution/runtime-profile,
-  operations/failing-run and operations/local-diagnostics. Phase 6 owns the
-  execution/slurm/dry-run-basics and execution/slurm/afterok-diamond planning
-  scripts and physical Slurm acceptance hook. Phase 9 owns final remaining-owner
-  cutover, including execution/offline-first-import,
-  operations/offline-import-rejections, operations/authority-backend-diagnostics,
-  diagnostic/authority test-state helpers and other retained PipelineRunner
-  consumers. Existing generic runtime, sweep, prepared-run, stage-worker, Slurm,
-  artifact and authority primitives remain for these owners. The physical Slurm
-  acceptance hook was preserved unchanged; default fixtures do not qualify it.
+- Exact retained consumers and successor owners (paths below are relative to
+  `examples/`):
+  - Phase 4: `execution/subprocess/run_subprocess_pipeline.py`,
+    `execution/subprocess/run_failure_diagnostics.py`,
+    `execution/containers/docker/run_docker_pipeline.py`,
+    `execution/containers/docker/run_failure_diagnostics.py`,
+    `execution/containers/slurm-apptainer/run_apptainer_pipeline.py`,
+    `execution/runtime-profile/run_runtime_profile.py`,
+    `operations/failing-run/run_failure_diagnostics.py`, and
+    `operations/local-diagnostics/run_diagnostics.py`.
+  - Phase 6: `execution/slurm/dry-run-basics/run_dry_run_basics.py`,
+    `execution/slurm/afterok-diamond/run_afterok_diamond.py`, and the unchanged
+    physical `tests/slurm_acceptance` hook (repository-relative).
+  - Phase 9: `execution/offline-first-import/run_offline_first_import.py`,
+    `operations/offline-import-rejections/run_offline_import_rejections.py`,
+    `operations/authority-backend-diagnostics/run_backend_diagnostics.py`, and
+    `tests/support/executed_run_fixture.py` (repository-relative), together with
+    final remaining PipelineRunner consumers. Existing generic runtime, sweep,
+    prepared-run, stage-worker, Slurm, artifact and authority primitives remain
+    for their accepted owners. The physical Slurm acceptance hook was preserved
+    unchanged; default fixtures do not qualify it.
 - Validation preparation correction: the initial `make validate-pr` at
   `1aa60f9f599d8bdd8328284f9b526b01bda0f903` passed Ruff/Pyright but was
   intentionally interrupted during the baseline lane (exit 130) after the cleanup
@@ -430,6 +439,36 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   (1 passed, 18 deselected in 23.38 s), retaining bound identity and observing
   native success and actual authorized agent exit. These runtime changes require
   the final complete gates; earlier partial evidence does not replace them.
+- Final validation: both required commands completed with exit 0 on commit
+  `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree
+  `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`, with a clean tracked tree throughout.
+  `make validate-pr` passed Ruff, Pyright, baseline (3300 passed, 2 skipped,
+  287 deselected; 1237.48 s), config-extra (247 passed, 18 skipped,
+  3341 deselected; 931.07 s), MCP-extra (36 passed, 3553 deselected; 68.24 s),
+  and source/wheel builds. Exact terminal log:
+  `/tmp/loom-p3-validate-pr-watermark-final.log`.
+  `make test-summary` passed all seven rows: package 127, unit 2312,
+  contract 302, integration 514, e2e 47, config-extra 247 and MCP-extra 36;
+  overall 3585 passed, zero failures/errors, 18 skipped, 7160 row-summed
+  deselections, 2965.94 s. Report: `build/test-summary.md`; per-row JUnit,
+  coverage and output evidence: `build/test-summary/`; exact terminal log:
+  `/tmp/loom-p3-test-summary-final.log`.
+- Qualification: baseline's two skips are no-extra dependency gates; the summary
+  runs the config-enabled e2e row. The 18 config-extra skips are opt-in real
+  Docker (1), Apptainer smoke/build/resource/scheduling (4), and Apptainer
+  namespace-lifecycle acceptance (13). Slurm/network/slow/optional markers use
+  the repository's ordinary lane selection, not physical fleet qualification.
+  No real fleet, scheduler, container installation or external workload was run.
+  Two unrelated existing Loom-monitor coroutine warnings appeared in the
+  baseline/unit evidence; builds warned that installed uv 0.12.3 differs from
+  the declared uv-build range, but both artifacts built successfully.
+- Final cleanup: process inventory after both gates showed no attempt-owned
+  service runtime, native supervisor or resident worker. Unrelated existing
+  supervisors were preserved. Fixture-authenticated shutdown and actual process
+  exit assertions cover persistent/mixed-role teardown. Validation artifacts
+  remain under ignored `build/` and `dist/`; no validation process is running.
+  Only this phase card's receipt was updated after the validated code tree;
+  `git diff --check` passed for that metadata-only delta.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover
@@ -476,8 +515,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Shared deployment/facade/runtime; coordinator acceptance/lifetime and agent retirement owners; ordinary CLI; corresponding tests and current docs/examples. |
 | Tests added, updated or intentionally removed | Coverage and removal rationale recorded in Workflow State; replaced ordinary bypass tests removed, underlying backend/authority assertions retained through local fixtures. |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
+| Validated revision/tree and evidence | Both required gates exited 0 at `4ece6e39e8d75a7468a6b474a5ae32a2478ce4fa`, tree `c0c4490e2bbeaebb8fb3806f8a4903a4eee11784`; terminal logs, summary and row artifacts recorded above. |
+| Validation-relevant changes after evidence | None; only this card's final receipt changed after both gates. |
 | Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Live fleet qualification and mixed-role process evidence pending |
+| PR, review and merge | Not started; manager-owned pre-submit and independent review remain. |
+| Residual risk and cleanup | Native mixed-role/process evidence passed; no attempt-owned services remain. Physical fleet/container/Slurm qualification remains explicitly excluded and mapped to successor owners above. |
