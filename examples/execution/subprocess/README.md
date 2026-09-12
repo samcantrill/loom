@@ -1,5 +1,7 @@
 # Subprocess Pipeline Example
 
+## Workflow
+
 The run entrypoints use public `loom.run` with a protected installed agent
 profile. Preparation, execution, fenced results and owned-service cleanup follow
 the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
@@ -18,3 +20,11 @@ uv run python examples/execution/subprocess/run_subprocess_pipeline.py
 uv run python examples/execution/subprocess/run_failure_diagnostics.py
 uv run python examples/execution/subprocess/run_direct_worker.py
 ```
+
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

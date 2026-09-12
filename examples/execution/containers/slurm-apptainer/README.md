@@ -1,5 +1,7 @@
 # Apptainer Agent Worker Example
 
+## Workflow
+
 The run entrypoints use public `loom.run` with a protected installed agent
 profile. Preparation, execution, fenced results and owned-service cleanup follow
 the [configured lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
@@ -35,3 +37,8 @@ uv run loom preflight examples/execution/containers/slurm-apptainer/pipeline.yam
 On a real Slurm cluster, allocation remains owned by the existing
 `slurm-single-job` or `slurm-afterok` path; Apptainer owns its worker environment.
 Live scheduler/container qualification remains site-specific and opt-in.
+
+## Variants
+
+Use the installed SIF variables above only with a qualified local runtime.
+The shared Slurm profiles retain their separate allocation and site requirements.

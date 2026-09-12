@@ -1,5 +1,7 @@
 # Failing Run Diagnostics
 
+## Workflow
+
 The run entrypoints use public `loom.run` with a protected installed agent
 profile. Preparation, execution, fenced results and owned-service cleanup follow
 the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
@@ -15,3 +17,11 @@ structured failure and logs remain in the materialized worker result.
 ```sh
 uv run python examples/operations/failing-run/run_failure_diagnostics.py
 ```
+
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

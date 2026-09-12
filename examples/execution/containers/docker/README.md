@@ -1,5 +1,7 @@
 # Docker Agent Worker Example
 
+## Workflow
+
 The run entrypoints use public `loom.run` with a protected installed agent
 profile. Preparation, execution, fenced results and owned-service cleanup follow
 the [configured lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
@@ -33,3 +35,16 @@ Python, Loom, Weave and project dependencies. See the [installed profile contrac
 
 Physical acceptance remains opt-in under `tests/container_acceptance`; fixture
 results do not qualify an image or site. No image build or pull is performed.
+
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.
+
+Selected-Docker preflight also supports `--executor docker`; checks include
+`executor.docker.command` and `filesystem.docker.artifact_root_visible`.
+A physical Docker daemon is unnecessary for these preflight checks. Docker is
+not a security sandbox for untrusted project code or untrusted images.
