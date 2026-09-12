@@ -5035,6 +5035,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             if role_name == "agent":
                 if operation not in {
+                    "service_lifetime",
                     "handshake",
                     "register",
                     "reconcile",
@@ -5193,6 +5194,9 @@ def _dispatch(
     if operation == "handshake":
         _exact(value, set())
         return view.handshake()
+    if operation == "service_lifetime":
+        _exact(value, {"session_id", "coordinator_epoch", "generation", "action"})
+        return view.service_lifetime(_string(value, "session_id"), _string(value, "coordinator_epoch"), _string(value, "generation"), _string(value, "action"))
     if operation == "register":
         return view.register(_registration(value)).value()
     if operation == "reconcile":

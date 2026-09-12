@@ -56,6 +56,7 @@ class NativeCoordinatorClient:
     ) -> None:
         self._transport = transport
         self._legacy = legacy
+        self._last_connection: CoordinatorConnectionDescription | None = None
         try:
             self._expected_coordinator_id = optional_id(expected_coordinator_id)
         except ValueError as exc:
@@ -224,7 +225,10 @@ class NativeCoordinatorClient:
                     and CONTROL_CAPABILITY not in capabilities
                 ) or (isinstance(version, str) and version != "1"):
                     raise control_error("unsupported", operation, envelope)
-            return decode_result(operation, value)
+            decoded = decode_result(operation, value)
+            if operation == "handshake":
+                self._last_connection = cast(CoordinatorConnectionDescription, decoded)
+            return decoded
         except CoordinatorClientError:
             raise
         except (QueueError, ValueError, TypeError, KeyError, RecursionError) as exc:

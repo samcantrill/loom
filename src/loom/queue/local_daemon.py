@@ -1563,6 +1563,9 @@ class LocalDaemon:
         from ._preparation_operations import CoordinatorPreparations
 
         self._preparations = CoordinatorPreparations(self, preparation)
+        from ._service_lifetime import CoordinatorLifetime
+
+        self._lifetime = CoordinatorLifetime(self)
 
     @property
     def preparation_available(self) -> bool:
@@ -1940,7 +1943,8 @@ class LocalDaemon:
         if self._execution is not None:
             self._execution.close()
             try:
-                self._execution.shutdown_clean()
+                if not self._lifetime.clean_shutdown_verified:
+                    self._execution.shutdown_clean()
             except (QueueConflictError, QueueServiceError):
                 # A busy or unavailable cross-owner proof deliberately leaves
                 # the detached process running for recovery.
@@ -2554,6 +2558,7 @@ class LocalDaemon:
         from .local_daemon_execution import load_managed_local_intent
 
         with self._cycle_lock:
+            self._lifetime.require_accepting()
             from ._preparation_operations import (
                 PREPARATION_RUN_PREFIX,
                 PreparationChildReserved,

@@ -368,8 +368,8 @@ publication. A `run` operation applies only when its exact admission is accepted
 admission and inspection evidence separately, plus the safe connection binding
 and this observer's borrowed-coordinator cleanup decision. A BLOCKED admission
 retains its diagnostic meaning and does not establish successful containment.
-This API starts no services. Configured startup and the ordinary `loom run`
-facade are separate delivery work.
+This low-level API starts no services. The configured startup facade below
+composes it for ordinary Python and CLI runs.
 
 Closing the client, `wait=False`, observation timeout, Ctrl-C and EOF detach;
 they never request cancellation. Reconnect with the same coordinator and operation
@@ -410,3 +410,94 @@ ID. They do not launch services or implement the ordinary run facade.
 Caller-chosen operation IDs cannot use the `cancel-run-` namespace: it is reserved
 for the coordinator's stable run cancellation controls. This prevents a later
 preparation or operator request from taking an accepted run's cancellation ID.
+
+### Configured startup and ordinary run
+
+`loom.run(request, *, deployment, wait=True, timeout_seconds=None)` establishes
+availability for one explicit protected selection, then uses the same native
+`start_run` and observation operations described above. Importing Loom and
+constructing a client perform no startup. The ordinary CLI is:
+
+```sh
+loom run pipeline.yaml --deployment deployment.yaml
+loom run pipeline.yaml --deployment deployment.yaml --operation-id experiment-001 --detach
+```
+
+`--operation-id`, `--queue-item-id` and `--run-name` select stable native identities;
+the latter two default to the operation identity. Omit all three for a new run.
+Replay requires the same IDs, source, config, overrides and options. A new
+experiment requires new IDs. `--overlay`, `--set`, `--profile`, stage selectors,
+parallelism, failure policy, tags and notes are forwarded through preparation.
+The old executor, run-URI, resume, dry-run and offline run switches are removed.
+Use `loom plan` for read-only planning and native explicit retry/cancellation
+operations for their respective contracts.
+
+A selection is a protected `loom.deployment` version-one file. For example:
+
+```yaml
+schema_version: 1
+kind: loom.deployment
+coordinator:
+  service_config: coordinator.yaml
+  env_file: coordinator.env
+  lifetime: run
+binding_path: state/service-binding.json
+preparation:
+  source:
+    mode: shared
+    root: projects
+    path: .
+    include: [pipeline.yaml]
+  profile: existing-project
+startup_seconds: 30
+wait_seconds: null
+```
+
+The coordinator config selects an existing authorized preparation profile and
+source-root mapping. Its embedded agent shares the coordinator's lifetime.
+For independent roles, configure `agent: {service_config: agent.yaml, lifetime:
+run}` and use the existing authenticated outbound-agent configuration. The
+coordinator must have no embedded agent in that selection. Each independent
+role can instead use `lifetime: persistent`. Remote-only clients select
+`connection: coordinator-client.yaml`, whose protected configuration must contain
+`expected_coordinator_id`. An unavailable remote service never creates a local
+replacement.
+
+Deployment paths resolve from the caller's current directory; references and
+the binding path inside the deployment resolve from the deployment file.
+Role `env_file` references are explicit and retain the role loader's behavior.
+Experiment CONFIG and overlay paths are contained relative paths inside the
+selected preparation project, and must lie in its explicit include closure.
+They have the same meaning for Unix and HTTPS invocation. Staged preparation
+still requires coordinator-visible source; it does not upload arbitrary client
+files.
+
+Protect authored selections and role/env files with owner-only permissions.
+Keep `binding_path` outside all role roots. The binding retains all creation
+intents before initialization, then records the published service IDs.
+Concurrent starters converge on those IDs. Interrupted publication can complete
+the matching binding; conflicting or partial roots fail. A missing bound root
+is an error. Preserve the binding, role stores, authority, receipts and outputs
+when stopping or restarting; shutdown does not delete them.
+
+Startup/dispatch has its own bounded policy and also respects a supplied caller
+deadline. A configured observation timeout is cumulative across reconnects.
+`wait=False`, `--detach`, timeout, Ctrl-C and EOF detach; they do not cancel.
+Accepted waiting preparation, continuations, admission retries, assignments,
+cancellation controls, unresolved containment and result delivery retain their
+services independently of the client. An unaccepted startup attachment expires
+within the bounded startup policy.
+
+The returned `RunOutcome.observation` contains native operation/admission and
+inspection facts. `RunOutcome.cleanup` reports each role as `stopped`,
+`persistent/borrowed`, `retained-for-other-work`, or `cleanup-blocked`, with
+native/process evidence where available. Embedded roles identify their shared
+process. Another run's work transfers remaining cleanup responsibility back to
+the service, allowing this caller to return. Cleanup failure never changes a
+committed scientific result or triggers an unrequested kill. Independent
+run-owned agents require a coordinator decision bound to the current session
+and process generation before clean retirement; stale or unavailable evidence
+cannot authorize it.
+
+These contracts are tested with local native workers and local authenticated
+transport fixtures. Physical fleet/site qualification remains separate.

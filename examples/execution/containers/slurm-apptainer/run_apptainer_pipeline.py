@@ -17,7 +17,7 @@ REPO_ROOT = next(
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from examples.support import run_cli_json, started_authority_session
+from examples.support import started_authority_session
 from fake_apptainer import activate_fake_apptainer, read_fake_apptainer_log
 from loom.pipeline.stores import LocalRunArtifactStore, path_to_run_uri
 
@@ -36,9 +36,14 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"apptainer-pipeline-{uuid4().hex[:8]}")
 
     with started_authority_session(output_root) as authority:
-        run = run_cli_json(
-            ["run", str(HERE / "pipeline.yaml"), "--run-uri", run_uri, "--executor", "apptainer", *authority.authority_args, "--format", "json"]
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import ApptainerExecutor
+        composed = compose_config(str(HERE / 'pipeline.yaml'))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'apptainer'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=ApptainerExecutor(run_store=execution_store)).run(RunRequest(config=composed, options=execution_options))
 
     provenance = LocalRunArtifactStore(run_root).stage_artifacts(run_uri, "analyze").read_stage_provenance()
     if provenance is None:
@@ -51,8 +56,8 @@ def main() -> None:
         raise RuntimeError("expected fake Apptainer exec call")
 
     print(f"  run_uri: {run_uri}")
-    print(f"  run_status: {run['result']['status']}")
-    print(f"  artifact_count: {run['result']['artifact_count']}")
+    print(f"  run_status: {run.status.value}")
+    print(f"  artifact_count: {len(run.artifact_index)}")
     print(f"  executor: {metadata.get('executor')}")
     print(f"  image: {calls[0].get('image')}")
     print(f"  flags: {','.join(calls[0].get('flags', []))}")

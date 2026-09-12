@@ -739,7 +739,7 @@ For fan-in stages, include all relevant changed inputs or a summarized count.
 Command shape:
 
 ```bash
-loom run experiment.yaml --from-stage train
+loom run experiment.yaml --deployment deployment.yaml --from-stage train
 ```
 
 Behavior:
@@ -761,7 +761,7 @@ rerun training and all evaluations after changing train config
 Command shape:
 
 ```bash
-loom run experiment.yaml --only-stage evaluate
+loom run experiment.yaml --deployment deployment.yaml --only-stage evaluate
 ```
 
 Behavior:
@@ -783,7 +783,7 @@ debug one stage with existing inputs
 Command shape:
 
 ```bash
-loom run experiment.yaml --force-stage train
+loom run experiment.yaml --deployment deployment.yaml --force-stage train
 ```
 
 Behavior:
@@ -805,7 +805,7 @@ rerun a flaky stage or regenerate outputs
 Command shape:
 
 ```bash
-loom run experiment.yaml --skip-stage analyze
+loom run experiment.yaml --deployment deployment.yaml --skip-stage analyze
 ```
 
 Behavior:

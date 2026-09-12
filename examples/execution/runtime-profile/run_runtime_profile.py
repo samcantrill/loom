@@ -63,21 +63,14 @@ def main() -> None:
         )
         if workspace.result is None or workspace.result.workspace is None:
             raise RuntimeError("expected authority workspace creation to succeed")
-        run = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--tag",
-                "invocation=cli",
-                "--note",
-                "runtime example executed",
-                *authority.authority_args,
-                "--format",
-                "json",
-            ]
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'local', "tags": {'invocation': 'cli'}, "notes": ['runtime example executed']})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
     raw_metadata = LocalRunArtifactStore(run_root).read_runtime_metadata(run_uri)
     if raw_metadata is None:
         raise RuntimeError("runtime metadata was not written")
@@ -85,7 +78,7 @@ def main() -> None:
 
     print(f"run_uri: {run_uri}")
     print(f"preflight_status: {preflight['result']['status']}")
-    print(f"run_status: {run['result']['status']}")
+    print(f"run_status: {run.status.value}")
     print(f"runtime_executor: {metadata['executor']}")
     print(f"runtime_tags: {','.join(sorted(metadata['tags']))}")
     print(f"runtime_stage_count: {len(metadata['stages'])}")

@@ -1,48 +1,17 @@
 # Subprocess Pipeline Example
 
+The runnable script uses the existing library execution or planning primitives
+directly. Ordinary runs use the [configured service lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). Backend demonstrations here retain their
+current process, artifact, and diagnostic assertions.
+
 This example demonstrates v5 subprocess execution with local synthetic stages:
 
-1. Run the same two-stage pipeline locally and with `--executor subprocess`.
+1. Run the same two-stage pipeline locally and with `SubprocessExecutor`.
 2. Run subprocess execution against an explicit local authority supervisor.
 3. Run a subprocess stage that fails, then inspect persisted status and stderr
    logs.
 4. Prepare one stage attempt with Python APIs and invoke it through
    `loom stage run --run-uri RUN_URI --stage STAGE_NAME`.
-
-## Workflow
-
-This workflow uses:
-
-- `loom run CONFIG --run-uri RUN_URI`
-- `loom run CONFIG --run-uri RUN_URI --executor subprocess`
-- `loom stage run --run-uri RUN_URI --stage STAGE_NAME`
-
-## Variants
-
-Canonical local command:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-local
-```
-
-Subprocess executor variant:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-workers \
-  --executor subprocess
-```
-
-Explicit co-located authority selection:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-workers \
-  --executor subprocess \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
 
 Run from the repository root:
 

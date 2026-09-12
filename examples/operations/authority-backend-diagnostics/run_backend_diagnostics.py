@@ -35,17 +35,14 @@ def main() -> None:
 
     with LocalAuthorityService.start() as authority:
         authority_args = authority_config_to_cli_args(authority.config())
-        run = run_cli_json(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                *authority_args,
-                "--format",
-                "json",
-            ]
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'local'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.config())
+        run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
         inspect = run_cli_json(
             ["backend", "inspect", run_uri, *authority_args, "--format", "json"]
         )
@@ -73,7 +70,7 @@ def main() -> None:
 
     print("authority_backend_diagnostics:")
     print(f"  run_uri: {run_uri}")
-    print(f"  run_status: {run['result']['status']}")
+    print(f"  run_status: {run.status.value}")
     print(f"  inspect_source: {inspect_result['state_source']['label']}")
     print(f"  backend_name: {capabilities_result['backend_name']}")
     print(f"  capabilities_total: {len(capability_records)}")

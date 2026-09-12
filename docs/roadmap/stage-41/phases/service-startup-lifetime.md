@@ -347,7 +347,42 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   cutover. The manager retains manifest, pre-submit, PR/review and delivery
   ownership; no child delegation or overlapping source writes.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: implemented; final validation is in progress. Protected selection
+  and external binding now retain every role creation intent before initializing
+  roots. Native role locks preserve identity and immutable lifetime on foreground
+  or automatic restart. Coordinator cycle serialization owns startup attachments,
+  accepted-work retention and final retirement; independent agents require current
+  coordinator/session/process-generation authorization and clean native retirement.
+  The lazy root facade and ordinary CLI share startup, exact native acceptance,
+  bounded observation and separate cleanup evidence.
+- Development coverage: added cold/replay and actual process exit; concurrent
+  starters; missing-bound-root and interrupted multi-role creation; all independent
+  mixed lifetime combinations; foreground restart; abandoned startup expiry and
+  losing acceptance; waiting preparation/detach; shared-run and cancellation
+  retention; history-only idle; unavailable/stale agent retirement; borrowed
+  Unix/HTTPS source parity; configured observation handshake timeout; and clean
+  shutdown refusal preserving committed success. Existing publication/continuation
+  and retry-recovery fixtures now assert retention at their native barriers.
+  Existing Phase 2 zero-timeout detach assertions remain unchanged.
+- Removal reconciliation: ordinary direct CLI dispatch/builders and executor,
+  run-uri, dry-run, authority and plugin bypass controls were removed. Obsolete
+  CLI dispatch tests were replaced by managed-path tests; authority/diagnostic
+  setup now uses bounded test-local existing-library fixtures. The manager
+  explicitly authorized bounded example-local primitive wiring to preserve the
+  existing executable backend/container assertions. No production compatibility
+  adapter or old ordinary CLI branch remains.
+- Retained consumers and successor owners: Phase 4 owns native/container journeys
+  in execution/subprocess, execution/containers/docker,
+  execution/containers/slurm-apptainer, execution/runtime-profile,
+  operations/failing-run and operations/local-diagnostics. Phase 6 owns the
+  execution/slurm/dry-run-basics and execution/slurm/afterok-diamond planning
+  scripts and physical Slurm acceptance hook. Phase 9 owns final remaining-owner
+  cutover, including execution/offline-first-import,
+  operations/offline-import-rejections, operations/authority-backend-diagnostics,
+  diagnostic/authority test-state helpers and other retained PipelineRunner
+  consumers. Existing generic runtime, sweep, prepared-run, stage-worker, Slurm,
+  artifact and authority primitives remain for these owners. The physical Slurm
+  acceptance hook was preserved unchanged; default fixtures do not qualify it.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover
@@ -358,10 +393,10 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
+| Implementation and changed paths | Shared deployment/facade/runtime; coordinator acceptance/lifetime and agent retirement owners; ordinary CLI; corresponding tests and current docs/examples. |
+| Tests added, updated or intentionally removed | Coverage and removal rationale recorded in Workflow State; replaced ordinary bypass tests removed, underlying backend/authority assertions retained through local fixtures. |
 | Validated revision/tree and evidence | Pending implementation |
 | Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Replaced-code removal / retained primitive consumers | Ordinary CLI hard cut complete; exact retained consumer groups and Phase 4/6/9 successor ownership recorded above. |
 | PR, review and merge | Pending |
 | Residual risk and cleanup | Live fleet qualification and mixed-role process evidence pending |

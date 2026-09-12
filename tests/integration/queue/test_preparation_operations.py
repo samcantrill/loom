@@ -310,6 +310,7 @@ def test_prepared_native_failed_admission_explicit_retry(
 
                 def interrupted_resume(self, *args, **kwargs):
                     resume(self, *args, **kwargs)
+                    assert daemon._lifetime.retained()
                     raise OSError("injected interruption after atomic authority retry")
 
                 monkeypatch.setattr(

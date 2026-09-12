@@ -25,6 +25,7 @@ from loom.serialization import PlainData, stable_json_bytes
 
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
+from ._service_lifetime import ServiceRetiring
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
@@ -235,6 +236,8 @@ class CoordinatorPreparations:
             return self._accept(
                 request.preparation, principal_id, queue_item_id=request.queue_item_id
             )
+        except ServiceRetiring:
+            raise
         except QueueServiceError as exc:
             raise PreparationNotAccepted(
                 "unsupported" if "unsupported" in str(exc) else "invalid_request",
@@ -246,6 +249,8 @@ class CoordinatorPreparations:
     ) -> LocalDaemonOperation:
         try:
             return self._accept(request, principal_id)
+        except ServiceRetiring:
+            raise
         except QueueServiceError as exc:
             code = "invalid_request"
             if (
@@ -278,6 +283,7 @@ class CoordinatorPreparations:
             ).hexdigest()
         coordinator_id = self.daemon._require_started()
         with self.daemon._cycle_lock, self.daemon._connection() as conn:
+            self.daemon._lifetime.require_accepting()
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM preparation_operations WHERE operation_id = ?",

@@ -1,8 +1,12 @@
 # Docker Container Executor Example
 
+The runnable script uses the existing library execution or planning primitives
+directly. Ordinary runs use the [configured service lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). Backend demonstrations here retain their
+current process, artifact, and diagnostic assertions.
+
 This example demonstrates Stage 17 Docker execution with domain-neutral stages:
 
-1. Run a normal Loom pipeline with `loom run --executor docker`.
+1. Run a normal Loom pipeline with the existing Python execution primitives.
 2. Inspect selected-Docker preflight pass and fail diagnostics.
 3. Run a failing Docker stage, then inspect persisted status and stderr logs.
 4. Review the prepared-stage `docker run` command shape used by the executor.
@@ -14,51 +18,6 @@ Docker daemon, image pull, registry, network access, or Docker SDK.
 
 Docker can improve environment reproducibility, but this example does not make
 Docker a security sandbox for untrusted project code or untrusted images.
-
-## Workflow
-
-This workflow uses:
-
-- `loom run CONFIG --run-uri RUN_URI --executor docker`
-- `loom preflight CONFIG --check executor --check filesystem --check resources`
-- `loom status RUN_URI`
-- `loom logs RUN_URI STAGE --stream stderr`
-
-## Variants
-
-Canonical Docker executor command:
-
-```sh
-uv run loom run examples/execution/containers/docker/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/docker-pipeline \
-  --executor docker
-```
-
-Explicit co-located authority selection:
-
-```sh
-uv run loom run examples/execution/containers/docker/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/docker-pipeline \
-  --executor docker \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
-
-Focused selected-Docker preflight:
-
-```sh
-uv run loom preflight examples/execution/containers/docker/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/docker-preflight \
-  --check executor \
-  --check filesystem \
-  --check resources \
-  --format json
-```
-
-The JSON output includes stable Docker check IDs such as
-`executor.docker.command`, `executor.docker.container_options`,
-`executor.docker.image`, `filesystem.docker.artifact_root_visible`,
-`resources.docker.mapping`, and `resources.docker.gpu`.
 
 Run from the repository root:
 

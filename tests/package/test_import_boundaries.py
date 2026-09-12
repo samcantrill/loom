@@ -20,7 +20,8 @@ def test_import_does_not_import_deferred_modules() -> None:
 
         import loom
 
-        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
+        assert callable(loom.run)
+        for forbidden in ("weave", "loom.pipeline", "loom.cli", "loom._run", "loom.deployment", "loom.coordinator"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
         for forbidden in ("omegaconf", "yaml", "pydantic", "fastapi", "starlette"):
@@ -116,7 +117,8 @@ def test_import_io_does_not_import_config_or_pipeline() -> None:
 
         import loom.io
 
-        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
+        assert callable(loom.run)
+        for forbidden in ("weave", "loom.pipeline", "loom.cli", "loom._run", "loom.deployment", "loom.coordinator"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.io")
         print("ok")

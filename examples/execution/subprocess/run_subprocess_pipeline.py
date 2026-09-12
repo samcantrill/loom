@@ -39,43 +39,30 @@ def main() -> None:
     service_uri = path_to_run_uri(run_root / f"subprocess-service-{uuid4().hex[:8]}")
 
     with started_authority_session(output_root) as authority:
-        local = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                local_uri,
-                *authority.authority_args,
-                "--format",
-                "json",
-            ]
-        )
-        subprocess = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                subprocess_uri,
-                "--executor",
-                "subprocess",
-                *authority.authority_args,
-                "--format",
-                "json",
-            ]
-        )
-        service_run = _run_cli(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                service_uri,
-                "--executor",
-                "subprocess",
-                *authority.authority_args,
-                "--format",
-                "json",
-            ]
-        )
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": local_uri, "executor": 'local'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        local = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": subprocess_uri, "executor": 'subprocess'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        subprocess = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=SubprocessExecutor(worker_results=execution_store)).run(RunRequest(config=composed, options=execution_options))
+        from weave import compose_config
+        from loom.pipeline.execution import PipelineRunner, RunRequest, RuntimeServices, create_authority_backed_serial_run_store
+        from loom.pipeline.runtime import merge_config_run_options
+        from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
+        composed = compose_config(str(config_path))
+        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": service_uri, "executor": 'subprocess'})
+        execution_store = create_authority_backed_serial_run_store(run_root, authority_config=authority.authority_config)
+        service_run = PipelineRunner(services=RuntimeServices.from_legacy(execution_store), executor=SubprocessExecutor(worker_results=execution_store)).run(RunRequest(config=composed, options=execution_options))
 
     store = LocalRunArtifactStore(run_root)
     provenance = store.stage_artifacts(subprocess_uri, "seed").read_stage_provenance()
@@ -86,14 +73,14 @@ def main() -> None:
             executor = metadata.get("executor")
 
     print(f"local_run_uri: {local_uri}")
-    print(f"local_status: {local['result']['status']}")
-    print(f"local_artifact_count: {local['result']['artifact_count']}")
+    print(f"local_status: {local.status.value}")
+    print(f"local_artifact_count: {len(local.artifact_index)}")
     print(f"subprocess_run_uri: {subprocess_uri}")
-    print(f"subprocess_status: {subprocess['result']['status']}")
-    print(f"subprocess_artifact_count: {subprocess['result']['artifact_count']}")
+    print(f"subprocess_status: {subprocess.status.value}")
+    print(f"subprocess_artifact_count: {len(subprocess.artifact_index)}")
     print(f"subprocess_seed_executor: {executor}")
     print(f"service_authority_run_uri: {service_uri}")
-    print(f"service_authority_status: {service_run['result']['status']}")
+    print(f"service_authority_status: {service_run.status.value}")
 
 
 def _configure_import_path() -> None:

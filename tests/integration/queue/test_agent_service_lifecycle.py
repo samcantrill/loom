@@ -86,13 +86,13 @@ class _RemoteWork:
     supervisor: AgentProcessSupervisorClient
     services: list[_AgentService] = field(default_factory=list)
 
-    def start_agent(self) -> _AgentService:
+    def start_agent(self, *, lifetime: str = "persistent") -> _AgentService:
         stop = Event()
         errors: list[BaseException] = []
 
         def serve() -> None:
             try:
-                run_outbound_agent_service(self.service_config, stop=stop)
+                run_outbound_agent_service(self.service_config, stop=stop, lifetime=lifetime)
             except BaseException as exc:
                 errors.append(exc)
 
@@ -418,3 +418,29 @@ def _kill_worker(work: _RemoteWork, launch: ResidentWorkerLaunch) -> None:
         assert select.select([descriptor], [], [], 3)[0]
     finally:
         os.close(descriptor)
+
+
+def test_run_owned_agent_does_not_retire_on_unavailable_or_stale_decision(remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch) -> None:
+    work = remote_owner
+    reached = Event()
+    original = LocalDaemonAgentHttpClient._call
+    decisions = []
+
+    def intercepted(self, operation, value, **kwargs):
+        if operation == "service_lifetime":
+            decisions.append(dict(value))
+            reached.set()
+            if len(decisions) == 1:
+                raise QueueServiceError("coordinator unavailable")
+            return {**value, "state": "authorized", "coordinator_id": "stale-owner"}
+        return original(self, operation, value, **kwargs)
+
+    from loom.queue.errors import QueueServiceError
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", intercepted)
+    service = work.start_agent(lifetime="run")
+    assert reached.wait(10)
+    _wait_until(lambda: len(decisions) >= 2)
+    assert service.thread.is_alive()
+    assert work.supervisor.status()["service_process_id"] == work.supervisor.service_process_id
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_retirement_proofs").fetchone()[0] == 0

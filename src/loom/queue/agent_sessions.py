@@ -1771,6 +1771,9 @@ class AgentSessionView:
             provider_release_proof=provider_release_proof,
         )
 
+    def service_lifetime(self, session_id: str, coordinator_epoch: str, generation: str, action: str) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).service_lifetime(session_id, coordinator_epoch, generation, action)
+
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
@@ -3969,6 +3972,42 @@ class AgentSessionService:
         if execution is None:
             raise QueueServiceError("remote execution owner is unavailable")
         return execution
+
+    @_serialized_session_operation
+    def service_lifetime(self, session_id: str, coordinator_epoch: str, generation: str, action: str) -> Mapping[str, PlainData]:
+        """Authorize this process generation's retirement from accepted work."""
+        rule, policy_revision = self._authorize("retire")
+        daemon = self._daemon
+        if coordinator_epoch != daemon._epoch or action not in {"observe", "closed"}:
+            raise QueueConflictError("service retirement generation is stale")
+        _identifier(generation, "service generation")
+        with daemon._connection() as conn:
+            session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), daemon._require_started(), expected_principal=rule.principal_id)
+            if session.agent_id != rule.agent_id or session.coordinator_epoch != coordinator_epoch:
+                raise QueueConflictError("service retirement session is stale")
+            key = "service-agent:" + session.agent_root_id
+            prior = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", (key,)).fetchone()
+            record = {} if prior is None else json.loads(prior[0])
+            identity = {"session_id": session_id, "coordinator_epoch": coordinator_epoch, "generation": generation}
+            if action == "closed":
+                if any(record.get(k) != v for k, v in identity.items()) or record.get("state") != "authorized" or session.state is not AgentSessionState.RETIRED_CLEAN:
+                    raise QueueConflictError("service retirement acknowledgement conflicts")
+                state = "closed"
+            else:
+                daemon._lifetime.require_accepting()
+                if daemon._lifetime.retained():
+                    state = "retained"
+                else:
+                    if not _coordinator_references_empty(conn, session_id):
+                        raise QueueConflictError("agent session has unresolved references")
+                    conn.execute("UPDATE agent_offers SET current = 0 WHERE session_id = ?", (session_id,))
+                    conn.execute("UPDATE agent_poll_state SET active = 0 WHERE session_id = ?", (session_id,))
+                    conn.execute("UPDATE agent_sessions SET state = ? WHERE session_id = ?", (AgentSessionState.RETIRING.value, session_id))
+                    state = "authorized"
+            result = {**identity, "coordinator_id": daemon._require_started(), "state": state}
+            conn.execute("INSERT INTO daemon_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, _canonical_json(result)))
+            conn.commit()
+        return result
 
     @_serialized_session_operation
     def retire_clean(

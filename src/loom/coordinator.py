@@ -143,13 +143,20 @@ class CoordinatorClient(NativeCoordinatorClient):
             raise control_error(
                 "invalid_request", "observe_run", {"operation_id": operation_id}
             )
-        connection = self.describe_connection(
-            expected_coordinator_id=expected_coordinator_id
-        )
-        owner = connection.coordinator_id
         deadline = (
             None if timeout_seconds is None else time.monotonic() + timeout_seconds
         )
+        guard = self._guard("observe_run", {"operation_id": operation_id}, expected_coordinator_id)
+        if timeout_seconds == 0 and self._last_connection is not None:
+            connection = self._last_connection
+            if guard is not None and connection.coordinator_id != guard:
+                raise control_error("conflict", "observe_run", {"operation_id": operation_id})
+        else:
+            connection = cast(
+                CoordinatorConnectionDescription,
+                self._native_call("handshake", {}, expected_coordinator_id, deadline=deadline),
+            )
+        owner = connection.coordinator_id
         operation = None
         admission = None
         inspection = None

@@ -1,6 +1,10 @@
 # Apptainer Container Executor
 
-This example runs one prepared stage through `loom run --executor apptainer`.
+The runnable script uses the existing library execution or planning primitives
+directly. Ordinary runs use the [configured service lifecycle](../../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). Backend demonstrations here retain their
+current process, artifact, and diagnostic assertions.
+
+This example runs one prepared stage through the existing Python execution primitives.
 Default validation installs a fake `apptainer` executable on `PATH`, logs the
 safe command shape, and executes the worker locally. It proves Loom's command
 integration, not container isolation or an HPC installation.
@@ -9,7 +13,7 @@ integration, not container isolation or an HPC installation.
 
 The runner calls:
 
-- `loom run CONFIG --run-uri RUN_URI --executor apptainer`
+- the existing Python execution primitives
 - `apptainer exec --cleanenv --nv IMAGE WORKER_COMMAND`
 
 ## Variants
