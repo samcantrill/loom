@@ -454,7 +454,10 @@ delivery failure; it does not become success.
 The authority alone validates the accepted fence and exact admitted output
 predecessor and performs commit/replay. Losing its acknowledgement leaves shared
 bytes for replay of the same commit. Cleanup follows final acknowledgement;
-bootstrap/client exit never cleans transport evidence. A published result racing
+bootstrap/client exit never cleans transport evidence. If acknowledged cleanup
+is interrupted after deleting some files, the agent obtains the same authority
+commit/replay acknowledgement again using the coordinator's retained result
+before finishing cleanup. A published result racing
 with cancellation does not obstruct the existing containment path: retirement
 waits for the acknowledged terminal cancellation/rejection disposition, including
 replay after a lost rejection acknowledgement. Scheduler observation,

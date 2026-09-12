@@ -372,13 +372,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   before publication and accurately lists its invoked surfaces. Focused consumer
   checks pass; these corrections do not change library behavior. A fresh complete
   gate follows and retains the failed receipt.
+- Cleanup recovery correction: gate 5 passed its complete default lane (3345
+  passed, two skipped); the optional lane was stopped to cover an interrupted
+  acknowledged cleanup. If some shared files were already removed before agent
+  exit, terminal tasks now reauthenticate the existing coordinator's complete
+  fenced result before retrying cleanup. This uses the same admitted predecessor
+  and adds no acknowledgement database or filesystem-success authority. All 37
+  affected storage/agent/Slurm integration checks pass; fresh full gates follow.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
-- Blocker corrections: 2/3 (published-result cancellation and quota-blocked unissued cancellation; executor-local corrections, no refiner)
+- Blocker corrections: 3/3 (published-result cancellation, quota-blocked unissued cancellation and interrupted acknowledged cleanup; executor-local corrections, no refiner)
 - PR and merge: not started
 
 ## Completion Record

@@ -305,12 +305,27 @@ class SharedSlurmResult:
                     raise QueueConflictError(
                         "SLURM result output acknowledgement conflicts"
                     )
-        response = call({**binding, "result_operation": "commit"})
+        return self.finish_delivery(identity, call)
+
+    def finish_delivery(
+        self,
+        identity: Mapping[str, PlainData],
+        call: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+    ) -> bool:
+        """Reauthenticate commit/replay before retiring even partially cleaned bytes."""
+        response = call(
+            {
+                "assignment_id": self.assignment_id,
+                "identity": dict(identity),
+                "result_operation": "commit",
+            }
+        )
         if response.get("acknowledged") is not True:
             raise QueueConflictError(
                 "SLURM result final acknowledgement is unavailable"
             )
-        self.cleanup()
+        if self.path.exists():
+            self.cleanup()
         return True
 
     def cleanup(self) -> None:

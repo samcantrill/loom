@@ -302,3 +302,88 @@ def test_quota_refusal_cannot_prevent_cancellation_of_unissued_job(tmp_path):
     assert not agent.has_retained_work()
     assert occupied.path.exists()
     assert not any(call[0] == "sbatch" for call in runner.calls)
+
+
+def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from loom.pipeline.status import StageStatus
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentHelper
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+    import loom.queue._agent_slurm as owner_module
+
+    profile = replace(
+        _profile(FakeSlurmCommandRunner(), tmp_path),
+        containment_helper=SlurmContainmentHelper("fixture", ("true",)),
+    )
+    AgentSlurmJobs.initialize(tmp_path)
+    task = _task(profile)
+    operations = []
+
+    def acknowledge(value):
+        if "result_operation" in value:
+            operations.append(value["result_operation"])
+            return {"acknowledged": True}
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    AgentSlurmJobs(tmp_path, (profile,)).step(task, acknowledge)
+    identity = {
+        "coordinator_id": "coordinator",
+        "assignment": task["assignment"],
+        "fence": "fence",
+        "incarnation": "bootstrap",
+    }
+    report = _RemoteExecutionReport(
+        "assignment-1",
+        "train",
+        1,
+        StageStatus.SUCCEEDED,
+        "2026-09-13T00:00:00Z",
+        "2026-09-13T00:00:01Z",
+        "local",
+        schema_version=3,
+        executor_metadata={},
+        process_created=True,
+    )
+    transport = SharedSlurmResult(profile.result_storage, "assignment-1")
+    transport.publish(identity, report, lambda *_args: (b"", True))
+    cleanup = SharedSlurmResult.cleanup
+
+    def interrupted(owner):
+        (owner.path / "report.json").unlink()
+        raise OSError("cleanup interrupted after acknowledged commit")
+
+    monkeypatch.setattr(SharedSlurmResult, "cleanup", interrupted)
+    with pytest.raises(OSError, match="cleanup interrupted"):
+        AgentSlurmJobs(tmp_path, (profile,)).step(
+            {**task, "result_identity": identity}, acknowledge
+        )
+    assert operations == ["report", "commit"]
+    assert transport.path.exists() and not (transport.path / "report.json").exists()
+    monkeypatch.setattr(SharedSlurmResult, "cleanup", cleanup)
+    monkeypatch.setattr(
+        owner_module,
+        "resolve_slurm_containment",
+        lambda _profile, proof: SimpleNamespace(
+            contained=True,
+            state="CONTAINED",
+            evidence_id="proof",
+            evidence_revision="1",
+            echo=proof,
+        ),
+    )
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.step(
+        {
+            **task,
+            "result_identity": identity,
+            "release_requested": True,
+            "containment_request": {},
+        },
+        acknowledge,
+    )
+    assert operations == ["report", "commit", "commit"]
+    assert not transport.path.exists()
+    assert not reopened.has_retained_work()

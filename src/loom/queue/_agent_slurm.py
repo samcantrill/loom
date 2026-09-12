@@ -369,7 +369,15 @@ class AgentSlurmJobs:
             and identity.get("fence") is not None
             and reply.get("cancel_requested") is not True
         ):
-            transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
+            if task.get("release_requested") is True:
+                # The coordinator already retains the complete result. Obtain
+                # its exact fenced acknowledgement again; shared cleanup may
+                # have been interrupted after removing some transport files.
+                transport.finish_delivery(
+                    cast(Mapping[str, PlainData], identity), acknowledge
+                )
+            else:
+                transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):
             receipt = resolve_slurm_containment(profile, recovery_request)
