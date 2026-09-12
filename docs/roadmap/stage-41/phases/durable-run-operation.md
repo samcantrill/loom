@@ -350,7 +350,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   startup, deployment creation, ordinary run facade or temporary CLI orchestrator
   was introduced.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed on 2026-09-12 at executor handoff
+  `172d2080f6168945647190ed7637000fa34f1f41`. The manager checked the full
+  implementation and correction diffs, accepted run/cancel/replay/observation
+  contracts, removal scope, both required command receipts and all seven JUnit
+  reports. The tested runtime tree is unchanged; the only subsequent changes
+  are execution metadata. `git diff --check` passed. No implementation blocker
+  remains; independent review of the actual PR is still required.
 - Independent implementation review: required for durable continuation and cancellation boundary
 - Blocker corrections: 2/3. Manager reproduced caller preparation stealing the
   stable `cancel-run-` identity after run acceptance. Reserve that native control
@@ -392,6 +398,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
     documented lanes. Log: `/tmp/loom-stage41-p2-test-summary.log`; commands,
     deselections, coverage and JUnit evidence: `build/test-summary.md` and
     `build/test-summary/<suite>/junit.xml`.
+    The manager archived and byte-verified the summary plus all seven JUnit
+    reports at `/tmp/loom-stage41-p2-summary-evidence/` before later phases
+    reuse the harness output paths.
   - The two baseline skips are the dotenv-dependent queue journey checks;
     both executed successfully in the summary's config-enabled e2e lane.
     All 18 config-extra skips are opt-in physical container acceptance: 13
@@ -420,5 +429,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both `make validate-pr` and `make test-summary` passed on `7f343c90b9f79bf14a731d75979c03638f02c196`, tree `78bcc2d8f9d4619b528a1c0aa605d4f49795f078`. Exact outcomes, logs, skipped qualification and report/JUnit paths are in the final validation receipt above. |
 | Validation-relevant changes after evidence | None. Only this card's execution/completion metadata changed after the tested commit. |
 | Replaced-code removal / retained primitive consumers | Existing coordinator facade and raw CLI contained no production prepare/wait/submit orchestration chain to remove. Preparation-only and explicit prepared submission/retry remain separate native primitives and retain their tests. The old in-process execution RunRequest remains with its Phase 9 removal owner. |
-| PR, review and merge | Manager-owned pre-submit, PR, independent review and delivery remain pending. |
+| PR, review and merge | Manager pre-submit passed; PR, independent review and delivery remain pending. |
 | Residual risk and cleanup | No unresolved implementation blocker. Evidence is local synthetic services and mutual TLS fixtures; physical qualification remains with its owning phases. Owned validation processes completed, fixture cleanup passed, and temporary edit scripts were removed. Logs and harness artifacts remain available; stage worktree/branch are retained for manager delivery. |

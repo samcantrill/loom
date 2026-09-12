@@ -225,7 +225,7 @@ and all approved validation commands remain binding.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [308](https://github.com/samcantrill/loom/pull/308), merge `c133d17` | Both required gates, manager acceptance and independent review passed; exact evidence in Phase 1 card | Physical qualification remains with later owners; no Phase 1 blocker | Replaced publication helper and consumers removed; metadata published/synchronized; exact remote/local phase branches retired |
-| 2 | pending | Prepared on published `383e9d4`; implementation in progress | Persistent-service execution/cancellation evidence pending | Pending this phase's removal audit |
+| 2 | pending | Durable run/cancel implementation, both required gates and manager pre-submit passed; exact evidence in Phase 2 card | Independent PR review and delivery pending; physical qualification remains with later owners | No replaced client orchestration chain existed; preparation-only and explicit native retry retained; summary/JUnit evidence archived |
 | 3 | pending | not started | Live fleet qualification and mixed-role process evidence pending | not started |
 | 4 | pending | not started | Real container/runtime qualification pending | not started |
 | 5 | pending | not started | Completed-job result durability and site qualification delivered by Phase 6 | not started |
