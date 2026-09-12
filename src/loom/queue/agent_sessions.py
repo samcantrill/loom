@@ -2767,6 +2767,11 @@ class AgentSessionService:
             ).fetchone()
             if row is None:
                 # No request committed before the former process epoch ended.
+                if sequence != 1:
+                    raise QueueConflictError("retained poll history is unavailable")
+                return {"state": "absent"}
+            if int(row["sequence"]) == sequence - 1:
+                # The sole outstanding next request never reached this owner.
                 return {"state": "absent"}
             if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(request):
                 raise QueueConflictError("retained poll identity conflicts")

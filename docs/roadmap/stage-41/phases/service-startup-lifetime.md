@@ -460,6 +460,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   remain enforced. The fc266b7 gate was interrupted for this correction:
   exit 2, baseline 596 passed, 2 skipped, 287 deselected in 305.93 s; no full-gate
   claim is made from it. Final gates must validate the corrected tree.
+- Correction 2 later-sequence completion: when the next poll was lost before
+  acceptance, the native owner may retain its completed predecessor. Recovery
+  now recognizes that exact one-step absence and restores the local predecessor
+  watermark instead of resetting to sequence 1. The discriminating sequence-2
+  fixture passed (1 passed, 10 deselected in 43.12 s), including native success
+  and one assignment/worker. The 1aa2141 gate was interrupted for this fix:
+  exit 2, baseline 447 passed, 2 skipped, 287 deselected in 146.42 s.
 - Blocker corrections: 2/3
 - PR and merge: not started
 

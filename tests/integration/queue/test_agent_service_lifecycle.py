@@ -473,7 +473,7 @@ def test_retirement_replay_stays_authorized_after_new_startup_hold(remote_owner:
     work.daemon._lifetime.release("racing-starter")
 
 
-@pytest.mark.parametrize("loss", ["absent", "fenced", "committed"])
+@pytest.mark.parametrize("loss", ["absent", "later-absent", "fenced", "committed"])
 def test_outstanding_poll_recovery_across_coordinator_epoch(
     remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch, loss: str,
 ) -> None:
@@ -486,6 +486,11 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
 
     def lose_response(client, operation, value, **kwargs):
         if operation == "poll" and not lost.is_set():
+            if loss == "later-absent" and value["sequence"] == 1:
+                result = original_call(client, operation, value, **kwargs)
+                assert result["result"] == "wait"
+                coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+                return result
             if loss == "fenced":
                 with pytest.raises(QueueServiceError):
                     original_call(client, operation, value, **kwargs)
@@ -512,9 +517,10 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
     coordinator = work.daemon.client_view(
         LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
     )
-    coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+    if loss != "later-absent":
+        coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
     first = work.start_agent()
-    assert lost.wait(10)
+    assert lost.wait(15)
     first.thread.join(timeout=10)
     assert not first.thread.is_alive()
     assert len(first.errors) == 1 and isinstance(first.errors[0], LostApplication)
@@ -526,6 +532,12 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
         poll = conn.execute("SELECT active, result_json FROM agent_poll_state").fetchone()
     if loss == "absent":
         assert poll is None
+    elif loss == "later-absent":
+        assert poll is not None and poll[0] == 0
+        assert json.loads(poll[1])["sequence"] == 1
+        assert json.loads(poll[1])["result"] == "wait"
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert conn.execute("SELECT sequence FROM agent_poll_state_local").fetchone()[0] == 2
     elif loss == "fenced":
         assert poll == (1, None)
     else:

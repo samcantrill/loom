@@ -953,11 +953,20 @@ class _RemoteAgentJournal:
 
     def discard_absent_poll(self, session_id: str, sequence: int) -> None:
         with self._connection() as conn:
-            conn.execute(
-                "DELETE FROM agent_poll_state_local WHERE session_id = ? "
-                "AND sequence = ? AND state = 'PENDING'",
-                (session_id, sequence),
-            )
+            if sequence == 1:
+                conn.execute(
+                    "DELETE FROM agent_poll_state_local WHERE session_id = ? "
+                    "AND sequence = ? AND state = 'PENDING'",
+                    (session_id, sequence),
+                )
+            else:
+                # Preserve the proven predecessor watermark so the same next
+                # sequence is submitted after current-session reconciliation.
+                conn.execute(
+                    "UPDATE agent_poll_state_local SET sequence = ?, state = 'FENCED' "
+                    "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
+                    (sequence - 1, session_id, sequence),
+                )
             conn.commit()
 
     def persist_reconciled_session(self, session: AgentSession) -> None:
