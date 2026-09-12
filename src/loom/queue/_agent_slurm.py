@@ -202,11 +202,6 @@ class AgentSlurmJobs:
         response = acknowledge({**evidence, "sequence": sequence})
         if response.get("sequence") != sequence:
             raise QueueConflictError("agent SLURM acknowledgement conflicts")
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE agent_slurm_operations SET acknowledged=1, released=? WHERE operation_id=? AND sequence=?",
-                (int(provider_released), assignment.operation_id, sequence),
-            )
         if provider_released:
             profile = self.profiles[
                 (assignment.profile_id, assignment.profile_configuration_fingerprint)
@@ -219,6 +214,13 @@ class AgentSlurmJobs:
                 or not (transport.path / "manifest.json").exists()
             ):
                 transport.cleanup()
+        # Preserve the pending outbox until acknowledged transport retirement
+        # finishes, so a cleanup interruption can replay even a released task.
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE agent_slurm_operations SET acknowledged=1, released=? WHERE operation_id=? AND sequence=?",
+                (int(provider_released), assignment.operation_id, sequence),
+            )
         return response
 
     def replay_pending(

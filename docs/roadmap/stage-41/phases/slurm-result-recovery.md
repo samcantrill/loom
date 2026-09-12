@@ -385,6 +385,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   path to the shared profile helper; every cross-module helper consumer is
   reconciled. Its focused regression passes. Library behavior is unchanged by
   this fixture correction, and the fresh complete gate is rerun below.
+- Acknowledged cleanup scope completion: the third correction also keeps the
+  agent's terminal-rejection outbox pending until shared cleanup completes. A
+  deletion interruption therefore replays its already accepted rejection instead
+  of orphaning retained bytes after the coordinator released the task. Nine
+  affected actor/outbound-agent checks pass. The previous successful full gate
+  and deliberately interrupted summary are archived; both full commands are
+  repeated on the completed cleanup implementation.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.

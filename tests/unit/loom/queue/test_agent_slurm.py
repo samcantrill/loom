@@ -191,8 +191,9 @@ def test_uncertain_agent_call_discovers_before_exact_cancel_without_host_gpu(
     assert reopened.has_retained_work(), "scancel is not containment"
 
 
+@pytest.mark.parametrize("interruption", ("acknowledgement", "cleanup"))
 def test_cancelled_published_result_waits_for_terminal_rejection_ack(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, interruption
 ):
     from types import SimpleNamespace
     from loom.pipeline.status import StageStatus
@@ -223,7 +224,8 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
             )
             if not lost:
                 lost = True
-                raise OSError("lost terminal rejection acknowledgement")
+                if interruption == "acknowledgement":
+                    raise OSError("lost terminal rejection acknowledgement")
         return {"sequence": value["sequence"], "cancel_requested": cancel}
 
     agent.step(task, acknowledge)
@@ -257,6 +259,18 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
             echo=proof,
         ),
     )
+    cleanup = SharedSlurmResult.cleanup
+    interrupted_cleanup = False
+
+    def cleanup_with_interruption(owner):
+        nonlocal interrupted_cleanup
+        if interruption == "cleanup" and not interrupted_cleanup:
+            interrupted_cleanup = True
+            (owner.path / "report.json").unlink()
+            raise OSError("lost terminal rejection cleanup")
+        cleanup(owner)
+
+    monkeypatch.setattr(SharedSlurmResult, "cleanup", cleanup_with_interruption)
     cancel = True
     with pytest.raises(OSError, match="lost terminal rejection"):
         agent.step(
