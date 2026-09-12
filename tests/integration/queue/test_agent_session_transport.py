@@ -7289,6 +7289,7 @@ def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
             json.dumps({**request, "unexpected": _nested_report_detail(20)}).encode(),
             failure_report=True,
         )
-    request["evidence"]["report"] = _failure_report({"items": [0] * 257}).to_dict()
+    items: list[PlainData] = [0] * 257
+    request["evidence"]["report"] = _failure_report({"items": items}).to_dict()
     with pytest.raises(QueueServiceError, match="maximum 256"):
         _decode(json.dumps(request).encode(), failure_report=True)

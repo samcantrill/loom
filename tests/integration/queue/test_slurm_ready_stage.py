@@ -919,6 +919,7 @@ result = execute_resident_stage_worker_request(worker_request=workspace.worker_r
 report = workspace.retain_result(result)
 SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).publish(identity, report, workspace.output_chunk)
 """
+            assert profile.result_storage is not None
             completed_compute = subprocess.run(
                 [
                     sys.executable,
@@ -967,6 +968,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             assert settled.state is LocalDaemonAdmissionState.SUCCEEDED
             assert len(commits) >= 2 and len(set(commits)) == 1
             assert not retained.path.exists()
+            assert daemon._execution is not None
             assert (
                 daemon._execution.slurm_assignments.read(assignment_id).state
                 == "released"
