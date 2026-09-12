@@ -397,6 +397,20 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   check observes its exact native session's retained retirement record before
   dispatch, so a closing incarnation cannot stand in for the next eligible one.
   The deterministic authorization/replay/new-hold test passed (4.78 s).
+- Acceptance handoff completion: a new cancel-run control for an already
+  completed run is rejected before commitment when retirement wins; completed
+  existing controls remain replayable. Accepted preparation/run transactions
+  remove their matching startup attachment atomically, leaving native accepted
+  work as the lifetime owner. The complete lifetime file passed: 18 passed in
+  184.16 s, including cold fast replay, mixed roles, source/observation budgets,
+  cleanup refusal and this cancellation race.
+- Gate restart qualification: the second `make validate-pr` at
+  `76084c1bb16a92226f33f139450b111d898fb417` passed Ruff/Pyright and was
+  intentionally interrupted during baseline execution (exit 130) for the final
+  cancellation/handoff correction. Neither interrupted baseline is full-suite
+  evidence. Three native fixture supervisors left by interrupted baseline cases
+  were shut down through their authenticated private test-shutdown protocol and
+  observed exited; no fixture workloads or processes remain from those attempts.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for durable startup/lifetime and public cutover

@@ -263,6 +263,8 @@ def test_waiting_preparation_survives_detach_without_local_worker(
         assert client.operation(_request().operation_id).state == "pending"
         state = client._native_call("service_lifetime", {})
         assert state["retained"] is True
+        with sqlite3.connect(tmp_path / "deployment/coordinator/control.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM daemon_metadata WHERE key LIKE 'startup-attachment:%'").fetchone()[0] == 0
         assert not (tmp_path / "deployment/agent").exists()
         cancel = client.cancel_run_operation(_request().operation_id)
         assert (
@@ -744,4 +746,33 @@ def test_observation_handshake_shares_configured_budget_and_keeps_receipt(
             == "applied"
         )
         server.stop()
+        daemon.stop()
+
+
+def test_retirement_rejects_new_cancellation_of_completed_run(tmp_path: Path) -> None:
+    from loom.queue import LocalDaemon
+    from loom.preparation import CoordinatorPreparation
+    from loom.queue._service_lifetime import ServiceRetiring
+
+    service = _service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        daemon.start_run(RunRequest(_request(), "completed"), principal_id="caller")
+        assert (
+            daemon.wait_operation("prepare-1", timeout=25).operation.state == "applied"
+        )
+        assert daemon._wait("completed", timeout_seconds=25).state.value == "SUCCEEDED"
+        assert daemon._lifetime.retire_if_idle()
+        with pytest.raises(ServiceRetiring):
+            daemon.cancel_run_operation("prepare-1", principal_id="caller")
+        with sqlite3.connect(service.daemon.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM preparation_cancellations"
+                ).fetchone()[0]
+                == 0
+            )
+    finally:
         daemon.stop()

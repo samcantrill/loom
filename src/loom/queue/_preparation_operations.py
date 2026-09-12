@@ -296,6 +296,8 @@ class CoordinatorPreparations:
                     or row["intent_digest"] != intent
                 ):
                     raise QueueConflictError("preparation operation intent conflicts")
+                conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
+                conn.commit()
                 return self._projection(row)
             if not self.available or self.callbacks is None:
                 raise QueueServiceError("preparation is unsupported")
@@ -393,6 +395,9 @@ class CoordinatorPreparations:
                     _json(result),
                 ),
             )
+            # Transfer this bounded startup attachment into the durable native
+            # operation in the same acceptance transaction.
+            conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
             conn.commit()
         self.daemon._wake.set()
         return operation
@@ -1087,6 +1092,7 @@ class CoordinatorPreparations:
             ).fetchone()
             if old is not None:
                 return self._projection(old)
+            self.daemon._lifetime.require_accepting()
             if _operation_projection(conn, cancel_id) is not None or (
                 self.daemon._execution is not None
                 and self.daemon._execution.operation_projection(cancel_id) is not None
