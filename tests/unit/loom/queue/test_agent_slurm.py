@@ -189,3 +189,87 @@ def test_uncertain_agent_call_discovers_before_exact_cancel_without_host_gpu(
     assert any(call[0] == "scancel" and "5101" in call[1] for call in discovered.calls)
     assert not any(call[0] == "sbatch" for call in discovered.calls)
     assert reopened.has_retained_work(), "scancel is not containment"
+
+
+def test_cancelled_published_result_waits_for_terminal_rejection_ack(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from loom.pipeline.status import StageStatus
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentHelper
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+    import loom.queue._agent_slurm as owner_module
+
+    profile = replace(
+        _profile(FakeSlurmCommandRunner(), tmp_path),
+        containment_helper=SlurmContainmentHelper("fixture", ("true",)),
+    )
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    cancel = False
+    lost = False
+    transport = SharedSlurmResult(profile.result_storage, "assignment-1")
+
+    def acknowledge(value):
+        nonlocal lost
+        assert "result_operation" not in value, (
+            "cancelled result must not block containment"
+        )
+        if value["provider_released"]:
+            assert transport.path.exists(), (
+                "evidence must survive the lost rejection acknowledgement"
+            )
+            if not lost:
+                lost = True
+                raise OSError("lost terminal rejection acknowledgement")
+        return {"sequence": value["sequence"], "cancel_requested": cancel}
+
+    agent.step(task, acknowledge)
+    identity = {
+        "coordinator_id": "coordinator",
+        "assignment": task["assignment"],
+        "fence": "fence",
+        "incarnation": "bootstrap",
+    }
+    report = _RemoteExecutionReport(
+        "assignment-1",
+        "train",
+        1,
+        StageStatus.SUCCEEDED,
+        "2026-09-13T00:00:00Z",
+        "2026-09-13T00:00:01Z",
+        "local",
+        schema_version=3,
+        executor_metadata={},
+        process_created=True,
+    )
+    transport.publish(identity, report, lambda *_args: (b"", True))
+    monkeypatch.setattr(
+        owner_module,
+        "resolve_slurm_containment",
+        lambda _profile, proof: SimpleNamespace(
+            contained=True,
+            state="CONTAINED",
+            evidence_id="proof",
+            evidence_revision="1",
+            echo=proof,
+        ),
+    )
+    cancel = True
+    with pytest.raises(OSError, match="lost terminal rejection"):
+        agent.step(
+            {
+                **task,
+                "cancel_requested": True,
+                "result_identity": identity,
+                "containment_request": {},
+            },
+            acknowledge,
+        )
+    assert transport.path.exists()
+    assert agent.has_retained_work()
+    AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
+    assert not transport.path.exists()
+    assert not agent.has_retained_work()

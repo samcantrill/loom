@@ -214,9 +214,9 @@ class AgentSlurmJobs:
             transport = SharedSlurmResult(
                 profile.result_storage, assignment.assignment_id
             )
-            if (
-                transport.path.exists()
-                and not (transport.path / "manifest.json").exists()
+            if transport.path.exists() and (
+                response.get("cancel_requested") is True
+                or not (transport.path / "manifest.json").exists()
             ):
                 transport.cleanup()
         return response
@@ -364,7 +364,11 @@ class AgentSlurmJobs:
             current = self.journal.observe(request.operation_id, profile)
             self._publish(assignment, current, acknowledge)
         identity = task.get("result_identity")
-        if isinstance(identity, Mapping) and identity.get("fence") is not None:
+        if (
+            isinstance(identity, Mapping)
+            and identity.get("fence") is not None
+            and reply.get("cancel_requested") is not True
+        ):
             transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):

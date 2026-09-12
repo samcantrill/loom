@@ -353,13 +353,21 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Earlier full transport subset failure occurred while the protocol version
   changed during that exploratory run; fresh final gates supersede that run.
   All exploratory/correction logs will remain in the final evidence directory.
+- Final-gate correction: the first committed gate stopped on four test typing
+  errors, corrected without source behavior changes. The second gate passed
+  Ruff/type checks but its baseline run was deliberately stopped after identifying
+  the reachable cancellation/publication race: attempting a cancelled result
+  could prevent the existing positive containment/release path. Delivery now
+  defers to cancellation and cleanup requires the acknowledged existing terminal
+  rejection; lost rejection acknowledgement retains bytes. The focused regression
+  and fresh committed final gates cover the correction.
 - Physical qualification: unavailable and unclaimed. The opt-in site receipt
   audit requires the unified public run/outage and separate storage/containment
   evidence. It does not automate site service controls or execute a live journey.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 (published-result cancellation/retirement race; executor-local correction, no refiner)
 - PR and merge: not started
 
 ## Completion Record

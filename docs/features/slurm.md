@@ -454,7 +454,10 @@ delivery failure; it does not become success.
 The authority alone validates the accepted fence and exact admitted output
 predecessor and performs commit/replay. Losing its acknowledgement leaves shared
 bytes for replay of the same commit. Cleanup follows final acknowledgement;
-bootstrap/client exit never cleans transport evidence. Scheduler observation,
+bootstrap/client exit never cleans transport evidence. A published result racing
+with cancellation does not obstruct the existing containment path: retirement
+waits for the acknowledged terminal cancellation/rejection disposition, including
+replay after a lost rejection acknowledgement. Scheduler observation,
 result publication, authority acceptance and execution containment remain
 separate facts. Missing accounting is unknown. Unresolved assignments/delivery
 retain service lifetime, and accepted output alone does not release capacity.
