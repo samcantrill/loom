@@ -199,6 +199,9 @@ class NativeCoordinatorClient:
                     "handshake", {}, guard, deadline=bound, waiting=waiting
                 )
                 if operation == "start_run":
+                    requested = envelope.get("request")
+                    if isinstance(requested, Mapping) and requested.get("mode") == "reconcile" and "reconciled-run-v1" not in description.capabilities:
+                        raise control_error("unsupported", operation, payload)
                     # Retain the owner learned before mutation even if the
                     # acceptance response disappears. Later calls stay bound.
                     self._expected_coordinator_id = description.coordinator_id
@@ -372,7 +375,10 @@ class NativeCoordinatorClient:
     ) -> LocalDaemonOperation:
         """Durably accept preparation plus admission; returning detaches observation.
 
-        Supply the same operation and queue IDs to recover an uncertain reply.
+        Replay the same immutable request to recover an uncertain reply. An
+        explicitly reconciled request has unresolved target/queue identities until
+        installed preparation selects its shared target. Its frozen retry policy
+        never authorizes a later failed revision on replay.
         Acceptance does not mean publication, admission, or execution has finished.
         """
         if not isinstance(request, RunRequest):
@@ -384,7 +390,11 @@ class NativeCoordinatorClient:
     def cancel_run_operation(
         self, operation_id: str, *, expected_coordinator_id: str | None = None
     ) -> LocalDaemonOperation:
-        """Explicitly cancel a run; wait on the returned independent control ID."""
+        """Cancel this submission before binding, or its shared target after binding.
+
+        Wait on the returned control ID for native child/target settlement. Other
+        observers of a bound target see the same cancellation; detach is separate.
+        """
         return cast(LocalDaemonOperation, self._native_call(
             "cancel_run_operation", {"operation_id": operation_id}, expected_coordinator_id
         ))

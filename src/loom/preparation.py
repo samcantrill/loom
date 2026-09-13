@@ -172,6 +172,10 @@ class PreparationStage:
                 composition, effective_options, binding, preflight
             )
 
+        verification = None
+        if binding.candidate is not None and preparation_checks_allow_publication(preflight):
+            verification = _verify_project_candidate(binding, composition, effective_options, project_result)
+
         requirements: dict[str, PlainData] = {}
         if preflight.status != PreflightStatus.FAIL:
             pipeline = _pipeline_from_resolved(
@@ -182,7 +186,9 @@ class PreparationStage:
                 name: requirement.to_dict() for name in pipeline.stage_names
             }
         report: dict[str, PlainData] = {
-            "schema_version": 4 if binding.project_preparation is not None else 2 if binding.local_scope is None else 3,
+            "schema_version": binding.to_dict()["schema_version"],
+            **({"candidate": dict(binding.candidate) if binding.candidate is not None else None,
+                "verification": verification} if binding.to_dict()["schema_version"] == 5 else {}),
             **({"project_preparation": dict(binding.project_preparation),
                 "requested_composition": requested_composition,
                 "project_result": project_result} if binding.project_preparation is not None else {}),
@@ -218,7 +224,8 @@ def _inspect_project(
         for part in attribute.split("."):
             processor = getattr(processor, part)
         request: dict[str, PlainData] = {
-            "schema_version": 1,
+            "schema_version": selected["schema_version"],
+            **({"operation": "prepare"} if selected["schema_version"] == 2 else {}),
             "composition": deepcopy(composition),
             "effective_run_options": options.to_dict(),
             "invocation": _invocation_data(binding),
@@ -252,6 +259,46 @@ def _inspect_project(
     return checked, result, PreflightResult((*preflight.checks, check), preflight.groups)
 
 
+def _checked_project_uri(binding: PreparationChildInput, result: Mapping[str, PlainData]) -> str:
+    from loom.queue.preparation import project_target_from_key
+
+    assert binding.project_preparation is not None
+    if binding.project_preparation["target_run_uri"] is not None:
+        return cast(str, binding.project_preparation["target_run_uri"])
+    return project_target_from_key(binding.project_preparation, _plain_mapping(result["reconciliation_key"]))
+
+
+def _verify_project_candidate(binding: PreparationChildInput, composition: Mapping[str, PlainData],
+                              options: RunOptions | None, project_result: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
+    from loom.fingerprints import hash_mapping
+    from loom.serialization import thaw_plain_data
+
+    assert binding.project_preparation is not None and binding.candidate is not None
+    selected = _plain_mapping(binding.project_preparation["processor"])
+    module, attribute = cast(str, selected["callable"]).split(":")
+    processor = importlib.import_module(module)
+    for part in attribute.split("."):
+        processor = getattr(processor, part)
+    candidate = _plain_mapping(thaw_plain_data(binding.candidate))
+    expected = {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}
+    try:
+        response = _plain_mapping(cast(Any, processor)({
+            "schema_version": 2, "operation": "verify_candidate", "candidate": candidate,
+            "composition": deepcopy(composition), "project_result": project_result,
+            "effective_run_options": None if options is None else options.to_dict(),
+            "operation_id": binding.operation_id, "invocation": _invocation_data(binding),
+            "input_manifest_digest": binding.input_receipt.manifest_digest,
+            "profile_descriptor": dict(binding.profile_descriptor),
+            "project_preparation": dict(binding.project_preparation),
+            "local_scope": dict(binding.local_scope or {}),
+        }))
+        if response != expected:
+            raise QueueConflictError("candidate verification result conflicts")
+    except Exception as exc:
+        return {**expected, "verdict": "rejected", "error_type": type(exc).__name__}
+    return expected
+
+
 def _recovery_config(snapshot: dict[str, PlainData], name: str) -> dict[str, PlainData]:
     pipeline = snapshot.get("pipeline")
     if not isinstance(pipeline, dict):
@@ -273,7 +320,7 @@ def _validate_project_result(
     assert binding.project_preparation is not None
     selected = _plain_mapping(binding.project_preparation["processor"])
     if (set(result) != {"schema_version", "evidence", "reconciliation_key"}
-        or type(result["schema_version"]) is not int or result["schema_version"] != 1):
+        or type(result["schema_version"]) is not int or result["schema_version"] != selected["schema_version"]):
         raise QueueConflictError("unsupported project preparation result capability")
     evidence = _plain_mapping(result["evidence"])
     if set(evidence) != {"namespace", "payload"} or evidence["namespace"] != selected["evidence_namespace"]:
@@ -289,6 +336,8 @@ def _validate_project_result(
             or not isinstance(digest, str) or len(digest) != 64
             or any(char not in "0123456789abcdef" for char in digest)):
             raise QueueConflictError("project preparation reconciliation key is invalid")
+    if binding.project_preparation["target_run_uri"] is None and key is None:
+        raise QueueConflictError("reconciled preparation requires a complete key")
     before, after = deepcopy(original), deepcopy(checked)
     for view in ("resolved", "redacted"):
         requested = cast(dict[str, PlainData], before.get(view))
@@ -309,7 +358,7 @@ def _validate_project_result(
             if set(recovery) != {"run_uri", "resume_fingerprint", "environment_fingerprint"}:
                 raise QueueConflictError("project recovery fields are invalid")
             if view == "resolved":
-                if (recovery["run_uri"] != binding.project_preparation["target_run_uri"]
+                if (recovery["run_uri"] != _checked_project_uri(binding, result)
                     or recovery["environment_fingerprint"] != binding.profile_descriptor["environment_fingerprint"]
                     or not isinstance(recovery["resume_fingerprint"], str)
                     or not recovery["resume_fingerprint"]):
@@ -471,11 +520,23 @@ def _decode_preparation_report(
     report = _plain_mapping(value)
     if (
         set(report) != (_REPORT_FIELDS | ({"local_scope"} if expected.local_scope is not None else set())
-                        | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set()))
+                        | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
+                        | ({"candidate", "verification"} if expected.to_dict()["schema_version"] == 5 else set()))
         or type(report["schema_version"]) is not int
-        or report["schema_version"] != (4 if expected.project_preparation is not None else 2 if expected.local_scope is None else 3)
+        or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
+    if expected.to_dict()["schema_version"] == 5:
+        from loom.fingerprints import hash_mapping
+        from loom.serialization import thaw_plain_data
+
+        candidate = thaw_plain_data(expected.candidate)
+        if report["candidate"] != candidate:
+            raise QueueConflictError("preparation candidate binding conflicts")
+        if candidate is not None and report["verification"] != {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}:
+            raise QueueConflictError("installed candidate verification failed")
+        if candidate is None and report["verification"] is not None:
+            raise QueueConflictError("unexpected candidate verification")
     if _project_binding(report.get("project_preparation")) != expected.project_preparation:
         raise QueueConflictError("preparation report project processor identity conflicts")
     if _local_scope(report.get("local_scope")) != expected.local_scope:
@@ -650,6 +711,16 @@ def _plain_mapping(value: object) -> dict[str, PlainData]:
     return plain
 
 
+def _prospective_run_name(request: PrepareRunRequest, binding: PreparationChildInput, composed: _ReceivedComposition) -> str:
+    from loom.pipeline.stores import run_uri_to_path
+
+    if request.run_name is not None:
+        return request.run_name
+    if composed.project_result is None:
+        raise QueueConflictError("reconciled preparation has no checked project result")
+    return run_uri_to_path(_checked_project_uri(binding, composed.project_result)).name
+
+
 class CoordinatorPreparation:
     """Application callbacks installed alongside the native coordinator daemon.
 
@@ -773,7 +844,7 @@ class CoordinatorPreparation:
                     self._service(config),
                     resolved,
                     pipeline,
-                    request.run_name,
+                    _prospective_run_name(request, binding, cast(_ReceivedComposition, composed)),
                     effective_options=cast(
                         _ReceivedComposition, composed
                     ).effective_run_options,
@@ -792,7 +863,39 @@ class CoordinatorPreparation:
             allowed,
             prospective,
             (composed, requirements),
+            None if cast(_ReceivedComposition, composed).project_result is None else cast(Mapping[str, PlainData], cast(_ReceivedComposition, composed).project_result)["reconciliation_key"],
         )
+
+    def capture_candidate(self, config: LocalDaemonConfig, run_uri: str,
+                          admission: LocalDaemonAdmission | None) -> dict[str, PlainData]:
+        """Capture plain native evidence without exporting an authority factory."""
+        from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+
+        intent = load_managed_local_intent(config, run_uri)
+        factory = config.coordinator_authority_factory
+        if factory is None:
+            raise QueueConflictError("candidate authority is unavailable")
+        snapshot = factory(run_uri).open_run(run_uri)
+        if (snapshot.run_uri != run_uri
+            or (snapshot.stages and set(stage.stage_name for stage in snapshot.stages) != set(intent.pipeline.stage_names))
+            or (not snapshot.stages and snapshot.status.value != "PLANNED")
+            or snapshot.status.value in {"CANCELLED", "CANCELLING"}
+            or (admission is not None and admission.state.value == "SUCCEEDED" and snapshot.status.value != "SUCCEEDED")):
+            raise QueueConflictError("candidate authority identity conflicts")
+        store = LocalRunStore(config.run_store_root)
+        resolved = store.read_config_snapshot(run_uri, "resolved")
+        if resolved is None:
+            raise QueueConflictError("candidate configuration is unavailable")
+        record = load_managed_local_runtime_record(store, run_uri)
+        return {
+            "schema_version": 1, "run_uri": run_uri,
+            "admission": None if admission is None else admission.to_dict(),
+            "authority": snapshot.to_dict(), "configuration": json.loads(resolved),
+            "native_intent": record, "intent_digest": intent.digest,
+            "artifact_binding": {"access": "read_only", "root": str(store.local_artifact_root(run_uri))},
+            "prepared_run": {"run_uri": run_uri, "plan_digest": record["plan_digest"],
+                             "runtime_digest": record["digest"], "stage_names": list(intent.pipeline.stage_names)},
+        }
 
     def publish_target(
         self,
@@ -803,11 +906,16 @@ class CoordinatorPreparation:
         composed, requirements = cast(
             tuple[object, Mapping[str, ExecutionRequirement]], report.publication_data
         )
+        received = cast(_ReceivedComposition, composed)
+        if received.project_preparation is not None and received.project_preparation["target_run_uri"] is None:
+            from loom.queue.preparation import project_target_from_key
+            received = replace(received, project_preparation={"processor": received.project_preparation["processor"],
+                "target_run_uri": project_target_from_key(received.project_preparation, _plain_mapping(cast(Mapping[str, PlainData], received.project_result)["reconciliation_key"]))})
         try:
             return prepare_managed_run(
                 self._service(config),
-                composed,
-                request.run_name,
+                received,
+                cast(str, request.run_name),
                 execution_requirements=requirements,
             )
         except QueueServiceError as exc:

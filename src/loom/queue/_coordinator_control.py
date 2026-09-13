@@ -546,7 +546,7 @@ def dispatch_control(
                 (
                     CONTROL_CAPABILITY,
                     *(
-                        ("agent-preparation-v1",)
+                        ("agent-preparation-v1", "reconciled-run-v1")
                         if daemon.preparation_available
                         else ()
                     ),

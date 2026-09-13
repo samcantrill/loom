@@ -32,6 +32,8 @@ def register_subparser(
     )
     parser.add_argument("--queue-item-id", help="exact native admission queue identity")
     parser.add_argument("--run-name", help="new prepared run name")
+    parser.add_argument("--reconcile", action="store_true", help="resolve the canonical target using the installed project")
+    parser.add_argument("--retry-failed", action="store_true", help="with --reconcile, retry one observed eligible failed revision")
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--timeout-seconds", type=float)
     parser.add_argument("--profile")
@@ -63,12 +65,18 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.queue.run import RunRequest
 
     try:
+        from loom.queue.errors import QueueConfigError
+
+        reconcile = getattr(namespace, "reconcile", False)
+        retry = getattr(namespace, "retry_failed", False)
+        if (reconcile and (namespace.run_name or namespace.queue_item_id)) or (retry and not reconcile):
+            raise QueueConfigError("--reconcile requires an unresolved target; --retry-failed requires --reconcile")
         selection = load_deployment(namespace.deployment)
         identity = namespace.operation_id or "run-" + uuid4().hex
         request = RunRequest(
             PrepareRunRequest(
                 identity,
-                namespace.run_name or identity,
+                None if reconcile else namespace.run_name or identity,
                 selection.source,
                 namespace.config,
                 selection.preparation_profile,
@@ -81,7 +89,9 @@ def handle(namespace: argparse.Namespace) -> int:
                     ),
                 ),
             ),
-            namespace.queue_item_id or identity,
+            None if reconcile else namespace.queue_item_id or identity,
+            mode="reconcile" if reconcile else "exact",
+            retry_policy="one_observed_failure" if retry else "never",
         )
         result = run(
             request,
