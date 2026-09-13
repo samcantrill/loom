@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 _MAX_OUTPUT_BYTES = 64 * 1024
+MAX_RESIDENT_PROBE_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +52,7 @@ def run_resident_probe(
     if (
         not isinstance(timeout_seconds, float | int)
         or isinstance(timeout_seconds, bool)
-        or not 0 < timeout_seconds <= 30
+        or not 0 < timeout_seconds <= MAX_RESIDENT_PROBE_TIMEOUT_SECONDS
     ):
         raise ValueError("resident probe timeout is invalid")
     request = thaw_plain_data(

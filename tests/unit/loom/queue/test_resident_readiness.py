@@ -51,6 +51,25 @@ def test_profile_probe_uses_selected_python_and_reports_missing_import(
     assert check.status == "FAIL"
 
 
+def test_explicit_readiness_timeout_allows_cold_import_beyond_thirty_seconds(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "cold_package.py").write_text(
+        "import time\ntime.sleep(31)\n", encoding="utf-8"
+    )
+    result = qualify_resident_profile(
+        _profile(
+            tmp_path,
+            ResidentReadinessRequirements(
+                imports=("loom", "cold_package"), timeout_seconds=120
+            ),
+        )
+    )
+
+    assert result.ok
+    assert result.identity is not None
+
+
 @pytest.mark.optional_dependency
 def test_preparation_qualification_does_not_change_portable_software_identity(
     tmp_path: Path,

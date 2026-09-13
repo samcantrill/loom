@@ -95,6 +95,16 @@ def test_probe_bounds_timeout_and_combined_output(tmp_path: Path) -> None:
     assert oversized.contained
 
 
+@pytest.mark.parametrize("timeout", (0, -1, True, 120.1, float("inf"), float("nan")))
+def test_probe_rejects_invalid_timeout_before_launch(
+    tmp_path: Path, timeout: float
+) -> None:
+    with pytest.raises(ValueError, match="resident probe timeout is invalid"):
+        run_resident_probe(
+            _profile(tmp_path), "print('{}')", {}, timeout_seconds=timeout
+        )
+
+
 def test_probe_contains_descendant_holding_stdout_pipe(tmp_path: Path) -> None:
     child_pid = tmp_path / "child.pid"
     script = (

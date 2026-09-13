@@ -420,6 +420,13 @@ def test_frozen_retry_lost_reply_and_later_failure_never_chases(tmp_path):
     service = _reconciled_service(tmp_path)
     path = tmp_path / "projects" / "pipeline.yaml"
     authored = json.loads(path.read_text())
+    authored["pipeline"]["stages"].append(
+        {
+            **json.loads(json.dumps(authored["pipeline"]["stages"][0])),
+            "name": "other",
+            "depends_on": ["produce"],
+        }
+    )
     authored["pipeline"]["stages"][0]["factory"]["_target_"] = (
         "tests.support.pipeline_execution_stages.FailingStage"
     )
@@ -434,6 +441,12 @@ def test_frozen_retry_lost_reply_and_later_failure_never_chases(tmp_path):
         queue = _result(initial)["queue_item_id"]
         failed = daemon._wait(queue, timeout_seconds=30)
         assert failed.state.value == "FAILED"
+        factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
+        uri = _result(initial)["prepared_run"]["run_uri"]
+        assert {
+            stage.stage_name for stage in factory(uri).open_run(uri).stages
+        } == {"produce"}
     finally:
         daemon.stop()
     lost = Event()
@@ -538,6 +551,13 @@ def test_active_candidate_observation_revision_change_and_shared_child_cancellat
     marker.mkdir()
     path = tmp_path / "projects" / "pipeline.yaml"
     authored = json.loads(path.read_text())
+    authored["pipeline"]["stages"].append(
+        {
+            **json.loads(json.dumps(authored["pipeline"]["stages"][0])),
+            "name": "other",
+            "depends_on": ["produce"],
+        }
+    )
     authored["pipeline"]["stages"][0]["factory"]["_target_"] = (
         "tests.support.pipeline_execution_stages.ReleaseStage"
     )
@@ -589,6 +609,12 @@ class OwnedStage(ReleaseStage):
             client.start_run(_reconciled_request("observer"))
             attached = daemon.wait_operation("observer", timeout=50).operation
             assert attached.state == "applied", attached.to_dict()
+            assert {
+                stage["stage_name"] for stage in captures[0]["authority"]["stages"]
+            } == {"produce"}
+            assert set(captures[0]["prepared_run"]["stage_names"]) == {
+                "produce", "other"
+            }
             assert (
                 _result(attached)["admission"]["admission_id"]
                 == _result(first)["admission"]["admission_id"]
