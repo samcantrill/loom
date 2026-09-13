@@ -868,3 +868,54 @@ def test_startup_qualification_timeout_is_not_applied_and_creates_no_roots(tmp_p
     assert failure.value.code == "deadline_exceeded"
     assert failure.value.mutation_outcome == "not_applied"
     assert not (tmp_path / "deployment").exists()
+
+
+@pytest.mark.parametrize("existing", ["cold", "initialized", "bound"])
+def test_wrong_run_owner_precedes_binding_and_startup_mutations(tmp_path, existing):
+    from loom._run import run
+    from loom.coordinator import CoordinatorClientError
+    from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
+
+    path = _selection(tmp_path)
+    selection = load_deployment(path)
+    if existing == "initialized":
+        service = load_coordinator_service_config(tmp_path / "coordinator.json")
+        LocalDaemon.initialize_deployment(service.daemon)
+    elif existing == "bound":
+        _bind(selection, "retained", time.monotonic() + 20)
+    binding = tmp_path / "binding.json"
+    before_binding = binding.read_bytes() if binding.exists() else None
+    database = tmp_path / "deployment/coordinator/control.sqlite"
+    before_state = database.read_bytes() if database.exists() else None
+    request = RunRequest(_request(), "wrong-owner-queue")
+    with pytest.raises(CoordinatorClientError) as failure:
+        run(request, deployment=path, wait=False, expected_coordinator_id="another-owner")
+    assert failure.value.code == "conflict"
+    assert failure.value.mutation_outcome == "not_applied"
+    assert failure.value.ids["operation_id"] == request.preparation.operation_id
+    assert (binding.read_bytes() if binding.exists() else None) == before_binding
+    assert (database.read_bytes() if database.exists() else None) == before_state
+    if existing == "cold":
+        assert not (tmp_path / "deployment").exists()
+        assert not (tmp_path / "binding.json.lock").exists()
+
+
+def test_matching_owner_binds_preinitialized_native_root(tmp_path):
+    from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
+    from loom.queue.local_daemon import _open_root
+
+    selection = load_deployment(_selection(tmp_path))
+    service = load_coordinator_service_config(tmp_path / "coordinator.json")
+    LocalDaemon.initialize_deployment(service.daemon)
+    owner = _open_root(service.daemon.coordinator_root, role="coordinator")
+    assert not (tmp_path / "binding.json").exists()
+    roles, _ = _bind(selection, "matching-owner", time.monotonic() + 20,
+                     expected_coordinator_id=owner)
+    assert roles["coordinator"]["ids"]["coordinator"] == owner
+    with sqlite3.connect(service.daemon.coordinator_root / "control.sqlite") as connection:
+        assert connection.execute(
+            "SELECT value FROM daemon_metadata WHERE key=?",
+            ("startup-attachment:matching-owner",),
+        ).fetchone() is not None

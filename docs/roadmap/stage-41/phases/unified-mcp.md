@@ -303,7 +303,18 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   and MCP coverage for a refused cold mismatch and unchanged existing binding/
   startup state, then affected checks and both fresh required gates. No new
   product contract, durable format, refiner or reviewer is needed.
-- Blocker corrections: 1/3 (first correction pending)
+- Scoped correction 1 implementation: native `_bind` resolves the caller and
+  protected connection guards before local writes, checks any selected native
+  coordinator root before publishing binding storage, and rechecks under the
+  existing shared binding lock before binding/hold writes. A matching
+  pre-initialized root remains valid without an external binding; unguarded cold
+  creation and matching-owner restart remain supported. Native cold/initialized/
+  bound mismatch regressions assert unchanged binding/database bytes, and the
+  stdio cold/restart journey asserts the same refusal before successful replay.
+  Focused native/MCP consumers: 70 passed in 382.02s; Pyright passed. Logs:
+  `/tmp/loom-p8-c1-targeted.log` and `/tmp/loom-p8-c1-typecheck.log`.
+  Fresh mandatory full gates are next on the committed correction candidate.
+- Blocker corrections: 1/3 (first correction implemented; fresh final gates pending)
 - PR and merge: not started
 
 ## Completion Record

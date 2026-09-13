@@ -542,6 +542,14 @@ def test_cold_run_all_tools_reconnect_to_same_binding_after_restart(tmp_path: Pa
             offline = await client.call_tool("loom_status", {})
             assert offline.is_error
             assert not (tmp_path / "deployment").exists()
+            refused = await client.call_tool("loom_run", {
+                "request": request, "expected_coordinator_id": "another-owner",
+            })
+            assert refused.is_error
+            assert refused.structured_content["code"] == "conflict"
+            assert refused.structured_content["mutation_outcome"] == "not_applied"
+            assert not (tmp_path / "deployment").exists()
+            assert not (tmp_path / "binding.json").exists()
             accepted = await _call(client, "loom_run", request=request)
             owner = accepted["connection"]["coordinator_id"]
             assert accepted["operation_id"] == "prepare-1"
@@ -554,7 +562,15 @@ def test_cold_run_all_tools_reconnect_to_same_binding_after_restart(tmp_path: Pa
             await _call(client, "loom_wait_for_operation", operation_id=control["operation_id"])
         binding = (tmp_path / "binding.json").read_bytes()
         _stop_fixture_process(tmp_path / "deployment/coordinator")
+        database = tmp_path / "deployment/coordinator/control.sqlite"
+        before_state = database.read_bytes()
         async with _client(args) as client:
+            refused = await client.call_tool("loom_run", {
+                "request": request, "expected_coordinator_id": "another-owner",
+            })
+            assert refused.is_error and refused.structured_content["code"] == "conflict"
+            assert (tmp_path / "binding.json").read_bytes() == binding
+            assert database.read_bytes() == before_state
             replay = await _call(client, "loom_run", request=request, expected_coordinator_id=owner)
             assert replay["connection"]["coordinator_id"] == owner
             assert replay["operation_id"] == "prepare-1"

@@ -28,6 +28,7 @@ from loom.queue.deployment import (
     load_outbound_agent_service_config,
 )
 from loom.queue.errors import QueueConfigError, QueueConflictError, QueueServiceError
+from loom.queue._coordinator_control import control_error, optional_id
 from loom.queue.local_daemon import (
     LocalDaemon,
     _acquire_lock,
@@ -230,8 +231,17 @@ def _check_deadline(deadline: float) -> None:
 
 
 def _bind(
-    selection: DeploymentSelection, attachment_id: str, deadline: float
+    selection: DeploymentSelection, attachment_id: str, deadline: float,
+    *, expected_coordinator_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if selection.connection is not None:
+        with CoordinatorClient.from_connection_file(selection.connection) as client:
+            expected = client._guard("ensure", {}, expected_coordinator_id)
+    else:
+        try:
+            expected = optional_id(expected_coordinator_id)
+        except ValueError as exc:
+            raise control_error("invalid_request", "ensure", {}) from exc
     configs: dict[str, Any] = {}
     if selection.coordinator is not None:
         role = selection.coordinator
@@ -265,6 +275,22 @@ def _bind(
     }
     if any(path.is_relative_to(root) for root in roots.values()):
         raise QueueConfigError("creation binding must be outside role roots")
+
+    def check_owner() -> None:
+        if expected is None or "coordinator" not in configs:
+            return
+        coordinator_root = configs["coordinator"].daemon.coordinator_root
+        if not coordinator_root.exists() or _open_root(
+            coordinator_root, role="coordinator"
+        ) != expected:
+            raise control_error(
+                "conflict", "ensure", {"expected_coordinator_id": expected}
+            )
+
+    # Refuse an unresolvable saved owner before even publishing binding storage.
+    # Pre-initialized native roots supply their real identity without requiring
+    # an external creation binding. Recheck under the shared binding lock below.
+    check_owner()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -276,6 +302,7 @@ def _bind(
                 break
             except BlockingIOError:
                 time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+        check_owner()
         if path.exists():
             _protected_input_path(path, label="creation binding")
             binding = json.loads(path.read_text())
@@ -421,14 +448,22 @@ def ensure_available(
     selection: DeploymentSelection, *, attachment_id: str, deadline: float | None = None,
     expected_coordinator_id: str | None = None,
 ) -> AvailableDeployment:
-    """Initialize/reopen only selected local roles and bound startup dispatch time."""
+    """Initialize/reopen only selected local roles and bound startup dispatch time.
+
+    A supplied owner must match the existing native coordinator root before
+    publishing local bindings or startup holds. First creation omits that guard;
+    pre-initialized roots need no external binding to prove their actual owner.
+    """
     deadline = min(
         time.monotonic() + selection.startup_seconds,
         deadline if deadline is not None else math.inf,
     )
     _check_deadline(deadline)
     try:
-        roles, configs = _bind(selection, attachment_id, deadline)
+        roles, configs = _bind(
+            selection, attachment_id, deadline,
+            expected_coordinator_id=expected_coordinator_id,
+        )
     except TimeoutError:
         _check_deadline(deadline)
         raise
