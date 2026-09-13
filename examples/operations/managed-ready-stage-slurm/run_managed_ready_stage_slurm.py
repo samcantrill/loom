@@ -58,7 +58,7 @@ from loom.queue.slurm_ready_stage import (  # noqa: E402
     SlurmBootstrapWorkspace,
     SlurmStageDelivery,
 )
-from loom.serialization import json_dumps_pretty  # noqa: E402
+from loom.serialization import json_dumps_pretty, thaw_plain_data  # noqa: E402
 
 
 class ProduceStage:
@@ -81,7 +81,14 @@ def main() -> None:
         starting_job_id=1800,
         scripted_results={"sbatch": [SlurmCommandResult("sbatch", ("sbatch",), 1)]},
     )
+    result_root = root / "shared-results"
+    result_root.mkdir(exist_ok=True)
     profile = SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(result_root),
+            "compute_root": str(result_root),
+            "retention_bytes": 256 * 1024 * 1024,
+        },
         profile_id="training",
         partition="gpu",
         max_outstanding=1,
@@ -286,34 +293,15 @@ def main() -> None:
             ),
         )
         report = workspace.retain_result(worker_result)
-        recorder.python(
-            "LocalDaemonSlurmBootstrapView.declare_report",
-            lambda: view.declare_report(assignment_id, incarnation, fence, report),
+        from loom.queue._slurm_result_transport import SharedSlurmResult
+
+        identity = thaw_plain_data(
+            registration["result_identity"], path="SLURM result identity"
         )
-        for output in report.outputs:
-            offset = 0
-            while True:
-                data, final = workspace.output_chunk(output.transfer_id, offset)
-                offset = recorder.python(
-                    "LocalDaemonSlurmBootstrapView.output_chunk",
-                    lambda data=data, final=final, offset=offset: view.output_chunk(
-                        assignment_id,
-                        incarnation,
-                        output.transfer_id,
-                        offset=offset,
-                        data=data,
-                        final=final,
-                    ),
-                )
-                if final:
-                    break
-        recorder.python(
-            "LocalDaemonSlurmBootstrapView.commit_result",
-            lambda: view.commit_result(assignment_id, incarnation, fence),
-        )
-        recorder.python(
-            "LocalDaemonSlurmBootstrapView.release",
-            lambda: view.release(assignment_id, incarnation),
+        assert isinstance(identity, dict)
+        identity["fence"] = fence
+        SharedSlurmResult(profile.result_storage, assignment_id, compute=True).publish(
+            identity, report, workspace.output_chunk
         )
         completed = recorder.cli(
             "queue",

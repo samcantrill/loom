@@ -6603,7 +6603,14 @@ def test_loopback_query_preserves_a_256_record_phase_one_result(
 
 
 def _slurm_bootstrap_profile(tmp_path: Path) -> SlurmReadyStageProfile:
+    result_root = tmp_path / "shared-results"
+    result_root.mkdir(exist_ok=True)
     return SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(result_root),
+            "compute_root": str(result_root),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="gpu",
         max_outstanding=1,
@@ -7264,3 +7271,25 @@ def test_agent_policy_reload_rebuilds_the_shared_gpu_monitor(
     finally:
         client.shutdown_clean()
         client.close()
+
+
+def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
+    from loom.queue.agent_session_transport import _decode
+
+    report = _failure_report(_nested_report_detail(511)).to_dict()
+    request = {
+        "session_id": "session",
+        "coordinator_epoch": "epoch",
+        "cursor": None,
+        "evidence": {"result_operation": "report", "report": report},
+    }
+    _decode(json.dumps(request).encode(), failure_report=True)
+    with pytest.raises(QueueServiceError, match="too deeply nested"):
+        _decode(
+            json.dumps({**request, "unexpected": _nested_report_detail(20)}).encode(),
+            failure_report=True,
+        )
+    items: list[PlainData] = [0] * 257
+    request["evidence"]["report"] = _failure_report({"items": items}).to_dict()
+    with pytest.raises(QueueServiceError, match="maximum 256"):
+        _decode(json.dumps(request).encode(), failure_report=True)

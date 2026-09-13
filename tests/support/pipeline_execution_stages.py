@@ -171,10 +171,15 @@ class TextConsumerStage:
             input_path = uri_to_path(context.input_artifact("data").uri)
             companion = input_path.parent / data["companion"]
             companion_text = f" companion={companion.read_text(encoding='utf-8')}"
+        text = f"seen {data}{companion_text}"
+        output_size = context.stage_config.get("output_size")
+        if output_size is not None:
+            assert isinstance(output_size, int) and output_size >= 0
+            text = text.ljust(output_size, "x")[:output_size]
         return {
             "text": context.save_artifact(
                 "text",
-                f"seen {data}{companion_text}",
+                text,
                 artifact_type="text",
                 codec_key="text.v1",
             )

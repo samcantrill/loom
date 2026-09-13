@@ -1704,6 +1704,11 @@ def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
     reference_owner: str,
 ) -> None:
     profile = SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(tmp_path),
+            "compute_root": str(tmp_path),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="cpu",
         max_outstanding=1,

@@ -9,6 +9,8 @@ from pathlib import Path
 import base64
 import json
 import sqlite3
+import subprocess
+import shutil
 import sys
 import time
 from threading import Event
@@ -60,6 +62,14 @@ from loom.serialization import PlainData, json_dumps_pretty
 
 
 pytestmark = pytest.mark.integration
+_RESULT_ROOT = Path("/unconfigured-test-root")
+
+
+@pytest.fixture(autouse=True)
+def _result_root(tmp_path, monkeypatch):
+    root = tmp_path / "shared-results"
+    root.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "_RESULT_ROOT", root)
 
 
 def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
@@ -96,7 +106,18 @@ def _profile(
     capability_path: Path | None = None,
     container_options: Mapping[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
+    result_root = (
+        _RESULT_ROOT
+        if capability_path is None
+        else capability_path.parent / "shared-results"
+    )
+    result_root.mkdir(parents=True, exist_ok=True)
     return SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(result_root),
+            "compute_root": str(result_root),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="gpu",
         max_outstanding=max_outstanding,
@@ -350,6 +371,9 @@ def _exercise_mixed_route_run(
     monkeypatch: pytest.MonkeyPatch,
     terminal_boundary: str | None = None,
     *,
+    finish_during_outage: bool = False,
+    slurm_output_size: int | None = None,
+    lose_output_ack_at: int | None = None,
     guarded_recovery: bool = False,
     native_failure: bool = False,
     container_options: Mapping[str, object] | None = None,
@@ -403,6 +427,11 @@ def _exercise_mixed_route_run(
                     )
                 },
                 "depends_on": ["preprocess"],
+                **(
+                    {"config": {"output_size": slurm_output_size}}
+                    if slurm_output_size is not None
+                    else {}
+                ),
                 "inputs": {"data": "preprocess.data"},
                 "outputs": {"text": {"artifact_type": "text", "codec_key": "text.v1"}},
                 "placement": {
@@ -871,6 +900,158 @@ def _exercise_mixed_route_run(
                     authority.open_run(run_uri).stages[1].status
                     is StageStatus.CANCELLED
                 )
+        if finish_during_outage:
+            from loom.queue.local_daemon_execution import LocalDaemonExecution
+            from loom.queue._slurm_result_transport import SharedSlurmResult
+
+            identity = execution.slurm_result_identity(
+                execution.slurm_assignments.read(assignment_id)
+            )
+            with pytest.raises(QueueConflictError, match="another submit agent"):
+                execution.relay_slurm_result(
+                    "foreign-agent",
+                    "foreign-root",
+                    {
+                        "assignment_id": assignment_id,
+                        "identity": identity,
+                        "result_operation": "commit",
+                    },
+                )
+            daemon.stop()
+            # This is an actual compute process. It gets no coordinator transport
+            # and terminates before the submit agent/coordinator are reopened.
+            program = """
+import json, sys
+from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
+from loom.queue._slurm_result_transport import SharedSlurmResult
+from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
+from loom.pipeline.context import ProcessContainmentOwner
+identity = json.loads(sys.argv[3])
+workspace = SlurmBootstrapWorkspace(sys.argv[1], identity['assignment']['assignment_id'])
+result = execute_resident_stage_worker_request(worker_request=workspace.worker_request(), workspace_root=workspace.root, process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY)
+report = workspace.retain_result(result)
+SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).publish(identity, report, workspace.output_chunk)
+"""
+            assert profile.result_storage is not None
+            completed_compute = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    str(tmp_path / "compute"),
+                    json.dumps(dict(profile.result_storage)),
+                    json.dumps(identity),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert completed_compute.returncode == 0, completed_compute.stderr
+            shutil.rmtree(tmp_path / "compute")
+            retained = SharedSlurmResult(profile.result_storage, assignment_id)
+            retained_report, output_bytes = retained.read(identity)
+            assert retained_report.schema_version == 3
+            assert output_bytes
+            if slurm_output_size is not None:
+                assert sum(map(len, output_bytes.values())) == slurm_output_size
+            assert execution.slurm_assignments.read(assignment_id).state == "running"
+            commits = []
+            output_ack_lost = Event()
+            output_acknowledgements = []
+            original_finalize = LocalDaemonExecution._slurm_finalize_record
+            original_relay = LocalDaemonExecution.relay_slurm_result
+
+            def lose_output_ack(owner, agent_id, agent_root_id, evidence):
+                response = original_relay(owner, agent_id, agent_root_id, evidence)
+                if evidence.get("result_operation") == "output":
+                    output_acknowledgements.append(
+                        (evidence["offset"], response["received"])
+                    )
+                    if (
+                        lose_output_ack_at is not None
+                        and response["received"] == lose_output_ack_at
+                        and not output_ack_lost.is_set()
+                    ):
+                        assert not commits
+                        assert retained.path.exists()
+                        assert (
+                            owner.slurm_assignments.read(assignment_id).state
+                            == "running"
+                        )
+                        output_ack_lost.set()
+                        raise OSError(
+                            "lost persisted output acknowledgement before commit"
+                        )
+                return response
+
+            def lose_first_ack(owner, candidate, candidate_fence):
+                if lose_output_ack_at is not None:
+                    assert output_ack_lost.is_set()
+                original_finalize(owner, candidate, candidate_fence)
+                committed = next(
+                    stage.latest_commit
+                    for stage in owner._remote_authority(run_uri)
+                    .open_run(run_uri)
+                    .stages
+                    if stage.stage_name == "train"
+                )
+                assert committed is not None
+                commits.append(committed.commit_id)
+                if lose_output_ack_at is None and len(commits) == 1:
+                    assert retained.path.exists()
+                    raise OSError("lost final result acknowledgement")
+
+            monkeypatch.setattr(
+                LocalDaemonExecution, "_slurm_finalize_record", lose_first_ack
+            )
+            monkeypatch.setattr(
+                LocalDaemonExecution, "relay_slurm_result", lose_output_ack
+            )
+            daemon = LocalDaemon(reopened_config)
+            daemon.start()
+            client = daemon.client_view(
+                LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+            )
+            settled = client.wait("mixed-route", timeout_seconds=20)
+            assert settled.state is LocalDaemonAdmissionState.SUCCEEDED
+            assert len(commits) >= (2 if lose_output_ack_at is None else 1)
+            assert len(set(commits)) == 1
+            if lose_output_ack_at is not None:
+                assert output_ack_lost.is_set()
+                if slurm_output_size == 0:
+                    assert output_acknowledgements == [(0, 0), (0, 0)]
+                else:
+                    assert output_acknowledgements[:3] == [
+                        (0, 32768),
+                        (32768, 65536),
+                        (0, 65536),
+                    ]
+                    if slurm_output_size == 98304:
+                        assert output_acknowledgements[3:] == [(65536, 98304)]
+                    else:
+                        assert len(output_acknowledgements) == 3
+            saved_result = run_store.read_stage_worker_result(
+                run_uri, "train", attempt=1
+            )
+            assert saved_result is not None
+            from loom.io.uris import uri_to_path
+            from loom.pipeline.execution.models import StageWorkerResult
+
+            saved_outputs = StageWorkerResult.from_dict(saved_result).outputs
+            for artifact in retained_report.outputs:
+                ref = saved_outputs[artifact.logical_name]
+                assert (
+                    uri_to_path(ref.uri).read_bytes()
+                    == output_bytes[artifact.transfer_id]
+                )
+            assert not retained.path.exists()
+            assert daemon._execution is not None
+            assert (
+                daemon._execution.slurm_assignments.read(assignment_id).state
+                == "released"
+            )
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
             workspace_root=workspace.root,
@@ -1112,7 +1293,7 @@ def _exercise_mixed_route_run(
             )
             execution._launch_lock.release()
 
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 10
         while (
             execution.slurm_assignments.read(assignment_id).state != "released"
             and time.monotonic() < deadline
@@ -1622,3 +1803,22 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         assert all(stage.status is StageStatus.PENDING for stage in snapshot.stages)
     finally:
         daemon.stop()
+
+
+def test_compute_process_exits_during_outage_then_agent_replays_one_commit(
+    tmp_path, monkeypatch
+):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, finish_during_outage=True)
+
+
+@pytest.mark.parametrize("output_size", [0, 65536, 98304])
+def test_agent_recovers_cumulative_output_acknowledgement_before_commit(
+    tmp_path, monkeypatch, output_size
+):
+    _exercise_mixed_route_run(
+        tmp_path,
+        monkeypatch,
+        finish_during_outage=True,
+        slurm_output_size=output_size,
+        lose_output_ack_at=min(output_size, 65536),
+    )

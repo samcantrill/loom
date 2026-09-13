@@ -25,6 +25,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
 )
 from loom.serialization import PlainData
 
+from ._slurm_result_transport import SharedSlurmResult
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmStageAssignment
 
@@ -201,6 +202,20 @@ class AgentSlurmJobs:
         response = acknowledge({**evidence, "sequence": sequence})
         if response.get("sequence") != sequence:
             raise QueueConflictError("agent SLURM acknowledgement conflicts")
+        if provider_released:
+            profile = self.profiles[
+                (assignment.profile_id, assignment.profile_configuration_fingerprint)
+            ]
+            transport = SharedSlurmResult(
+                profile.result_storage, assignment.assignment_id
+            )
+            if transport.path.exists() and (
+                response.get("cancel_requested") is True
+                or not (transport.path / "manifest.json").exists()
+            ):
+                transport.cleanup()
+        # Preserve the pending outbox until acknowledged transport retirement
+        # finishes, so a cleanup interruption can replay even a released task.
         with self._connect() as conn:
             conn.execute(
                 "UPDATE agent_slurm_operations SET acknowledged=1, released=? WHERE operation_id=? AND sequence=?",
@@ -292,6 +307,9 @@ class AgentSlurmJobs:
         if released is not None and released[0]:
             return
         current = self.journal.find(request.operation_id)
+        transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
+        if current is None and task.get("cancel_requested") is not True:
+            transport.reserve(assignment.to_dict())
         now = monotonic()
         urgent_cancel = (
             current is not None
@@ -347,6 +365,21 @@ class AgentSlurmJobs:
                 current = self.journal.request_cancel(request.operation_id, profile)
             current = self.journal.observe(request.operation_id, profile)
             self._publish(assignment, current, acknowledge)
+        identity = task.get("result_identity")
+        if (
+            isinstance(identity, Mapping)
+            and identity.get("fence") is not None
+            and reply.get("cancel_requested") is not True
+        ):
+            if task.get("release_requested") is True:
+                # The coordinator already retains the complete result. Obtain
+                # its exact fenced acknowledgement again; shared cleanup may
+                # have been interrupted after removing some transport files.
+                transport.finish_delivery(
+                    cast(Mapping[str, PlainData], identity), acknowledge
+                )
+            else:
+                transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):
             receipt = resolve_slurm_containment(profile, recovery_request)

@@ -4215,6 +4215,16 @@ class LocalDaemonSlurmBootstrapView:
                 "cluster": record.cluster,
                 "incarnation": record.bootstrap_incarnation,
                 "delivery": record.delivery.to_dict(),
+                "result_identity": self._execution().slurm_result_identity(record),
+                "result_storage": dict(
+                    self._execution()
+                    ._slurm_profile(
+                        record.assignment.profile_id,
+                        record.assignment.profile_configuration_fingerprint,
+                    )
+                    .result_storage
+                    or {}
+                ),
             },
             path="SLURM bootstrap registration",
         )
