@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: pr_open
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
@@ -14,7 +14,7 @@
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: independent review found cumulative-output acknowledgement replay failure; the three-correction budget is exhausted
+- Blockers: cumulative-output acknowledgement replay correction authorized; implementation, fresh validation and same-reviewer confirmation in progress
 
 ## Objective And Context
 
@@ -351,7 +351,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   amendments and predecessor readiness receipt remain owned by the manifest
   Quality Gate.
 - Refiner: not used
-- Pre-submit gate: passed. Manager verified clean executor head
+- Initial pre-submit gate: passed before the independent-review finding; current
+  correction revalidation is pending. Manager verified clean executor head
   `ccee3131cb0113ff432c4fccbf8c5d6ea52407a1`, accepted scope/removals, current
   docs, exact validated revision/tree, both required commands and seven JUnit
   suites. The archived summary and fourteen XML/coverage files match current
@@ -377,9 +378,30 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   bytes remain until replay commits once and acknowledged cleanup completes.
   Validate the transport and its actual coordinator consumer, then both required
   final gates and the same reviewer's bounded confirmation. This is a distinct
-  fourth correction, not a relabelled cleanup fix; implementation awaits a
-  maintainer exception to AGENTS.md's three-correction maximum.
-- Blocker corrections: 3/3 used and resolved; one additional independent-review blocker requires a budget exception before correction
+  fourth correction, not a relabelled cleanup fix. The maintainer explicitly
+  approved this additional bounded correction, required validation and
+  same-reviewer confirmation on 2026-09-13 ("Agree please do this"). The manager
+  implements it locally; no new executor, refiner or review loop is introduced.
+  Regression selection uses the existing real compute/outage/coordinator fixture
+  with a 64 KiB fully uploaded output, a 96 KiB partially uploaded output and an
+  empty output; response loss occurs after receiver persistence and before
+  authority commit. Preserve retained bytes, exact one-commit replay and cleanup
+  acknowledgement. Broaden only for affected consumers or observed failures.
+- Fourth-correction execution: the sender now advances using the existing bounded
+  cumulative acknowledgement, including fully persisted output and an empty final
+  chunk. The 64 KiB regression failed before the source fix
+  (`/tmp/loom-p6-review-output-replay-before.log`); all three output sizes now
+  recover after a response lost by the real coordinator upload owner, before
+  commit. The helper's commit assertion selects the train stage by name instead
+  of list position, preserving exact commit and output-byte verification.
+  All 44 affected storage/agent/Slurm/public-run cases passed in 123.42 seconds
+  (`/tmp/loom-p6-review-output-replay-affected.log`), the four outage cases passed
+  under coverage in 51.09 seconds (`/tmp/loom-p6-review-output-replay-coverage.log`),
+  and selected typing passed with zero errors/warnings
+  (`/tmp/loom-p6-review-output-replay-pyright.log`). Fresh committed full gates and
+  the same reviewer's confirmation remain required; no further behavior change
+  is planned while those gates execute.
+- Blocker corrections: three original scopes resolved; the expressly authorized fourth replay correction is implemented and awaits final validation/review (4/4 maximum for this phase)
 - PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) is open,
   non-draft and mergeable. Canonical title, exact phase branch and develop target
   are verified; independent review found the blocker above. The PR remains open
@@ -395,7 +417,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Implementation and changed paths | Complete in `src/loom/queue` shared transport, bootstrap, original-agent/session relay and existing finalizer; protected `src/loom/pipeline/executors/slurm/ready_stage.py` profile, deployment composition, current execution/Slurm docs and managed-ready-stage-slurm example updated. |
 | Tests added, updated or intentionally removed | New shared publication/ingestion and agent cancellation/cleanup tests, separate compute-process outage/restart journey, decoder/profile/bootstrap/operation/preparation/example consumers, and opt-in site-receipt audit. No required acceptance coverage removed. |
 | Validated revision/tree and evidence | `169bc32031e2a31a48af8c6e181d8596d02231f4` / `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`; both mandatory gates passed. Exact final logs, seven-suite summary/XML/coverage and prior failure/correction receipts are under `/tmp/loom-stage-41-p6-evidence/` as identified above. |
-| Validation-relevant changes after evidence | None; subsequent commit only records this card's Workflow State and Completion Record. |
+| Validation-relevant changes after evidence | The approved fourth replay correction and regression tests require fresh affected checks and both final gates; prior receipts remain historical evidence. |
 | Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
-| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; correction budget exception required. |
+| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; additional correction authorized; repair, fresh validation and same-reviewer confirmation in progress. |
 | Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |

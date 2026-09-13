@@ -289,7 +289,8 @@ class SharedSlurmResult:
         call({**binding, "result_operation": "report", "report": report.to_dict()})
         for item in report.outputs:
             data = outputs[item.transfer_id]
-            for offset in range(0, max(1, len(data)), TRANSFER_CHUNK_BYTES):
+            offset = 0
+            while True:
                 chunk = data[offset : offset + TRANSFER_CHUNK_BYTES]
                 response = call(
                     {
@@ -301,10 +302,19 @@ class SharedSlurmResult:
                         "final": offset + len(chunk) == len(data),
                     }
                 )
-                if response.get("received") != offset + len(chunk):
+                received = response.get("received")
+                if (
+                    isinstance(received, bool)
+                    or not isinstance(received, int)
+                    or not offset + len(chunk) <= received <= len(data)
+                ):
                     raise QueueConflictError(
                         "SLURM result output acknowledgement conflicts"
                     )
+                # Replay may acknowledge a prefix persisted before response loss.
+                offset = received
+                if offset == len(data):
+                    break
         return self.finish_delivery(identity, call)
 
     def finish_delivery(

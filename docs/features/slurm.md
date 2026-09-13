@@ -451,6 +451,11 @@ remains with a bounded `delivery-failure.json` diagnostic in the transport root.
 A worker result exceeding the existing transport bounds also records a retained
 delivery failure; it does not become success.
 
+Output acknowledgements report the cumulative stored byte position. After a
+lost response, the agent advances to that bounded position, including when the
+coordinator already has a complete output. An upload acknowledgement alone does
+not commit the result or permit transport cleanup.
+
 The authority alone validates the accepted fence and exact admitted output
 predecessor and performs commit/replay. Losing its acknowledgement leaves shared
 bytes for replay of the same commit. Cleanup follows final acknowledgement;
