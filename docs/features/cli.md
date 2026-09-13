@@ -1403,29 +1403,24 @@ modules.
 
 ## 20. `loom sweep`
 
-### 20.1 Purpose
-
-Run or inspect experiment sweeps.
-
-Command:
+Plan, run and inspect deterministic manual/grid sweeps. The current behavior,
+input schema and Python interface are owned by [sweeps.md](sweeps.md).
 
 ```bash
-loom sweep SWEEP_CONFIG
+loom sweep plan SWEEP_CONFIG --sweep-dir SWEEP_DIR
+loom sweep run SWEEP_CONFIG --config PROJECT_CONFIG --deployment DEPLOYMENT \
+  --sweep-dir SWEEP_DIR
+loom sweep status SWEEP_DIR --deployment DEPLOYMENT
+loom sweep collect SWEEP_DIR
 ```
 
-### 20.2 Boundary
-
-Sweep behavior should be specified in `docs/features/sweeps.md`.
-
-The CLI should eventually support:
-
-```text
-loom sweep plan SWEEP_CONFIG
-loom sweep run SWEEP_CONFIG
-loom sweep status SWEEP_RUN_URI
-```
-
-Defer sweep commands until the sweep planning API exists.
+Run config/overlay paths are relative to the selected project source. Trial
+requests and native operation/admission IDs are retained before submission;
+replay never implicitly retries a failed admission. `--no-wait` detaches after
+submission. Status without `--deployment` reads retained observations; native
+collection reopens the retained deployment to read committed artifact facts.
+The former direct/whole-run queue selector and queue configuration inputs have
+been removed.
 
 ---
 

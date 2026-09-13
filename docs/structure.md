@@ -1044,14 +1044,17 @@ directories, write run-store documents, or replace execution-time validation.
 
 ### 6.11 Sweeps
 
-Detailed specification: [sweeps.md](features/sweeps.md)
+Current behavior and interfaces: [sweeps.md](features/sweeps.md).
 
-`loom.pipeline.sweep` is reserved for a future module that expands parameter
-sets into multiple run configurations and coordinates trial execution through
-the same config, planning, execution, and store APIs as normal runs.
+`loom.pipeline.sweep` expands deterministic manual/grid specifications into
+ordered trial plans. Execution persists each trial's exact native run request
+before submission and projects coordinator operation/admission observations.
+Status and collection preserve trial provenance, early-stop meaning and
+committed artifact references, including outputs retained through retry.
 
-Sweeps should remain generic when implemented. They should not become a
-hyperparameter optimizer, experiment database, or scheduler replacement.
+The sweep layer selects experiments; native coordinator, agent and authority
+owners retain execution, placement and finalization. It remains domain-neutral
+and does not introduce a separate scheduler or experiment database.
 
 ### 6.12 Plugins
 
