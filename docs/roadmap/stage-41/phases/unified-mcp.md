@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 8
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p8-unified-mcp
@@ -14,7 +14,7 @@
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none in implementation; scoped correction 1 is implemented and validated, manager verification passed; independent review pending.
+- Blockers: none; implementation, validation, independent review and remote merge complete.
 
 ## Objective And Context
 
@@ -282,10 +282,10 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   lifecycle tests. The manager owns the manifest, delivery and independent review;
   no children, extra branches or lifecycle sidecars are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: complete and validated at correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both fresh mandatory gates pass; manager delivery and independent review remain pending.
+- Implementation: complete and validated at correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both fresh mandatory gates pass; independent review passed and PR 319 is remotely merged.
 - Refiner: not used
-- Pre-submit gate: passed. Manager verified the native identity-before-binding correction, causal native/stdio assertions, preserved first creation/restart, complete phase diff and mandatory evidence. Independently parsed all seven archived XML suites: 3721 passed/18 skipped, zero failures/errors. The initial four failures passed unchanged in focused and complete reruns; no source or acceptance relaxation followed the validated candidate. Subsequent changes are phase metadata only. No phase-owned runtime remains. Independent actual-PR-head review is next.
-- Independent implementation review: required for tool authorization/side effects and cancellation delegation
+- Pre-submit gate: passed. Manager verified the native identity-before-binding correction, causal native/stdio assertions, preserved first creation/restart, complete phase diff and mandatory evidence. Independently parsed all seven archived XML suites: 3721 passed/18 skipped, zero failures/errors. The initial four failures passed unchanged in focused and complete reruns; no source or acceptance relaxation followed the validated candidate. Subsequent changes are phase metadata only. No phase-owned runtime remains. Independent actual-PR-head review passed below.
+- Independent implementation review: passed at `8bf87069e4743604bf91c00f2df9eb80e66c749a`; no product blocker, required localized correction or workflow issue. Reviewer confirmed native ownership, tool/skill contracts, exact PR identity and all seven archived suite totals; only metadata followed the tested candidate.
 - Scoped correction 1 (resolved): the supported `loom_run` call accepts an optional saved
   coordinator guard. Its native composition calls `ensure_available`, which calls
   `_bind` before checking that guard. A cold selected deployment with a conflicting
@@ -316,7 +316,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Both fresh mandatory full gates pass on the committed correction candidate;
   current revision/tree and complete evidence are recorded below.
 - Blocker corrections: 1/3 (first correction implemented and validated)
-- PR and merge: [PR 319](https://github.com/samcantrill/loom/pull/319) is open against develop with the canonical head/title; independent review and merge pending.
+- PR and merge: [PR 319](https://github.com/samcantrill/loom/pull/319) squash-merged into develop as `928df2e42ec29b9f2c68a7cdb8bfff2c9d09d1b4` at 2026-09-13T21:11:39Z. Reviewed head `8bf87069e4743604bf91c00f2df9eb80e66c749a`; remote phase branch retired. Transition passed on the coordination branch; publish/synchronize this metadata before exact local branch retirement and successor start.
 
 ## Completion Record
 
@@ -327,7 +327,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both fresh mandatory gates passed on clean correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`, tree `a2e1686d3190ce445f0f256037c5aa2ca486ed31`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 301 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3721 passed, 18 skipped, zero failures/errors across seven suites. Current gate logs, summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-c1-evidence/`; 24 final gate/report files were byte-verified. The initial candidate's evidence remains separately archived at `/tmp/loom-stage41-p8-evidence/`. |
 | Validation-relevant changes after evidence | None after the fresh passing gates. This completion update changes only phase metadata; correction source/tests and the remaining validated tree are unchanged. |
 | Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
-| PR, review and merge | [PR 319](https://github.com/samcantrill/loom/pull/319) open against develop; independent actual-head review pending. |
+| PR, review and merge | [PR 319](https://github.com/samcantrill/loom/pull/319); independent pass at `8bf87069e4743604bf91c00f2df9eb80e66c749a`; merge `928df2e42ec29b9f2c68a7cdb8bfff2c9d09d1b4`. Validation reconciled through metadata-only changes, delivery and transition passed. |
 | Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Both gate terminals and phase-owned test/service processes are terminal; process inspection found only unrelated historical supervisors and current rphys work, which were preserved. |
 
 
@@ -400,5 +400,5 @@ them with the actual changed skills; native/stdio tests own runtime evidence.
   No physical workload or live assistant-session qualification was performed.
 - Final process inspection found no remaining phase-owned runtime, MCP, pytest
   or harness process. Unrelated historical supervisors were preserved. The
-  executor made no branch transition, push, PR or merge; manager verification,
-  independent review and delivery remain pending.
+  executor made no branch transition, push, PR or merge. Manager verification,
+  independent review and delivery are complete as recorded above.
