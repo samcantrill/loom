@@ -182,17 +182,41 @@ def run_sweep(
 def observe_sweep(
     plan: SweepPlan, *, client: CoordinatorClient, sweep_dir: str | Path
 ) -> SweepStatusSummary:
-    """Refresh retained operations without submitting any unsent trial or retry."""
+    """Refresh retained operations without submitting any unsent trial or retry.
+
+    A saved request can precede native acceptance. If its operation is absent and
+    no observation or cancellation control has established acceptance, retain its
+    local outcome and continue. Missing accepted work and other native errors
+    propagate to the caller.
+    """
+    from loom.coordinator import CoordinatorClientError
+
     root = Path(sweep_dir)
     manifest = read_sweep_manifest(root / SWEEP_MANIFEST_FILE_NAME)
     for trial_id, record in cast(
         dict[str, Any], manifest.metadata.get("native_runs", {})
     ).items():
-        observation = client.observe_run(
-            record["request"]["preparation"]["operation_id"],
-            wait=False,
-            expected_coordinator_id=_observed_owner(record),
-        ).to_dict()
+        operation_id = record["request"]["preparation"]["operation_id"]
+        try:
+            observation = client.observe_run(
+                operation_id,
+                wait=False,
+                expected_coordinator_id=_observed_owner(record),
+            ).to_dict()
+        except CoordinatorClientError as exc:
+            previous = record.get("observation") or {}
+            if (
+                exc.code == "not_found"
+                and exc.operation == "operation"
+                and exc.ids.get("operation_id") == operation_id
+                and previous.get("operation") is None
+                and previous.get("admission") is None
+                and record.get("cancellation_operation_id") is None
+            ):
+                # Intent is saved before send. Preserve its uncertainty/failure
+                # and any newer concurrent observation without writing a stale row.
+                continue
+            raise
         _update_state(
             root,
             lambda runs: runs[trial_id].update(

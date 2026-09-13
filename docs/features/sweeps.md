@@ -97,7 +97,11 @@ without requesting another attempt. Rewriting a compatible plan preserves these
 references. The coordinator owns readiness, placement, workers and finalization.
 
 `observe_sweep(plan, client=client, sweep_dir=...)` refreshes only selected native
-operations. `cancel_sweep_trial(sweep_dir, trial_id, client=client)` delegates to
+operations. A request saved before transmission may have no native operation yet;
+status keeps its retained uncertainty or dispatch failure and continues refreshing
+later trials. It does not submit the missing request. Missing previously accepted
+work, a missing admission after finding its operation, and other coordinator
+errors still propagate. `cancel_sweep_trial(sweep_dir, trial_id, client=client)` delegates to
 native run cancellation and returns its independent control operation.
 `retry_sweep_trial(..., retry_failed_revision=revision, client=client)` durably
 retains and submits explicit failed-revision authorization through the native

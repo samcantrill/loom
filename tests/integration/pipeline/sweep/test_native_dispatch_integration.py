@@ -1,5 +1,6 @@
 """Scientific/control sweep assertions through real native preparation and workers."""
 
+import io
 import json
 from typing import Any, cast
 from pathlib import Path
@@ -107,6 +108,77 @@ def test_lost_native_response_recovers_same_admission(tmp_path, monkeypatch):
     )
     assert sent[0] == sent[1]
     assert recovered.trials[0].metadata["admission_id"] == lost[0]
+
+
+def test_cli_observation_skips_unaccepted_request_and_recovers_later_acceptance(
+    tmp_path, monkeypatch
+):
+    import loom
+    from loom.cli.main import main
+    from loom.coordinator import CoordinatorClient
+
+    selection = _selection(tmp_path)
+    plan = plan_sweep(
+        ManualSweepSpec(
+            sweep_id="partial-acceptance",
+            run_uri_root=(tmp_path / "runs").as_uri(),
+            trials=(
+                ManualTrialSpec(overrides={"pipeline.name": "first"}),
+                ManualTrialSpec(overrides={"pipeline.name": "second"}),
+            ),
+        )
+    )
+    native_run = loom.run
+    accepted = []
+
+    def lose_response(request, **kwargs):
+        if request.preparation.run_name == "trial-0001":
+            raise ConnectionError("connection lost before acceptance")
+        result = native_run(request, **kwargs)
+        assert result.observation.admission is not None
+        accepted.append(result.observation.admission.admission_id)
+        raise ConnectionError("accepted response lost before sweep persistence")
+
+    root = tmp_path / "sweep"
+    monkeypatch.setattr(loom, "run", lose_response)
+    first = run_sweep(
+        plan,
+        request_template=RunRequest(_request(), "template"),
+        deployment=selection,
+        sweep_dir=root,
+    )
+    assert [t.outcome.value for t in first.trials] == ["unknown", "unknown"]
+    before = _records(root)["trial-0001"]
+    monkeypatch.setattr(
+        CoordinatorClient,
+        "start_run",
+        lambda *a, **kw: pytest.fail("observer submitted work"),
+    )
+    stdout, stderr = io.StringIO(), io.StringIO()
+    assert (
+        main(
+            [
+                "sweep",
+                "status",
+                str(root),
+                "--deployment",
+                str(selection),
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    ), stderr.getvalue()
+    summary = json.loads(stdout.getvalue())["result"]
+    assert summary["counts"]["unknown"] == 1
+    assert summary["counts"]["succeeded"] == 1
+    assert _records(root)["trial-0001"] == before
+    assert (
+        _records(root)["trial-0002"]["observation"]["admission"]["admission_id"]
+        == accepted[0]
+    )
 
 
 def test_collection_preserves_committed_outputs_across_explicit_retry(tmp_path):

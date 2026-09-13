@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from loom.coordinator import RunRequest
+from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest
+from loom.queue.errors import QueueConfigError
 from loom.queue.preparation import PreparationSource, PrepareRunRequest
 from loom.pipeline.sweep import (
     ManualSweepSpec,
@@ -19,6 +20,7 @@ from loom.pipeline.sweep import (
     SweepProtocolError,
     cancel_sweep_trial,
     retry_sweep_trial,
+    observe_sweep,
 )
 
 
@@ -336,6 +338,220 @@ def test_definite_submission_failure_is_failed_and_later_trials_continue(
     assert result.failed_count == 1
     assert result.succeeded_count == 1
     assert result.status.value == "failed"
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        (ConnectionError("connection lost before acceptance"), "unknown"),
+        (QueueConfigError("selected config is outside source closure"), "failed"),
+    ],
+)
+def test_observe_unaccepted_trial_preserves_failure_and_refreshes_later_trial(
+    tmp_path, monkeypatch, failure, expected
+):
+    import loom
+
+    sent = []
+
+    def run(request, **kwargs):
+        sent.append(request)
+        if len(sent) == 1:
+            raise failure
+        return _outcome(request, "WAITING")
+
+    monkeypatch.setattr(loom, "run", run)
+    plan = _plan()
+    run_sweep(
+        plan,
+        request_template=_template(),
+        deployment="selection.json",
+        sweep_dir=tmp_path,
+        wait=False,
+    )
+    before = _records(tmp_path)["trial-0001"]
+    observed = []
+
+    def observe(operation_id, **kwargs):
+        observed.append(operation_id)
+        if operation_id == sent[0].preparation.operation_id:
+            raise CoordinatorClientError(
+                "not_found",
+                boundary="coordinator",
+                operation="operation",
+                ids={"operation_id": operation_id},
+            )
+        return _outcome(sent[1]).observation
+
+    monkeypatch.setattr(loom, "run", lambda *a, **kw: pytest.fail("observer sent work"))
+    summary = observe_sweep(
+        plan, client=cast(Any, SimpleNamespace(observe_run=observe)), sweep_dir=tmp_path
+    )
+    assert observed == [r.preparation.operation_id for r in sent]
+    assert [t.outcome.value for t in summary.trials] == [expected, "succeeded"]
+    assert _records(tmp_path)["trial-0001"] == before
+
+
+def test_observe_interruption_before_send_leaves_saved_intent_untouched(
+    tmp_path, monkeypatch
+):
+    import loom
+    from loom.queue._coordinator_control import (
+        control_error,
+        encode_wire,
+        error_envelope,
+    )
+    from tests.unit.loom.test_coordinator import _peer
+
+    def interrupt(request, **kwargs):
+        saved = json.loads((tmp_path / "sweep.json").read_text())
+        assert (
+            saved["metadata"]["native_runs"]["trial-0001"]["request"]
+            == request.to_dict()
+        )
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(loom, "run", interrupt)
+    plan = _plan()
+    with pytest.raises(KeyboardInterrupt):
+        run_sweep(
+            plan,
+            request_template=_template(),
+            deployment="selection.json",
+            sweep_dir=tmp_path,
+        )
+    before = (tmp_path / "sweep.json").read_bytes()
+
+    def respond(connection, request):
+        assert request["operation"] == "operation"
+        error = control_error("not_found", "operation", request, boundary="coordinator")
+        connection.sendall(encode_wire(error_envelope(error)) + b"\n")
+
+    monkeypatch.setattr(loom, "run", lambda *a, **kw: pytest.fail("observer sent work"))
+    endpoint = tmp_path / "service.sock"
+    with _peer(endpoint, respond) as requests:
+        with CoordinatorClient.from_unix_socket(endpoint) as client:
+            summary = observe_sweep(plan, client=client, sweep_dir=tmp_path)
+    assert {r["operation"] for r in requests} == {"handshake", "operation"}
+    assert (tmp_path / "sweep.json").read_bytes() == before
+    assert [t.outcome.value for t in summary.trials] == ["queued", "pending"]
+    assert all(t.metadata["admission_id"] is None for t in summary.trials)
+
+
+@pytest.mark.parametrize("accepted_by", ["observation", "cancellation"])
+def test_missing_previously_accepted_operation_still_raises(
+    tmp_path, monkeypatch, accepted_by
+):
+    import loom
+
+    def run(request, **kwargs):
+        if accepted_by == "cancellation":
+            raise ConnectionError("acceptance response lost")
+        return _outcome(request)
+
+    monkeypatch.setattr(loom, "run", run)
+    plan = _plan()
+    run_sweep(
+        plan,
+        request_template=_template(),
+        deployment="selection.json",
+        sweep_dir=tmp_path,
+    )
+    if accepted_by == "cancellation":
+        cancel_sweep_trial(
+            tmp_path,
+            "trial-0001",
+            client=cast(
+                Any,
+                SimpleNamespace(
+                    cancel_run_operation=lambda op, **kw: SimpleNamespace(
+                        operation_id="cancel-" + op
+                    )
+                ),
+            ),
+        )
+    operation_id = _records(tmp_path)["trial-0001"]["request"]["preparation"][
+        "operation_id"
+    ]
+    error = CoordinatorClientError(
+        "not_found",
+        boundary="coordinator",
+        operation="operation",
+        ids={"operation_id": operation_id},
+    )
+
+    def observe(*args, **kwargs):
+        raise error
+
+    before = (tmp_path / "sweep.json").read_bytes()
+    with pytest.raises(CoordinatorClientError) as caught:
+        observe_sweep(
+            plan,
+            client=cast(Any, SimpleNamespace(observe_run=observe)),
+            sweep_dir=tmp_path,
+        )
+    assert caught.value is error
+    assert (tmp_path / "sweep.json").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "failure_at,code", [("admission", "not_found"), ("operation", "conflict")]
+)
+def test_native_observation_errors_beyond_missing_requested_operation_propagate(
+    tmp_path, monkeypatch, failure_at, code
+):
+    import loom
+    from loom.queue._coordinator_control import (
+        control_error,
+        encode_wire,
+        error_envelope,
+    )
+    from tests.unit.loom.test_coordinator import _peer
+
+    def lose_response(request, **kwargs):
+        raise ConnectionError("response lost")
+
+    monkeypatch.setattr(loom, "run", lose_response)
+    plan = _plan()
+    run_sweep(
+        plan,
+        request_template=_template(),
+        deployment="selection.json",
+        sweep_dir=tmp_path,
+    )
+    operation_id = _records(tmp_path)["trial-0001"]["request"]["preparation"][
+        "operation_id"
+    ]
+
+    def respond(connection, request):
+        if request["operation"] == failure_at:
+            response = error_envelope(
+                control_error(code, failure_at, request, boundary="coordinator")
+            )
+        else:
+            assert request["operation"] == "operation"
+            response = {
+                "ok": True,
+                "result": {
+                    "operation_id": operation_id,
+                    "kind": "run",
+                    "state": "applied",
+                    "code": None,
+                    "result": {"admission": {"admission_id": "accepted"}},
+                },
+            }
+        connection.sendall(encode_wire(response) + b"\n")
+
+    before = (tmp_path / "sweep.json").read_bytes()
+    endpoint = tmp_path / "service.sock"
+    with _peer(endpoint, respond) as requests:
+        with CoordinatorClient.from_unix_socket(endpoint) as client:
+            with pytest.raises(CoordinatorClientError) as caught:
+                observe_sweep(plan, client=client, sweep_dir=tmp_path)
+    assert caught.value.code == code
+    assert caught.value.operation == failure_at
+    assert {r["operation"] for r in requests} == {"handshake", "operation", failure_at}
+    assert (tmp_path / "sweep.json").read_bytes() == before
 
 
 def _records(root) -> dict[str, Any]:
