@@ -77,7 +77,7 @@ from loom.cli.main import main
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _service(tmp_path: Path, *, mode: str = "shared"):
+def _service(tmp_path: Path, *, mode: str = "shared", local: bool = False):
     pytest.importorskip("weave")
     repository = Path(__file__).resolve().parents[3]
     projects = tmp_path / "projects"
@@ -196,6 +196,10 @@ def _service(tmp_path: Path, *, mode: str = "shared"):
         authored = json.loads(coordinator.read_text())
         authored["preparation"]["source_roots"]["projects"].pop("shared_snapshot_root")
         authored["preparation"]["profiles"]["existing-project"]["source_modes"] = [mode]
+        coordinator.write_text(json.dumps(authored))
+    if local:
+        authored = json.loads(coordinator.read_text())
+        authored["preparation"]["profiles"]["existing-project"]["configuration_policy"] = "local"
         coordinator.write_text(json.dumps(authored))
     return load_coordinator_service_config(coordinator)
 
@@ -2175,6 +2179,91 @@ def test_reuse_only_plan_completes_from_planned_without_new_attempt(
             assert snapshot.status is RunStatus.SUCCEEDED
             assert snapshot.stages[0].attempts == previous
             assert artifacts.load(output) == {"value": 41}
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("fault,mode", ((None, "shared"), (None, "staged"), ("portable", "shared"), ("untrusted", "shared"), ("target", "shared")))
+def test_native_local_file_graph_is_bound_from_preparation_to_execution(
+    tmp_path: Path, fault: str | None, mode: str,
+) -> None:
+    from loom.queue.local_daemon_execution import load_managed_local_intent
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    service = _service(tmp_path, mode=mode, local=fault not in {"portable", "untrusted"})
+    path = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(path.read_text())
+    stage = authored["pipeline"]["stages"][0]
+    counter = tmp_path / "local-counter"
+    stage["config"].update(counter_path=str(counter), weights_ref={"path": "/data/product"})
+    if fault == "untrusted":
+        stage["fingerprint"] = {LOCAL_PREPARATION_SCOPE: {
+            "agent_id": "coordinator", "binding_fingerprint": "a" * 64,
+        }}
+    if fault == "target":
+        stage["placement"] = {"target": "another-agent"}
+    path.write_text(json.dumps(authored))
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.prepare_run(_request(mode))
+            operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            if fault is not None:
+                assert operation.state in {"failed", "conflict"}, operation.to_dict()
+                assert not (service.daemon.run_store_root / "target-1").exists()
+                assert not counter.exists()
+                return
+            assert operation.state == "applied", (operation.to_dict(), daemon._service_error)
+            receipt = _result(operation)["prepared_run"]
+            from copy import deepcopy
+            from loom.preparation import decode_preparation_report
+            from loom.queue.preparation import PreparationChildInput
+
+            child = client.admission(_result(operation)["preparation_admission_id"]).admission
+            child_intent = load_managed_local_intent(service.daemon, child.run_uri)
+            binding = PreparationChildInput.from_dict(child_intent.pipeline.get_stage("prepare").stage_config)
+            report_ref = ArtifactRef.from_dict(dict(_result(operation)["report_ref"]))
+            report = LocalArtifactStore(LocalRunStore(service.daemon.run_store_root).local_artifact_root(child.run_uri)).load(report_ref)
+            assert isinstance(report, dict)
+            assert report["schema_version"] == 3
+            decode_preparation_report(report, expected=binding)
+            stale = deepcopy(report)
+            stale["local_scope"]["agent_id"] = "other-agent"
+            with pytest.raises(QueueConflictError, match="local policy"):
+                decode_preparation_report(stale, expected=binding)
+            unsupported = {**report, "schema_version": 4}
+            with pytest.raises(QueueServiceError, match="fields"):
+                decode_preparation_report(unsupported, expected=binding)
+            intent = load_managed_local_intent(service.daemon, receipt["run_uri"])
+            stage = intent.pipeline.get_stage("produce")
+            launch = service.daemon.resident_worker_launch_profile
+            assert launch is not None
+            assert stage.fingerprint_fields[LOCAL_PREPARATION_SCOPE] == {
+                "agent_id": "coordinator", "binding_fingerprint": launch.fingerprint,
+            }
+            assert intent.placements["produce"].target == "coordinator"
+            assert not counter.exists()
+            # Restart reads persisted intent against the new protected launch.
+            changed = replace(service.daemon, resident_worker_launch_profile=replace(
+                launch, environment={**launch.environment, "LOCAL_BINDING": "changed"},
+            ))
+            with pytest.raises(QueueConflictError, match="binding identity"):
+                load_managed_local_intent(changed, receipt["run_uri"])
+            client.submit(LocalDaemonAdmissionRequest("execute-local", receipt["run_uri"]))
+            assert client.wait("execute-local", timeout_seconds=25).state.value == "SUCCEEDED"
+            assert counter.read_text() == "1"
+            store = LocalRunStore(service.daemon.run_store_root)
+            worker_result = StageWorkerResult.from_dict(
+                store.read_stage_worker_result(receipt["run_uri"], "produce", attempt=1)
+            )
+            assert LocalArtifactStore(store.local_artifact_root(receipt["run_uri"])).load(
+                worker_result.outputs["data"]
+            ) == {"value": 41}
     finally:
         server.stop()
         daemon.stop()

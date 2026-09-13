@@ -37,6 +37,9 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 - `execution.containers.docker` -> `tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`
 - `execution.containers.slurm-apptainer` -> `tests/e2e/test_example_journeys.py::test_e2e_example_apptainer_executor_runs_with_fake_command`
 
+A [native local file preparation example](local-preparation/README.md) demonstrates
+protected local policy, a file-using installed stage and committed result checking.
+
 ## Run
 
 Run from the repository root:

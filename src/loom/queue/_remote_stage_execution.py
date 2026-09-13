@@ -1486,6 +1486,10 @@ class _ResidentAssignmentWorkspace:
             raise QueueConflictError(
                 "resident assignment bundle does not match the resident profile"
             )
+        from .preparation import _require_local_binding
+
+        launch_profile = profile.launch_profile if isinstance(profile, ResidentExecutionProfile) else profile
+        _require_local_binding(_assignment_local_scope(request), launch_profile)
         encoded = _canonical_json(request.to_dict())
         with self._connect() as conn:
             row = conn.execute(
@@ -1674,6 +1678,12 @@ class _ResidentAssignmentWorkspace:
             decoded = json.loads(launch_json)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise QueueServiceError("supervisor launch state is invalid") from exc
+        from .preparation import _require_local_binding
+
+        scope = _assignment_local_scope(self.request())
+        if scope is not None:
+            launch = _launch_from_value(decoded)
+            _require_local_binding(scope, launch.profile)
         canonical = _canonical_json(decoded)
         with self._connect() as conn:
             row = conn.execute(
@@ -1702,6 +1712,15 @@ class _ResidentAssignmentWorkspace:
 
     def worker_request(self) -> StageWorkerRequest:
         request = self.request()
+        scope = _assignment_local_scope(request)
+        if scope is not None:
+            from .preparation import _require_local_binding
+
+            retained = self.supervisor_launch_json()
+            # Pre-launch failure evidence also uses this materialization path.
+            if retained is not None:
+                launch = _launch_from_value(json.loads(retained))
+                _require_local_binding(scope, launch.profile)
         fingerprint = StageFingerprintRecord.from_dict(
             thaw_plain_data(request.fingerprint, path="remote fingerprint")
         )
@@ -1751,20 +1770,26 @@ class _ResidentAssignmentWorkspace:
             raise QueueConflictError(
                 "preparation input conflicts with the retained launch"
             )
-        from .preparation import SharedInputReceipt
+        from .preparation import SharedInputReceipt, _require_local_binding
 
+        _require_local_binding(preparation.local_scope, launch.profile)
+        local_context: dict[str, PlainData] = (
+            {} if preparation.local_scope is None else {"local_scope": dict(preparation.local_scope)}
+        )
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
             return {
-                "schema_version": 1,
+                "schema_version": 1 if preparation.local_scope is None else 2,
+                **local_context,
                 "profile_descriptor": dict(launch.profile.descriptor),
                 "staged_directory": str(directory),
             }
         alias = preparation.input_receipt.root
         path = launch.profile.preparation_shared_roots.get(alias)
         return {
-            "schema_version": 1,
+            "schema_version": 1 if preparation.local_scope is None else 2,
+                **local_context,
             "profile_descriptor": dict(launch.profile.descriptor),
             "shared_roots": {} if path is None else {alias: str(path)},
         }
@@ -2207,6 +2232,18 @@ class _ResidentAssignmentWorkspace:
         return "EMPTY" if row is None else str(row[0])
 
 
+def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, PlainData] | None:
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
+
+    payload = cast(Mapping[str, PlainData], request.fingerprint["payload"])
+    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    scope = _local_scope(fields.get(LOCAL_PREPARATION_SCOPE))
+    preparation = request.preparation_input
+    if preparation is not None and scope != preparation.local_scope:
+        raise QueueConflictError("preparation assignment local scope conflicts")
+    return scope
+
+
 def _reject_path_bearing_data(value: object, field: str) -> None:
     forbidden_keys = ("path", "root", "uri", "url", "directory", "cwd")
     if isinstance(value, Mapping):
@@ -2233,7 +2270,14 @@ def _validate_remote_semantic_data(
     worker_metadata: Mapping[str, PlainData],
 ) -> None:
     """Reject coordinator-local locations from the semantic wire request."""
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
+
+    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
+    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
     preparation = _preparation_input_from_fingerprint(fingerprint)
+    if (_local_scope(fields.get(LOCAL_PREPARATION_SCOPE)) is not None
+        or (preparation is not None and preparation.local_scope is not None)):
+        raise QueueServiceError("remote transport cannot export unresolved local preparation bindings")
     if preparation is not None:
         # The fixed stage's only location-bearing data is a validated finite
         # preparation reference. Every other semantic field keeps the same guard.

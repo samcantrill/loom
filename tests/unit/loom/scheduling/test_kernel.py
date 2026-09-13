@@ -662,3 +662,28 @@ def test_runtime_resource_adapter_normalizes_memory_and_preserves_attributes() -
     )
     assert (view.amount, view.unit) == (ExactQuantity(2 * 1024**2), "B")
     assert view.attributes == {"mode": "resident"}
+
+
+def test_local_preparation_target_cannot_spill_to_equally_installed_agent() -> None:
+    from loom.preparation import _bind_local_snapshot
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    from typing import Any
+
+    snapshot: dict[str, Any] = {"pipeline": {"stages": [
+        {"name": "read", "factory": {"_target_": "installed.FileStage"},
+         "config": {"weights_ref": {"path": "/data/product"}}, "outputs": {"data": {"artifact_type": "json"}}},
+        {"name": "write", "factory": {"_target_": "installed.FileStage"}, "outputs": {"data": {"artifact_type": "json"}}},
+    ]}}
+    _bind_local_snapshot(snapshot, {"agent_id": "selected", "binding_fingerprint": "a" * 64})
+    kernel = SchedulingKernel(planners={}, policy=FifoSchedulingPolicy())
+    for stage in snapshot["pipeline"]["stages"]:
+        assert stage["fingerprint"][LOCAL_PREPARATION_SCOPE]["agent_id"] == "selected"
+        work = WorkItem(stage["name"], 1, {}, target=stage["placement"]["target"])
+        same_profile = {"resident_profile_fingerprint": "equal-installation"}
+        other = Candidate("other", {}, {}, attributes=same_profile)
+        selected = Candidate("selected", {}, {}, attributes=same_profile)
+        decision = kernel.decide(work=(work,), candidates=(other, selected), as_of=1)
+        assert decision.selected is not None
+        assert decision.selected.candidate_id == "selected"
+        assert kernel.decide(work=(work,), candidates=(other,), as_of=1).selected is None

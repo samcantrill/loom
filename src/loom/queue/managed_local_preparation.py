@@ -115,6 +115,14 @@ def prepare_managed_run(
     run_name_text = _validate_run_name(run_name)
     resolved = _resolved_mapping(composed)
     pipeline = _pipeline_from_resolved(resolved)
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope, _require_local_binding
+
+    for stage in pipeline.stages:
+        scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
+        _require_local_binding(scope, service.daemon.resident_worker_launch_profile,
+                               agent_id=service.daemon.machine_id)
+        if scope is not None and stage.placement.get("target") != scope["agent_id"]:
+            raise QueueConflictError("local preparation hard placement conflicts")
     requirements = _validated_execution_requirements(pipeline, execution_requirements)
     profiles = {
         profile.profile_id: profile for profile in service.daemon.slurm_profiles

@@ -527,3 +527,9 @@ and accepted outputs do not release capacity without containment and provider
 release acknowledgements. A site without qualifying containment evidence retains
 the unresolved reservation. Fake-scheduler tests do not qualify physical Slurm,
 container setup or durable completed-job result storage.
+
+For an installed graph that reads host files, select the protected
+[local configuration policy](features/agent-preparation.md#protected-local-configuration).
+It binds preparation and every target action to the embedded local agent and its
+retained launch configuration. Use fresh preparation after changing those bindings;
+portable fleet execution still requires resolved portable inputs.

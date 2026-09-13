@@ -1129,3 +1129,31 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
             )
     finally:
         daemon.stop()
+
+
+def test_local_assignment_rejects_changed_binding_and_remote_export(tmp_path: Path) -> None:
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    local = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, fingerprint_fields={LOCAL_PREPARATION_SCOPE: {
+            "agent_id": "agent-1", "binding_fingerprint": profile.launch_profile.fingerprint,
+        }}),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    request = replace(request, fingerprint=local.to_dict())
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    # A reopening process receives the durable scope even when config changes.
+    reopened = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    assert reopened.request() == request
+    changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
+    with pytest.raises(QueueConflictError, match="binding identity"):
+        reopened.persist_request(request, changed)
+    with pytest.raises(QueueServiceError, match="unresolved local"):
+        request.validate_remote_transport()
+    with pytest.raises(QueueServiceError, match="unresolved local"):
+        _ResidentAssignmentBundle.from_remote_dict(request.to_dict())

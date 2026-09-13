@@ -263,6 +263,8 @@ def load_coordinator_service_config(
     )
     preparation_policy = load_preparation_policy(
         payload.get("preparation"),
+        local_agent_id=_string(payload, "machine_id"),
+        local_launch_profile=None if local_agent is None else local_agent.profile.launch_profile,
         base=base,
         descriptors=(
             *remote_profiles,

@@ -40,6 +40,7 @@ class PreparationProfile:
     allowed_source_roots: tuple[str, ...]
     source_modes: tuple[str, ...]
     runtime_options: RunOptions
+    local_scope: Mapping[str, PlainData] | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -47,6 +48,7 @@ class PreparationProfile:
             "allowed_source_roots": list(self.allowed_source_roots),
             "source_modes": list(self.source_modes),
             "runtime_options": self.runtime_options.to_dict(),
+            **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
         }
 
 
@@ -96,13 +98,15 @@ class PreparationPolicy:
                 "allowed_source_roots": list(profile.allowed_source_roots),
                 "source_modes": list(profile.source_modes),
                 "runtime_options_digest": hash_mapping(profile.runtime_options.to_dict()),
+                **({"local_scope": dict(profile.local_scope)} if profile.local_scope is not None else {}),
             } for alias, profile in sorted(self.profiles.items())],
             "effective_modes": list(self.effective_modes),
         }
 
 
 def load_preparation_policy(
-    value: object, *, base: Path, descriptors: Sequence[ResidentProfileDescriptor]
+    value: object, *, base: Path, descriptors: Sequence[ResidentProfileDescriptor],
+    local_agent_id: str | None = None, local_launch_profile: object = None,
 ) -> PreparationPolicy | None:
     """Decode only explicit roots, qualified descriptor selections and native options.
 
@@ -128,7 +132,7 @@ def load_preparation_policy(
     profiles: dict[str, PreparationProfile] = {}
     for alias, raw in raw_profiles.items():
         _alias(alias, "preparation profile")
-        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"})
+        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy"})
         profile_id = _alias(data["resident_profile_id"], "resident_profile_id")
         matches = {descriptor for descriptor in descriptors if descriptor.profile_id == profile_id}
         if len(matches) != 1:
@@ -147,7 +151,19 @@ def load_preparation_policy(
             raise QueueConfigError("preparation runtime_options are invalid") from exc
         if options.executor != "local":
             raise QueueConfigError("preparation runtime_options must explicitly select the local managed executor")
-        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options)
+        mode = data.get("configuration_policy", "portable")
+        if mode not in ("portable", "local"):
+            raise QueueConfigError("preparation configuration_policy must be portable or local")
+        scope = None
+        if mode == "local":
+            from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+
+            if (not isinstance(local_launch_profile, ResidentWorkerLaunchProfile)
+                or local_agent_id is None
+                or local_launch_profile.descriptor != next(iter(matches)).to_dict()):
+                raise QueueConfigError("local preparation requires the selected protected local agent")
+            scope = {"agent_id": local_agent_id, "binding_fingerprint": local_launch_profile.fingerprint}
+        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope)
     return PreparationPolicy(MappingProxyType(roots), MappingProxyType(profiles))
 
 

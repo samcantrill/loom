@@ -337,6 +337,38 @@ def input_receipt_from_dict(data: Mapping[str, object]) -> PreparationInputRecei
     raise QueueServiceError("preparation input receipt is invalid")
 
 
+LOCAL_PREPARATION_SCOPE = "loom.local_preparation"
+
+
+def _local_scope(value: object) -> Mapping[str, PlainData] | None:
+    """Decode the retained protected locality identity; absence means portable."""
+    from types import MappingProxyType
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"agent_id", "binding_fingerprint"}:
+        raise QueueServiceError("local preparation scope is invalid")
+    validate_queue_id(value["agent_id"], "local preparation agent_id")
+    fingerprint = value["binding_fingerprint"]
+    if (not isinstance(fingerprint, str) or len(fingerprint) != 64
+        or any(char not in "0123456789abcdef" for char in fingerprint)):
+        raise QueueServiceError("local preparation binding fingerprint is invalid")
+    return MappingProxyType(dict(value))
+
+
+def _require_local_binding(scope: Mapping[str, PlainData] | None, profile: object,
+                           *, agent_id: str | None = None) -> None:
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from .errors import QueueConflictError
+
+    if scope is not None and (
+        not isinstance(profile, ResidentWorkerLaunchProfile)
+        or profile.fingerprint != scope["binding_fingerprint"]
+        or (agent_id is not None and agent_id != scope["agent_id"])
+    ):
+        raise QueueConflictError("local preparation binding identity conflicts")
+
+
 @dataclass(frozen=True, slots=True)
 class PreparationChildInput:
     """Finite captured input and invocation for the fixed preparation stage."""
@@ -349,11 +381,13 @@ class PreparationChildInput:
     overlays: tuple[str, ...] = ()
     overrides: tuple[str, ...] = ()
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
+    local_scope: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
+        object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
         _invocation(self)
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
@@ -369,7 +403,8 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 2,
+            "schema_version": 2 if self.local_scope is None else 3,
+            **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
             "operation_id": self.operation_id,
             "preparation_profile": self.preparation_profile,
             "config_path": self.config_path,
@@ -383,7 +418,7 @@ class PreparationChildInput:
         if (
             not isinstance(value, Mapping)
             or set(value)
-            != {
+            != ({
                 "schema_version",
                 "operation_id",
                 "preparation_profile",
@@ -393,9 +428,10 @@ class PreparationChildInput:
                 "overlays",
                 "overrides",
                 "run_options",
-            }
+            } | ({"local_scope"} if value.get("schema_version") == 3 else set()))
             or type(value.get("schema_version")) is not int
-            or value.get("schema_version") != 2
+            or value.get("schema_version") not in (2, 3)
+            or (value.get("schema_version") == 3 and value.get("local_scope") is None)
             or not isinstance(value.get("input_receipt"), Mapping)
         ):
             raise QueueServiceError("preparation child input is invalid")
@@ -408,6 +444,7 @@ class PreparationChildInput:
             cast(tuple[str, ...], value["overlays"]),
             cast(tuple[str, ...], value["overrides"]),
             cast(Mapping[str, PlainData], value["run_options"]),
+            _local_scope(value.get("local_scope")),
         )
 
 

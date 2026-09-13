@@ -54,6 +54,9 @@ from loom.queue.managed_local_preparation import (
     prepare_managed_run,
 )
 from loom.queue.preparation import (
+    LOCAL_PREPARATION_SCOPE,
+    _local_scope,
+    _require_local_binding,
     PREPARATION_INPUT_CONTEXT_ENV,
     PREPARATION_STAGE_TARGET,
     PreparationChildInput,
@@ -95,6 +98,8 @@ class PreparationStage:
         binding = PreparationChildInput.from_dict(context.stage_config)
         private = _worker_context()
         profile = ResidentProfileDescriptor.from_dict(private["profile_descriptor"])
+        if _local_scope(private.get("local_scope")) != binding.local_scope:
+            raise QueueConflictError("preparation local policy identity conflicts")
         if profile.to_dict() != dict(binding.profile_descriptor):
             raise QueueConflictError("preparation installation_mismatch")
         if isinstance(binding.input_receipt, SharedInputReceipt):
@@ -138,6 +143,10 @@ class PreparationStage:
             ),
         )
         composition = _composition_data(composed)
+        if preflight.status != PreflightStatus.FAIL:
+            for key in ("resolved", "redacted"):
+                snapshot = cast(dict[str, PlainData], composition[key])
+                _bind_local_snapshot(snapshot, binding.local_scope)
         provenance = cast(dict[str, PlainData], composition["provenance"])
         metadata = cast(dict[str, PlainData], provenance["metadata"])
         metadata["loom_invocation"] = _invocation_data(binding)
@@ -157,7 +166,8 @@ class PreparationStage:
                 name: requirement.to_dict() for name in pipeline.stage_names
             }
         report: dict[str, PlainData] = {
-            "schema_version": 2,
+            "schema_version": 2 if binding.local_scope is None else 3,
+            **({"local_scope": dict(binding.local_scope)} if binding.local_scope is not None else {}),
             "operation_id": binding.operation_id,
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "preparation_profile": binding.preparation_profile,
@@ -175,6 +185,27 @@ class PreparationStage:
                 "report", report, artifact_type="json", codec_key="json.v1"
             )
         }
+
+
+def _bind_local_snapshot(snapshot: dict[str, PlainData], scope: Mapping[str, PlainData] | None) -> None:
+    """Attach native locality to every action, preserving authored semantics."""
+    pipeline = _pipeline_from_resolved(snapshot)
+    for stage in pipeline.stages:
+        if LOCAL_PREPARATION_SCOPE in stage.fingerprint_fields:
+            raise QueueConflictError("captured configuration cannot select local preparation scope")
+        if scope is not None:
+            target = stage.placement.get("target")
+            if target is not None and target != scope["agent_id"]:
+                raise QueueConflictError("local preparation conflicts with requested hard target")
+            route = stage.placement.get("execution_route")
+            if route is not None and route != {"kind": "managed_agent"}:
+                raise QueueConflictError("local preparation requires the managed agent route")
+    if scope is None:
+        return
+    definition = cast(dict[str, PlainData], snapshot["pipeline"])
+    for stage in cast(list[dict[str, PlainData]], definition["stages"]):
+        stage["placement"] = {**cast(dict[str, PlainData], stage.get("placement", {})), "target": scope["agent_id"]}
+        stage["fingerprint"] = {**cast(dict[str, PlainData], stage.get("fingerprint", {})), LOCAL_PREPARATION_SCOPE: dict(scope)}
 
 
 def _compose_worker_config(
@@ -205,12 +236,13 @@ def _worker_context() -> Mapping[str, PlainData]:
         value = json.loads(encoded)
         if (
             not isinstance(value, dict)
-            or set(value) not in (
+            or (set(value) - {"local_scope"}) not in (
                 {"schema_version", "profile_descriptor", "shared_roots"},
                 {"schema_version", "profile_descriptor", "staged_directory"},
             )
             or type(value["schema_version"]) is not int
-            or value["schema_version"] != 1
+            or value["schema_version"] not in (1, 2)
+            or (value["schema_version"] == 2) != ("local_scope" in value)
             or not isinstance(value.get("shared_roots", {}), dict)
             or any(
                 not isinstance(alias, str)
@@ -285,11 +317,13 @@ def _decode_preparation_report(
 ) -> tuple[object, dict[str, ExecutionRequirement], PreflightResult]:
     report = _plain_mapping(value)
     if (
-        set(report) != _REPORT_FIELDS
+        set(report) != (_REPORT_FIELDS | ({"local_scope"} if expected.local_scope is not None else set()))
         or type(report["schema_version"]) is not int
-        or report["schema_version"] != 2
+        or report["schema_version"] != (2 if expected.local_scope is None else 3)
     ):
         raise QueueServiceError("preparation report fields are invalid")
+    if _local_scope(report.get("local_scope")) != expected.local_scope:
+        raise QueueConflictError("preparation report local policy identity conflicts")
     if (
         report["invocation"] != _invocation_data(expected)
         or report["operation_id"] != expected.operation_id
@@ -366,8 +400,12 @@ def _decode_preparation_report(
                 "preparation execution requirements do not match the selected installation"
             )
         for stage in pipeline.stages:
-            _reject_path_bearing_data(stage.stage_config, "prepared stage config")
-            _reject_path_bearing_data(stage.factory.init, "prepared factory arguments")
+            scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
+            if scope != expected.local_scope or (scope is not None and stage.placement.get("target") != scope["agent_id"]):
+                raise QueueConflictError("preparation report local placement conflicts")
+            if scope is None:
+                _reject_path_bearing_data(stage.stage_config, "prepared stage config")
+                _reject_path_bearing_data(stage.factory.init, "prepared factory arguments")
     return received, requirements, preflight
 
 
@@ -409,6 +447,8 @@ def prepare_child_run(
         },
         "runtime": runtime_options.to_dict(),
     }
+    _require_local_binding(binding.local_scope, service.daemon.resident_worker_launch_profile, agent_id=service.daemon.machine_id)
+    _bind_local_snapshot(resolved, binding.local_scope)
     # The fixed child has no authored composition/recipe provenance. Its native
     # plan fingerprint includes the complete validated input and profile binding.
     composed = _ReceivedComposition(
