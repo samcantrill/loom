@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 7
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p7-unified-sweeps
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 6 merges; record exact SHA at execution preparation
+- Base revision: `2e3050badb987863b02cf0bef19439cda35b6ef0` (published Phase 6 completion metadata after PR 313)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 7: Unified Sweeps
 - Dependencies: Phase 6 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; no named refinement is required
 
 ## Objective And Context
 
@@ -27,10 +27,29 @@ Validation ownership: VAL-41-12 (sweeps).
 
 ## Current Source And Harness
 
-- `src/loom/pipeline/sweep/dispatch.py::run_sweep_direct`, enqueue_sweep_trials, dispatch records and `cli/sweep.py`.
-- Sweep planner/coordination/runner records: deterministic expansion, trial identity and persisted progress.
-- Phase 2 RunRequest/start_run and Phase 3 public deployment/run composition; exact prepared receipts remain usable.
-- `tests/contracts/test_sweep_dispatch_contract.py`, `tests/integration/pipeline/sweep` and `tests/e2e/test_sweep_cli.py`.
+- `src/loom/pipeline/sweep/dispatch.py` owns `run_sweep_direct`,
+  `enqueue_sweep_trials`, direct/queue dispatch records and request translation.
+  `src/loom/cli/sweep.py` selects those engines and composes trial config locally.
+- `src/loom/pipeline/sweep/{runner,manifest,trials,coordination,status}.py`
+  own deterministic expansion, existing sweep/trial state and outcome projection.
+  Existing manifest metadata and workspace trial references are current durable
+  reuse candidates; choose one authoritative request/reference owner, not a new
+  job database. Planning must remain side-effect-free.
+- `src/loom/_run.py::run`, `src/loom/deployment.py::ensure_available`,
+  `src/loom/coordinator.py`, `src/loom/queue/run.py::RunRequest` and
+  `src/loom/queue/_coordinator_client.py` provide current startup, native run
+  acceptance, observation and cancellation. Explicit failed-admission retry
+  remains `LocalDaemonSubmissionRequest.retry_failed_revision`; ordinary replay
+  does not carry that authorization.
+- Published predecessor includes PR 314's opt-in local preparation policy.
+  Preserve selected source/profile and local binding meaning; default portable
+  preparation remains unchanged. No automatic placement or configuration-policy
+  substitution belongs to the sweep adapter.
+- Existing tests: `tests/contracts/test_sweep_dispatch_contract.py`,
+  `tests/{unit/loom,integration}/pipeline/sweep`, `tests/e2e/test_sweep_cli.py`,
+  and sweep public API/CLI/example consumers. Current runnable example:
+  `examples/experiments/deterministic-sweep/`; current feature doc:
+  `docs/features/sweeps.md`. Resolve exact dynamic references before removal.
 
 ## Scope
 
@@ -193,9 +212,31 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed in the manifest's persistent stage worktree at
+  the Base revision above, on the canonical Phase 7 branch. Phase 6 PR 313
+  merged as `5eeb021742a271339a2583cd2ac0ccb8a6e125fa`; completion metadata is
+  published, synchronization verified matching stage/local/fetched/advertised
+  develop, and exact local/remote predecessor branches are retired. Predecessor
+  agents and phase-owned processes are terminal. Successor start/preflight passed.
+- Source reconciliation: native prepare/run acceptance, exact admission replay,
+  explicit failed-admission retry, per-role startup/lifetime, agent backends and
+  authority finalization are delivered. Convert the existing sweep consumer while
+  keeping scientific expansion, parameters/order, provenance, resource/reliability
+  controls, failure continuation and early-stopped outcome assertions.
+- Validation selection: begin with sweep unit/contract/integration, CLI/E2E and
+  deterministic-sweep example consumers. Add causal interruption/lost-response
+  assertions at durable request-before-send and native operation/admission readback.
+  Cover public removals and cheap imports. Expand for changed native boundaries,
+  shared store/serialization consumers or observed failures; preserve both final
+  make gates and reuse predecessor backend qualification without a new matrix.
+- Named refinement: none; accepted observable/durable contracts are sufficient.
+  Private request storage/wiring remains implementation discretion.
+- Execution delegation: one executor is justified by the coupled dispatch,
+  persisted trial references, CLI/status/aggregation and removal conversion.
+  The manager owns manifest, PR preparation, independent review and delivery.
+  No children or extra implementation branches are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: prepared; execution pending
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for sweep scientific/control preservation and public removal
