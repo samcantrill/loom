@@ -2267,3 +2267,59 @@ def test_native_local_file_graph_is_bound_from_preparation_to_execution(
     finally:
         server.stop()
         daemon.stop()
+
+
+@pytest.mark.parametrize("local", (False, True), ids=("portable", "local"))
+def test_preparation_preserves_redacted_output_declarations(
+    tmp_path: Path, local: bool,
+) -> None:
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    service = _service(tmp_path, local=local)
+    path = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(path.read_text())
+    stage = authored["pipeline"]["stages"][0]
+    stage["factory"]["_target_"] = "tests.support.pipeline_execution_stages.TokenizeStage"
+    stage["config"] = {"text": "one two"}
+    stage["outputs"]["tokens"] = stage["outputs"].pop("data")
+    path.write_text(json.dumps(authored))
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    daemon.start()
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.prepare_run(_request())
+            operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            assert operation.state == "applied", operation.to_dict()
+            result = _result(operation)
+            child = client.admission(result["preparation_admission_id"]).admission
+            store = LocalRunStore(service.daemon.run_store_root)
+            report = LocalArtifactStore(store.local_artifact_root(child.run_uri)).load(
+                ArtifactRef.from_dict(dict(result["report_ref"]))
+            )
+            assert isinstance(report, dict)
+            resolved = report["composition"]["resolved"]["pipeline"]["stages"][0]
+            redacted = report["composition"]["redacted"]["pipeline"]["stages"][0]
+            assert resolved["outputs"]["tokens"] == {
+                "artifact_type": "json", "codec_key": "json.v1",
+            }
+            assert redacted["outputs"]["tokens"] == "***REDACTED***"
+            if local:
+                assert redacted["placement"] == resolved["placement"]
+                assert redacted["fingerprint"][LOCAL_PREPARATION_SCOPE] == resolved[
+                    "fingerprint"
+                ][LOCAL_PREPARATION_SCOPE]
+            run_uri = result["prepared_run"]["run_uri"]
+            client.submit(LocalDaemonAdmissionRequest("execute-tokens", run_uri))
+            assert client.wait("execute-tokens", timeout_seconds=25).state.value == "SUCCEEDED"
+            worker = StageWorkerResult.from_dict(
+                store.read_stage_worker_result(run_uri, "produce", attempt=1)
+            )
+            assert LocalArtifactStore(store.local_artifact_root(run_uri)).load(
+                worker.outputs["tokens"]
+            ) == ["one", "two"]
+    finally:
+        server.stop()
+        daemon.stop()

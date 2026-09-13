@@ -144,9 +144,11 @@ class PreparationStage:
         )
         composition = _composition_data(composed)
         if preflight.status != PreflightStatus.FAIL:
-            for key in ("resolved", "redacted"):
-                snapshot = cast(dict[str, PlainData], composition[key])
-                _bind_local_snapshot(snapshot, binding.local_scope)
+            _bind_local_snapshot(
+                cast(dict[str, PlainData], composition["resolved"]),
+                binding.local_scope,
+                redacted=cast(dict[str, PlainData], composition["redacted"]),
+            )
         provenance = cast(dict[str, PlainData], composition["provenance"])
         metadata = cast(dict[str, PlainData], provenance["metadata"])
         metadata["loom_invocation"] = _invocation_data(binding)
@@ -187,8 +189,13 @@ class PreparationStage:
         }
 
 
-def _bind_local_snapshot(snapshot: dict[str, PlainData], scope: Mapping[str, PlainData] | None) -> None:
-    """Attach native locality to every action, preserving authored semantics."""
+def _bind_local_snapshot(
+    snapshot: dict[str, PlainData],
+    scope: Mapping[str, PlainData] | None,
+    *,
+    redacted: dict[str, PlainData] | None = None,
+) -> None:
+    """Validate resolved locality and annotate executable and diagnostic views."""
     pipeline = _pipeline_from_resolved(snapshot)
     for stage in pipeline.stages:
         if LOCAL_PREPARATION_SCOPE in stage.fingerprint_fields:
@@ -202,10 +209,19 @@ def _bind_local_snapshot(snapshot: dict[str, PlainData], scope: Mapping[str, Pla
                 raise QueueConflictError("local preparation requires the managed agent route")
     if scope is None:
         return
-    definition = cast(dict[str, PlainData], snapshot["pipeline"])
-    for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-        stage["placement"] = {**cast(dict[str, PlainData], stage.get("placement", {})), "target": scope["agent_id"]}
-        stage["fingerprint"] = {**cast(dict[str, PlainData], stage.get("fingerprint", {})), LOCAL_PREPARATION_SCOPE: dict(scope)}
+    # Redaction may mask valid declarations (for example an output named tokens).
+    # Annotate that diagnostic view without parsing it or restoring authored data.
+    for view in (snapshot,) if redacted is None else (snapshot, redacted):
+        definition = cast(dict[str, PlainData], view["pipeline"])
+        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
+            stage["placement"] = {
+                **cast(dict[str, PlainData], stage.get("placement", {})),
+                "target": scope["agent_id"],
+            }
+            stage["fingerprint"] = {
+                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
+                LOCAL_PREPARATION_SCOPE: dict(scope),
+            }
 
 
 def _compose_worker_config(
