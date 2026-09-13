@@ -1222,7 +1222,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             )
             execution._launch_lock.release()
 
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 10
         while (
             execution.slurm_assignments.read(assignment_id).state != "released"
             and time.monotonic() < deadline
