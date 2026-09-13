@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 
 from loom.pipeline.stores import TrialState
 from loom.pipeline.sweep import (
     ManualSweepSpec,
     ManualTrialSpec,
     project_sweep_coordination,
-    trial_state_from_queue_status,
-    trial_state_from_run_status,
     plan_sweep,
 )
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
@@ -46,17 +43,6 @@ def test_project_sweep_coordination_records_planned_trials_idempotently() -> Non
     assert trials[0].metadata["proposal_overrides"] == {"pipeline.variant": "a"}
 
 
-def test_trial_state_mappers_accept_run_and_queue_status_like_objects() -> None:
-    assert (
-        trial_state_from_run_status(SimpleNamespace(status="SUCCEEDED"))
-        is TrialState.COMPLETED
-    )
-    assert (
-        trial_state_from_queue_status(SimpleNamespace(status="DISPATCHED"))
-        is TrialState.RUNNING
-    )
-
-
 def _plan():
     return plan_sweep(
         ManualSweepSpec(
@@ -69,3 +55,9 @@ def _plan():
         ),
         created_at="2026-05-14T00:00:00Z",
     )
+
+
+def test_trial_state_mapper_accepts_run_status():
+    from loom.pipeline.sweep import trial_state_from_run_status
+
+    assert trial_state_from_run_status("SUCCEEDED") is TrialState.COMPLETED

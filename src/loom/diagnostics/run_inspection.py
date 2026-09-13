@@ -662,7 +662,12 @@ class RunInspectionProjection:
             if isinstance(raw_stages, Mapping):
                 for stage_name, state in sorted(raw_stages.items()):
                     if isinstance(stage_name, str) and isinstance(state, str):
-                        stages.append(RunInspectionStage(stage_name, state))
+                        reasons = authority.get("stage_reasons", {})
+                        reason = reasons.get(stage_name, {}) if isinstance(reasons, Mapping) else {}
+                        code = reason.get("code") if isinstance(reason, Mapping) else None
+                        stages.append(RunInspectionStage(
+                            stage_name, state, code=code if isinstance(code, str) else None
+                        ))
         return admission.admission_id, admission.queue_item_id, True
 
     def _project_service_less_queue(

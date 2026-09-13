@@ -5090,6 +5090,9 @@ def _worker_terminal_reason(result: StageWorkerResult) -> LifecycleReason:
             detail={"attempt": result.attempt},
         )
     if result.status is StageStatus.CANCELLED:
+        reason = result.executor_metadata.get("lifecycle_reason")
+        if isinstance(reason, Mapping) and reason.get("code") == "early_stop":
+            return LifecycleReason.from_dict(reason)
         return LifecycleReason(
             code="managed_worker_cancelled",
             message="managed worker cancelled",
