@@ -25,3 +25,15 @@ def test_run_requires_explicit_deployment() -> None:
     errors = io.StringIO()
     assert main(["run", "pipeline.yaml"], stdout=io.StringIO(), stderr=errors) != 0
     assert "--deployment" in errors.getvalue()
+
+
+@pytest.mark.parametrize('flags', [
+    ['--reconcile', '--run-name', 'placeholder'],
+    ['--reconcile', '--queue-item-id', 'placeholder'],
+    ['--retry-failed'],
+])
+def test_reconciliation_rejects_exact_targets_before_loading_deployment(flags):
+    errors = io.StringIO()
+    assert main(['run', 'pipeline.yaml', '--deployment', 'absent.json', *flags],
+                stdout=io.StringIO(), stderr=errors) != 0
+    assert '--reconcile' in errors.getvalue()

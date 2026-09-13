@@ -1290,7 +1290,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 15}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 16}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1302,7 +1302,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 15)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 16)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1504,7 +1504,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -2330,6 +2330,7 @@ def test_preparation_preserves_redacted_output_declarations(
     ("shared", "false", None), ("shared", "73", "mutation"),
     ("shared", "73", "target"), ("shared", "73", "root"),
     ("shared", "73", "installation"), ("shared", "73", "capability"),
+    ("shared", "73", "no_key"),
 ])
 def test_installed_project_checks_final_invocation_and_publishes_recovery(
     tmp_path: Path, mode: str, value: str, fault: str | None,
@@ -2376,7 +2377,7 @@ def inspect(request):
     return {'schema_version': 99 if fault == 'capability' else 1,
             'composition': composition,
             'evidence': {'namespace': 'example', 'payload': evidence},
-            'reconciliation_key': {'namespace': 'example', 'version': 1, 'digest': 'a' * 64}}
+            'reconciliation_key': None if fault == 'no_key' else {'namespace': 'example', 'version': 1, 'digest': 'a' * 64}}
 
 class Consumer:
     def run(self, context: StageContext, inputs):
@@ -2423,17 +2424,21 @@ class Consumer:
             ArtifactRef.from_dict(dict(result["report_ref"])))
         assert isinstance(report, dict), operation.to_dict()
         assert report["schema_version"] == 4
-        if value == "false" or fault is not None:
+        if value == "false" or fault not in (None, "no_key"):
             assert operation.state == "failed", operation.to_dict()
             assert report["project_result"] is None
             assert report["preflight"]["status"] == "FAIL"
             assert "private-path-do-not-expose" not in json.dumps(report)
+            assert request.run_name is not None
             assert not (service.daemon.run_store_root / request.run_name).exists()
             return
         assert operation.state == "applied", (operation.to_dict(), daemon._service_error)
         binding = PreparationChildInput.from_dict(load_managed_local_intent(service.daemon, child.run_uri).pipeline.get_stage("prepare").stage_config)
         composed, requirements, _ = decode_preparation_report(report, expected=binding)
-        assert report["project_result"]["reconciliation_key"]["digest"] == "a" * 64
+        if fault == "no_key":
+            assert report["project_result"]["reconciliation_key"] is None
+        else:
+            assert report["project_result"]["reconciliation_key"]["digest"] == "a" * 64
         assert report["requested_composition"]["resolved"]["pipeline"]["stages"][0]["config"]["value"] == 73
         for changed in ("schema_version", "project_preparation", "composition", "invocation",
                         "recovery_target", "recovery_environment", "options", "project_check", "result_version"):

@@ -42,6 +42,7 @@ def test_cancellation_during_archive_capture_prevents_child_dispatch(
         cancelled = daemon.wait_operation(request.operation_id, timeout=25).operation
         assert cancelled.state == "cancelled", cancelled
         assert not daemon.admissions().admissions
+        assert request.run_name is not None
         assert not (service.daemon.run_store_root / request.run_name).exists()
         assert daemon.prepare_run(request, principal_id="caller") == cancelled
         assert not tuple((service.daemon.coordinator_root / "preparation-inputs").glob(".*.tmp-*.tar"))

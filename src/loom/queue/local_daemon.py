@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 15
+_COORDINATOR_SCHEMA_VERSION = 16
 _AGENT_SCHEMA_VERSION = 12
 # Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
@@ -4452,14 +4452,20 @@ def _initialize_coordinator_schema(
         _initialize_preparation_schema(conn)
 
 
-def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
+def _initialize_preparation_schema(conn: sqlite3.Connection, *, legacy: bool = False) -> None:
     conn.execute(
         "CREATE TABLE preparation_operations ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-        "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
-        "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
-        "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
-        "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
+        + (
+            "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
+            if legacy else "kind TEXT NOT NULL, queue_item_id TEXT, "
+        )
+        + "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+        + (
+            "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
+            if legacy else "selected_json TEXT NOT NULL, target_name TEXT, "
+        )
+        + "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
         "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
         "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
         "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
@@ -4474,7 +4480,7 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
 
 
 def _validate_coordinator_schema(
-    conn: sqlite3.Connection, *, preparation: bool
+    conn: sqlite3.Connection, *, preparation: bool, legacy_preparation: bool = False
 ) -> None:
     """Validate durable table/identity constraints against the initialization owner."""
 
@@ -4500,7 +4506,9 @@ def _validate_coordinator_schema(
 
     try:
         with sqlite3.connect(":memory:") as expected:
-            _initialize_coordinator_schema(expected, preparation=preparation)
+            _initialize_coordinator_schema(expected, preparation=preparation and not legacy_preparation)
+            if legacy_preparation:
+                _initialize_preparation_schema(expected, legacy=True)
             tables = tuple(
                 row[0]
                 for row in expected.execute(
@@ -4545,9 +4553,9 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
             )
         )
         if version != expected_version:
-            if role == "coordinator" and version == 12:
+            if role == "coordinator" and version in (12, 15):
                 raise QueueStorageError(
-                    "coordinator schema 12 requires an offline upgrade with loom queue daemon-upgrade"
+                    f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
                 )
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
@@ -4555,7 +4563,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
         if role == "coordinator":
             _validate_coordinator_schema(
-                conn, preparation=version == _COORDINATOR_SCHEMA_VERSION
+                conn, preparation=version in (15, _COORDINATOR_SCHEMA_VERSION), legacy_preparation=version == 15
             )
         values = {
             str(row[0]): str(row[1])

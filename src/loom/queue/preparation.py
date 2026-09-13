@@ -164,6 +164,8 @@ def _invocation_data(instance: object) -> dict[str, PlainData]:
 class PrepareRunRequest:
     """Immutable intent for one preparation operation.
 
+    ``run_name=None`` is supported only inside an explicitly reconciled RunRequest;
+    standalone preparation and exact runs require a named target.
     Overlays are ordered captured project-relative files; overrides are ordered
     native config strings. Sparse plain run options override authored runtime
     settings using the existing config/profile/invocation precedence. Omitted
@@ -171,7 +173,7 @@ class PrepareRunRequest:
     """
 
     operation_id: str
-    run_name: str
+    run_name: str | None
     source: PreparationSource
     config_path: str
     preparation_profile: str
@@ -185,7 +187,8 @@ class PrepareRunRequest:
         _invocation(self)
         validate_queue_id(self.operation_id, "operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
-        _validate_run_name(self.run_name)
+        if self.run_name is not None:
+            _validate_run_name(self.run_name)
         if not isinstance(self.source, PreparationSource):
             raise QueueServiceError("preparation source is invalid")
         object.__setattr__(
@@ -214,7 +217,7 @@ class PrepareRunRequest:
             raise QueueServiceError("prepare request is invalid")
         return cls(
             cast(str, data["operation_id"]),
-            cast(str, data["run_name"]),
+            cast(str | None, data["run_name"]),
             PreparationSource.from_dict(cast(Mapping[str, object], data["source"])),
             cast(str, data["config_path"]),
             cast(str, data["preparation_profile"]),
@@ -374,9 +377,11 @@ def _project_processor(value: object) -> dict[str, PlainData] | None:
     if value is None:
         return None
     if (not isinstance(value, Mapping)
-        or set(value) != {"schema_version", "callable", "evidence_namespace", "recovery_stage"}
-        or type(value["schema_version"]) is not int or value["schema_version"] != 1):
+        or set(value) != ({"schema_version", "callable", "evidence_namespace", "recovery_stage"} | ({"target_prefix"} if value.get("schema_version") == 2 else set()))
+        or type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2)):
         raise QueueServiceError("unsupported project preparation capability")
+    if value["schema_version"] == 2:
+        validate_queue_id(value["target_prefix"], "project target prefix")
     reference = value["callable"]
     if (not isinstance(reference, str) or ":" not in reference
         or any(not part.isidentifier() for part in reference.replace(":", ".").split("."))
@@ -406,15 +411,32 @@ def _project_binding(value: object) -> dict[str, PlainData] | None:
 
     if value is None:
         return None
-    if not isinstance(value, Mapping) or set(value) != {"processor", "target_run_uri"}:
+    if not isinstance(value, Mapping) or set(value) not in ({"processor", "target_run_uri"}, {"processor", "target_run_uri", "run_store_root_uri"}):
         raise QueueServiceError("project preparation binding is invalid")
     processor = _project_processor(value["processor"])
     if processor is None:
         raise QueueServiceError("project preparation processor is missing")
     uri = value["target_run_uri"]
+    if "run_store_root_uri" in value:
+        root = value["run_store_root_uri"]
+        if processor["schema_version"] != 2 or uri is not None or not isinstance(root, str) or path_to_run_uri(run_uri_to_path(root)) != root:
+            raise QueueServiceError("project reconciliation binding is invalid")
+        return {"processor": processor, "target_run_uri": None, "run_store_root_uri": root}
     if not isinstance(uri, str) or path_to_run_uri(run_uri_to_path(uri)) != uri:
         raise QueueServiceError("project preparation target URI is invalid")
     return {"processor": processor, "target_run_uri": uri}
+
+
+def project_target_from_key(binding: Mapping[str, PlainData], key: Mapping[str, PlainData]) -> str:
+    """Derive the protected target from a checked complete domain key."""
+    from loom.pipeline.stores import run_uri_to_path
+
+    processor = cast(Mapping[str, PlainData], binding["processor"])
+    if binding["target_run_uri"] is not None:
+        return cast(str, binding["target_run_uri"])
+    return _project_target_uri(run_uri_to_path(cast(str, binding["run_store_root_uri"])),
+                               cast(str, processor["target_prefix"]) + cast(str, key["digest"]))
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,12 +453,19 @@ class PreparationChildInput:
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
     local_scope: Mapping[str, PlainData] | None = None
     project_preparation: Mapping[str, PlainData] | None = None
+    candidate: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
         object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
+        if self.candidate is not None:
+            if not isinstance(self.candidate, Mapping):
+                raise QueueServiceError("candidate descriptor must be plain data")
+            if self.project_preparation is None:
+                raise QueueServiceError("candidate verification requires installed project preparation")
+            object.__setattr__(self, "candidate", freeze_plain_data(self.candidate))
         project = _project_binding(self.project_preparation)
         if project is not None and self.local_scope is None:
             raise QueueServiceError("project preparation requires protected local policy")
@@ -456,7 +485,8 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            "schema_version": 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            **({"candidate": thaw_plain_data(self.candidate)} if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else {}),
             **({"project_preparation": dict(self.project_preparation)} if self.project_preparation is not None else {}),
             **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
             "operation_id": self.operation_id,
@@ -482,12 +512,12 @@ class PreparationChildInput:
                 "overlays",
                 "overrides",
                 "run_options",
-            } | ({"local_scope"} if value.get("schema_version") in (3, 4) else set())
-                | ({"project_preparation"} if value.get("schema_version") == 4 else set()))
+            } | ({"local_scope"} if value.get("schema_version") in (3, 4, 5) else set())
+                | ({"project_preparation"} if value.get("schema_version") in (4, 5) else set()) | ({"candidate"} if value.get("schema_version") == 5 else set()))
             or type(value.get("schema_version")) is not int
-            or value.get("schema_version") not in (2, 3, 4)
-            or (value.get("schema_version") in (3, 4) and value.get("local_scope") is None)
-            or (value.get("schema_version") == 4 and value.get("project_preparation") is None)
+            or value.get("schema_version") not in (2, 3, 4, 5)
+            or (value.get("schema_version") in (3, 4, 5) and value.get("local_scope") is None)
+            or (value.get("schema_version") in (4, 5) and value.get("project_preparation") is None)
             or not isinstance(value.get("input_receipt"), Mapping)
         ):
             raise QueueServiceError("preparation child input is invalid")
@@ -502,6 +532,7 @@ class PreparationChildInput:
             cast(Mapping[str, PlainData], value["run_options"]),
             _local_scope(value.get("local_scope")),
             _project_binding(value.get("project_preparation")),
+            cast(Mapping[str, PlainData] | None, value.get("candidate")),
         )
 
 
@@ -1118,6 +1149,7 @@ def _verify_capture(directory: Path, digest: str) -> Path:
 
 
 __all__ = [
+    "project_target_from_key",
     "PrepareRunRequest",
     "PreparationSource",
     "PreparationChildInput",

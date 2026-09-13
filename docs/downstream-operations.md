@@ -250,7 +250,7 @@ Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
 are rejected. Initialization never overwrites a populated root. The narrow
 [coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
-schema-12 root when moving to schema 15; it does not reinterpret profiles or
+schema-12 or schema-15 root when moving to schema 16; it does not reinterpret profiles or
 provide a migration for other historical root versions.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
@@ -310,10 +310,10 @@ store tools; no automatic expiry or preparation-delete command is provided.
 
 ## Upgrade A Retained Coordinator Root
 
-Coordinator control roots use schema 15; worker roots and journals remain at
+Coordinator control roots use schema 16; worker roots and journals remain at
 schema 12. Schema-13 preparation roots are incompatible with the current child
 input/report contracts and are rejected without mutation; settle their work with
-the original installation before service replacement. For a valid existing schema-12 coordinator, stop its foreground service
+the original installation before service replacement. For a valid existing schema-12 or schema-15 coordinator, stop its foreground service
 and retain the same protected role configuration and deployment binding. Run the
 local administrative command on the coordinator host:
 
@@ -325,18 +325,19 @@ loom queue daemon-serve coordinator-service.yaml --env-file coordinator-service.
 The upgrade takes the existing exclusive coordinator lock, checks ownership,
 private permissions, deployment binding and stable identity, and creates a
 protected pre-upgrade backup through SQLite's backup API. It will not overwrite
-an existing backup. One transaction adds preparation storage and changes the
-coordinator marker from 12 to 15. Stable coordinator IDs, admissions and other
+an existing backup. One transaction adds preparation storage for schema 12, or migrates the exact
+preparation rows from schema 15, and changes the coordinator marker to 16. Stable coordinator IDs, admissions and other
 existing durable identities remain intact; worker databases are not changed.
 A running coordinator is rejected without mutation. Workers do not need a
 fresh root or an inferred shutdown for this coordinator-only migration.
 
-A crash before commit leaves schema 12; after commit the root reopens at 15.
+A crash before commit leaves the original schema; after commit the root reopens
+at 16.
 Repeating the command on a structurally valid current root reports its current
 identity/version without rewriting retained state. Unsupported versions and
 malformed partial schemas are rejected, rather than automatically repaired.
 
-Keep the backup as operational evidence. Old binaries cannot open schema 15,
+Keep the backup as operational evidence. Old binaries cannot open schema 16,
 and no automatic downgrade is provided. Restoring an older backup after further
 work has been accepted can lose that work; recovery then needs a separately
 assessed procedure. Never replace a retained coordinator or worker root merely
@@ -394,7 +395,7 @@ projections retain all mandatory references within 64 KiB; only optional full
 preflight detail may be omitted in favor of its pinned report. Prospective
 mandatory overflow is refused before target publication/admission.
 
-Coordinator schema 15 retains these facts in the preparation owner and a native
+Coordinator schema 16 retains these facts in the preparation owner and a native
 cancellation control table. Existing schema-14 roots are incompatible: settle
 work under its original version before replacement. Do not reset old roots or
 delete outputs. The explicit older schema-12 upgrade remains available only for
@@ -533,3 +534,86 @@ For an installed graph that reads host files, select the protected
 It binds preparation and every target action to the embedded local agent and its
 retained launch configuration. Use fresh preparation after changing those bindings;
 portable fleet execution still requires resolved portable inputs.
+
+
+### Reconcile unique submissions with canonical targets
+
+An installed project can opt into `RunRequest(mode="reconcile")`. The preparation
+request has `run_name=None` and the run request has `queue_item_id=None` at
+acceptance. Generate a submission ID once and retain the entire request for replay:
+
+```python
+from dataclasses import replace
+from uuid import uuid4
+from loom.coordinator import RunRequest
+import loom
+
+submission = RunRequest(
+    preparation=replace(preparation, operation_id="run-" + uuid4().hex, run_name=None),
+    mode="reconcile",
+    retry_policy="one_observed_failure",
+)
+outcome = loom.run(submission, deployment="deployment.json")
+```
+
+The same request works with `CoordinatorClient.start_run`. The CLI equivalent is
+`loom run pipeline.yaml --deployment deployment.json --reconcile --retry-failed`;
+omit `--retry-failed` to refuse failed candidates. `--run-name` and `--queue-item-id`
+are incompatible with reconciliation. Replay retains the operation ID and every
+other request field, including retry policy. Exact requests keep their existing
+wire shape and never retry through replay.
+
+Protected project processor schema 2 adds `target_prefix` to the schema 1 policy
+fields. For example, `"target_prefix": "science-"` derives
+`science-<complete 64-character digest>`. The processor receives schema 2 with
+`operation="prepare"`; it returns schema 2 composition, namespaced evidence and
+its version 1 complete reconciliation key. The private project binding has an
+unresolved `target_run_uri` and a protected `run_store_root_uri`. The installed
+processor can call `loom.queue.preparation.project_target_from_key(binding, key)`
+for its recovery locator. Native report validation checks the resulting locator
+and permitted derived fields before any target publication.
+
+Native preparation rows atomically select one publication owner and retain each
+submission's binding, original preparation report and invocation provenance.
+Equivalent followers wait for that owner, then invoke the same installed processor
+with `operation="verify_candidate"` in a supervised preparation child. Candidate
+input contains the selected URI, stored configuration, complete native runtime
+intent, admission revision, authority snapshot with commits and declared artifact
+facts, and a read-only artifact-root binding. It contains no coordinator factory,
+control database location, mutation credential or deserialized checkpoint. The
+verifier must validate stored project science and native intent for every
+attachment, and all declared output/resource bytes, schemas, member checksums and
+containment for successful reuse, including outputs beyond a final report.
+Presentation fields may differ only where the installed scientific contract permits
+it; the winner's immutable runtime intent remains authoritative.
+
+A successful verifier returns exactly `{"schema_version": 1,
+"candidate_digest": hash_mapping(candidate), "verdict": "verified"}` using
+`loom.fingerprints.hash_mapping`. The native version 5 child/report protocol binds
+this verdict to the invocation, installation and captured descriptor. A changed
+candidate requires re-observation and a fresh verification child. Nonterminal
+admission counter changes alone do not invalidate unchanged decision facts; failed
+revision fencing and authority/commit identity checks remain exact. Rejection,
+missing/corrupt evidence, unavailable authority, cancelled targets and foreign
+scope retain failure without creating another canonical target. Schema 1 project
+processors and version 2–4 exact preparation reports retain their existing contracts.
+
+The operation result exposes `binding`, `decision`, `prepared_run`, its immutable
+admission receipt, and `verification_report_ref`. Decisions are `new_attempt`,
+`admit_prepared`, `observe`, `reuse` or `retry`. The full descriptor remains private
+in the native operation; original report references remain in `evidence_refs`.
+Mutable execution state still comes from native admission observation.
+
+Before requesting a retry, the operation freezes one observed failed admission
+revision. The existing native retry journal handles contention, lost replies and
+restart. The same submission cannot chase a later failure; a new submission is
+required to authorize it. Before atomic binding, cancellation affects only that
+submission and its owned child. After binding it cancels the shared target for
+all authorized observers, including publication followers. Cancellation completion
+is a separate control receipt and waits for owned child settlement. Detach and
+observation timeout never request cancellation.
+
+Existing schema 15 coordinator roots require the offline
+`loom queue daemon-upgrade` migration to schema 16. It preserves exact operation,
+cancellation and admission rows while allowing many submission references to one
+target. It retains a protected schema 15 backup; worker roots remain unchanged.
