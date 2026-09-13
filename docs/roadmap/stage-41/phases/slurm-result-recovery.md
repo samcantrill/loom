@@ -280,135 +280,92 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Base revision above. Phase 5 PR 312 merged as
   `5e4237d1fe5165152dc2e7f296edb574dfea6463`; completion metadata is published.
   Synchronization verified matching stage/local/fetched/advertised develop;
-  exact local/remote Phase 5 branches are retired. All predecessor agents and
+  exact local/remote Phase 5 branches are retired. Predecessor agents and
   phase-owned processes are terminal. Successor start and clean preflight passed.
-- Source reconciliation: `_agent_slurm.py::AgentSlurmJobs` now owns the exact
-  agent/root journal, ordered outbox, scheduler and containment/provider release;
-  coordinator `SlurmSubmissionProjection` has no external-call capability.
-  Agent protocol 12 and assignment version 2 retain the current ownership.
-  The early-bootstrap readiness correction waits for acknowledged submission
-  within the original deadline without granting pending work; preserve it.
-- Current result boundary: `SlurmBootstrapWorkspace.retain_result` creates report
-  version 3 and retained output bytes in compute workspace; `run_slurm_bootstrap`
-  then synchronously calls report/output/result/release. No attempt-bound shared
-  publication/ingestion owner exists. Extend these owners with manifest-last
-  durable bytes, exact compute/agent mapping and finite protected retention quota;
-  do not make disappearance of compute-local workspace lose acknowledged work.
-- Finalizer and bounds: `local_daemon_execution.py::slurm_commit_result` validates
-  the accepted fence, calls the authority commit/terminal owner, persists the
-  typed result with scheduler/container redaction and marks the assignment
-  terminal. Reuse this finalization path for authenticated original-agent relay,
-  preserving exact admitted output predecessor/replay wherever the authority
-  requires it. `_remote_stage_execution.py::MAX_TRANSFER_BYTES` is 64 MiB;
-  report decoders and declared artifact bounds remain authoritative. Shared
-  storage adds no larger-transfer claim, new success database or offline grant.
-- Retirement and removal: connect result acknowledgement/cleanup to the existing
-  retained-work predicates and keep containment/provider release separate.
-  Replace callback-only delivery assumptions here; callbacks may only remain as
-  useful notification/current transport hooks. Preserve native/container proof,
-  profile fingerprint and version-3 metadata. Broader legacy-engine removal
-  remains Phase 9; update obsolete Slurm storage/qualification claims owned here.
-- Named refinement: none required at preparation. The existing card fixes the
-  durable identity, trust, bounds, ordering and acknowledgement semantics; private
-  storage layout, mapping/configuration wiring and finite quota representation
-  remain implementation discretion. Stop for a demonstrated missing public or
-  durable decision instead of narrowing the finish-during-outage journey.
-- Coverage selection: existing ready-stage/bootstrap, agent journal/transport and
-  public run-operation tests, plus new causal shared-result and compute-exit
-  cases. Cover manifest-last interruption, regular-file/path/content validation,
-  stale fences/foreign ownership, aggregate bound/quota refusal, lost commit
-  acknowledgement with exact predecessor, metadata preservation, no early cleanup
-  and no release from report validity alone. Shared protocol/lifetime changes
-  expand to native/container consumers; both required make gates remain binding.
-- Qualification inventory: sbatch/squeue/sacct/scancel/srun and Apptainer are
-  unavailable, and no opt-in Slurm acceptance/root is configured. Docker command
-  availability alone is not runtime/site qualification. No scheduler job,
-  allocation, image pull/build, external workload or provisioning is authorized
-  by this preparation. Use local fixtures for implementation evidence and retain
-  the missing live-site/storage/container qualification explicitly.
-  `tests/slurm_acceptance/test_real_slurm_live_operations.py` currently exercises
-  legacy single-job/afterok CLI paths, so it does not prove this phase's unified
-  outage result journey. Update/add the current opt-in qualification owner and
-  documentation without claiming its execution here. All referenced local test
-  paths exist. No active Loom improvement-log entry intersects this phase.
-- Execution delegation: one executor is justified by the coupled bootstrap
-  publisher, shared filesystem reader, authenticated relay, authority commit and
-  retirement boundary. It owns phase implementation/tests/current docs and this
-  card's execution evidence; the manager owns manifest, PR, review and delivery.
-  No children or overlapping source writes.
-- Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: complete; final committed validation pending. Protected profile
-  result_storage binds both mount roots and finite per-attempt reservations;
-  SharedSlurmResult owns version-1 manifest-last publication, strict bounded
-  regular-file ingestion and final-ack cleanup. Original-agent session protocol
-  13 relays through the existing Slurm finalizer with the admitted predecessor.
-  Bootstrap exit is independent of coordinator availability. Scheduler ownership,
-  containment/provider release and native/container report-v3 owners remain.
-- Focused evidence: real compute-process exit during coordinator loss and scratch
-  removal, same-root service restart, lost authority acknowledgement and one
-  replayed commit passed. Publication interruption, stale/foreign/path/digest
-  rejection, retained quota and 64 MiB aggregate bounds are covered. A report
-  nesting failure exposed the extra relay envelope; the existing decoder now
-  preserves its report budget separately from the strict session envelope.
-  Earlier full transport subset failure occurred while the protocol version
-  changed during that exploratory run; fresh final gates supersede that run.
-  All exploratory/correction logs will remain in the final evidence directory.
-- Final-gate correction: the first committed gate stopped on four test typing
-  errors, corrected without source behavior changes. The second gate passed
-  Ruff/type checks but its baseline run was deliberately stopped after identifying
-  the reachable cancellation/publication race: attempting a cancelled result
-  could prevent the existing positive containment/release path. Delivery now
-  defers to cancellation and cleanup requires the acknowledged existing terminal
-  rejection; lost rejection acknowledgement retains bytes. The focused regression
-  and fresh committed final gates cover the correction. The next exploratory
-  final gate was stopped to include the related pre-submission quota case:
-  cancellation must suppress an unissued job even while another retained attempt
-  exhausts shared storage. That suppression now skips a new result reservation;
-  it never removes the other attempt's bytes.
-- Broad consumer reconciliation: committed gate 4 passed Ruff/types and 3343
-  default cases (two skipped); two fixture/example consumers failed. The imported
-  Slurm profile fixture now derives its shared root from the supplied capability
-  fixture location, and the Python example thaws its local protected response
-  before publication and accurately lists its invoked surfaces. Focused consumer
-  checks pass; these corrections do not change library behavior. A fresh complete
-  gate follows and retains the failed receipt.
-- Cleanup recovery correction: gate 5 passed its complete default lane (3345
-  passed, two skipped); the optional lane was stopped to cover an interrupted
-  acknowledged cleanup. If some shared files were already removed before agent
-  exit, terminal tasks now reauthenticate the existing coordinator's complete
-  fenced result before retrying cleanup. This uses the same admitted predecessor
-  and adds no acknowledgement database or filesystem-success authority. All 37
-  affected storage/agent/Slurm integration checks pass; fresh full gates follow.
-- Optional consumer reconciliation: gate 6 passed all 3346 default tests (two
-  skipped), then 255 config-extra tests (18 skipped) with one preparation fixture
-  failure. The preparation-only consumer now supplies its own qualified fixture
-  path to the shared profile helper; every cross-module helper consumer is
-  reconciled. Its focused regression passes. Library behavior is unchanged by
-  this fixture correction, and the fresh complete gate is rerun below.
-- Acknowledged cleanup scope completion: the third correction also keeps the
-  agent's terminal-rejection outbox pending until shared cleanup completes. A
-  deletion interruption therefore replays its already accepted rejection instead
-  of orphaning retained bytes after the coordinator released the task. Nine
-  affected actor/outbound-agent checks pass. The previous successful full gate
-  and deliberately interrupted summary are archived; both full commands are
-  repeated on the completed cleanup implementation.
-- Physical qualification: unavailable and unclaimed. The opt-in site receipt
-  audit requires the unified public run/outage and separate storage/containment
-  evidence. It does not automate site service controls or execute a live journey.
+- Source reconciliation: `AgentSlurmJobs` remains the sole original-agent/root
+  scheduler, journal, ordered outbox and containment/provider-release owner.
+  Coordinator `SlurmSubmissionProjection` has no external-call capability.
+  Assignment version 2, original bootstrap deadline/readiness/start grants and
+  native/container report-v3 behavior are preserved. Agent protocol is now 13
+  for the authenticated result relay.
+- Implementation: complete. Protected `result_storage` binds the compute/agent
+  mount roots and finite retention quota. `SharedSlurmResult` reserves 65 MiB per
+  attempt, publishes bounded report/artifacts before its version-1 manifest, and
+  preserves unacknowledged bytes through compute exit. Ingestion validates exact
+  coordinator/assignment/agent/root/incarnation/fence identity and contained
+  regular-file sizes/digests. Existing 64 MiB aggregate and report bounds remain.
+- Finalization and retirement: original-agent delivery calls the existing Slurm
+  authority finalizer with the exact admitted output predecessor, including
+  acknowledgement replay. Filesystem validity supplies no success authority.
+  Cleanup requires the existing commit or terminal-rejection acknowledgement;
+  interrupted cleanup retries that acknowledgement, and the agent outbox remains
+  pending until cleanup completes. Containment and provider release remain
+  separate. Cancellation suppresses an unissued job even when another retained
+  attempt exhausts storage, without evicting that attempt.
+- Coverage: causal fixture evidence covers a separate compute process finishing
+  during coordinator loss, compute exit and scratch removal, exact-root restart,
+  original-agent ingestion, lost authority acknowledgement and one replayed
+  commit. Publication interruption, partial/corrupt/path/symlink/foreign/stale
+  rejection, report-v3 metadata, aggregate bounds, quota refusal, cancellation,
+  and interrupted acknowledged cleanup are covered. Public native/container,
+  preparation, transport, operation inspection and Slurm example consumers pass.
+- Validation: both required commands passed on committed implementation/test
+  revision `169bc32031e2a31a48af8c6e181d8596d02231f4`, tree
+  `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`. `make validate-pr` passed Ruff,
+  Pyright, baseline (3347 passed, two skipped), config-extra (256 passed,
+  18 skipped), mcp-extra (36 passed), locks/builds and diff checks.
+  `make test-summary` passed all seven suites (3641 passed, 18 skipped,
+  zero failures/errors). Exact logs are
+  `/tmp/loom-stage-41-p6-evidence/validate-pr-9.log` and
+  `/tmp/loom-stage-41-p6-evidence/test-summary-final-2.log`; complete Markdown summary,
+  per-suite JUnit and JSON coverage artifacts are archived under
+  `/tmp/loom-stage-41-p6-evidence/test-summary-final/`.
+- Correction receipts: `/tmp/loom-stage-41-p6-evidence/` retains exploratory,
+  failed, deliberately interrupted and correction logs (`validate-pr-1.log`
+  through `validate-pr-8.log`, `test-summary-interrupted.log`,
+  `test-summary-final.log`, `test-summary-failed/`, and focused correction logs).
+  Three semantic correction scopes are resolved: published-result cancellation,
+  quota-blocked unissued cancellation, and interrupted acknowledged cleanup.
+  Fixture/type/example corrections are reconciled. The coverage summary exposed
+  the existing two-second release-retry assertion deadline; its bounded wait is
+  now ten seconds, with unchanged release assertions. Both crash-boundary cases
+  passed under coverage before the final full gates. No failed run is presented
+  as qualification; final committed evidence supersedes earlier receipts.
+- Removal audit: bootstrap delivery no longer depends on synchronous
+  report/output/result/release callbacks. Existing narrow callback primitives
+  retain current contract/notification consumers and delegate to the same
+  finalizer; they are not a second authority or offline grant. Current execution,
+  Slurm docs and managed-ready-stage-slurm example describe shared publication.
+  Broader legacy-engine removal remains Phase 9.
+- Physical qualification: unavailable and unclaimed. No physical Slurm scheduler,
+  site/shared-root or container outage journey ran; no external workload,
+  allocation, image pull/build or provisioning occurred. The opt-in
+  `tests/slurm_acceptance/test_slurm_result_recovery.py` owner audits a site-owned
+  unified public-run/outage receipt and separate storage/containment evidence;
+  it does not execute or automate that live journey. The legacy live-operation
+  acceptance cases do not qualify this phase's recovery journey.
+- Execution delegation: one executor completed the coupled publication, relay,
+  finalization and cleanup work. No children, named planner or refiner were used.
+  Manager retains manifest, PR, independent review and delivery ownership.
+- Planning review: original accepted contracts retained; published-source
+  amendments and predecessor readiness receipt remain owned by the manifest
+  Quality Gate.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: executor local validation complete; manager delivery gate pending
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
-- Blocker corrections: 3/3 (published-result cancellation, quota-blocked unissued cancellation and interrupted acknowledged cleanup; executor-local corrections, no refiner)
+- Blocker corrections: 3/3, resolved locally; no remaining implementation blocker
 - PR and merge: not started
+- Cleanup: all executor terminals are terminal and no executor-owned runtime
+  process remains. Existing unrelated supervisors/services were preserved.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Live site/container and durable shared-storage qualification pending |
+| Implementation and changed paths | Complete in `src/loom/queue` shared transport, bootstrap, original-agent/session relay and existing finalizer; protected `src/loom/pipeline/executors/slurm/ready_stage.py` profile, deployment composition, current execution/Slurm docs and managed-ready-stage-slurm example updated. |
+| Tests added, updated or intentionally removed | New shared publication/ingestion and agent cancellation/cleanup tests, separate compute-process outage/restart journey, decoder/profile/bootstrap/operation/preparation/example consumers, and opt-in site-receipt audit. No required acceptance coverage removed. |
+| Validated revision/tree and evidence | `169bc32031e2a31a48af8c6e181d8596d02231f4` / `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`; both mandatory gates passed. Exact final logs, seven-suite summary/XML/coverage and prior failure/correction receipts are under `/tmp/loom-stage-41-p6-evidence/` as identified above. |
+| Validation-relevant changes after evidence | None; subsequent commit only records this card's Workflow State and Completion Record. |
+| Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
+| PR, review and merge | Manager-owned and pending; implementation/validation handoff complete. |
+| Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |
