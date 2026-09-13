@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 8
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p8-unified-mcp
@@ -316,7 +316,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Both fresh mandatory full gates pass on the committed correction candidate;
   current revision/tree and complete evidence are recorded below.
 - Blocker corrections: 1/3 (first correction implemented and validated)
-- PR and merge: not started
+- PR and merge: [PR 319](https://github.com/samcantrill/loom/pull/319) is open against develop with the canonical head/title; independent review and merge pending.
 
 ## Completion Record
 
@@ -327,7 +327,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | Both fresh mandatory gates passed on clean correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`, tree `a2e1686d3190ce445f0f256037c5aa2ca486ed31`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 301 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3721 passed, 18 skipped, zero failures/errors across seven suites. Current gate logs, summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-c1-evidence/`; 24 final gate/report files were byte-verified. The initial candidate's evidence remains separately archived at `/tmp/loom-stage41-p8-evidence/`. |
 | Validation-relevant changes after evidence | None after the fresh passing gates. This completion update changes only phase metadata; correction source/tests and the remaining validated tree are unchanged. |
 | Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
-| PR, review and merge | Pending |
+| PR, review and merge | [PR 319](https://github.com/samcantrill/loom/pull/319) open against develop; independent actual-head review pending. |
 | Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Both gate terminals and phase-owned test/service processes are terminal; process inspection found only unrelated historical supervisors and current rphys work, which were preserved. |
 
 
