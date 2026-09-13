@@ -231,11 +231,11 @@ It must not create nested sbatch work by accident. New allocation hosting,
 multi-node identity and allocation acquisition are deferred; site qualification
 is required before claiming this deployment works.
 
-### Proposed Phase 9 amendment: native lifecycle observers
+### Phase 9 amendment: native lifecycle observers
 
-Status: proposed on 2026-09-14; independent review passed for maintainer approval.
-Maintainer approval is required before implementation. The manifest Quality Gate
-owns the bounded independent review receipt. Existing
+Status: independently reviewed and explicitly approved by the maintainer on
+2026-09-14. Implementation is authorized within Phase 9. The manifest Quality Gate
+owns the bounded independent review and approval receipt. Existing
 Phases 1–8 and their approval/evidence remain unchanged. This amendment supplies
 the missing event-consumer contract within FR-41-13, DQ-41-06 and VAL-41-12; it
 does not add a tenth phase or reopen execution/backend semantics.
@@ -262,7 +262,7 @@ and stage transitions across resident/container/Slurm execution and survives
 client detachment. Reuse the existing event models/registry and narrow authority
 adapters. Notification implementations remain installed project/plugin code.
 
-| Alternative | Consequence | Proposed disposition |
+| Alternative | Consequence | Accepted disposition |
 | --- | --- | --- |
 | Protected coordinator configuration selects local sink factories | One lifecycle owner can notify across clients/backends; installed callback code executes with that service's privileges | Recommended; explicit administrator-selected trust boundary |
 | External observer wrapper alone | Independent observer lifetime, catch-up and observer-fact storage need a separate contract; client-local callbacks stop on detach | Defer as a separate consumer capability; retain existing read-only primitives |
