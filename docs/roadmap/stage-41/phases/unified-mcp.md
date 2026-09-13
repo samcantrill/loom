@@ -14,7 +14,7 @@
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: pre-submit identity guard runs after native binding/startup writes; scoped correction 1 pending
+- Blockers: none in implementation; scoped correction 1 is implemented and validated, awaiting manager verification and independent review.
 
 ## Objective And Context
 
@@ -282,11 +282,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   lifecycle tests. The manager owns the manifest, delivery and independent review;
   no children, extra branches or lifecycle sidecars are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: complete and validated at `294f31d7aaf0f90cd21d36c2a234832c61a0f931`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both mandatory gates pass; manager delivery and independent review remain pending.
+- Implementation: complete and validated at correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both fresh mandatory gates pass; manager delivery and independent review remain pending.
 - Refiner: not used
-- Pre-submit gate: product blocker identified at `6fa59d78ad980e8c22016c11ae680762a944b2ad`; the first scoped correction below is required before review/delivery.
+- Pre-submit gate: the identity-before-binding blocker found at `6fa59d78ad980e8c22016c11ae680762a944b2ad` is corrected and validated below; manager verification remains pending before review/delivery.
 - Independent implementation review: required for tool authorization/side effects and cancellation delegation
-- Scoped correction 1: the supported `loom_run` call accepts an optional saved
+- Scoped correction 1 (resolved): the supported `loom_run` call accepts an optional saved
   coordinator guard. Its native composition calls `ensure_available`, which calls
   `_bind` before checking that guard. A cold selected deployment with a conflicting
   expected owner therefore creates the deployment, publishes its binding and
@@ -313,8 +313,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   stdio cold/restart journey asserts the same refusal before successful replay.
   Focused native/MCP consumers: 70 passed in 382.02s; Pyright passed. Logs:
   `/tmp/loom-p8-c1-targeted.log` and `/tmp/loom-p8-c1-typecheck.log`.
-  Fresh mandatory full gates are next on the committed correction candidate.
-- Blocker corrections: 1/3 (first correction implemented; fresh final gates pending)
+  Both fresh mandatory full gates pass on the committed correction candidate;
+  current revision/tree and complete evidence are recorded below.
+- Blocker corrections: 1/3 (first correction implemented and validated)
 - PR and merge: not started
 
 ## Completion Record
@@ -323,8 +324,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | `src/loom/mcp` binds one protected deployment, resolves current native clients, delegates durable run and named cancellation, and forwards ordered invocation/explicit receipt retry. Native deployment/run and service qualification helpers share the absolute startup deadline without qualifying workers during connect-only reads. Four skills, MCP docs/example and directly affected native/package/SDK tests updated. |
 | Tests added, updated or intentionally removed | Inert public discovery, no per-call selectors, complete native request/deadline/error/control forwarding, explicit receipt retry, capacity retention after SDK cancellation, unified stdio disconnect, cold creation/restart binding, connect-only missing-root refusal, and qualification deadline refusal. Existing source/report/identity/authorization/optional-import checks retained. One existing native deployment fixture assertion was narrowed for Pyright. |
-| Validated revision/tree and evidence | Both mandatory gates passed on clean candidate `294f31d7aaf0f90cd21d36c2a234832c61a0f931`, tree `7307610ba9fdba808739b275fb9e84cb47b14fe0`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 297 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3717 passed, 18 skipped, zero failures/errors across seven suites. The 160-test focused selection and causal logs, final gate logs, Markdown summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-evidence/`; 24 final gate/report files were byte-verified against originals. |
-| Validation-relevant changes after evidence | Manager found the identity-before-binding blocker above. Initial gates remain evidence for their exact revision; the scoped correction requires fresh affected checks and both final gates before review. |
+| Validated revision/tree and evidence | Both fresh mandatory gates passed on clean correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`, tree `a2e1686d3190ce445f0f256037c5aa2ca486ed31`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 301 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3721 passed, 18 skipped, zero failures/errors across seven suites. Current gate logs, summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-c1-evidence/`; 24 final gate/report files were byte-verified. The initial candidate's evidence remains separately archived at `/tmp/loom-stage41-p8-evidence/`. |
+| Validation-relevant changes after evidence | None after the fresh passing gates. This completion update changes only phase metadata; correction source/tests and the remaining validated tree are unchanged. |
 | Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
 | PR, review and merge | Pending |
 | Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Both gate terminals and phase-owned test/service processes are terminal; process inspection found only unrelated historical supervisors and current rphys work, which were preserved. |
@@ -376,17 +377,28 @@ them with the actual changed skills; native/stdio tests own runtime evidence.
 
 ### Final gate evidence
 
-- Candidate revision/tree: `294f31d7aaf0f90cd21d36c2a234832c61a0f931` /
-  `7307610ba9fdba808739b275fb9e84cb47b14fe0` (clean before both gates).
-- Archive: `/tmp/loom-stage41-p8-evidence/loom-p8-validate-pr.log`,
-  `loom-p8-test-summary.log`, `test-summary.md`, and the seven directories under
-  `test-summary/` containing `junit.xml`, `coverage.json` and `.coverage`.
-  Causal/targeted/static logs are retained alongside these final receipts.
-- The summary's 18 skips are existing opt-in Docker/Apptainer acceptance; the
-  default lane's two optional-import skips are covered by its separate extra
-  lane. No scientific workload, worker provisioning, physical deployment or live
-  assistant-session qualification was performed.
-- A final process inspection found no remaining phase-owned runtime, MCP, pytest
-  or harness process. Unrelated historical supervisors and current rphys work
-  were left intact. No branch transition, push, PR or merge was performed by
-  the executor. The manager owns subsequent gates and delivery.
+- Current correction revision/tree: `585d110a06c8d14fb84bc8480a5bbc5b2985af52` /
+  `a2e1686d3190ce445f0f256037c5aa2ca486ed31` (clean before both fresh gates).
+- Current archive: `/tmp/loom-stage41-p8-c1-evidence/`, including
+  `loom-p8-c1-validate-pr-recheck.log`, `loom-p8-c1-test-summary.log`,
+  `test-summary.md`, and seven suite directories containing `junit.xml`,
+  `coverage.json` and `.coverage`. The manager's causal failure, 70-test focused
+  pass and Pyright receipt are retained in this correction archive.
+- The first full correction gate passed baseline but encountered four timing or
+  readiness failures in existing example/sweep checks. All four passed unchanged
+  in a focused recheck (140.03s), followed by a passing complete `make validate-pr`
+  rerun and the required fresh summary. The failed gate and focused recheck are
+  preserved as `loom-p8-c1-validate-pr.log` and
+  `loom-p8-c1-gate-failures-recheck.log`; no source or acceptance change was made
+  to obtain the passing rerun.
+- Initial candidate `294f31d7aaf0f90cd21d36c2a234832c61a0f931`, tree
+  `7307610ba9fdba808739b275fb9e84cb47b14fe0`, retains its separately qualified
+  evidence at `/tmp/loom-stage41-p8-evidence/`. Those earlier receipts are not
+  presented as validating the owner-guard correction.
+- The summary's 18 skips remain existing opt-in Docker/Apptainer acceptance;
+  default optional-import skips are covered by the separate extra selections.
+  No physical workload or live assistant-session qualification was performed.
+- Final process inspection found no remaining phase-owned runtime, MCP, pytest
+  or harness process. Unrelated historical supervisors were preserved. The
+  executor made no branch transition, push, PR or merge; manager verification,
+  independent review and delivery remain pending.
