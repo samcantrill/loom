@@ -14,7 +14,7 @@
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none; published predecessor and accepted contracts verified
+- Blockers: pre-submit identity guard runs after native binding/startup writes; scoped correction 1 pending
 
 ## Objective And Context
 
@@ -284,9 +284,26 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: complete and validated at `294f31d7aaf0f90cd21d36c2a234832c61a0f931`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both mandatory gates pass; manager delivery and independent review remain pending.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: product blocker identified at `6fa59d78ad980e8c22016c11ae680762a944b2ad`; the first scoped correction below is required before review/delivery.
 - Independent implementation review: required for tool authorization/side effects and cancellation delegation
-- Blocker corrections: 0/3
+- Scoped correction 1: the supported `loom_run` call accepts an optional saved
+  coordinator guard. Its native composition calls `ensure_available`, which calls
+  `_bind` before checking that guard. A cold selected deployment with a conflicting
+  expected owner therefore creates the deployment, publishes its binding and
+  writes `startup-attachment:<operation_id>` before returning conflict/not-applied.
+  This violates the accepted expected-identity guard before mutation. The manager
+  reproduced all three writes through the exact native composition used by MCP;
+  `/tmp/loom-p8-owner-guard-before.log` records the causal failure. No daemon/job
+  launched and the disposable fixture was cleaned.
+  Enforce the expected identity at the native binding/availability owner before
+  durable creation/binding/startup-hold writes. Preserve valid first creation
+  without a supplied owner, correct-owner existing-root connection/restart and
+  same-owner remote/local selections. Use existing protected identity/binding
+  owners rather than a separate MCP check-then-start sequence. Add causal native
+  and MCP coverage for a refused cold mismatch and unchanged existing binding/
+  startup state, then affected checks and both fresh required gates. No new
+  product contract, durable format, refiner or reviewer is needed.
+- Blocker corrections: 1/3 (first correction pending)
 - PR and merge: not started
 
 ## Completion Record
@@ -296,7 +313,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Implementation and changed paths | `src/loom/mcp` binds one protected deployment, resolves current native clients, delegates durable run and named cancellation, and forwards ordered invocation/explicit receipt retry. Native deployment/run and service qualification helpers share the absolute startup deadline without qualifying workers during connect-only reads. Four skills, MCP docs/example and directly affected native/package/SDK tests updated. |
 | Tests added, updated or intentionally removed | Inert public discovery, no per-call selectors, complete native request/deadline/error/control forwarding, explicit receipt retry, capacity retention after SDK cancellation, unified stdio disconnect, cold creation/restart binding, connect-only missing-root refusal, and qualification deadline refusal. Existing source/report/identity/authorization/optional-import checks retained. One existing native deployment fixture assertion was narrowed for Pyright. |
 | Validated revision/tree and evidence | Both mandatory gates passed on clean candidate `294f31d7aaf0f90cd21d36c2a234832c61a0f931`, tree `7307610ba9fdba808739b275fb9e84cb47b14fe0`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 297 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3717 passed, 18 skipped, zero failures/errors across seven suites. The 160-test focused selection and causal logs, final gate logs, Markdown summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-evidence/`; 24 final gate/report files were byte-verified against originals. |
-| Validation-relevant changes after evidence | None. Only this completion record changes after both final gates; validated source, tests, skills, docs, dependencies and build configuration remain unchanged. |
+| Validation-relevant changes after evidence | Manager found the identity-before-binding blocker above. Initial gates remain evidence for their exact revision; the scoped correction requires fresh affected checks and both final gates before review. |
 | Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
 | PR, review and merge | Pending |
 | Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Both gate terminals and phase-owned test/service processes are terminal; process inspection found only unrelated historical supervisors and current rphys work, which were preserved. |
