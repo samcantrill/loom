@@ -14,7 +14,7 @@
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none in implementation; scoped correction 1 is implemented and validated, awaiting manager verification and independent review.
+- Blockers: none in implementation; scoped correction 1 is implemented and validated, manager verification passed; independent review pending.
 
 ## Objective And Context
 
@@ -284,7 +284,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: complete and validated at correction candidate `585d110a06c8d14fb84bc8480a5bbc5b2985af52`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both fresh mandatory gates pass; manager delivery and independent review remain pending.
 - Refiner: not used
-- Pre-submit gate: the identity-before-binding blocker found at `6fa59d78ad980e8c22016c11ae680762a944b2ad` is corrected and validated below; manager verification remains pending before review/delivery.
+- Pre-submit gate: passed. Manager verified the native identity-before-binding correction, causal native/stdio assertions, preserved first creation/restart, complete phase diff and mandatory evidence. Independently parsed all seven archived XML suites: 3721 passed/18 skipped, zero failures/errors. The initial four failures passed unchanged in focused and complete reruns; no source or acceptance relaxation followed the validated candidate. Subsequent changes are phase metadata only. No phase-owned runtime remains. Independent actual-PR-head review is next.
 - Independent implementation review: required for tool authorization/side effects and cancellation delegation
 - Scoped correction 1 (resolved): the supported `loom_run` call accepts an optional saved
   coordinator guard. Its native composition calls `ensure_available`, which calls
