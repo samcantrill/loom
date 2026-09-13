@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 7
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p7-unified-sweeps
@@ -263,7 +263,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   of the actual phase PR is still required.
 - Independent implementation review: required for sweep scientific/control preservation and public removal
 - Blocker corrections: 2/3
-- PR and merge: not started
+- PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) is open; canonical title, develop target and exact phase branch verified. Independent review and delivery are pending.
 
 ## Completion Record
 
@@ -274,5 +274,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | `make validate-pr` passed at `d158bec08e7ba9aa3989c17c180472e3921d9dd6`, tree `a45db5383bdd589a7926e82c09ed05b5add0019d`: lint/typecheck, default 3352 passed/2 skipped, config-extra 267 passed/18 skipped, MCP 36 passed, wheel/sdist built (`/tmp/loom-stage41-p7-validate-pr.log`). `make test-summary` passed at `9e45fd6ed92349a0439c5df3ad93a051d338a8af`, tree `5055302bab0507920d5830fd486eb3863b20838b`: 3657 passed, 18 skipped, no failures/errors (archived `test-summary.md`, per-suite JUnit/coverage under `suites/`, and `loom-stage41-p7-test-summary.log` in `/tmp/loom-stage41-p7-evidence/`). |
 | Validation-relevant changes after evidence | No production/test/example/build/dependency changes after successful validate-pr; only the manager-requested current sweep sections of docs/structure.md and docs/features/cli.md changed before test-summary, with links/diff checked. Only this completion receipt changes after summary. The first candidate's gate stopped at test-fixture typing, corrected before the successful gate (`/tmp/loom-stage41-p7-validate-pr-initial.log`). |
 | Replaced-code removal / retained primitive consumers | Removed run_sweep_direct, enqueue_sweep_trials, sweep-only direct/queue request/results/counts, generated enqueue requests, queue selectors and queue-state mapper. No remaining source/example references to the removed dispatch APIs. PipelineRunner remains behind pipeline.execution.run_pipeline/public exports; QueueService remains used by queue.controller and queue.status for the later shared-owner audit. |
-| PR, review and merge | Manager-owned; not started by executor. |
+| PR, review and merge | [PR 317](https://github.com/samcantrill/loom/pull/317) open; canonical identity and develop target verified. Independent review and delivery pending. |
 | Residual risk and cleanup | No unresolved implementation blocker; 2/3 semantic corrections used. Synthetic native acceptance and inspection/collection evidence only; no new physical container/fleet/Slurm qualification. The 18 summary skips are opt-in Docker/Apptainer smoke/build/resource/scheduling/namespace-lifecycle cases; predecessor backend qualification is reused for unchanged execution boundaries. Both gate terminals and all executor-owned test processes are terminal; process inspection found no remaining Loom service runtime or worktree test process. Durable test/build receipts are retained; no external workload/provisioning, push, PR or branch transition occurred. |
