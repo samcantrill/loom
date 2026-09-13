@@ -252,7 +252,15 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   facts from the retained deployment's native admission authority view, including
   outputs retained through retry/reuse. Legacy `artifacts.json` is not required.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed. Manager verified accepted scope and scientific/control
+  assertions, current docs/example, exact validated revisions and the intervening
+  documentation-only delta. Both required gates remain fresh. Seven parsed XML
+  suites reconcile to 3657 passed, zero failures/errors and 18 explicit physical
+  container skips. Summary, XML/coverage and correction logs are retained under
+  `/tmp/loom-stage41-p7-evidence/` (23 byte-verified files). No phase-owned runtime
+  process remains. Removed API names survive only in explicit rejection tests;
+  shared legacy owners remain with the named Phase 9 consumers. Independent review
+  of the actual phase PR is still required.
 - Independent implementation review: required for sweep scientific/control preservation and public removal
 - Blocker corrections: 2/3
 - PR and merge: not started
@@ -263,7 +271,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Native sweep request-before-send persistence, exact replay/observation, explicit cancel/retry and status/collection; CLI/public cutover; current sweep/CLI/structure docs and deterministic example. Narrow native authority finalizer/inspection changes retain early-stop meaning and expose existing committed artifact facts. |
 | Tests added, updated or intentionally removed | Native input/order/provenance and stable-ID checks; lost-response/interruption, failed/early-stopped/cancelled trials, failed-admission retry with successful predecessor outputs retained, CLI/E2E/example and public removals. Obsolete direct/queue engines and record serialization fixtures removed; meaningful planner/coordination/collection assertions preserved. Targeted sweep and inspection selection: 68 passed (`/tmp/sweep-targeted-final.txt`). |
-| Validated revision/tree and evidence | `make validate-pr` passed at `d158bec08e7ba9aa3989c17c180472e3921d9dd6`, tree `a45db5383bdd589a7926e82c09ed05b5add0019d`: lint/typecheck, default 3352 passed/2 skipped, config-extra 267 passed/18 skipped, MCP 36 passed, wheel/sdist built (`/tmp/loom-stage41-p7-validate-pr.log`). `make test-summary` passed at `9e45fd6ed92349a0439c5df3ad93a051d338a8af`, tree `5055302bab0507920d5830fd486eb3863b20838b`: 3657 passed, 18 skipped, no failures/errors (`build/test-summary.md`, per-suite JUnit/coverage under `build/test-summary/`, `/tmp/loom-stage41-p7-test-summary.log`). |
+| Validated revision/tree and evidence | `make validate-pr` passed at `d158bec08e7ba9aa3989c17c180472e3921d9dd6`, tree `a45db5383bdd589a7926e82c09ed05b5add0019d`: lint/typecheck, default 3352 passed/2 skipped, config-extra 267 passed/18 skipped, MCP 36 passed, wheel/sdist built (`/tmp/loom-stage41-p7-validate-pr.log`). `make test-summary` passed at `9e45fd6ed92349a0439c5df3ad93a051d338a8af`, tree `5055302bab0507920d5830fd486eb3863b20838b`: 3657 passed, 18 skipped, no failures/errors (archived `test-summary.md`, per-suite JUnit/coverage under `suites/`, and `loom-stage41-p7-test-summary.log` in `/tmp/loom-stage41-p7-evidence/`). |
 | Validation-relevant changes after evidence | No production/test/example/build/dependency changes after successful validate-pr; only the manager-requested current sweep sections of docs/structure.md and docs/features/cli.md changed before test-summary, with links/diff checked. Only this completion receipt changes after summary. The first candidate's gate stopped at test-fixture typing, corrected before the successful gate (`/tmp/loom-stage41-p7-validate-pr-initial.log`). |
 | Replaced-code removal / retained primitive consumers | Removed run_sweep_direct, enqueue_sweep_trials, sweep-only direct/queue request/results/counts, generated enqueue requests, queue selectors and queue-state mapper. No remaining source/example references to the removed dispatch APIs. PipelineRunner remains behind pipeline.execution.run_pipeline/public exports; QueueService remains used by queue.controller and queue.status for the later shared-owner audit. |
 | PR, review and merge | Manager-owned; not started by executor. |
