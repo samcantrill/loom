@@ -1,0 +1,11 @@
+input_file: /replace/with/local/input.txt
+pipeline:
+  name: local-file
+  stages:
+    - name: read
+      factory: {_target_: stages.ReadFile}
+      config:
+        weights_ref: {path: "${input_file}"}
+      outputs:
+        text: {artifact_type: json, codec_key: json.v1}
+runtime: {executor: local}

@@ -518,3 +518,38 @@ def test_overlay_must_belong_to_explicit_capture(tmp_path: Path) -> None:
         capture_shared_input(
             request, source_root=root, snapshot_root=tmp_path / "snapshots"
         )
+
+
+def test_local_policy_is_protected_and_child_input_is_versioned(tmp_path: Path) -> None:
+    from loom.queue.errors import QueueConfigError
+    from loom.queue.preparation import PreparationChildInput
+
+    descriptor = ResidentProfileDescriptor("local", "v1", "project", "env", "executor")
+    launch = ResidentWorkerLaunchProfile(tmp_path, Path(sys.executable), descriptor.to_dict())
+    config = {
+        "source_roots": {"projects": {"path": "projects", "shared_snapshot_root": "snapshots"}},
+        "profiles": {"example-cpu": {
+            "resident_profile_id": "local", "allowed_source_roots": ["projects"],
+            "source_modes": ["shared"], "runtime_options": {"executor": "local"},
+            "configuration_policy": "local",
+        }},
+    }
+    with pytest.raises(QueueConfigError, match="protected local agent"):
+        load_preparation_policy(config, base=tmp_path, descriptors=(descriptor,))
+    policy = load_preparation_policy(config, base=tmp_path, descriptors=(descriptor,),
+                                     local_agent_id="worker", local_launch_profile=launch)
+    assert policy is not None
+    scope = policy.profiles["example-cpu"].local_scope
+    assert scope == {"agent_id": "worker", "binding_fingerprint": launch.fingerprint}
+    receipt = SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture")
+    binding = PreparationChildInput("operation", "example-cpu", "pipeline.yaml", receipt,
+                                    descriptor.to_dict(), local_scope=scope)
+    assert binding.to_dict()["schema_version"] == 3
+    assert PreparationChildInput.from_dict(binding.to_dict()) == binding
+    portable = replace(binding, local_scope=None)
+    assert portable.to_dict()["schema_version"] == 2
+    assert PreparationChildInput.from_dict(portable.to_dict()) == portable
+    with pytest.raises(QueueServiceError, match="invalid"):
+        PreparationChildInput.from_dict({**binding.to_dict(), "schema_version": 4})
+    with pytest.raises(QueueServiceError):
+        PrepareRunRequest.from_dict({**_request().to_dict(), "configuration_policy": "local"})

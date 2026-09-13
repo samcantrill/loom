@@ -3494,6 +3494,11 @@ def run_managed_local_assignment(
         claims=claims,
         provider_descriptors=tuple(command.provider_descriptor for command in commands),
     )
+    from ._remote_stage_execution import _assignment_local_scope
+    from .preparation import _require_local_binding
+
+    _require_local_binding(_assignment_local_scope(delivered), resident_launch_profile,
+                           agent_id=assignment.agent_id)
     workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
     workspace.persist_request(delivered, resident_launch_profile)
     for artifact in remote_inputs:

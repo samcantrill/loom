@@ -1071,6 +1071,13 @@ def load_managed_local_intent(
         raise QueueServiceError(
             "exact runtime record execution requirements conflict with pipeline"
         )
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope, _require_local_binding
+
+    for stage in pipeline.stages:
+        scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
+        _require_local_binding(scope, config.resident_worker_launch_profile, agent_id=config.machine_id)
+        if scope is not None and placements[stage.name].target != scope["agent_id"]:
+            raise QueueServiceError("local preparation retained placement conflicts")
     allowed_targets = {config.machine_id} | {
         rule.agent_id for rule in config.agent_policy.agents
     }

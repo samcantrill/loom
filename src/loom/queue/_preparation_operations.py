@@ -555,6 +555,14 @@ class CoordinatorPreparations:
                 "preparation execution owner is unavailable"
             )
         with self.daemon._cycle_lock:
+            from .preparation import _local_scope, _require_local_binding
+
+            scope = _local_scope(_mapping(selected["profile"]).get("local_scope"))
+            try:
+                _require_local_binding(scope, self.daemon.config.resident_worker_launch_profile,
+                                       agent_id=self.daemon.config.machine_id)
+            except QueueConflictError as exc:
+                raise PreparationConfigurationUnavailable("accepted local preparation binding is unavailable") from exc
             if (
                 coordinator_authority_identity(
                     self.daemon.config.coordinator_authority_factory
@@ -712,6 +720,7 @@ class CoordinatorPreparations:
             request.overlays,
             request.overrides,
             request.run_options,
+            cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:

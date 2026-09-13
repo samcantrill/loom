@@ -456,3 +456,49 @@ Qualified storage must support cross-process advisory locking. A locally partial
 corrupt or changed target remains an inspectable conflict. Once local publication
 is complete, an unknown authority reply is reconciled idempotently using the same
 publication identity. Successful replay returns the original target receipt.
+
+## Protected local configuration
+
+The default `configuration_policy: portable` retains path-free stage configuration
+and factory arguments. To prepare file-using installed project stages, an operator
+can set `configuration_policy: local` in an existing protected coordinator
+`preparation.profiles` entry:
+
+```yaml
+preparation:
+  profiles:
+    example-cpu:
+      resident_profile_id: installed
+      allowed_source_roots: [project]
+      source_modes: [shared]
+      runtime_options: {executor: local}
+      configuration_policy: local
+```
+
+Keep the existing `source_roots` and local-agent configuration alongside this
+entry. Local policy requires that resident profile to be the coordinator's
+protected embedded local agent. It applies equally to shared and staged source
+capture; source mode controls capture transport, while configuration policy
+controls target locality. Requests and captured YAML cannot grant this permission.
+
+Every action, including the preparation child, receives the coordinator
+`machine_id` as its hard agent target. A conflicting authored target or nonlocal
+execution route fails before publication. An equally installed second agent
+cannot take the work, and an unavailable selected agent cannot cause spillover.
+Loom retains the selected agent and the protected launch-profile fingerprint,
+covering installation, environment, container settings and shared-root bindings.
+Publication, restart admission and resident assignment compare that identity.
+Changed bindings require fresh preparation; old work cannot silently relocate.
+This identity describes installation and binding configuration, not a checksum of
+mutable dataset contents. Installed project code owns data semantics and integrity.
+
+Local child input and reports use version 3 with an explicit `local_scope`.
+Portable version-2 producers and reports remain supported. Unknown versions fail
+before publication. Native action fingerprints retain locality in the reserved
+`loom.local_preparation` fingerprint field; authored configuration cannot provide
+that field. Remote assignment export explicitly refuses unresolved local scope,
+even when a particular action contains no path-looking value.
+
+Source containment and native preflight still apply. Local policy permits ordinary
+domain fields such as `weights_ref.path`; it does not add mounts or grant filesystem
+permissions. See the runnable [local file example](../../examples/execution/local-preparation/README.md).

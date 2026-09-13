@@ -390,3 +390,20 @@ class BadOutputStage:
 
 class NotAStage:
     pass
+
+
+class TokenizeStage:
+    """Publish whitespace tokens under a name masked in diagnostic snapshots."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        text = context.stage_config["text"]
+        assert isinstance(text, str)
+        return {
+            "tokens": context.save_artifact(
+                "tokens", text.split(), artifact_type="json", codec_key="json.v1"
+            )
+        }

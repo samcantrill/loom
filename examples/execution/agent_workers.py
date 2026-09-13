@@ -14,7 +14,8 @@ from loom.queue.preparation import PreparationSource, PrepareRunRequest
 
 
 def run_example(
-    config: Path, output_root: Path, *, container=None, run_options=None, overrides=()
+    config: Path, output_root: Path, *, container=None, run_options=None, overrides=(),
+    configuration_policy="portable",
 ):
     """Prepare and run importable project code, then settle owned services."""
     config = config.resolve()
@@ -90,6 +91,7 @@ def run_example(
                     "allowed_source_roots": ["project"],
                     "source_modes": ["shared"],
                     "runtime_options": {"executor": "local"},
+                    "configuration_policy": configuration_policy,
                 }
             },
         },
