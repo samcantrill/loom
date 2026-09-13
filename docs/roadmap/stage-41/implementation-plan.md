@@ -9,7 +9,7 @@ Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: Phase 7, unified-sweeps
 Next phase: Phase 8, unified-mcp, after Phase 7 merge and synchronization
-Blockers: Phase 7 retained-unaccepted observation correction explicitly authorized (4/4 maximum); correction implemented; fresh gates and same-reviewer confirmation pending
+Blockers: Phase 7 observation correction passes fresh gates; original-reviewer confirmation pending (4/4 corrections authorized)
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -230,6 +230,6 @@ and all approved validation commands remain binding.
 | 4 | [311](https://github.com/samcantrill/loom/pull/311), merge `243c86a` | Both fresh required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 4 card | No implementation blocker; physical qualification unavailable and unclaimed | Examples/removals and evidence archive complete; no phase-owned processes remain; completion metadata published/synchronized; exact remote/local phase branches retired |
 | 5 | [312](https://github.com/samcantrill/loom/pull/312), merge `5e4237d` | Both required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 5 card | No implementation blocker; completed-job durability/site qualification stays with Phase 6 | Sole agent submission owner and removal audit complete; metadata published/synchronized; exact remote/local phase branches retired |
 | 6 | [313](https://github.com/samcantrill/loom/pull/313), merge `5eeb021` | Both fresh required gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 6 card | No implementation blocker; physical site/storage/container qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired |
-| 7 | [317](https://github.com/samcantrill/loom/pull/317), open | Earlier gates passed; independent review found retained-unaccepted observation abort; fourth correction explicitly authorized, fresh gates and confirmation pending | Observation blocker recorded in Phase 7 card; physical qualification remains explicit | Evidence archived; current PR remains unmerged; successor start blocked |
+| 7 | [317](https://github.com/samcantrill/loom/pull/317), open | Fourth correction implemented; 90 affected checks and both fresh gates pass; original-reviewer confirmation pending | No additional product blocker identified in manager checks; physical qualification remains explicit | 22 evidence files archived; current PR remains unmerged; successor starts after acceptance, delivery and synchronization |
 | 8 | pending | not started | Optional MCP/real-session qualification pending | not started |
 | 9 | pending | not started | Final dynamic removal and qualified deployment evidence audit pending | not started |

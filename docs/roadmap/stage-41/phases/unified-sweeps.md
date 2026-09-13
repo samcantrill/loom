@@ -14,7 +14,7 @@
 - Dependencies: Phase 6 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: retained-unaccepted observation correction implemented; fresh final gates and same-reviewer confirmation pending
+- Blockers: original-reviewer confirmation of the validated observation correction pending
 
 ## Objective And Context
 
@@ -238,7 +238,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native request-before-send persistence, replay/observation and
   explicit controls are implemented in existing sweep state; scientific planning
-  remains unchanged. Targeted checks passed (68 tests); both fresh required full gates pass on the reconciled upstream tree. Independent review found the observation blocker recorded below; implementation is not merge eligible.
+  remains unchanged. The fourth observation correction passes 90 affected checks and both fresh final gates at the revision below. Confirmation by the original reviewer is pending before delivery.
 - Scoped correction 1: the real EarlyStopStage native sweep initially reported
   `cancelled` instead of `early_stopped` (causal integration failure). Existing
   managed/remote/Slurm authority finalizers replaced its verified worker reason;
@@ -269,36 +269,30 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   committed merged candidate recorded below.
   No new reconciled sweep capability or compatibility fallback is introduced.
 - Refiner: not used
-- Initial pre-submit gate: passed on the reconciled tree before the independent
-  observation finding below. Manager verified accepted
-  scientific/control assertions, current docs/example, native scope guard and
-  exact validation revision/tree. Both fresh required gates passed at
-  `790a1171085be7edfc150cfad9cd09f9b10fb386`, tree
-  `cf05ee0627d31a3c0eceb797710219e48f8a7453`: validate-pr in 3324.44 seconds,
-  summary in 3844.06 seconds. Seven parsed XML suites reconcile to 3689 passed,
-  zero failures/errors and 18 explicit physical-container skips. Current summary,
-  XML/coverage and correction logs are archived under
-  `/tmp/loom-stage41-p7-upstream-evidence/` (21 byte-verified files).
-  Original pre-reconciliation receipts remain under `/tmp/loom-stage41-p7-evidence/`
-  (23 byte-verified files). Only evidence metadata follows current validation.
-  No phase-owned runtime process remains. Removed API names survive only in
-  explicit rejection tests; shared legacy owners retain named Phase 9 consumers.
-  Independent review of the actual PR head found the blocker below; passing
-  validation does not override that result.
-- Independent implementation review: product blocker at
+- Pre-submit gate: passed after the fourth correction. Manager verified the
+  accepted scientific/control assertions, current docs/example, exact-template
+  guard, native observation boundaries, removal audit and exact evidence revision.
+  Both mandatory gates passed at `ec9a585db20053e63c93dbec818824d2ee571785`, tree
+  `a1e712735e55e971073ecea2251c17273a459594`: validate-pr in 3195.50 seconds;
+  summary in 4223.50 seconds. Seven parsed XML suites reconcile to 3697 passed,
+  zero failures/errors and 18 explicit physical-container skips. Gate logs,
+  summary, seven XML/coverage suites and scoped correction receipts are archived
+  under `/tmp/loom-stage41-p7-observation-evidence/` (22 byte-verified files).
+  Earlier receipts remain under `/tmp/loom-stage41-p7-upstream-evidence/` and
+  `/tmp/loom-stage41-p7-evidence/`. Only phase/manifest evidence metadata follows
+  this validated tree. Gate terminals are complete; process inspection found no
+  remaining stage-owned service runtime or test process. The PR still targets
+  develop at `84d4a16a792b3f59f94dadbc1e28350cc8c8f54d`; no relevant upstream drift
+  invalidates these checks. Same-reviewer confirmation is pending.
+- Independent implementation review: initial product blocker at
   `b41e5722f1ffb7e939c1ee467caf4342019ff1fa`; no other qualified findings.
-  A trial request is durably saved before send. If connection fails before
-  acceptance, or the process is interrupted before transmission, there is no
-  native operation yet. `observe_sweep` observes every saved request and propagates
-  that trial's `not_found`, aborting refresh of later accepted trials. This violates
-  the interruption-safe, truthful status linkage contract. The manager reproduced
-  initial outcomes `[unknown, succeeded]`, then `not_found` with the second trial
-  never refreshed; receipt is `observe-unaccepted-reproducer.log` in the current
-  archive. Product source/tests remain unchanged after the validated revision.
-  The reviewer independently reconciled all seven suites and accepted the
-  remaining scope, exact-template guard, scientific/control preservation,
-  early-stop correction, collection, removals and current docs. PR is not eligible
-  to merge while this finding remains.
+  Request persistence before transmission can leave a retained, unaccepted trial;
+  its native `not_found` aborted status refresh of later accepted trials. The
+  manager reproduced this supported interruption/connection-loss path. The
+  reviewer accepted the remaining scope, exact-template guard, scientific/control
+  preservation, early-stop correction, collection, removals and current docs.
+  The correction below is implemented and validated; confirmation by that same
+  reviewer is pending before merge.
 - Scoped correction 4 (authorized): handle native `not_found` for the requested
   operation per trial only when
   retained state has never established acceptance. Leave that trial's saved
@@ -326,18 +320,18 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Pyright pass. Receipts: `/tmp/loom-p7-observation-{before,after,ruff,pyright}.log`.
   All 90 affected sweep/CLI/native-inspection and coordinator-client checks pass
   (150.13 seconds; `/tmp/loom-p7-observation-affected.log`). Both required final
-  gates remain pending on the committed correction candidate.
-- Blocker corrections: 4/4 authorized and implemented; fourth final gates and confirmation pending
-- PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) remains open and unmerged; canonical identity and develop target verified. Independent review found the blocker above. Phase 8 cannot start before correction, review acceptance, delivery and synchronization.
+  gates pass on the committed correction candidate identified above.
+- Blocker corrections: 4/4 authorized, implemented and validated; original-reviewer confirmation pending
+- PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) remains open and unmerged; canonical identity and develop target verified. The fourth correction is implemented and validated. Phase 8 cannot start before original-reviewer acceptance, delivery and synchronization.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Native sweep request-before-send persistence, exact replay/observation, explicit cancel/retry and status/collection; CLI/public cutover; current sweep/CLI/structure docs and deterministic example. Narrow native authority finalizer/inspection changes retain early-stop meaning and expose existing committed artifact facts. |
-| Tests added, updated or intentionally removed | Native input/order/provenance and stable-ID checks; lost-response/interruption, failed/early-stopped/cancelled trials, failed-admission retry with successful predecessor outputs retained, CLI/E2E/example and public removals. Obsolete direct/queue engines and record serialization fixtures removed; meaningful planner/coordination/collection assertions preserved. Targeted sweep and inspection selection: 68 passed (`/tmp/sweep-targeted-final.txt`). |
-| Validated revision/tree and evidence | Both mandatory gates passed at `790a1171085be7edfc150cfad9cd09f9b10fb386`, tree `cf05ee0627d31a3c0eceb797710219e48f8a7453`. Validate-pr: lint/typecheck, default 3358 passed/2 skipped, config-extra 293 passed/18 skipped, MCP 36 passed, wheel/sdist built. Summary: 3689 passed, 18 skipped, zero failures/errors. Current logs `loom-p7-upstream-validate-pr-790a117.log` and `loom-p7-upstream-test-summary-790a117.log`, summary and seven XML/coverage suites are under `/tmp/loom-stage41-p7-upstream-evidence/`. Earlier receipts remain under `/tmp/loom-stage41-p7-evidence/`. |
-| Validation-relevant changes after evidence | Fourth observation correction is now authorized; fresh focused checks and both gates are required after its implementation. Earlier gate receipts remain historical evidence for their exact revisions. |
+| Tests added, updated or intentionally removed | Native input/order/provenance and stable-ID checks; lost-response/interruption, failed/early-stopped/cancelled trials, explicit failed-admission retry retaining successful predecessor outputs, CLI/E2E/example and public removals. Fourth correction adds causal pre-acceptance loss/interruption, continuation, definite-failure preservation, accepted-operation/cancellation evidence and native admission/conflict error assertions, including real CLI recovery. All 90 affected sweep/client checks pass; meaningful planner/coordination/collection assertions remain. |
+| Validated revision/tree and evidence | Both mandatory gates pass at `ec9a585db20053e63c93dbec818824d2ee571785`, tree `a1e712735e55e971073ecea2251c17273a459594`. Validate-pr: lint/typecheck, default 3365 passed/2 skipped, config-extra 294 passed/18 skipped, MCP 36 passed, wheel/sdist built. Summary: 3697 passed, 18 skipped, zero failures/errors. Logs `loom-p7-observation-validate-pr-ec9a585.log` and `loom-p7-observation-test-summary-ec9a585.log`, summary, seven XML/coverage suites and correction receipts are archived under `/tmp/loom-stage41-p7-observation-evidence/` (22 byte-verified files). Earlier evidence remains in the prior archives listed above. |
+| Validation-relevant changes after evidence | None; only phase/manifest evidence metadata follows the current tested revision. The fourth correction and its tests/current feature documentation are included in both fresh gates. |
 | Replaced-code removal / retained primitive consumers | Removed run_sweep_direct, enqueue_sweep_trials, sweep-only direct/queue request/results/counts, generated enqueue requests, queue selectors and queue-state mapper. No remaining source/example references to the removed dispatch APIs. PipelineRunner remains behind pipeline.execution.run_pipeline/public exports; QueueService remains used by queue.controller and queue.status for the later shared-owner audit. |
-| PR, review and merge | [PR 317](https://github.com/samcantrill/loom/pull/317) open and unmerged; independent review at `b41e5722f1ffb7e939c1ee467caf4342019ff1fa` found the retained-unaccepted observation blocker. Fourth scoped correction implemented; fresh final gates and same-reviewer confirmation pending. |
-| Residual risk and cleanup | Three scoped corrections implemented and validated; fourth observation correction explicitly authorized (4/4 maximum). Synthetic native acceptance and inspection/collection evidence only; no new physical container/fleet/Slurm qualification. The 18 summary skips are opt-in Docker/Apptainer smoke/build/resource/scheduling/namespace-lifecycle cases; predecessor backend qualification is reused for unchanged execution boundaries. Both gate terminals and all executor-owned test processes are terminal; process inspection found no remaining Loom service runtime or worktree test process. Durable test/build receipts are retained; no external workload/provisioning, push, PR or branch transition occurred. |
+| PR, review and merge | [PR 317](https://github.com/samcantrill/loom/pull/317) open and unmerged; the initial independent review identified the retained-unaccepted observation blocker. Fourth scoped correction implemented and both final gates passed; original-reviewer confirmation pending. |
+| Residual risk and cleanup | Four scoped corrections authorized, implemented and validated (4/4 maximum). Synthetic native acceptance/inspection/collection evidence only; no new physical container/fleet/Slurm qualification. The 18 summary skips are opt-in Docker/Apptainer acceptance cases; predecessor qualification is reused for unchanged execution boundaries. Both gate terminals and all executor-owned test processes are terminal; process inspection found no remaining stage-owned service runtime or test process. Durable test/build receipts are retained. |
