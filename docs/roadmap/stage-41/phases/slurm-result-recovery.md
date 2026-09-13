@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: blocked
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
@@ -14,7 +14,7 @@
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none; Phase 5 remotely merged, metadata synchronized and exact phase branches retired
+- Blockers: independent review found cumulative-output acknowledgement replay failure; the three-correction budget is exhausted
 
 ## Objective And Context
 
@@ -360,11 +360,31 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   Only phase evidence changed after validation. No remaining product blocker was
   identified; independent PR review is required. No phase-owned process remained
   in manager inspection, and unrelated work is preserved.
-- Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
-- Blocker corrections: 3/3, resolved locally; no remaining implementation blocker
+- Independent implementation review: product blocker at
+  `af0ec659fd0498436096153ee0d941c1c42eb83e`. A retained multi-chunk artifact
+  uploaded before connection loss is already complete at the coordinator. Replay
+  sends offset zero, but the existing `write_output_chunk` returns cumulative
+  received bytes (the full size for finalized output). `SharedSlurmResult.deliver`
+  currently requires only the just-sent chunk end and rejects this valid replay,
+  so commit, cleanup and settlement cannot finish. Existing lost-ack tests cover
+  interruption after finalization and do not cover this earlier boundary.
+  No other qualified finding was identified; PR identity and existing evidence
+  remain verified, but merge is not eligible.
+- Concrete correction: advance delivery from the existing bounded cumulative
+  acknowledgement, retaining integer/range/progress checks and exact report,
+  identity, fence and digest contracts. Add a 64 KiB/two-chunk regression losing
+  the response after final output persistence and before commit; prove original
+  bytes remain until replay commits once and acknowledged cleanup completes.
+  Validate the transport and its actual coordinator consumer, then both required
+  final gates and the same reviewer's bounded confirmation. This is a distinct
+  fourth correction, not a relabelled cleanup fix; implementation awaits a
+  maintainer exception to AGENTS.md's three-correction maximum.
+- Blocker corrections: 3/3 used and resolved; one additional independent-review blocker requires a budget exception before correction
 - PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) is open,
   non-draft and mergeable. Canonical title, exact phase branch and develop target
-  are verified; independent review and gated delivery remain pending.
+  are verified; independent review found the blocker above. The PR remains open
+  and unmerged; Phase 7 may start only after correction, accepted review, delivery
+  and synchronization.
 - Cleanup: all executor terminals are terminal and no executor-owned runtime
   process remains. Existing unrelated supervisors/services were preserved.
 
@@ -377,5 +397,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | `169bc32031e2a31a48af8c6e181d8596d02231f4` / `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`; both mandatory gates passed. Exact final logs, seven-suite summary/XML/coverage and prior failure/correction receipts are under `/tmp/loom-stage-41-p6-evidence/` as identified above. |
 | Validation-relevant changes after evidence | None; subsequent commit only records this card's Workflow State and Completion Record. |
 | Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
-| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open; canonical identity verified; independent review and delivery pending. |
+| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; correction budget exception required. |
 | Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |
