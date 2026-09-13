@@ -2353,3 +2353,28 @@ def test_preparation_aliases_are_data_in_active_policy_identity(tmp_path: Path) 
         load_coordinator_service_config(source).active_fingerprint
         != first.active_fingerprint
     )
+
+
+def test_installed_processor_is_protected_local_policy_and_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    profile = payload["preparation"]["profiles"]["example-cpu"]
+    profile["project_processor"] = {
+        "schema_version": 1, "callable": "uninstalled_project:inspect",
+        "evidence_namespace": "example", "recovery_stage": "fit",
+    }
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="protected local"):
+        load_coordinator_service_config(source)
+    profile["configuration_policy"] = "local"
+    _write_protected(source, payload)
+    first = load_coordinator_service_config(source)
+    assert "uninstalled_project" not in sys.modules
+    profile["project_processor"]["recovery_stage"] = "other-fit"
+    _write_protected(source, payload)
+    assert load_coordinator_service_config(source).active_fingerprint != first.active_fingerprint
+    profile["project_processor"]["schema_version"] = 99
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="unsupported.*capability"):
+        load_coordinator_service_config(source)

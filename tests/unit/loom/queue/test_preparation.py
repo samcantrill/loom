@@ -553,3 +553,17 @@ def test_local_policy_is_protected_and_child_input_is_versioned(tmp_path: Path) 
         PreparationChildInput.from_dict({**binding.to_dict(), "schema_version": 4})
     with pytest.raises(QueueServiceError):
         PrepareRunRequest.from_dict({**_request().to_dict(), "configuration_policy": "local"})
+
+
+def test_project_target_derivation_rechecks_protected_root(tmp_path: Path) -> None:
+    from loom.queue.preparation import _project_target_uri
+    from loom.queue.errors import QueueConflictError
+
+    root = tmp_path / "runs"
+    root.mkdir()
+    assert _project_target_uri(root, "science-" + "a" * 64) == (root / ("science-" + "a" * 64)).as_uri()
+    outside = tmp_path / "other-store"
+    outside.mkdir()
+    (root / "target").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(QueueConflictError, match="protected run root"):
+        _project_target_uri(root, "target")

@@ -1776,11 +1776,13 @@ class _ResidentAssignmentWorkspace:
         local_context: dict[str, PlainData] = (
             {} if preparation.local_scope is None else {"local_scope": dict(preparation.local_scope)}
         )
+        if preparation.project_preparation is not None:
+            local_context["project_preparation"] = dict(preparation.project_preparation)
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
             return {
-                "schema_version": 1 if preparation.local_scope is None else 2,
+                "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
                 "profile_descriptor": dict(launch.profile.descriptor),
                 "staged_directory": str(directory),
@@ -1788,7 +1790,7 @@ class _ResidentAssignmentWorkspace:
         alias = preparation.input_receipt.root
         path = launch.profile.preparation_shared_roots.get(alias)
         return {
-            "schema_version": 1 if preparation.local_scope is None else 2,
+            "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
             "profile_descriptor": dict(launch.profile.descriptor),
             "shared_roots": {} if path is None else {alias: str(path)},

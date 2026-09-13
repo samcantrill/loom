@@ -711,6 +711,18 @@ class CoordinatorPreparations:
             row = self._read(operation_id)
         else:
             receipt = input_receipt_from_dict(_mapping(receipt_data))
+        from .preparation import _project_target_uri
+
+        project_binding = None
+        if profile.get("project_processor") is not None:
+            try:
+                project_binding = {
+                    "processor": profile["project_processor"],
+                    "target_run_uri": _project_target_uri(config.run_store_root, request.run_name),
+                }
+            except QueueConflictError:
+                self._fail(row, "publication_conflict", conflict=True)
+                return
         binding = PreparationChildInput(
             request.operation_id,
             request.preparation_profile,
@@ -721,6 +733,7 @@ class CoordinatorPreparations:
             request.overrides,
             request.run_options,
             cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
+            project_binding,
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:
