@@ -233,8 +233,9 @@ is required before claiming this deployment works.
 
 ### Proposed Phase 9 amendment: native lifecycle observers
 
-Status: proposed on 2026-09-14; maintainer approval required before implementation.
-The manifest Quality Gate owns the bounded independent review receipt. Existing
+Status: proposed on 2026-09-14; independent review passed for maintainer approval.
+Maintainer approval is required before implementation. The manifest Quality Gate
+owns the bounded independent review receipt. Existing
 Phases 1–8 and their approval/evidence remain unchanged. This amendment supplies
 the missing event-consumer contract within FR-41-13, DQ-41-06 and VAL-41-12; it
 does not add a tenth phase or reopen execution/backend semantics.
