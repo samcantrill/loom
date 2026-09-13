@@ -7,9 +7,9 @@ Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 8 merged; Phase 9 preparation next
-Next phase: Phase 9, execution-cutover, after this Phase 8 metadata is published and synchronized
-Blockers: none; Phase 8 PR 319 merged after passing local validation and independent review
+Current phase: Phase 9, execution-cutover
+Next phase: final closeout after Phase 9 merge and synchronization
+Blockers: none; Phase 9 preparation passed on the published/synchronized predecessor
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -135,7 +135,7 @@ links directly to all nine walkthroughs.
 | 6 | slurm-result-recovery | merged | [Phase 6](phases/slurm-result-recovery.md) | agent/stage-41-p6-slurm-result-recovery | [313](https://github.com/samcantrill/loom/pull/313) | Bootstrap result publisher, submit-agent transport and existing coordinator finalizer | A job can finish and its compute process exit during coordinator downtime; the recovered submit agent delivers the same result for one authority commit. |
 | 7 | unified-sweeps | merged | [Phase 7](phases/unified-sweeps.md) | agent/stage-41-p7-unified-sweeps | [317](https://github.com/samcantrill/loom/pull/317) | Sweep expansion/dispatch state and native admission references | Sweep trials use the unified run lifecycle with unchanged experiment meaning and stable retry identities. |
 | 8 | unified-mcp | merged | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | [319](https://github.com/samcantrill/loom/pull/319) | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |
-| 9 | execution-cutover | pending | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | pending | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
+| 9 | execution-cutover | in_progress | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | pending | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
 
 ## Validation Ownership
 

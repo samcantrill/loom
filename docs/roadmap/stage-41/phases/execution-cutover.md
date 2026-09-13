@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 9
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p9-execution-cutover
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 8 merges; record exact SHA at execution preparation
+- Base revision: `d0e2dd33729cb465d5af313fe22379a6dad5c27d` (published Phase 8 completion metadata after PR 319)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 9: Complete Execution Cutover
 - Dependencies: Phase 8 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; predecessor delivered and phase preparation passed
 
 ## Objective And Context
 
@@ -251,7 +251,12 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on the manifest stage worktree and canonical Phase 9 branch at the Base revision above. Phase 8 PR 319 merged as `928df2e42ec29b9f2c68a7cdb8bfff2c9d09d1b4`; completion metadata is published, synchronization verified matching stage/local/fetched/advertised develop, and exact predecessor local/remote branches are retired. All predecessor agents/processes are terminal; successor start and preflight passed.
+- Source reconciliation: the listed runner, continuation, offline adapter, whole-run queue owners and service-less CLI modules still exist. Current public pipeline exports, queue CLI/status/preflight, plugin diagnostics and Slurm submission contain static consumers. Current local/event-sink/webhook/log/catalog/authority/offline and whole-run queue examples plus their tests still reference these owners. Audit actual dynamic/generated producers and preserve surviving behavior at native owners before deletion; historical module names alone do not authorize dropping primitives or meaningful assertions.
+- Validation selection: package/public/isolated imports, runtime profiles, native CLI/Python/sweep/MCP journeys, affected diagnostics/event/log/catalog examples, removed entrypoint refusal and source/dynamic/doc disposition. The card's named test paths remain present; use the locked isolated environments owned by tests/README.md. Both full make gates remain binding. Expand for changed shared execution/planner/artifact/resource boundaries, a failing supported consumer or a missing accepted assertion; reuse unchanged predecessor backend/race evidence.
+- Qualification reconciliation: P3/P4/P6/P8 phase records own the actual local evidence and unavailable physical fleet/NAS/container/Slurm/live-assistant cases. Final docs must retain these limits; no external workload, provisioning, allocation acquisition or active project environment changes are required by this phase.
+- Named refinement: none; the accepted hard removal, retained primitive, scientific behavior and operator contracts are sufficient. Report a concrete missing supported contract if the consumer audit discovers one.
+- Execution delegation: one executor is justified for the remaining cross-package orchestration removal, consumer/test migration and integrated operator documentation. It owns Phase 9 source/tests/current docs/examples and this card; manager owns the manifest, delivery and independent review. No children, extra branches or lifecycle sidecars.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
