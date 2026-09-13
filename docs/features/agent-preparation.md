@@ -502,3 +502,105 @@ even when a particular action contains no path-looking value.
 Source containment and native preflight still apply. Local policy permits ordinary
 domain fields such as `weights_ref.path`; it does not add mounts or grant filesystem
 permissions. See the runnable [local file example](../../examples/execution/local-preparation/README.md).
+
+## Installed Final Project Inspection
+
+A protected local preparation profile can require one installed callable after
+recipe expansion, ordinary overrides, effective option merging and native
+preflight. The callable runs in the selected worker installation. The coordinator
+receives plain data and never imports the project's processor.
+
+Add this field to the existing protected preparation profile (alongside its
+resident profile, roots, source modes and child runtime options):
+
+```yaml
+configuration_policy: local
+project_processor:
+  schema_version: 1
+  callable: installed_project.preparation:inspect
+  evidence_namespace: example
+  recovery_stage: fit
+```
+
+`recovery_stage` selects one existing action's `config.recovery`; use `null` when
+the integration adds only top-level `scientific_evidence`. Captured YAML and
+processor results cannot choose the callable or widen those destinations. The
+selection participates in protected policy identity and is retained with the
+accepted invocation. It requires the local agent's protected installation and
+binding identity.
+
+The callable accepts one plain mapping with exactly these fields:
+
+- `schema_version: 1`, `composition`, `effective_run_options`, `invocation`;
+- `operation_id`, `input_manifest_digest`, `preparation_profile`,
+  `profile_descriptor`, `local_scope`, `project_preparation`.
+
+`composition` contains `resolved`, `redacted`, `manifest`, `recipe_manifest` and
+`provenance`. `effective_run_options` contains the final native options, while
+`invocation` preserves the selected overlays, typed override strings and sparse
+explicit run options. `profile_descriptor` is the actual worker installation
+evidence. `project_preparation` contains the protected `processor` declaration
+and `target_run_uri`. That URI is derived by Loom from its protected run root
+and the accepted exact target; it is never the child or assignment workspace.
+
+Return a plain mapping with exactly `schema_version: 1`, `composition`,
+`evidence` and `reconciliation_key`. For example, after project-specific checks:
+
+```python
+from copy import deepcopy
+
+
+def inspect(request):
+    checked = deepcopy(request["composition"])
+    evidence, resume_fingerprint = inspect_final_science(
+        checked["resolved"], request["effective_run_options"]
+    )
+    recovery = {
+        "run_uri": request["project_preparation"]["target_run_uri"],
+        "resume_fingerprint": resume_fingerprint,
+        "environment_fingerprint": request["profile_descriptor"]["environment_fingerprint"],
+    }
+    for view in ("resolved", "redacted"):
+        checked[view]["scientific_evidence"] = (
+            evidence if view == "resolved" else redact_project_evidence(evidence)
+        )
+        fit = next(s for s in checked[view]["pipeline"]["stages"] if s["name"] == "fit")
+        fit["config"]["recovery"] = dict(recovery)
+    fit["config"]["recovery"]["run_uri"] = "<redacted>"
+    return {
+        "schema_version": 1,
+        "composition": checked,
+        "evidence": {"namespace": "example", "payload": evidence},
+        "reconciliation_key": None,
+    }
+```
+
+`inspect_final_science` and `redact_project_evidence` are project-owned operations.
+Evidence must be a mapping; the resolved `scientific_evidence` must equal its
+payload. The recovery mapping has exactly the three fields shown. Native
+validation checks the target URI and installation fingerprint and requires a
+nonempty project resume fingerprint. The redacted recovery URI must be
+`<redacted>`; the project owns masking sensitive fields in its evidence. Original
+redactions and all source/override provenance remain intact. Native checks parse
+the augmented resolved graph, preserving diagnostic-only redactions.
+
+For later reconciliation, an integration can return
+`{"namespace": "example", "version": 1, "digest": "<64 lowercase hex characters>"}`.
+The digest denotes the complete desired-state fingerprint, not a resume or
+evidence-envelope fingerprint. This capability retains the key in the native
+report; it does not itself enable target reconciliation or rename exact requests.
+
+The child and coordinator compare the requested and checked compositions outside
+the two declared destinations. Action parameters, graph edges, factory targets,
+outputs, placement, provenance and options cannot change. The published immutable
+snapshot includes the additions, and normal assignment supplies `config.recovery`
+to the selected consumer. Publication also checks the exact target against the
+protected current run root.
+
+A processor exception or invalid result yields a required failed native preflight
+check and retained report, with no target publication. The diagnostic retains the
+exception class and a fixed message, excluding unchecked exception text. Child
+inputs/reports use version 4 and private worker context version 3 for this
+capability. Unsupported versions, stale processor/installation/invocation evidence,
+redirected recovery and unrelated mutations fail before publication. Existing
+portable version 2 and local version 3 reports without an integration still work.

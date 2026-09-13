@@ -77,6 +77,7 @@ class PreparationReport:
     publishable: bool
     prospective_receipt: ManagedLocalPreparationReceipt | None
     publication_data: object
+    reconciliation_key: PlainData = None
 
 
 class PreparationCallbacks(Protocol):
@@ -99,6 +100,9 @@ class PreparationCallbacks(Protocol):
         request: PrepareRunRequest,
         binding: PreparationChildInput,
     ) -> PreparationReport: ...
+
+    def capture_candidate(self, config: LocalDaemonConfig, run_uri: str,
+                          admission: LocalDaemonAdmission | None) -> dict[str, PlainData]: ...
 
     def publish_target(
         self,
@@ -195,6 +199,20 @@ def _mapping(value: object) -> dict[str, PlainData]:
     return cast(dict[str, PlainData], dict(value))
 
 
+def _same_candidate(observed: object, current: Mapping[str, PlainData]) -> bool:
+    if not isinstance(observed, Mapping):
+        return False
+    before, after = dict(observed), dict(current)
+    old_admission, new_admission = before.get("admission"), after.get("admission")
+    if isinstance(old_admission, Mapping) and isinstance(new_admission, Mapping):
+        if old_admission.get("state") not in {"FAILED", "SUCCEEDED", "CANCELLED"} and old_admission.get("state") == new_admission.get("state"):
+            # Native in-flight observations increment this counter even when no
+            # decision fact changes. Failed-revision retry fencing stays exact.
+            before["admission"] = {key: value for key, value in old_admission.items() if key != "revision"}
+            after["admission"] = {key: value for key, value in new_admission.items() if key != "revision"}
+    return before == after
+
+
 class CoordinatorPreparations:
     """Advance retained operations while the daemon owns its exclusive root lock."""
 
@@ -234,7 +252,8 @@ class CoordinatorPreparations:
             raise PreparationNotAccepted("invalid_request", "run request is invalid")
         try:
             return self._accept(
-                request.preparation, principal_id, queue_item_id=request.queue_item_id
+                request.preparation, principal_id, queue_item_id=request.queue_item_id,
+                run_mode=request.mode, retry_policy=request.retry_policy
             )
         except ServiceRetiring:
             raise
@@ -267,13 +286,17 @@ class CoordinatorPreparations:
         principal_id: str,
         *,
         queue_item_id: str | None = None,
+        run_mode: str | None = None,
+        retry_policy: str = "never",
     ) -> LocalDaemonOperation:
         from .local_daemon import _operation_projection
 
         if not isinstance(request, PrepareRunRequest):
             raise QueueServiceError("prepare request is invalid")
         _public_operation_id(request.operation_id)
-        kind = "prepare_run" if queue_item_id is None else "run"
+        kind = "prepare_run" if run_mode is None else "run"
+        if request.run_name is None and run_mode != "reconcile":
+            raise QueueServiceError("exact preparation requires a target")
         intent = request.intent_digest(principal_id)
         if queue_item_id is not None:
             if queue_item_id.startswith(PREPARATION_RUN_PREFIX):
@@ -281,6 +304,8 @@ class CoordinatorPreparations:
             intent = hashlib.sha256(
                 stable_json_bytes([intent, kind, queue_item_id])
             ).hexdigest()
+        if run_mode == "reconcile":
+            intent = hashlib.sha256(stable_json_bytes([intent, run_mode, retry_policy])).hexdigest()
         coordinator_id = self.daemon._require_started()
         with self.daemon._cycle_lock, self.daemon._connection() as conn:
             self.daemon._lifetime.require_accepting()
@@ -301,11 +326,17 @@ class CoordinatorPreparations:
                 return self._projection(row)
             if not self.available or self.callbacks is None:
                 raise QueueServiceError("preparation is unsupported")
-            if request.run_name.startswith(PREPARATION_RUN_PREFIX):
+            if request.run_name is not None and request.run_name.startswith(PREPARATION_RUN_PREFIX):
                 raise QueueServiceError("preparation target uses a reserved child name")
             policy = self.daemon.config.preparation_policy
             assert policy is not None
             selected = policy.select(request)
+            if run_mode == "reconcile":
+                processor = _mapping(selected["profile"]).get("project_processor")
+                if not isinstance(processor, Mapping) or processor.get("schema_version") != 2:
+                    raise QueueServiceError("reconciliation requires installed project capability v2")
+                selected["reconciliation"] = {"retry_policy": retry_policy, "publication_owner": None,
+                    "candidate": None, "failed_revision": None, "verification_generation": 0}
             selected["run_store_root"] = str(self.daemon.config.run_store_root)
             selected["scheduling"] = scheduling_snapshot(self.daemon.config)
             from loom.pipeline.stores.coordinator_authority import (
@@ -374,6 +405,9 @@ class CoordinatorPreparations:
                     cancellation_operation_id=None,
                 )
                 self._check_run_budget(request.operation_id, result)
+            if run_mode == "reconcile":
+                result.update(queue_item_id=None, admission=None, cancellation_operation_id=None,
+                              binding=None, decision=None, verification_report_ref=None)
             # Reserve enough outer-envelope space to report a terminal failure
             # even for an identifier near the native projection limit.
             _operation(
@@ -711,6 +745,19 @@ class CoordinatorPreparations:
             row = self._read(operation_id)
         else:
             receipt = input_receipt_from_dict(_mapping(receipt_data))
+        from .preparation import _project_target_uri
+
+        project_binding = None
+        if profile.get("project_processor") is not None:
+            try:
+                project_binding = {
+                    "processor": profile["project_processor"],
+                    "target_run_uri": None if request.run_name is None else _project_target_uri(config.run_store_root, request.run_name),
+                    **({"run_store_root_uri": _project_target_uri(config.run_store_root.parent, config.run_store_root.name)} if request.run_name is None else {}),
+                }
+            except QueueConflictError:
+                self._fail(row, "publication_conflict", conflict=True)
+                return
         binding = PreparationChildInput(
             request.operation_id,
             request.preparation_profile,
@@ -721,6 +768,8 @@ class CoordinatorPreparations:
             request.overrides,
             request.run_options,
             cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
+            project_binding,
+            None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:
@@ -831,6 +880,10 @@ class CoordinatorPreparations:
             return
         try:
             report = callbacks.read_report(config, admission, request, binding)
+            if "reconciliation" in selected:
+                references = cast(list[PlainData], result["evidence_refs"])
+                if not references:
+                    references.append({"preparation_admission_id": result["preparation_admission_id"], "report_ref": report.reference.to_dict()})
             result.update(
                 report_ref=report.reference.to_dict(),
                 preflight_status=report.preflight_status,
@@ -861,6 +914,9 @@ class CoordinatorPreparations:
             )
             return
         assert report.prospective_receipt is not None
+        if "reconciliation" in selected:
+            self._reconcile_target(row, request, selected, config, report, result)
+            return
         try:
             if row["kind"] == "run":
                 self._check_run_budget(
@@ -883,7 +939,7 @@ class CoordinatorPreparations:
             return
         if row["state"] == "pending":
             retain_preparation_path(
-                config.run_store_root / request.run_name,
+                config.run_store_root / cast(str, request.run_name),
                 coordinator_id=self.daemon._require_started(),
                 operation_id=operation_id,
             )
@@ -915,6 +971,138 @@ class CoordinatorPreparations:
         )
         if row["kind"] == "run":
             self._continue_run(self._read(operation_id))
+
+    def _save_selection(self, operation_id: str, selected: Mapping[str, PlainData]) -> None:
+        with self.daemon._connection() as conn:
+            conn.execute("UPDATE preparation_operations SET selected_json = ? WHERE operation_id = ?",
+                         (_json(selected), operation_id))
+            conn.commit()
+
+    def _reconcile_target(self, row: sqlite3.Row, request: PrepareRunRequest,
+                          selected: dict[str, PlainData], config: LocalDaemonConfig,
+                          report: PreparationReport, result: dict[str, PlainData]) -> None:
+        from loom.pipeline.stores import run_uri_to_path
+        from .local_daemon import AdmissionNotFoundError
+
+        assert self.callbacks is not None and report.prospective_receipt is not None
+        operation_id = str(row["operation_id"])
+        uri = report.prospective_receipt.run_uri
+        target_name = run_uri_to_path(uri).name
+        reconciliation = _mapping(selected["reconciliation"])
+        selected["reconciliation"] = reconciliation
+        with self.daemon._cycle_lock:
+            row = self._read(operation_id)
+            if row["cancellation_requested"]:
+                self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
+                return
+            if row["target_name"] is None:
+                retain_preparation_path(config.run_store_root / target_name,
+                                        coordinator_id=self.daemon._require_started(), operation_id=operation_id)
+                with self.daemon._connection() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    owners = conn.execute("SELECT * FROM preparation_operations WHERE target_name = ? ORDER BY rowid", (target_name,)).fetchall()
+                    owner = owners[0] if owners else None
+                    if owner is not None:
+                        previous = _mapping(json.loads(str(owner["selected_json"])))
+                        previous.pop("reconciliation", None)
+                        scope = dict(selected)
+                        scope.pop("reconciliation", None)
+                        old_request = PrepareRunRequest.from_dict(json.loads(str(owner["request_json"])))
+                        if owner["principal_id"] != row["principal_id"] or previous != scope or (old_request.source.root, old_request.source.path) != (request.source.root, request.source.path):
+                            conn.rollback()
+                            self._fail(row, "candidate_scope_conflict", conflict=True)
+                            return
+                    queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
+                    reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
+                    result["queue_item_id"] = queue_id
+                    result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
+                    try:
+                        self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
+                    except _ResultTooLarge:
+                        conn.rollback()
+                        self._fail(row, "result_too_large")
+                        return
+                    conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
+                                 (target_name, queue_id, _json(selected), _json(result), operation_id))
+                    conn.commit()
+                row = self._read(operation_id)
+            elif row["target_name"] != target_name:
+                self._fail(row, "candidate_key_conflict", conflict=True)
+                return
+            else:
+                # Binding and cancellation receipts are retained independently of child reports.
+                retained = _mapping(json.loads(str(row["result_json"])))
+                result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
+            owner = self._read(cast(str, reconciliation["publication_owner"]))
+            if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
+                self._fail(row, "candidate_publication_failed", conflict=True)
+                return
+            if owner["operation_id"] != operation_id and owner["state"] != "applied":
+                return
+            try:
+                admission = self.daemon.admission_for_run_uri(uri)
+            except AdmissionNotFoundError:
+                admission = None
+            if admission is not None:
+                if admission.queue_item_id != row["queue_item_id"]:
+                    self._fail(row, "candidate_admission_conflict", conflict=True)
+                    return
+                if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
+                    self._fail(row, "candidate_cancelled", conflict=True)
+                    return
+            path = run_uri_to_path(uri)
+            if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
+                # Binding was serialized with cancellation; only this owner can publish.
+                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                publish = True
+            else:
+                publish = False
+            if not publish:
+                if owner["operation_id"] == operation_id and row["state"] == "applying" and reconciliation["candidate"] is None:
+                    # The original publisher alone may reconcile a lost publication reply.
+                    publish = True
+                else:
+                    try:
+                        candidate = self.callbacks.capture_candidate(config, uri, admission)
+                    except Exception:
+                        self._fail(row, "candidate_unavailable", conflict=True)
+                        return
+                    if reconciliation["failed_revision"] is None and admission is not None and admission.state.value == "FAILED":
+                        if reconciliation["retry_policy"] != "one_observed_failure":
+                            self._fail(row, "candidate_failed", conflict=True)
+                            return
+                        reconciliation["failed_revision"] = admission.revision
+                        self._save_selection(operation_id, selected)
+                    if not _same_candidate(reconciliation["candidate"], candidate):
+                        reconciliation["candidate"] = candidate
+                        reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
+                        generation = reconciliation["verification_generation"]
+                        child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
+                        with self.daemon._connection() as conn:
+                            conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
+                                         (_json(selected), child_name, _json(result), operation_id))
+                            conn.commit()
+                        return
+                    # read_report checked a committed installed verifier against this pinned input.
+                    if reconciliation["verification_generation"] == 0:
+                        raise QueueConflictError("candidate verifier is missing")
+                    result["verification_report_ref"] = report.reference.to_dict()
+                    result["prepared_run"] = candidate["prepared_run"]
+                    result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
+                    self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                    self._continue_run(self._read(operation_id))
+                    return
+        # Native publication does filesystem work outside the cycle lock. A bound
+        # cancellation suppresses subsequent admission under that same owner.
+        try:
+            prepared = self.callbacks.publish_target(config, replace(request, run_name=target_name), report)
+        except QueueConflictError:
+            self._fail(self._read(operation_id), "publication_conflict", conflict=True)
+            return
+        result["prepared_run"] = prepared.to_dict()
+        result["decision"] = "new_attempt"
+        self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+        self._continue_run(self._read(operation_id))
 
     def _check_run_budget(
         self, operation_id: str, result: Mapping[str, PlainData]
@@ -994,6 +1182,10 @@ class CoordinatorPreparations:
                 continue
             if row["queue_item_id"] != request.queue_item_id or uri != request.run_uri:
                 raise QueueConflictError("reserved run admission identity conflicts")
+            if "reconciliation" in selected and operation_id != row["operation_id"]:
+                current = self._read(operation_id) if operation_id is not None else None
+                if current is not None and current["target_name"] == row["target_name"] and current["principal_id"] == row["principal_id"]:
+                    continue
             if operation_id == row["operation_id"]:
                 if row["cancellation_requested"] or row["state"] in _TERMINAL:
                     raise QueueConflictError(
@@ -1050,6 +1242,20 @@ class CoordinatorPreparations:
                 if admission.run_uri != prepared["run_uri"]:
                     self._fail(row, "admission_conflict", conflict=True)
                     return
+                selected = _mapping(json.loads(str(row["selected_json"])))
+                reconciliation = selected.get("reconciliation")
+                if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
+                    if row["cancellation_requested"]:
+                        self._fail(row, "target_cancelled", conflict=True)
+                        return
+                    try:
+                        admission = self.daemon._submit(LocalDaemonAdmissionRequest(
+                            str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
+                            retry_failed_revision=cast(int, reconciliation["failed_revision"])),
+                            run_operation_id=operation_id)
+                    except QueueConflictError:
+                        self._fail(row, "retry_revision_conflict", conflict=True)
+                        return
                 with self.daemon._connection() as conn:
                     self.retain_admission(conn, operation_id, admission)
                     conn.commit()
@@ -1131,6 +1337,10 @@ class CoordinatorPreparations:
                 "UPDATE preparation_operations SET cancellation_requested = 1, result_json = ? WHERE operation_id = ?",
                 (_json(projected.result), operation_id),
             )
+            selected = _mapping(json.loads(str(row["selected_json"])))
+            if "reconciliation" in selected and row["target_name"] is not None:
+                conn.execute("UPDATE preparation_operations SET cancellation_requested = 1 WHERE target_name = ? AND principal_id = ?",
+                             (row["target_name"], principal_id))
             conn.execute(
                 "INSERT INTO preparation_cancellations VALUES (?, ?, 'pending', NULL, ?)",
                 (cancel_id, operation_id, _json(operation.result)),
@@ -1158,6 +1368,12 @@ class CoordinatorPreparations:
                 target_result = _mapping(json.loads(str(target["result_json"])))
                 result = _mapping(json.loads(str(control["result_json"])))
                 state = "pending"
+                if target_result["admission"] is None and target["target_name"] is not None and "reconciliation" in _mapping(json.loads(str(target["selected_json"]))):
+                    from .local_daemon import AdmissionNotFoundError
+                    try:
+                        target_result["admission"] = self.daemon.admission_for_queue_item(str(target["queue_item_id"])).to_dict()
+                    except AdmissionNotFoundError:
+                        pass
                 if target_result["admission"] is not None:
                     result["admission"] = target_result["admission"]
                     admission = self.daemon._cancel(
@@ -1181,6 +1397,16 @@ class CoordinatorPreparations:
                     }
                 elif target["state"] in _TERMINAL:
                     state = "applied"
+                if state == "applied" and target["target_name"] is not None:
+                    with self.daemon._connection() as conn:
+                        children = conn.execute("SELECT child_admission_id FROM preparation_operations WHERE target_name = ? AND principal_id = ? AND child_admission_id IS NOT NULL",
+                                                (target["target_name"], target["principal_id"])).fetchall()
+                    for child in children:
+                        owned = self.daemon._admission(str(child["child_admission_id"]))
+                        execution = self.daemon._execution
+                        if owned.state not in {LocalDaemonAdmissionState.SUCCEEDED, LocalDaemonAdmissionState.FAILED, LocalDaemonAdmissionState.CANCELLED} or (execution is not None and execution.coordinator.run_active_assignment_count(owned.run_uri)):
+                            state = "pending"
+                            break
                 projected = _operation(
                     str(control["operation_id"]), state, None, result
                 )
