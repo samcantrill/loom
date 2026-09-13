@@ -1,4 +1,4 @@
-"""Run the manual Discord webhook event-sink example through direct Python wiring."""
+"""Run the manual Discord webhook example with protected coordinator callbacks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 REPO_ROOT = next(
     parent
@@ -20,50 +19,38 @@ for path in (REPO_ROOT, PACKAGE_SOURCE):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from examples.support import started_authority_session
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.event_sinks import EventSinkRegistry
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.status import RunStatus
-from loom.pipeline.stores import path_to_run_uri
-from loom_discord import discord_event_sink
-from weave import compose_config
+from examples.execution.agent_workers import run_example
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE / "outputs"))
-    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    run_uri = path_to_run_uri(run_root / f"discord-webhook-{uuid4().hex[:8]}")
-    registration = discord_event_sink()
-    registry = EventSinkRegistry()
-    registry.register(
-        "notifications.discord",
-        registration.sink,
-        subscription=registration.subscription,
+    os.environ["PYTHONPATH"] = (
+        str(PACKAGE_SOURCE) + os.pathsep + os.environ.get("PYTHONPATH", "")
     )
-    with started_authority_session(output_root) as authority:
-        store = create_authority_backed_serial_run_store(
-            run_root, authority_config=authority.authority_config
-        )
-        result = PipelineRunner(run_store=store).run(
-            RunRequest(
-                config=compose_config(HERE / "pipeline.yaml"),
-                run_uri=run_uri,
-                event_sink_registry=registry,
-            )
-        )
-        notification_failures = store.read_event_sink_failures(run_uri)
-    if result.status is not RunStatus.SUCCEEDED:
-        raise RuntimeError(f"example run did not succeed: {result.status.name}")
+    result = run_example(
+        HERE / "pipeline.yaml",
+        output_root,
+        event_sinks=[
+            {
+                "name": "notifications.discord",
+                "factory": {"_target_": "loom_discord.discord_event_sink"},
+            }
+        ],
+    )
+    admission = result.observation.admission
+    run_uri = admission.run_uri
+    failures = SQLitePerRunAuthorityStore(run_uri).read_event_sink_failures(run_uri)
+    if admission.state.value != "SUCCEEDED":
+        raise RuntimeError(f"example run did not succeed: {admission.state.value}")
     print(f"run_uri: {run_uri}")
-    print(f"run_status: {result.status.name}")
-    print(f"notification_failure_count: {len(notification_failures)}")
+    print(f"run_status: {admission.state.value}")
+    print(f"notification_failure_count: {len(failures)}")
     print(
-        "notification_status: "
-        + ("accepted" if not notification_failures else "failed")
+        "notification_status: " + ("no_failure_recorded" if not failures else "failed")
     )
-    if notification_failures:
-        raise RuntimeError(notification_failures[0].failure_message)
+    if failures:
+        raise RuntimeError(failures[0].failure_message)
 
 
 if __name__ == "__main__":

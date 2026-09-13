@@ -146,8 +146,7 @@ lifecycle notification behavior from current event-sink/webhook consumers.
 [The approved native lifecycle observer amendment](../planning.md#phase-9-amendment-native-lifecycle-observers)
 is the single owner of the new selection, authority, delivery/trust and validation
 contracts. The maintainer explicitly approved it on 2026-09-14. Phase 9 owns that bridge and consumer migration atomically with removal; existing backend,
-run identity and scientific behavior remain fixed. No notification implementation
-has started and the phase correction budget is unchanged.
+run identity and scientific behavior remain fixed. Notification implementation is in progress; the Workflow State records owner-level corrections and validation.
 
 ### Documentation and operator behavior
 
@@ -272,17 +271,17 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for final hard public/dynamic removal and stage integration
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3. Native runtime options already retained `continue_independent`, but admission finalization ignored it and failed before unrelated branches settled. Manager confirmed restoration within the accepted contract. Consume the existing serialized policy at native readiness/finalization, retain failed descendants and explicit retry semantics, and stop new work after a known failure under the default policy. No new durable policy schema is introduced. The discriminating failure and rechecks are archived under `/tmp/loom-stage41-p9-evidence/native-failure-policy*.log` and `native-policy-settlement.log`.
 - PR and merge: not started
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
+| Implementation and changed paths | In progress: protected coordinator observer factories, selected-authority events/observer facts, native failure-policy restoration. Remaining removal/test/example/docs migrations are not complete. |
+| Tests added, updated or intentionally removed | Native committed callback/error/replay checks; protected inert factory selection and diagnostic persistence failure checks; authenticated event/output-predecessor checks; native failure-policy/independent-descendant regression. |
 | Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
+| Validation-relevant changes after evidence | Worktree remains in progress. Focused receipts qualify their tested snapshot only; final gates have not run. |
 | Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
 | PR, review and merge | Pending |
 | Residual risk and cleanup | Independently reviewed observer trust/delivery amendment is approved; implementation may resume. Final removal/integration and qualified deployment evidence audit remain outstanding. |

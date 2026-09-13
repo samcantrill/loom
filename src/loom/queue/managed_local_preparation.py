@@ -117,15 +117,24 @@ def prepare_managed_run(
     from .preparation import _project_target_uri
 
     project = getattr(composed, "project_preparation", None)
-    if project is not None and project["target_run_uri"] != _project_target_uri(service.daemon.run_store_root, run_name_text):
+    if project is not None and project["target_run_uri"] != _project_target_uri(
+        service.daemon.run_store_root, run_name_text
+    ):
         raise QueueConflictError("project preparation target binding conflicts")
     pipeline = _pipeline_from_resolved(resolved)
-    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope, _require_local_binding
+    from .preparation import (
+        LOCAL_PREPARATION_SCOPE,
+        _local_scope,
+        _require_local_binding,
+    )
 
     for stage in pipeline.stages:
         scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
-        _require_local_binding(scope, service.daemon.resident_worker_launch_profile,
-                               agent_id=service.daemon.machine_id)
+        _require_local_binding(
+            scope,
+            service.daemon.resident_worker_launch_profile,
+            agent_id=service.daemon.machine_id,
+        )
         if scope is not None and stage.placement.get("target") != scope["agent_id"]:
             raise QueueConflictError("local preparation hard placement conflicts")
     requirements = _validated_execution_requirements(pipeline, execution_requirements)
@@ -158,7 +167,9 @@ def prepare_managed_run(
     # Keep the lock outside the target: creating the lock must not manufacture a
     # partial run. Retain its inode so queued callers always share the same lock.
     lock_path = (
-        store.local_run_dir(run_uri).parent / ".loom" / "preparation-locks"
+        store.local_run_dir(run_uri).parent
+        / ".loom"
+        / "preparation-locks"
         / f"{run_name_text}.lock"
     )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +209,9 @@ def prepare_managed_run(
             )
             store.write_runtime_metadata(
                 run_uri,
-                build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict(),
+                build_runtime_metadata(
+                    options, stage_ids=pipeline.stage_names
+                ).to_dict(),
             )
             runtime_digest = prepare_managed_local_runtime_record(
                 store=store,
@@ -223,7 +236,10 @@ def _publish_authority(
 ) -> None:
     try:
         publish_prepared_run(
-            service.daemon.coordinator_authority_factory, run_uri, digest
+            service.daemon.coordinator_authority_factory,
+            run_uri,
+            digest,
+            observers=service.event_observers,
         )
     except AuthenticatedCoordinatorAuthorityError as exc:
         if exc.category in {
@@ -419,7 +435,10 @@ def _replay_receipt(
         _replay_matches(
             store, run_uri, composed, pipeline, options, requirements, service
         )
-        if service.daemon.coordinator_authority_factory is embedded_coordinator_authority:
+        if (
+            service.daemon.coordinator_authority_factory
+            is embedded_coordinator_authority
+        ):
             # Local publication failures leave an inspectable conflict. Only the
             # authenticated owner reconciles uncertain remote publication.
             authority = embedded_coordinator_authority(run_uri)
@@ -437,7 +456,10 @@ def _replay_receipt(
             "managed-local preparation conflicts with existing partial, corrupt, or changed state"
         ) from exc
 
-    if service.daemon.coordinator_authority_factory is not embedded_coordinator_authority:
+    if (
+        service.daemon.coordinator_authority_factory
+        is not embedded_coordinator_authority
+    ):
         _publish_authority(service, run_uri, runtime_digest)
     return _receipt(run_uri, plan, runtime_digest)
 

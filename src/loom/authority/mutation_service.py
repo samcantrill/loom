@@ -53,6 +53,8 @@ from loom.pipeline.stores import (
     accepted_authority_response,
     rejected_authority_response,
 )
+from loom.pipeline.stores.service_authority import _pipeline_event_from_wire
+from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
 from loom.pipeline.stores.authority import ExecutionFence
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
@@ -114,6 +116,13 @@ class AuthorityMutationOperation(StrEnum):
     SET_RESOURCE_LIMIT = "set_resource_limit"
     ENSURE_RESOURCE_LIMITS = "ensure_resource_limits"
     READ_RESOURCE_LIMIT = "read_resource_limit"
+    APPEND_AUDIT_EVENT = "append_audit_event"
+    LIST_AUDIT_EVENTS = "list_audit_events"
+    APPEND_EVENT_SINK_FAILURE = "append_event_sink_failure"
+    READ_EVENT_SINK_FAILURES = "read_event_sink_failures"
+    APPEND_EVENT_OBSERVER_LINK = "append_event_observer_link"
+    READ_EVENT_OBSERVER_LINKS = "read_event_observer_links"
+    COORDINATOR_OBSERVERS_CAPABILITY = "coordinator_observers_capability"
     COORDINATOR_PUBLISH_RUN = "coordinator_publish_run"
     COORDINATOR_OPEN_RUN = "coordinator_open_run"
     COORDINATOR_TRANSITION_RUN = "coordinator_transition_run"
@@ -152,6 +161,13 @@ TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL = "loom:trusted-in-process-coordinator"
 
 _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
     {
+        AuthorityMutationOperation.COORDINATOR_OBSERVERS_CAPABILITY,
+        AuthorityMutationOperation.READ_EVENT_OBSERVER_LINKS,
+        AuthorityMutationOperation.APPEND_EVENT_OBSERVER_LINK,
+        AuthorityMutationOperation.READ_EVENT_SINK_FAILURES,
+        AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE,
+        AuthorityMutationOperation.LIST_AUDIT_EVENTS,
+        AuthorityMutationOperation.APPEND_AUDIT_EVENT,
         AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
@@ -392,12 +408,21 @@ class AuthorityMutationService:
                 if operation not in {
                     AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
                     AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
+                    AuthorityMutationOperation.COORDINATOR_OBSERVERS_CAPABILITY,
                 }:
                     self._repository.require_coordinator_principal(
                         _required_run_uri(request),
                         scoped_principal,
                         allow_prepared=operation
-                        is AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+                        in {
+                            AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+                            AuthorityMutationOperation.APPEND_AUDIT_EVENT,
+                            AuthorityMutationOperation.LIST_AUDIT_EVENTS,
+                            AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE,
+                            AuthorityMutationOperation.READ_EVENT_SINK_FAILURES,
+                            AuthorityMutationOperation.APPEND_EVENT_OBSERVER_LINK,
+                            AuthorityMutationOperation.READ_EVENT_OBSERVER_LINKS,
+                        },
                     )
             result = self._dispatch(
                 operation,
@@ -458,6 +483,22 @@ class AuthorityMutationService:
         *,
         coordinator_principal: str | None = None,
     ) -> AuthorityProtocolResult:
+        if operation is AuthorityMutationOperation.APPEND_AUDIT_EVENT:
+            return self._append_audit_event(request)
+        if operation is AuthorityMutationOperation.LIST_AUDIT_EVENTS:
+            return self._list_audit_events(request)
+        if operation is AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE:
+            return self._append_event_sink_failure(request)
+        if operation is AuthorityMutationOperation.READ_EVENT_SINK_FAILURES:
+            return self._read_event_sink_failures(request)
+        if operation is AuthorityMutationOperation.APPEND_EVENT_OBSERVER_LINK:
+            return self._append_event_observer_link(request)
+        if operation is AuthorityMutationOperation.READ_EVENT_OBSERVER_LINKS:
+            return self._read_event_observer_links(request)
+        if operation is AuthorityMutationOperation.COORDINATOR_OBSERVERS_CAPABILITY:
+            return _result(
+                service_generation=self._service_generation, body={"version": 1}
+            )
         match operation:
             case AuthorityMutationOperation.ADMIT_RUN:
                 return self._admit_run(request)
@@ -621,6 +662,80 @@ class AuthorityMutationService:
                 "coordinator authority workspace conflicts"
             )
 
+    def _append_audit_event(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        value = self._repository.append_audit_event(
+            run_uri, _pipeline_event_from_wire(_required_body_value(request, "fact"))
+        )
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={"record": value.to_dict()},
+        )
+
+    def _list_audit_events(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        value = self._repository.list_audit_events(run_uri)
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={"records": [record.to_dict() for record in value]},
+        )
+
+    def _append_event_sink_failure(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        self._repository.append_event_sink_failure(
+            run_uri,
+            EventSinkFailureRecord.from_dict(_required_body_value(request, "fact")),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={},
+        )
+
+    def _read_event_sink_failures(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        value = self._repository.read_event_sink_failures(run_uri)
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={"records": [record.to_dict() for record in value]},
+        )
+
+    def _append_event_observer_link(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        self._repository.append_event_observer_link(
+            run_uri,
+            EventObserverLinkRecord.from_dict(_required_body_value(request, "fact")),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={},
+        )
+
+    def _read_event_observer_links(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        value = self._repository.read_event_observer_links(run_uri)
+        return _result(
+            service_generation=self._service_generation,
+            revision=self._repository.open_run(run_uri).revision,
+            body={"records": [record.to_dict() for record in value]},
+        )
+
     def _coordinator_publish_run(
         self, request: AuthorityProtocolRequest, *, coordinator_principal: str | None
     ) -> AuthorityProtocolResult:
@@ -634,14 +749,27 @@ class AuthorityMutationService:
             metadata={"preparation_principal": coordinator_principal},
         )
         snapshot = self._repository.open_run(run_uri)
-        if snapshot.status is RunStatus.CREATED:
+        published = snapshot.status is RunStatus.CREATED
+        created_revision = snapshot.revision if published else None
+        if published:
             self._repository.transition_run(
                 run_uri,
                 from_status=RunStatus.CREATED,
                 to_status=RunStatus.PLANNED,
                 expected_revision=snapshot.revision,
             )
-        return self._coordinator_open_run(request)
+        snapshot = self._repository.open_run(run_uri)
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+            snapshot=snapshot,
+            body={
+                "published": published,
+                "created_revision": None
+                if created_revision is None
+                else created_revision.to_dict(),
+            },
+        )
 
     def _coordinator_open_run(
         self, request: AuthorityProtocolRequest
@@ -763,9 +891,7 @@ class AuthorityMutationService:
     ) -> AuthorityProtocolResult:
         receipt = self._repository.ensure_prepared_attempt(
             _required_run_uri(request),
-            PreparedAttemptRequest.from_dict(
-                _required_body_value(request, "request")
-            ),
+            PreparedAttemptRequest.from_dict(_required_body_value(request, "request")),
         )
         return _result(
             revision=receipt.attempt.revision,
@@ -834,9 +960,7 @@ class AuthorityMutationService:
     def _close_managed_fence(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
-        expected_state_version = _required_body_value(
-            request, "expected_state_version"
-        )
+        expected_state_version = _required_body_value(request, "expected_state_version")
         if isinstance(expected_state_version, bool) or not isinstance(
             expected_state_version, int
         ):
@@ -867,9 +991,7 @@ class AuthorityMutationService:
             attempt_id=_required_body_string(request, "attempt_id"),
             fencing_token=_required_fencing_token(request),
             outputs=_outputs(request),
-            supersedes_commit_id=_optional_body_string(
-                request, "supersedes_commit_id"
-            ),
+            supersedes_commit_id=_optional_body_string(request, "supersedes_commit_id"),
             reason=_optional_reason(request),
         )
         return _result(
@@ -883,9 +1005,7 @@ class AuthorityMutationService:
     ) -> AuthorityProtocolResult:
         revision = self._repository.write_reliability_policy_fact(
             _required_run_uri(request),
-            ReliabilityPolicyFact.from_dict(
-                _required_body_value(request, "fact")
-            ),
+            ReliabilityPolicyFact.from_dict(_required_body_value(request, "fact")),
         )
         return _result(revision=revision, service_generation=self._service_generation)
 
@@ -906,9 +1026,7 @@ class AuthorityMutationService:
     ) -> AuthorityProtocolResult:
         revision = self._repository.write_reliability_status_detail(
             _required_run_uri(request),
-            ReliabilityStatusDetail.from_dict(
-                _required_body_value(request, "detail")
-            ),
+            ReliabilityStatusDetail.from_dict(_required_body_value(request, "detail")),
         )
         return _result(revision=revision, service_generation=self._service_generation)
 
@@ -968,9 +1086,7 @@ class AuthorityMutationService:
     ) -> AuthorityProtocolResult:
         revision = self._repository.write_retry_decision(
             _required_run_uri(request),
-            RetryDecisionRecord.from_dict(
-                _required_body_value(request, "decision")
-            ),
+            RetryDecisionRecord.from_dict(_required_body_value(request, "decision")),
         )
         return _result(revision=revision, service_generation=self._service_generation)
 
@@ -991,9 +1107,7 @@ class AuthorityMutationService:
     ) -> AuthorityProtocolResult:
         revision = self._repository.write_timeout_outcome(
             _required_run_uri(request),
-            TimeoutOutcomeRecord.from_dict(
-                _required_body_value(request, "outcome")
-            ),
+            TimeoutOutcomeRecord.from_dict(_required_body_value(request, "outcome")),
         )
         return _result(revision=revision, service_generation=self._service_generation)
 

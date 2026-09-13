@@ -168,6 +168,7 @@ class CoordinatorServiceConfig:
     resident_readiness: ResidentReadinessResult | None = None
     local_agent: LocalAgentServiceConfig | None = None
     _scheduling_source: str | None = field(default=None, repr=False, compare=False)
+    event_observers: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,9 +249,12 @@ def load_coordinator_service_config(
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles", "preparation"},
+        {"scheduling", "slurm_profiles", "preparation", "event_sinks"},
         "coordinator service config",
     )
+    from ._lifecycle_observers import LifecycleObservers, parse_event_sinks
+
+    observers = LifecycleObservers(parse_event_sinks(payload.get("event_sinks")))
     _header(payload, "loom.coordinator-service")
     payload = _normalize_coordinator_payload(payload)
     base = source.parent
@@ -265,7 +269,9 @@ def load_coordinator_service_config(
     preparation_policy = load_preparation_policy(
         payload.get("preparation"),
         local_agent_id=_string(payload, "machine_id"),
-        local_launch_profile=None if local_agent is None else local_agent.profile.launch_profile,
+        local_launch_profile=None
+        if local_agent is None
+        else local_agent.profile.launch_profile,
         base=base,
         descriptors=(
             *remote_profiles,
@@ -382,6 +388,7 @@ def load_coordinator_service_config(
         else local_agent.profile.readiness_result,
         local_agent=local_agent,
         _scheduling_source=scheduling_source,
+        event_observers=observers,
     )
 
 
@@ -910,7 +917,11 @@ def _normalize_coordinator_payload(
 
 
 def _local_agent_service(
-    value: object, base: Path, *, allow_unready: bool = False, deadline: float | None = None,
+    value: object,
+    base: Path,
+    *,
+    allow_unready: bool = False,
+    deadline: float | None = None,
 ) -> LocalAgentServiceConfig | None:
     """Load the optional protected agent role used by a local coordinator."""
 

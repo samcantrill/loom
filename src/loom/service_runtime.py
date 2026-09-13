@@ -74,6 +74,7 @@ def serve_coordinator(
         trusted_scheduling_loader=load_replacement,
         prepare_role_reload=prepare_role_reload,
         preparation=CoordinatorPreparation(service),
+        event_observers=service.event_observers,
     )
     server = LocalDaemonSocketServer(
         daemon,

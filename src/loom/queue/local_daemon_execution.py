@@ -188,6 +188,7 @@ class ManagedLocalIntent:
     pipeline: PipelineSpec
     digest: str
     max_parallel_stages: int
+    continue_independent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1071,11 +1072,17 @@ def load_managed_local_intent(
         raise QueueServiceError(
             "exact runtime record execution requirements conflict with pipeline"
         )
-    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope, _require_local_binding
+    from .preparation import (
+        LOCAL_PREPARATION_SCOPE,
+        _local_scope,
+        _require_local_binding,
+    )
 
     for stage in pipeline.stages:
         scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
-        _require_local_binding(scope, config.resident_worker_launch_profile, agent_id=config.machine_id)
+        _require_local_binding(
+            scope, config.resident_worker_launch_profile, agent_id=config.machine_id
+        )
         if scope is not None and placements[stage.name].target != scope["agent_id"]:
             raise QueueServiceError("local preparation retained placement conflicts")
     allowed_targets = {config.machine_id} | {
@@ -1128,6 +1135,7 @@ def load_managed_local_intent(
         pipeline,
         str(record["digest"]),
         cast(int, record["max_parallel_stages"]),
+        parallel_execution_options(runtime_options).continue_independent,
     )
 
 
@@ -1265,6 +1273,11 @@ class LocalDaemonExecution:
         factory = config.coordinator_authority_factory
         if factory is None:
             raise QueueServiceError("coordinator authority factory is unavailable")
+        from ._lifecycle_observers import LifecycleObservers
+
+        self._event_observers = (
+            daemon._event_observers if daemon is not None else LifecycleObservers()
+        )
         self._authority_for_run = factory
         self._scheduling = _build_scheduling_epoch(
             epoch_id=scheduling_epoch,
@@ -1941,7 +1954,11 @@ class LocalDaemonExecution:
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
         terminal = self._terminal_outcome(
-            admission, intent.plan, snapshot, scoped_authority
+            admission,
+            intent.plan,
+            snapshot,
+            scoped_authority,
+            continue_independent=intent.continue_independent,
         )
         if terminal is not None:
             return terminal
@@ -1960,6 +1977,7 @@ class LocalDaemonExecution:
                     admission.run_uri,
                     stage_plan,
                     readiness,
+                    admission=admission,
                 )
             ),
         )
@@ -1969,7 +1987,11 @@ class LocalDaemonExecution:
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
         terminal = self._terminal_outcome(
-            admission, intent.plan, snapshot, scoped_authority
+            admission,
+            intent.plan,
+            snapshot,
+            scoped_authority,
+            continue_independent=intent.continue_independent,
         )
         if terminal is not None:
             return terminal
@@ -2122,6 +2144,9 @@ class LocalDaemonExecution:
                     admission = admissions[record.admission_id]
                     intent, authority = contexts[record.admission_id]
                     snapshot = authority.open_run(admission.run_uri)
+                    if not self._failure_policy_allows_new_work(intent, snapshot):
+                        exhausted_admissions.add(record.admission_id)
+                        continue
                     outcome = self._dispatch_slurm_ready(
                         admission=admission,
                         intent=intent,
@@ -2143,6 +2168,9 @@ class LocalDaemonExecution:
                     continue
                 intent, authority = contexts[record.admission_id]
                 snapshot = authority.open_run(admission.run_uri)
+                if not self._failure_policy_allows_new_work(intent, snapshot):
+                    exhausted_admissions.add(record.admission_id)
+                    continue
                 candidate_id = cast(str, decision.candidate_id)
                 remote_target = remote_targets.get(candidate_id)
                 local_profile = (
@@ -4028,6 +4056,8 @@ class LocalDaemonExecution:
         run_uri: str,
         stage_plan: StagePlan,
         readiness: AttemptReadiness,
+        *,
+        admission: LocalDaemonAdmission,
     ) -> None:
         snapshot = authority.open_run(run_uri)
         current = next(
@@ -4046,6 +4076,19 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "reused stage is not terminal in authority truth"
                 )
+            self._event_observers.defer_emit(
+                self._authority_for_run(run_uri),
+                run_uri,
+                event_type="stage.reused",
+                stage_name=stage_plan.stage_name,
+                revision=replace(snapshot.revision, created_at=admission.accepted_at),
+                identity=admission.authority_operation_id,
+                payload={
+                    "source_commit_id": None
+                    if current.latest_commit is None
+                    else current.latest_commit.commit_id
+                },
+            )
             return
         if readiness.action is not PlanAction.SKIP:
             raise QueueConflictError(
@@ -4071,12 +4114,31 @@ class LocalDaemonExecution:
             ),
         )
 
+    def _failure_policy_allows_new_work(
+        self, intent: ManagedLocalIntent, snapshot: AuthoritativeRunSnapshot
+    ) -> bool:
+        if snapshot.status in {
+            RunStatus.FAILED,
+            RunStatus.INTERRUPTED,
+            RunStatus.CANCELLED,
+            RunStatus.SUCCEEDED,
+        }:
+            return False
+        return intent.continue_independent or not any(
+            stage.status is StageStatus.FAILED
+            and not _current_attempt_retry_is_authorized(stage)
+            and not self._recovery_failure_is_settling(stage)
+            for stage in snapshot.stages
+        )
+
     def _terminal_outcome(
         self,
         admission: LocalDaemonAdmission,
         plan: ExecutionPlan,
         snapshot: AuthoritativeRunSnapshot,
         authority: _ScopedCoordinatorAuthority,
+        *,
+        continue_independent: bool = False,
     ) -> LocalDaemonExecutionOutcome | None:
         if snapshot.status is RunStatus.SUCCEEDED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
@@ -4102,7 +4164,29 @@ class LocalDaemonExecution:
             and not _current_attempt_retry_is_authorized(stage_facts[name])
             and not self._recovery_failure_is_settling(stage_facts[name])
         )
+        if terminal_failures and continue_independent:
+            # Failed dependencies cannot become ready without explicit retry.
+            # Keep the run live until every unrelated branch has settled.
+            blocked = {stage.stage_name for stage in terminal_failures}
+            for stage_plan in plan.ordered_stage_plans:
+                if any(name in blocked for name in stage_plan.upstream_stages):
+                    blocked.add(stage_plan.stage_name)
+            if any(
+                stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
+                for stage in snapshot.stages
+            ) or any(
+                stage_plan.stage_name not in blocked
+                and facts.get(stage_plan.stage_name)
+                not in {StageStatus.SUCCEEDED, StageStatus.SKIPPED}
+                for stage_plan in plan.ordered_stage_plans
+            ):
+                return None
         if terminal_failures:
+            if self.coordinator.list_run_live_states(admission.run_uri):
+                return LocalDaemonExecutionOutcome(
+                    LocalDaemonAdmissionState.ACTIVE,
+                    "existing assignments are settling after stage failure",
+                )
             authority.transition_run(
                 plan.run_uri,
                 from_status=snapshot.status,
@@ -5474,8 +5558,15 @@ class LocalDaemonExecution:
                     code=(
                         "early_stop"
                         if report.status is StageStatus.CANCELLED
-                        and isinstance((report.executor_metadata or {}).get("lifecycle_reason"), Mapping)
-                        and cast(Mapping[str, object], (report.executor_metadata or {})["lifecycle_reason"]).get("code") == "early_stop"
+                        and isinstance(
+                            (report.executor_metadata or {}).get("lifecycle_reason"),
+                            Mapping,
+                        )
+                        and cast(
+                            Mapping[str, object],
+                            (report.executor_metadata or {})["lifecycle_reason"],
+                        ).get("code")
+                        == "early_stop"
                         else "worker.remote_cancelled"
                         if report.status is StageStatus.CANCELLED
                         else "worker.remote_failed"
@@ -5860,8 +5951,15 @@ class LocalDaemonExecution:
                     code=(
                         "early_stop"
                         if report.status is StageStatus.CANCELLED
-                        and isinstance((report.executor_metadata or {}).get("lifecycle_reason"), Mapping)
-                        and cast(Mapping[str, object], (report.executor_metadata or {})["lifecycle_reason"]).get("code") == "early_stop"
+                        and isinstance(
+                            (report.executor_metadata or {}).get("lifecycle_reason"),
+                            Mapping,
+                        )
+                        and cast(
+                            Mapping[str, object],
+                            (report.executor_metadata or {})["lifecycle_reason"],
+                        ).get("code")
+                        == "early_stop"
                         else "worker.slurm_cancelled"
                         if report.status is StageStatus.CANCELLED
                         else "worker.slurm_failed"
@@ -6014,7 +6112,9 @@ class LocalDaemonExecution:
     def _authority_store(self, run_uri: str) -> CoordinatorAuthorityStore:
         """Open one configured coordinator/run authority, never SQLite directly."""
 
-        return self._authority_for_run(run_uri)
+        return self._event_observers.authority(
+            self._authority_for_run(run_uri), run_uri
+        )
 
     def cancellation_epoch_receipt(self, run_uri: str, operation_id: str):
         """Read cancellation truth through the configured authority adapter."""
@@ -6520,11 +6620,13 @@ def build_local_daemon_owner_views(
                 },
                 "artifacts": {
                     f"{stage.stage_name}.{fact.artifact_name}": fact.artifact.to_dict()
-                    for stage in snapshot.stages for fact in stage.artifact_facts
+                    for stage in snapshot.stages
+                    for fact in stage.artifact_facts
                 },
                 "stage_reasons": {
                     stage.stage_name: stage.reason.to_dict()
-                    for stage in snapshot.stages if stage.reason is not None
+                    for stage in snapshot.stages
+                    if stage.reason is not None
                 },
                 "attempts": [
                     {
