@@ -9,7 +9,7 @@ Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: Phase 7, unified-sweeps
 Next phase: Phase 8, unified-mcp, after Phase 7 merge and synchronization
-Blockers: Phase 7 upstream contract reconciliation implemented; fresh validation and independent review pending
+Blockers: none identified; Phase 7 independent review pending
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -230,6 +230,6 @@ and all approved validation commands remain binding.
 | 4 | [311](https://github.com/samcantrill/loom/pull/311), merge `243c86a` | Both fresh required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 4 card | No implementation blocker; physical qualification unavailable and unclaimed | Examples/removals and evidence archive complete; no phase-owned processes remain; completion metadata published/synchronized; exact remote/local phase branches retired |
 | 5 | [312](https://github.com/samcantrill/loom/pull/312), merge `5e4237d` | Both required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 5 card | No implementation blocker; completed-job durability/site qualification stays with Phase 6 | Sole agent submission owner and removal audit complete; metadata published/synchronized; exact remote/local phase branches retired |
 | 6 | [313](https://github.com/samcantrill/loom/pull/313), merge `5eeb021` | Both fresh required gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 6 card | No implementation blocker; physical site/storage/container qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired |
-| 7 | [317](https://github.com/samcantrill/loom/pull/317), open | Original gates and pre-submit passed; new upstream native contract reconciled with exact-template rejection; fresh validation and independent review pending | No manager-identified product blocker; physical qualification remains explicit | Native consumer conversion/removal audit complete; evidence archived; shared legacy owners retained for Phase 9 |
+| 7 | [317](https://github.com/samcantrill/loom/pull/317), open | Reconciled upstream native contract; both fresh required gates and manager pre-submit passed; independent review pending | No manager-identified product blocker; physical qualification remains explicit | Native consumer conversion/removal audit complete; evidence archived; shared legacy owners retained for Phase 9 |
 | 8 | pending | not started | Optional MCP/real-session qualification pending | not started |
 | 9 | pending | not started | Final dynamic removal and qualified deployment evidence audit pending | not started |
