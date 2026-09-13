@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+from typing import Any, cast
 from types import SimpleNamespace
 
 import pytest
@@ -110,7 +111,9 @@ def test_persist_before_lost_response_and_replay_preserves_intent(
     assert all(
         r.preparation.run_options["tags"] == {"purpose": "science"} for r in sent
     )
-    assert read_sweep_plan(tmp_path).trials_manifest.trials == plan.trials
+    trials = read_sweep_plan(tmp_path).trials_manifest
+    assert trials is not None
+    assert trials.trials == plan.trials
     assert result.succeeded_count == 2
 
 
@@ -133,7 +136,7 @@ def test_interruption_keeps_accepted_trial_and_leaves_remaining_unsent(
             deployment="selection.json",
             sweep_dir=tmp_path,
         )
-    records = read_sweep_plan(tmp_path).sweep_manifest.metadata["native_runs"]
+    records = _records(tmp_path)
     assert set(records) == {"trial-0001"}
     monkeypatch.setattr(
         loom, "run", lambda request, **kw: (sent.append(request), _outcome(request))[1]
@@ -222,12 +225,12 @@ def test_explicit_controls_retain_native_references_without_implicit_retry(
     )
 
     def submit(request, **kwargs):
-        records = read_sweep_plan(tmp_path).sweep_manifest.metadata["native_runs"]
+        records = _records(tmp_path)
         assert records["trial-0001"]["retry_request"] == request.to_dict()
         assert request.retry_failed_revision == 7
         return request
 
-    client = SimpleNamespace(
+    client: Any = SimpleNamespace(
         submit=submit,
         cancel_run_operation=lambda op, **kwargs: SimpleNamespace(
             operation_id="cancel-" + op
@@ -238,7 +241,7 @@ def test_explicit_controls_retain_native_references_without_implicit_retry(
     )
     assert request.run_uri == "file:///runs/trial-0001"
     control = cancel_sweep_trial(tmp_path, "trial-0001", client=client)
-    records = read_sweep_plan(tmp_path).sweep_manifest.metadata["native_runs"]
+    records = _records(tmp_path)
     assert records["trial-0001"]["cancellation_operation_id"] == control.operation_id
 
 
@@ -262,7 +265,7 @@ def test_changed_trial_plan_and_in_process_requests_are_rejected(tmp_path):
     with pytest.raises(SweepProtocolError, match="native RunRequest"):
         run_sweep(
             plan,
-            request_template=SimpleNamespace(pipeline=lambda: None),
+            request_template=cast(Any, SimpleNamespace(pipeline=lambda: None)),
             deployment="selection.json",
             sweep_dir=tmp_path,
         )
@@ -309,3 +312,11 @@ def test_definite_submission_failure_is_failed_and_later_trials_continue(
     assert result.failed_count == 1
     assert result.succeeded_count == 1
     assert result.status.value == "failed"
+
+
+def _records(root) -> dict[str, Any]:
+    from loom.pipeline.sweep import read_sweep_plan
+
+    manifest = read_sweep_plan(root).sweep_manifest
+    assert manifest is not None
+    return cast(dict[str, Any], manifest.metadata["native_runs"])

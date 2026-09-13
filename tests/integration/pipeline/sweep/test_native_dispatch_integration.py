@@ -1,6 +1,7 @@
 """Scientific/control sweep assertions through real native preparation and workers."""
 
 import json
+from typing import Any, cast
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,7 @@ def test_lost_native_response_recovers_same_admission(tmp_path, monkeypatch):
         sent.append(request)
         result = native_run(request, **kwargs)
         if len(sent) == 1:
+            assert result.observation.admission is not None
             lost.append(result.observation.admission.admission_id)
             raise ConnectionError(
                 "native acceptance response lost before sweep persistence"
@@ -110,7 +112,7 @@ def test_lost_native_response_recovers_same_admission(tmp_path, monkeypatch):
 def test_collection_preserves_committed_outputs_across_explicit_retry(tmp_path):
     from loom.cli.sweep import build_sweep_collect_result
     from loom.deployment import ensure_available, load_deployment
-    from loom.pipeline.sweep import read_sweep_plan, retry_sweep_trial
+    from loom.pipeline.sweep import retry_sweep_trial
 
     selection = _selection(tmp_path)
     coordinator = tmp_path / "coordinator.json"
@@ -148,7 +150,7 @@ def test_collection_preserves_committed_outputs_across_explicit_retry(tmp_path):
     assert result.failed_count == 1
     before = build_sweep_collect_result(root)
     assert before.artifact_count == 1
-    record = read_sweep_plan(root).sweep_manifest.metadata["native_runs"]["trial-0001"]
+    record = _records(root)["trial-0001"]
     available = ensure_available(
         load_deployment(selection), attachment_id="explicit-sweep-retry"
     )
@@ -165,9 +167,10 @@ def test_collection_preserves_committed_outputs_across_explicit_retry(tmp_path):
         observed = available.client.observe_run(
             record["request"]["preparation"]["operation_id"], timeout_seconds=30
         )
+        assert observed.admission is not None
         assert observed.admission.state.value == "SUCCEEDED"
         detail = available.client.admission(failed.admission_id)
-        attempts = detail.authority["attempts"]
+        attempts = cast(list[dict[str, Any]], detail.authority["attempts"])
         assert len([a for a in attempts if a["stage_name"] == "produce"]) == 1
         assert len([a for a in attempts if a["stage_name"] == "second"]) == 2
     finally:
@@ -180,3 +183,11 @@ def test_collection_preserves_committed_outputs_across_explicit_retry(tmp_path):
     after = build_sweep_collect_result(root)
     assert after.artifact_count == 2
     assert after.trials[0].artifacts[0] == before.trials[0].artifacts[0]
+
+
+def _records(root) -> dict[str, Any]:
+    from loom.pipeline.sweep import read_sweep_plan
+
+    manifest = read_sweep_plan(root).sweep_manifest
+    assert manifest is not None
+    return cast(dict[str, Any], manifest.metadata["native_runs"])
