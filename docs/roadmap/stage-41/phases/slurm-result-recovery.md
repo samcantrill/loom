@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
@@ -362,7 +362,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   in manager inspection, and unrelated work is preserved.
 - Independent implementation review: required for result filesystem/transport/commit and cleanup boundary
 - Blocker corrections: 3/3, resolved locally; no remaining implementation blocker
-- PR and merge: not started
+- PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) is open,
+  non-draft and mergeable. Canonical title, exact phase branch and develop target
+  are verified; independent review and gated delivery remain pending.
 - Cleanup: all executor terminals are terminal and no executor-owned runtime
   process remains. Existing unrelated supervisors/services were preserved.
 
@@ -375,5 +377,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | `169bc32031e2a31a48af8c6e181d8596d02231f4` / `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`; both mandatory gates passed. Exact final logs, seven-suite summary/XML/coverage and prior failure/correction receipts are under `/tmp/loom-stage-41-p6-evidence/` as identified above. |
 | Validation-relevant changes after evidence | None; subsequent commit only records this card's Workflow State and Completion Record. |
 | Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
-| PR, review and merge | Manager-owned and pending; implementation/validation handoff complete. |
+| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open; canonical identity verified; independent review and delivery pending. |
 | Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |
