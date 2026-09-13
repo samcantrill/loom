@@ -250,7 +250,7 @@ Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
 are rejected. Initialization never overwrites a populated root. The narrow
 [coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
-schema-12 root when moving to schema 16; it does not reinterpret profiles or
+schema-12 or schema-15 root when moving to schema 16; it does not reinterpret profiles or
 provide a migration for other historical root versions.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
