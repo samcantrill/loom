@@ -83,7 +83,11 @@ summary = run_sweep(plan, request_template=template,
                     deployment="deployment.json", sweep_dir="sweep-state")
 ```
 
-Template operation, admission and run-name identifiers are replaced per trial.
+Templates require native `mode="exact"`; reconciled submissions are rejected
+before sweep state is written or work is sent because they derive their target
+instead of using the sweep's planned trial URI. Their retry policy is never
+silently replaced. Template operation, admission and run-name identifiers are
+replaced per trial.
 The exact resulting native request is stored under the existing sweep manifest's
 `metadata.native_runs` before transmission, with the deployment reference.
 Responses retain operation/admission references and separate cleanup evidence.

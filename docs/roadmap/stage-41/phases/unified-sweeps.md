@@ -14,7 +14,7 @@
 - Dependencies: Phase 6 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none; no named refinement is required
+- Blockers: upstream contract reconciliation implemented; fresh validation and independent review pending
 
 ## Objective And Context
 
@@ -238,7 +238,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: native request-before-send persistence, replay/observation and
   explicit controls are implemented in existing sweep state; scientific planning
-  remains unchanged. Targeted checks passed (68 tests); both required full gates passed. Local implementation is ready for the manager's pre-submit and independent review gates.
+  remains unchanged. Targeted checks passed (68 tests); both original required full gates passed. Published upstream native changes are now reconciled; the current candidate requires fresh validation before independent review.
 - Scoped correction 1: the real EarlyStopStage native sweep initially reported
   `cancelled` instead of `early_stopped` (causal integration failure). Existing
   managed/remote/Slurm authority finalizers replaced its verified worker reason;
@@ -251,8 +251,25 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   before the failing collection assertion). The CLI now reads committed artifact
   facts from the retained deployment's native admission authority view, including
   outputs retained through retry/reuse. Legacy `artifacts.json` is not required.
+- Scoped correction 3 / published-source reconciliation: while this phase was
+  validating, upstream PRs 315/316 added installed project preparation and native
+  reconciled submissions at `84d4a16a792b3f59f94dadbc1e28350cc8c8f54d`. The merge
+  into this phase is `d598af15b67a88f9abeb6d7dfa5960f5ca75bd4f`. A new supported
+  `RunRequest(mode="reconcile", retry_policy="one_observed_failure")` could pass
+  the sweep template type check and be silently rebuilt as an exact request with
+  no retry policy. This violates planned trial identity and no silent control
+  substitution. Sweeps retain their accepted exact-target scope: reject a
+  non-exact template before filesystem persistence or native submission. The
+  regression fails before the guard (`/tmp/loom-p7-reconciled-template-before.log`)
+  and all 17 dispatch/contract cases pass after it
+  (`/tmp/loom-p7-reconciled-template-after.log`). All 58 affected sweep/CLI/native
+  collection/inspection checks pass on the merged tree (140.18 seconds;
+  `/tmp/loom-p7-upstream-affected.log`); selected typing has zero errors/warnings
+  (`/tmp/loom-p7-upstream-pyright.log`). Both fresh final gates are required.
+  No new reconciled sweep capability or compatibility fallback is introduced.
 - Refiner: not used
-- Pre-submit gate: passed. Manager verified accepted scope and scientific/control
+- Initial pre-submit gate: passed before upstream reconciliation; current gate
+  is pending fresh validation. Manager verified accepted scope and scientific/control
   assertions, current docs/example, exact validated revisions and the intervening
   documentation-only delta. Both required gates remain fresh. Seven parsed XML
   suites reconcile to 3657 passed, zero failures/errors and 18 explicit physical
@@ -262,7 +279,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   shared legacy owners remain with the named Phase 9 consumers. Independent review
   of the actual phase PR is still required.
 - Independent implementation review: required for sweep scientific/control preservation and public removal
-- Blocker corrections: 2/3
+- Blocker corrections: 3/3
 - PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) is open; canonical title, develop target and exact phase branch verified. Independent review and delivery are pending.
 
 ## Completion Record
@@ -272,7 +289,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Implementation and changed paths | Native sweep request-before-send persistence, exact replay/observation, explicit cancel/retry and status/collection; CLI/public cutover; current sweep/CLI/structure docs and deterministic example. Narrow native authority finalizer/inspection changes retain early-stop meaning and expose existing committed artifact facts. |
 | Tests added, updated or intentionally removed | Native input/order/provenance and stable-ID checks; lost-response/interruption, failed/early-stopped/cancelled trials, failed-admission retry with successful predecessor outputs retained, CLI/E2E/example and public removals. Obsolete direct/queue engines and record serialization fixtures removed; meaningful planner/coordination/collection assertions preserved. Targeted sweep and inspection selection: 68 passed (`/tmp/sweep-targeted-final.txt`). |
 | Validated revision/tree and evidence | `make validate-pr` passed at `d158bec08e7ba9aa3989c17c180472e3921d9dd6`, tree `a45db5383bdd589a7926e82c09ed05b5add0019d`: lint/typecheck, default 3352 passed/2 skipped, config-extra 267 passed/18 skipped, MCP 36 passed, wheel/sdist built (`/tmp/loom-stage41-p7-validate-pr.log`). `make test-summary` passed at `9e45fd6ed92349a0439c5df3ad93a051d338a8af`, tree `5055302bab0507920d5830fd486eb3863b20838b`: 3657 passed, 18 skipped, no failures/errors (archived `test-summary.md`, per-suite JUnit/coverage under `suites/`, and `loom-stage41-p7-test-summary.log` in `/tmp/loom-stage41-p7-evidence/`). |
-| Validation-relevant changes after evidence | No production/test/example/build/dependency changes after successful validate-pr; only the manager-requested current sweep sections of docs/structure.md and docs/features/cli.md changed before test-summary, with links/diff checked. Only this completion receipt changes after summary. The first candidate's gate stopped at test-fixture typing, corrected before the successful gate (`/tmp/loom-stage41-p7-validate-pr-initial.log`). |
+| Validation-relevant changes after evidence | The original validate/summary delta was current sweep prose only. Subsequent upstream native reconciliation and the explicit exact-template guard require fresh affected checks and final gates; original receipts remain archived historical evidence. The first candidate's gate stopped at test-fixture typing, corrected before the successful gate (`/tmp/loom-stage41-p7-validate-pr-initial.log`). |
 | Replaced-code removal / retained primitive consumers | Removed run_sweep_direct, enqueue_sweep_trials, sweep-only direct/queue request/results/counts, generated enqueue requests, queue selectors and queue-state mapper. No remaining source/example references to the removed dispatch APIs. PipelineRunner remains behind pipeline.execution.run_pipeline/public exports; QueueService remains used by queue.controller and queue.status for the later shared-owner audit. |
 | PR, review and merge | [PR 317](https://github.com/samcantrill/loom/pull/317) open; canonical identity and develop target verified. Independent review and delivery pending. |
-| Residual risk and cleanup | No unresolved implementation blocker; 2/3 semantic corrections used. Synthetic native acceptance and inspection/collection evidence only; no new physical container/fleet/Slurm qualification. The 18 summary skips are opt-in Docker/Apptainer smoke/build/resource/scheduling/namespace-lifecycle cases; predecessor backend qualification is reused for unchanged execution boundaries. Both gate terminals and all executor-owned test processes are terminal; process inspection found no remaining Loom service runtime or worktree test process. Durable test/build receipts are retained; no external workload/provisioning, push, PR or branch transition occurred. |
+| Residual risk and cleanup | Third scoped correction implemented; merged-tree validation and independent review pending (3/3 corrections used). Synthetic native acceptance and inspection/collection evidence only; no new physical container/fleet/Slurm qualification. The 18 summary skips are opt-in Docker/Apptainer smoke/build/resource/scheduling/namespace-lifecycle cases; predecessor backend qualification is reused for unchanged execution boundaries. Both gate terminals and all executor-owned test processes are terminal; process inspection found no remaining Loom service runtime or worktree test process. Durable test/build receipts are retained; no external workload/provisioning, push, PR or branch transition occurred. |

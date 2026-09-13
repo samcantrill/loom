@@ -68,8 +68,8 @@ def run_sweep(
 ) -> SweepStatusSummary:
     """Dispatch trials in order through :func:`loom.run`, continuing after failures.
 
-    The native template selects importable project config, overlays, sparse run
-    options and source/profile. Trial overrides follow base overrides. Each planned
+    The exact-mode native template selects importable project config, overlays,
+    sparse run options and source/profile. Trial overrides follow base overrides. Each planned
     run URI must match the deployment's protected run root plus its trial ID;
     conflicting placement fails at native preparation without relocating outputs.
     Exact requests and IDs are persisted in sweep-manifest metadata before send.
@@ -81,6 +81,8 @@ def run_sweep(
 
     if not isinstance(request_template, RunRequest):
         raise SweepProtocolError("request_template must be a native RunRequest")
+    if request_template.mode != "exact":
+        raise SweepProtocolError("native sweeps require exact run intent")
     root = Path(sweep_dir)
     compatibility = check_existing_sweep_plan(root, expected_plan=plan)
     if compatibility.diagnostics:

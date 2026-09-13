@@ -271,6 +271,30 @@ def test_changed_trial_plan_and_in_process_requests_are_rejected(tmp_path):
         )
 
 
+def test_reconciled_template_is_rejected_before_persistence_or_submission(
+    tmp_path, monkeypatch
+):
+    import loom
+
+    sent = []
+    monkeypatch.setattr(loom, "run", lambda request, **kwargs: sent.append(request))
+    request = RunRequest(
+        replace(_template().preparation, run_name=None),
+        mode="reconcile",
+        retry_policy="one_observed_failure",
+    )
+    root = tmp_path / "sweep"
+    with pytest.raises(SweepProtocolError, match="exact run intent"):
+        run_sweep(
+            _plan(),
+            request_template=request,
+            deployment="selection.json",
+            sweep_dir=root,
+        )
+    assert not sent
+    assert not root.exists()
+
+
 def test_waiting_detachment_does_not_select_remaining_trials(tmp_path, monkeypatch):
     import loom
 
