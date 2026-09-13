@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 41 / 6
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p6-slurm-result-recovery
@@ -14,7 +14,7 @@
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: approved replay correction and required validation complete; same-reviewer confirmation pending
+- Blockers: none; physical qualification remains explicitly unavailable
 
 ## Objective And Context
 
@@ -370,18 +370,17 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   remain explicit. All gate terminals are complete. One quiescent fixture
   supervisor left by the final summary accepted its authenticated clean-shutdown
   operation; no phase-owned runtime process remains and unrelated work is preserved.
-  The same independent reviewer's bounded confirmation is pending.
-- Independent implementation review: initial product blocker at
-  `af0ec659fd0498436096153ee0d941c1c42eb83e`. A retained multi-chunk artifact
-  uploaded before connection loss is already complete at the coordinator. Replay
-  sends offset zero, but the existing `write_output_chunk` returns cumulative
-  received bytes (the full size for finalized output). `SharedSlurmResult.deliver`
-  required only the just-sent chunk end and rejected this valid replay,
-  so commit, cleanup and settlement could not finish. The original lost-ack tests
-  covered interruption after finalization and missed this earlier boundary.
-  No other qualified finding was identified; PR identity and existing evidence
-  remain verified. The approved correction below now passes fresh validation;
-  merge awaits the same reviewer's confirmation.
+  The same independent reviewer confirmed the correction with no further finding.
+- Independent implementation review: passed at
+  `0c9077d105439361d04a768a9eca03a957ae4558`. The original reviewer confirmed
+  the cumulative-output acknowledgement correction with no further qualified
+  finding and independently reconciled all seven XML suites. Only evidence
+  metadata follows the validated implementation. Upstream `c66c358` adds opt-in
+  local preparation policy; manager and reviewer identified no material
+  interaction with this Slurm transport correction. The original review at
+  `af0ec659fd0498436096153ee0d941c1c42eb83e` found that replay of persisted
+  output rejected a valid cumulative acknowledgement before commit. This
+  finding is resolved by the expressly approved correction below.
 - Concrete correction: advance delivery from the existing bounded cumulative
   acknowledgement, retaining integer/range/progress checks and exact report,
   identity, fence and digest contracts. Add a 64 KiB/two-chunk regression losing
@@ -410,14 +409,16 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   under coverage in 51.09 seconds (`/tmp/loom-p6-review-output-replay-coverage.log`),
   and selected typing passed with zero errors/warnings
   (`/tmp/loom-p6-review-output-replay-pyright.log`). Both fresh committed final
-  gates passed as recorded above. The same reviewer's confirmation is pending;
-  no validation-relevant changes follow the tested revision.
-- Blocker corrections: three original scopes resolved; the expressly authorized fourth replay correction is implemented and validated; same-reviewer confirmation pending (4/4 maximum for this phase)
-- PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) is open,
-  non-draft and mergeable. Canonical title, exact phase branch and develop target
-  are verified; the initial independent finding is corrected and revalidated. The PR remains open
-  and unmerged; Phase 7 may start only after correction, accepted review, delivery
-  and synchronization.
+  gates passed as recorded above and the same reviewer confirmed the fix.
+  No validation-relevant changes follow the tested revision.
+- Blocker corrections: three original scopes resolved; the expressly authorized fourth replay correction is implemented, validated and independently confirmed (4/4 maximum for this phase)
+- PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) remotely
+  squash-merged at 2026-09-13T07:16:54Z as
+  `5eeb021742a271339a2583cd2ac0ccb8a6e125fa`. The delivery gate verified the
+  exact reviewed head, local validation reconciliation, canonical PR identity
+  and remote outcome. The exact remote phase branch is deleted. Transition to
+  the coordination branch passed; completion publication, synchronization and
+  exact local branch retirement follow before Phase 7 starts.
 - Cleanup: all executor terminals are terminal and no executor-owned runtime
   process remains. Existing unrelated supervisors/services were preserved.
 
@@ -430,5 +431,5 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validated revision/tree and evidence | `eba43e47a015769412251f0d3d7ec89f9915104a` / `9b6809eb7d6add31ef304ffe68f10f173d10a0e9`; both mandatory gates passed, summary 3644 passed/18 skipped. Current final logs, seven-suite summary/XML/coverage and correction receipts are under `/tmp/loom-stage41-p6-review-correction-evidence/`; earlier receipts remain as identified above. |
 | Validation-relevant changes after evidence | None. Only phase/manifest evidence metadata follows the validated implementation and tests. |
 | Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
-| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; additional correction authorized, implemented and validated; same-reviewer confirmation pending. |
+| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) merged as `5eeb021742a271339a2583cd2ac0ccb8a6e125fa`; original reviewer confirmed `0c9077d105439361d04a768a9eca03a957ae4558` with no further finding. Gated delivery and coordination transition passed. |
 | Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |
