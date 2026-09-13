@@ -282,7 +282,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   lifecycle tests. The manager owns the manifest, delivery and independent review;
   no children, extra branches or lifecycle sidecars are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: native deployment/run delegation, fifteen tools, four skills and current docs implemented; 160 focused tests and static checks pass; required final gates are next on the committed candidate.
+- Implementation: complete and validated at `294f31d7aaf0f90cd21d36c2a234832c61a0f931`; fifteen tools, native binding/deadline integration, four skills and current docs are committed. Both mandatory gates pass; manager delivery and independent review remain pending.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for tool authorization/side effects and cancellation delegation
@@ -295,11 +295,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | `src/loom/mcp` binds one protected deployment, resolves current native clients, delegates durable run and named cancellation, and forwards ordered invocation/explicit receipt retry. Native deployment/run and service qualification helpers share the absolute startup deadline without qualifying workers during connect-only reads. Four skills, MCP docs/example and directly affected native/package/SDK tests updated. |
 | Tests added, updated or intentionally removed | Inert public discovery, no per-call selectors, complete native request/deadline/error/control forwarding, explicit receipt retry, capacity retention after SDK cancellation, unified stdio disconnect, cold creation/restart binding, connect-only missing-root refusal, and qualification deadline refusal. Existing source/report/identity/authorization/optional-import checks retained. One existing native deployment fixture assertion was narrowed for Pyright. |
-| Validated revision/tree and evidence | Focused isolated SDK/config/native selection: 160 passed in 389.77s (`/tmp/loom-p8-targeted-stable.log`); Ruff and Pyright passed (`/tmp/loom-p8-lint-stable.log`, `/tmp/loom-p8-typecheck-stable.log`). Final committed revision/tree and both mandatory gate receipts follow. |
-| Validation-relevant changes after evidence | None |
+| Validated revision/tree and evidence | Both mandatory gates passed on clean candidate `294f31d7aaf0f90cd21d36c2a234832c61a0f931`, tree `7307610ba9fdba808739b275fb9e84cb47b14fe0`. `make validate-pr`: Ruff/Pyright pass; default 3374 passed/2 skipped, config-extra 297 passed/18 skipped, MCP 44 passed; wheel/sdist built. `make test-summary`: 3717 passed, 18 skipped, zero failures/errors across seven suites. The 160-test focused selection and causal logs, final gate logs, Markdown summary and seven XML/coverage suites are retained under `/tmp/loom-stage41-p8-evidence/`; 24 final gate/report files were byte-verified against originals. |
+| Validation-relevant changes after evidence | None. Only this completion record changes after both final gates; validated source, tests, skills, docs, dependencies and build configuration remain unchanged. |
 | Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Phase-owned process cleanup is checked before handoff. |
+| Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Both gate terminals and phase-owned test/service processes are terminal; process inspection found only unrelated historical supervisors and current rphys work, which were preserved. |
 
 
 ### Validation selection and causal findings
@@ -344,3 +344,21 @@ using those relocated instructions produced these continuations:
 These are scoped behavioral simulations, not an independent evaluator pass or a
 live assistant qualification. The mandatory implementation reviewer can assess
 them with the actual changed skills; native/stdio tests own runtime evidence.
+
+
+### Final gate evidence
+
+- Candidate revision/tree: `294f31d7aaf0f90cd21d36c2a234832c61a0f931` /
+  `7307610ba9fdba808739b275fb9e84cb47b14fe0` (clean before both gates).
+- Archive: `/tmp/loom-stage41-p8-evidence/loom-p8-validate-pr.log`,
+  `loom-p8-test-summary.log`, `test-summary.md`, and the seven directories under
+  `test-summary/` containing `junit.xml`, `coverage.json` and `.coverage`.
+  Causal/targeted/static logs are retained alongside these final receipts.
+- The summary's 18 skips are existing opt-in Docker/Apptainer acceptance; the
+  default lane's two optional-import skips are covered by its separate extra
+  lane. No scientific workload, worker provisioning, physical deployment or live
+  assistant-session qualification was performed.
+- A final process inspection found no remaining phase-owned runtime, MCP, pytest
+  or harness process. Unrelated historical supervisors and current rphys work
+  were left intact. No branch transition, push, PR or merge was performed by
+  the executor. The manager owns subsequent gates and delivery.
