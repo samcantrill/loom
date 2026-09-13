@@ -108,6 +108,24 @@ def test_resident_profile_requires_observed_imports_before_role_use(
         load_coordinator_service_config(source)
 
 
+def test_protected_readiness_timeout_accepts_bounded_cold_import_window(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profile = payload["resident_profiles"][0]
+    profile["readiness"] = {"timeout_seconds": 120}
+    _write_local_agent(source, payload)
+    load_coordinator_service_config(source)
+
+    profile["readiness"]["timeout_seconds"] = 121
+    _write_local_agent(source, payload)
+    with pytest.raises(
+        QueueConfigError, match="resident readiness requirements are invalid"
+    ):
+        load_coordinator_service_config(source)
+
+
 @pytest.mark.parametrize("role", ("coordinator", "agent"))
 def test_observed_source_drift_rejects_startup_without_rebinding_initialized_root(
     tmp_path: Path, role: str

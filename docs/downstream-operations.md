@@ -217,6 +217,10 @@ same cwd and allowlisted environment used for workers. A profile may add a
 finite `readiness` mapping with `imports`, `distributions`, `source_roots`, and
 `timeout_seconds`; defaults verify the selected Python, import `loom`, and inspect
 its installed distribution.
+The timeout defaults to 5 seconds per probe. Set `timeout_seconds` explicitly
+to a positive finite value of at most 120 seconds when cold imports need more
+time. Native and installed-container probes use the same bound and retain their
+timeout cancellation and process-containment checks.
 The probe does not install packages, build a project, inherit daemon secrets, create a
 deployment, or claim a GPU. Its narrow identity includes the selected Python,
 declared installation facts, and declared source contents. It excludes absolute
@@ -586,6 +590,10 @@ attachment, and all declared output/resource bytes, schemas, member checksums an
 containment for successful reuse, including outputs beyond a final report.
 Presentation fields may differ only where the installed scientific contract permits
 it; the winner's immutable runtime intent remains authoritative.
+Managed authority records materialize as stages start. Running and failed
+candidates can therefore contain only the started subset of the planned stages;
+successful candidates must contain the complete plan. Unstarted downstream stages do
+not prevent observing current work or requesting the native failed-run retry.
 
 A successful verifier returns exactly `{"schema_version": 1,
 "candidate_digest": hash_mapping(candidate), "verdict": "verified"}` using

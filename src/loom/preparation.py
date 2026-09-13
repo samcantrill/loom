@@ -876,8 +876,13 @@ class CoordinatorPreparation:
         if factory is None:
             raise QueueConflictError("candidate authority is unavailable")
         snapshot = factory(run_uri).open_run(run_uri)
+        planned_stages = set(intent.pipeline.stage_names)
+        observed_stages = {stage.stage_name for stage in snapshot.stages}
+        # Managed execution materializes stages when they start. A running or
+        # failed prefix may be observed or retried; success requires the full plan.
         if (snapshot.run_uri != run_uri
-            or (snapshot.stages and set(stage.stage_name for stage in snapshot.stages) != set(intent.pipeline.stage_names))
+            or not observed_stages.issubset(planned_stages)
+            or (snapshot.status.value == "SUCCEEDED" and observed_stages != planned_stages)
             or (not snapshot.stages and snapshot.status.value != "PLANNED")
             or snapshot.status.value in {"CANCELLED", "CANCELLING"}
             or (admission is not None and admission.state.value == "SUCCEEDED" and snapshot.status.value != "SUCCEEDED")):

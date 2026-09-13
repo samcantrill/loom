@@ -21,7 +21,7 @@ from loom.diagnostics.models import (
 )
 from loom.serialization import PlainData
 
-from ._resident_probe import run_resident_probe
+from ._resident_probe import MAX_RESIDENT_PROBE_TIMEOUT_SECONDS, run_resident_probe
 
 if TYPE_CHECKING:
     from ._remote_stage_execution import ResidentExecutionProfile
@@ -162,6 +162,8 @@ class ResidentReadinessRequirements:
     ``preparation`` also imports Loom's preparation stage and configuration loader
     in the selected Python. A shared preparation mapping requests the same check.
     This qualification does not add members to portable software fingerprints.
+    ``timeout_seconds`` bounds each probe separately; its default is 5 seconds
+    and an explicit value may be at most 120 seconds for slower cold imports.
     """
 
     imports: tuple[str, ...] = ("loom",)
@@ -228,10 +230,11 @@ class ResidentReadinessRequirements:
         if (
             not isinstance(self.timeout_seconds, int | float)
             or isinstance(self.timeout_seconds, bool)
-            or not 0 < self.timeout_seconds <= 30
+            or not 0 < self.timeout_seconds <= MAX_RESIDENT_PROBE_TIMEOUT_SECONDS
         ):
             raise ValueError(
-                "resident readiness timeout must be positive and at most 30 seconds"
+                "resident readiness timeout must be positive and at most "
+                f"{MAX_RESIDENT_PROBE_TIMEOUT_SECONDS} seconds"
             )
         if self.python_version is not None and (
             not isinstance(self.python_version, str)
