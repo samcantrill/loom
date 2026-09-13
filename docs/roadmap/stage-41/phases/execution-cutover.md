@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: 41 / 9
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p9-execution-cutover
@@ -14,7 +14,7 @@
 - Dependencies: Phase 8 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: none; predecessor delivered and phase preparation passed
+- Blockers: native lifecycle observer selection/trust/delivery contract requires approval of the proposed amendment before legacy event consumers can migrate
 
 ## Objective And Context
 
@@ -139,6 +139,17 @@ contract. Historical roadmap/evidence records need not be rewritten, but must no
 be presented as current supported workflows. No numerical/project behavior is
 replaced merely to make a removal audit empty.
 
+### Proposed native observer bridge
+
+The source audit found that deleting the old runner would remove committed
+lifecycle notification behavior from current event-sink/webhook consumers.
+[The proposed native lifecycle observer amendment](../planning.md#proposed-phase-9-amendment-native-lifecycle-observers)
+is the single owner of the new selection, authority, delivery/trust and validation
+contracts. It requires maintainer approval before implementation. Phase 9 would
+own that bridge and consumer migration atomically with removal; existing backend,
+run identity and scientific behavior remain fixed. No notification implementation
+has started and the phase correction budget is unchanged.
+
 ### Documentation and operator behavior
 
 Document coordinator service, agent service, stage worker, backend, supervisor,
@@ -255,10 +266,10 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Source reconciliation: the listed runner, continuation, offline adapter, whole-run queue owners and service-less CLI modules still exist. Current public pipeline exports, queue CLI/status/preflight, plugin diagnostics and Slurm submission contain static consumers. Current local/event-sink/webhook/log/catalog/authority/offline and whole-run queue examples plus their tests still reference these owners. Audit actual dynamic/generated producers and preserve surviving behavior at native owners before deletion; historical module names alone do not authorize dropping primitives or meaningful assertions.
 - Validation selection: package/public/isolated imports, runtime profiles, native CLI/Python/sweep/MCP journeys, affected diagnostics/event/log/catalog examples, removed entrypoint refusal and source/dynamic/doc disposition. The card's named test paths remain present; use the locked isolated environments owned by tests/README.md. Both full make gates remain binding. Expand for changed shared execution/planner/artifact/resource boundaries, a failing supported consumer or a missing accepted assertion; reuse unchanged predecessor backend/race evidence.
 - Qualification reconciliation: P3/P4/P6/P8 phase records own the actual local evidence and unavailable physical fleet/NAS/container/Slurm/live-assistant cases. Final docs must retain these limits; no external workload, provisioning, allocation acquisition or active project environment changes are required by this phase.
-- Named refinement: none; the accepted hard removal, retained primitive, scientific behavior and operator contracts are sufficient. Report a concrete missing supported contract if the consumer audit discovers one.
+- Named contract gap: the current event-sink/webhook consumers depend on old runner event emission and retained callback failures. The native request/coordinator authority has no observer selection/dispatch contract. The executor stopped before edits; manager authored the bounded proposed amendment linked above. Independent plan review and maintainer approval are pending; no planner/refiner or implementation correction has been used.
 - Execution delegation: one executor is justified for the remaining cross-package orchestration removal, consumer/test migration and integrated operator documentation. It owns Phase 9 source/tests/current docs/examples and this card; manager owns the manifest, delivery and independent review. No children, extra branches or lifecycle sidecars.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: stopped before source edits at `e662d6388909893b8f1f290c69e8c2dd26844eaf`; missing observer contract is now a concrete proposal. No runtime tests or owned background processes were started.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for final hard public/dynamic removal and stage integration
@@ -275,4 +286,4 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | Validation-relevant changes after evidence | None |
 | Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Final dynamic removal and qualified deployment evidence audit pending |
+| Residual risk and cleanup | Proposed observer trust/delivery amendment awaits review/approval; source remains unchanged and no phase processes remain. Final removal/integration and qualified deployment evidence audit remain outstanding. |

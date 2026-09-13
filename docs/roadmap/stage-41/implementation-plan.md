@@ -9,7 +9,7 @@ Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: Phase 9, execution-cutover
 Next phase: final closeout after Phase 9 merge and synchronization
-Blockers: none; Phase 9 preparation passed on the published/synchronized predecessor
+Blockers: Phase 9 native observer contract amendment awaits bounded review and maintainer approval
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -135,7 +135,7 @@ links directly to all nine walkthroughs.
 | 6 | slurm-result-recovery | merged | [Phase 6](phases/slurm-result-recovery.md) | agent/stage-41-p6-slurm-result-recovery | [313](https://github.com/samcantrill/loom/pull/313) | Bootstrap result publisher, submit-agent transport and existing coordinator finalizer | A job can finish and its compute process exit during coordinator downtime; the recovered submit agent delivers the same result for one authority commit. |
 | 7 | unified-sweeps | merged | [Phase 7](phases/unified-sweeps.md) | agent/stage-41-p7-unified-sweeps | [317](https://github.com/samcantrill/loom/pull/317) | Sweep expansion/dispatch state and native admission references | Sweep trials use the unified run lifecycle with unchanged experiment meaning and stable retry identities. |
 | 8 | unified-mcp | merged | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | [319](https://github.com/samcantrill/loom/pull/319) | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |
-| 9 | execution-cutover | in_progress | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | pending | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
+| 9 | execution-cutover | blocked | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | pending | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
 
 ## Validation Ownership
 
@@ -220,6 +220,29 @@ and all approved validation commands remain binding.
 - Revisit only for a changed predecessor contract, demonstrated supported-path
   blocker or explicitly requested deferred capability. Private choices remain open.
 
+### Phase 9 native observer amendment readiness
+
+- Status: proposed; bounded independent review and maintainer approval pending.
+- Current source/preparation head: `e662d6388909893b8f1f290c69e8c2dd26844eaf`,
+  on the canonical Phase 9 branch in the persistent stage worktree. Runtime source
+  matches published Phase 8 metadata `d0e2dd33729cb465d5af313fe22379a6dad5c27d`.
+- Gap and proposed contracts: [native lifecycle observers](planning.md#proposed-phase-9-amendment-native-lifecycle-observers).
+  The source-backed event consumer migration needs an explicit coordinator
+  callback trust boundary and delivery limits. Original approval does not select
+  between coordinator-loaded callbacks and an external observer service.
+- Scope/traceability: FR-41-13, DQ-41-06, VAL-41-12; Phase 9 owns the bridge,
+  dependent consumers and deletion. Nine-phase order and all earlier accepted
+  contracts/evidence remain unchanged. Both full Phase 9 gates stay binding.
+- Review scope: only this material source/contract gap and affected packet owners;
+  reuse unaffected original/startup readiness. The reviewer must assess necessity,
+  exact ownership, event/revision truth, configuration trust, delivery limits,
+  proportionality and causal coverage without reopening delivered phases.
+- Reviewed revision/tree and findings disposition: pending.
+- Maintainer decision: pending; no new runtime behavior is approved or implemented.
+- Landing/resumption: after approval, the reviewed amendment accompanies the
+  Phase 9 implementation on this existing phase branch/PR; do not create an
+  inter-phase documentation PR or restart the delivered stage workflow.
+
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
@@ -231,5 +254,5 @@ and all approved validation commands remain binding.
 | 5 | [312](https://github.com/samcantrill/loom/pull/312), merge `5e4237d` | Both required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 5 card | No implementation blocker; completed-job durability/site qualification stays with Phase 6 | Sole agent submission owner and removal audit complete; metadata published/synchronized; exact remote/local phase branches retired |
 | 6 | [313](https://github.com/samcantrill/loom/pull/313), merge `5eeb021` | Both fresh required gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 6 card | No implementation blocker; physical site/storage/container qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired |
 | 7 | [317](https://github.com/samcantrill/loom/pull/317), merge `6ca596a` | Both fresh gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 7 card | No implementation blocker; physical qualification remains explicit | Evidence archived; phase-owned processes terminal; completion metadata published/synchronized; exact local/remote phase branches retired |
-| 8 | pending | not started | Optional MCP/real-session qualification pending | not started |
-| 9 | pending | not started | Final dynamic removal and qualified deployment evidence audit pending | not started |
+| 8 | [319](https://github.com/samcantrill/loom/pull/319), merge `928df2e` | Both fresh gates, manager acceptance, independent review and delivery passed; exact evidence in Phase 8 card | Live assistant and physical qualification remain explicit gaps | Evidence archived; metadata published/synchronized; exact local/remote phase branches retired |
+| 9 | pending | Prepared on published Phase 8 metadata; source audit stopped before edits on the observer contract gap | Bounded amendment review/approval, final removal and qualification audit pending | No phase-owned runtime or test processes started |
