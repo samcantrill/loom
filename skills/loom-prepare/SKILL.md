@@ -1,6 +1,6 @@
 ---
 name: loom-prepare
-description: Prepare already-authored configuration through a Loom coordinator in a specified existing environment. Use for Loom preparation and prepare-and-run requests, not project authoring or environment creation.
+description: Prepare already-authored configuration through a Loom coordinator in a specified existing environment. Use for Loom prepare-only requests, not project authoring or environment creation.
 ---
 
 # Prepare with Loom
@@ -17,7 +17,7 @@ do not invent scientific parameters, resources or an environment.
    uploads laptop files or deploys the eventual target's code/data.
 2. Retain one operation ID and its exact accepted intent. Call `loom_prepare_run`
    with the requested run name, native source object, config path and explicit
-   profile. Carry saved `coordinator_id` as `expected_coordinator_id` on subsequent
+   profile, ordered overlays/overrides and supplied sparse run options. Carry saved `coordinator_id` as `expected_coordinator_id` on subsequent
    calls. Preparation can run on one eligible worker and execution on another;
    compatibility of their existing installations determines eligibility.
 3. Observe `loom_get_operation` or `loom_wait_for_operation` to the extent requested.
@@ -31,10 +31,12 @@ do not invent scientific parameters, resources or an environment.
    nonnull status/reference means a larger pinned report; retrieving it requires
    existing authorized artifact tooling. It does not mean checks were absent.
 
-A prepare-only request ends at the receipt. If the user requested prepare and run,
-continue with `loom_submit_run` using the receipt's run URI and one stable queue
-item ID, then observe as requested. This existing authorization needs no new
-approval. Closing the session or timing out never authorizes cancellation;
+A prepare-only request ends at the exact receipt; admission is separate. For a
+request to prepare and run, use `loom_run` with the native run request through
+`loom-run` instead of chaining client-side preparation and submission. The server
+is bound to one protected deployment at startup; reconnect to that same selection.
+Preparation/status connect only and report offline services; they do not start them.
+Closing the session or timing out never authorizes cancellation;
 `loom_cancel_preparation` requires the user's scope to cover it.
 
 Explain a failed operation from its native code, child admission and report.

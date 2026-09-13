@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import re
+import time
 from typing import TYPE_CHECKING, cast
 
 from loom.diagnostics.models import (
@@ -301,13 +302,15 @@ def _digest(value: object) -> str:
 
 
 def qualify_resident_profile(
-    profile: ResidentExecutionProfile,
+    profile: ResidentExecutionProfile, *, _deadline: float | None = None,
 ) -> ResidentReadinessResult:
     """Observe the selected interpreter before loading any declared project import.
 
     Both subprocesses reuse worker environment/containment. No training object,
     cache, deployment, run or resource claim is created. Limits cover each probe;
     cleanup uncertainty is a failure, never permission to release retained work.
+    Native availability may supply one absolute deadline shared by both probes;
+    expiration raises TimeoutError after the probe owner contains its process.
     """
 
     requirements = profile.readiness_requirements
@@ -317,6 +320,14 @@ def qualify_resident_profile(
         or bool(profile.preparation_shared_roots)
     )
     checks: list[PreflightCheckResult] = []
+
+    def probe_timeout() -> float:
+        if _deadline is None:
+            return requirements.timeout_seconds
+        remaining = _deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("resident readiness caller deadline elapsed")
+        return min(requirements.timeout_seconds, remaining)
 
     def add(
         check_id: str,
@@ -343,8 +354,9 @@ def qualify_resident_profile(
         profile.launch_profile,
         _HANDSHAKE,
         {},
-        timeout_seconds=requirements.timeout_seconds,
+        timeout_seconds=probe_timeout(),
     )
+    probe_timeout()
     python = response.payload
     valid = (
         isinstance(python, Mapping)
@@ -446,8 +458,9 @@ def qualify_resident_profile(
         profile.launch_profile,
         _INSTALLATION,
         request,
-        timeout_seconds=requirements.timeout_seconds,
+        timeout_seconds=probe_timeout(),
     )
+    probe_timeout()
     observed = response.payload
     valid = (
         observed is not None
@@ -584,11 +597,11 @@ def qualify_resident_profile(
 
 
 def qualified_resident_profile(
-    profile: ResidentExecutionProfile,
+    profile: ResidentExecutionProfile, *, _deadline: float | None = None,
 ) -> ResidentExecutionProfile:
     """Return a profile carrying one operation's observation and derived descriptor."""
 
-    result = qualify_resident_profile(profile)
+    result = qualify_resident_profile(profile, _deadline=_deadline)
     descriptor = profile.descriptor
     if result.ok:
         descriptor = replace(descriptor, **dict(result.fingerprints))

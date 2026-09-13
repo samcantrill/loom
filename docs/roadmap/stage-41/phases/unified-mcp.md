@@ -282,7 +282,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   lifecycle tests. The manager owns the manifest, delivery and independent review;
   no children, extra branches or lifecycle sidecars are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: native deployment/run delegation, fifteen tools, four skills and current docs implemented; 160 focused tests and static checks pass; required final gates are next on the committed candidate.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for tool authorization/side effects and cancellation delegation
@@ -293,10 +293,54 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
+| Implementation and changed paths | `src/loom/mcp` binds one protected deployment, resolves current native clients, delegates durable run and named cancellation, and forwards ordered invocation/explicit receipt retry. Native deployment/run and service qualification helpers share the absolute startup deadline without qualifying workers during connect-only reads. Four skills, MCP docs/example and directly affected native/package/SDK tests updated. |
+| Tests added, updated or intentionally removed | Inert public discovery, no per-call selectors, complete native request/deadline/error/control forwarding, explicit receipt retry, capacity retention after SDK cancellation, unified stdio disconnect, cold creation/restart binding, connect-only missing-root refusal, and qualification deadline refusal. Existing source/report/identity/authorization/optional-import checks retained. One existing native deployment fixture assertion was narrowed for Pyright. |
+| Validated revision/tree and evidence | Focused isolated SDK/config/native selection: 160 passed in 389.77s (`/tmp/loom-p8-targeted-stable.log`); Ruff and Pyright passed (`/tmp/loom-p8-lint-stable.log`, `/tmp/loom-p8-typecheck-stable.log`). Final committed revision/tree and both mandatory gate receipts follow. |
 | Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Replaced-code removal / retained primitive consumers | Removed endpoint/connection MCP startup selectors and captured-client wiring. Current registration docs, package CLI test, stdio fixtures and four skills use deployment binding. Retained native prepare-only, exact receipt submit/explicit failed-revision retry, observation and cancellation consumers. Native Python client endpoint/connection constructors and their separate CLI consumers remain supported. |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Optional MCP/real-session qualification pending |
+| Residual risk and cleanup | Live Codex and physical NAS qualification remain unrun: this session exposes no Loom tools and predecessor evidence does not establish those trials. Local synthetic/SDK evidence makes no physical qualification claim. Phase-owned process cleanup is checked before handoff. |
+
+
+### Validation selection and causal findings
+
+The affected contracts are the protected native binding, availability and startup
+deadline, durable acceptance/cancellation, invocation fidelity, bounded adapter
+capacity, optional imports, and portable skill behavior. Focused selectors are
+`tests/unit/loom/mcp`, `tests/contracts/test_mcp_tools.py`,
+`tests/integration/mcp`, `tests/integration/queue/test_service_lifetime.py`,
+`tests/unit/loom/queue/test_deployment.py` and
+`tests/unit/loom/queue/test_resident_readiness.py` in the isolated locked MCP/config
+environment. The final gates also cover package imports and remaining native
+consumers. Expansion triggers are a changed native boundary, failing supported
+consumer, or missing accepted coverage; both approved final gates remain required.
+
+A connect-only resolver initially reused full service loading. That qualified
+workers on reads and exceeded the existing query/cancel capacity latency check.
+It now reads protected routing and the retained binding; native handshake owns
+the live identity check, while ensure/reload owns full installation validation.
+Native availability also passes the original deadline into contained readiness
+probes so a configured 120-second probe cannot extend a 30-second MCP request.
+Probe containment remains with its existing owner. An expired startup is reported
+as native `start_run` not-applied with original operation/queue references.
+
+### Relocated skill behavior trials
+
+The four updated skill directories passed skill-creator `quick_validate.py` after
+independent copying to `/tmp/loom-p8-relocated-skills-o5mqmv4u`. They contain no
+repository-relative supporting resources. Implementer behavioral simulations
+using those relocated instructions produced these continuations:
+
+| Input scenario | Continuation and stopping point |
+| --- | --- |
+| Build/checksum prepare-only with authored source/profile and overlays | Forward ordered controls to prepare; return the exact prepared receipt/report and stop before admission. |
+| Transform/report prepare-and-run on the configured deployment | Send the complete native `loom_run` request; retain the accepted operation and coordinator; one requested status observation does not turn admission into execution success. |
+| Reopened status-only session with saved owner/operation | Query that operation on the same deployment with its owner guard, distinguish applied admission from run completion, then stop. |
+| Small inline failing preflight and scheduler-exit evidence | Explain the actual failing check; distinguish scheduler observation, authority result and service cleanup; no inferred repair or cancellation. |
+| Large report with null inline evidence and no artifact reader | Preserve the aggregate status and exact pinned report reference; state that full checks were not read rather than claiming missing or downloaded evidence. |
+| Lost unified-run response | Query the original operation on the same bound owner; preserve request/recovery identities and replay only identical intent if needed, without fresh IDs or inferred retry authorization. |
+| Explicit run cancellation versus receipt retry | Cancel through `loom_cancel_run_operation` and observe its returned control ID; an explicitly authorized receipt retry alone forwards the observed `retry_failed_revision`, while ordinary replay omits it. |
+
+These are scoped behavioral simulations, not an independent evaluator pass or a
+live assistant qualification. The mandatory implementation reviewer can assess
+them with the actual changed skills; native/stdio tests own runtime evidence.

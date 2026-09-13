@@ -15,6 +15,7 @@ from uuid import uuid4
 from loom.coordinator import CoordinatorClientError, RunObservation, RunRequest
 from loom.deployment import AvailableDeployment, ensure_available, load_deployment
 from loom.queue.errors import QueueConfigError, QueueError
+from loom.queue._coordinator_control import control_error
 from loom.queue.local_daemon import LocalDaemonAdmissionState
 from loom.serialization import PlainData
 
@@ -106,12 +107,16 @@ def run(
     deployment: str | Path,
     wait: bool = True,
     timeout_seconds: float | None = None,
+    _deadline: float | None = None,
+    expected_coordinator_id: str | None = None,
 ) -> RunOutcome:
     """Start/reuse selected roles and accept exactly the supplied native intent.
 
     Startup and dispatch share the caller deadline and the deployment startup
     limit. Observation timeout/interrupt detaches; cancellation is always explicit.
     Config and overlays must be in the selected project-relative source closure.
+    Adapters may pass their existing absolute deadline and an additional owner
+    guard; capacity acquisition never resets that deadline.
     """
     if not isinstance(request, RunRequest) or not isinstance(wait, bool):
         raise QueueConfigError("run request/wait is invalid")
@@ -122,6 +127,8 @@ def run(
     ):
         raise QueueConfigError("run timeout is invalid")
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    if _deadline is not None:
+        deadline = min(deadline if deadline is not None else math.inf, _deadline)
     selection = load_deployment(deployment)
     preparation = request.preparation
     if (
@@ -141,11 +148,20 @@ def run(
         time.monotonic() + selection.startup_seconds,
         deadline if deadline is not None else math.inf,
     )
-    available = ensure_available(
-        selection, attachment_id=preparation.operation_id, deadline=startup_deadline
-    )
+    try:
+        available = ensure_available(
+            selection, attachment_id=preparation.operation_id, deadline=startup_deadline,
+            expected_coordinator_id=expected_coordinator_id,
+        )
+    except CoordinatorClientError as exc:
+        raise CoordinatorClientError(
+            exc.code, boundary=exc.boundary, operation="start_run",
+            ids={**exc.ids, **control_error(exc.code, "start_run", {"request": request.to_dict()}).ids},
+            evidence_refs=exc.evidence_refs, mutation_outcome="not_applied",
+        ) from exc
     release_deadline = deadline
     try:
+        available.client._guard("start_run", {"request": request.to_dict()}, expected_coordinator_id)
         operation = available.client._native_call(
             "start_run",
             {"request": request.to_dict()},

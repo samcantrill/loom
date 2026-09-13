@@ -150,6 +150,60 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
     )
 
 
+def connect_deployment(selection: DeploymentSelection) -> CoordinatorClient:
+    """Resolve the protected owner without creating roots or starting services.
+
+    Local selections require their retained creation binding. Reopening a missing
+    or changed bound root is a conflict; an uncreated selection is unavailable.
+    The returned client is lazy and carries the configured coordinator guard.
+    """
+    roles = {}
+    root = None
+    owner = None
+    if selection.coordinator is not None:
+        if selection.binding is None or not selection.binding.exists():
+            raise CoordinatorClientError(
+                "unavailable", boundary="connection", operation="connection"
+            )
+        _protected_input_path(selection.binding, label="creation binding")
+        binding = json.loads(selection.binding.read_text())
+        # Connect-only routing must not qualify installed workers or construct
+        # service components. The retained binding owns identity; ensure/reload
+        # owns full service configuration validation and installation checks.
+        source, _, payload, _ = _load_protected_config(
+            selection.coordinator.config, env_file=selection.coordinator.env_file
+        )
+        authored_root = payload.get("deployment_root")
+        if payload.get("kind") != "loom.coordinator-service" or not isinstance(authored_root, str):
+            raise QueueConfigError("coordinator service selection is invalid")
+        root = (source.parent / authored_root).resolve()
+        roles = binding.get("roles", {})
+        retained = roles.get("coordinator", {})
+        identity = retained.get("identity", {})
+        if (
+            binding.get("schema_version") != 1
+            or identity.get("config") != str(selection.coordinator.config)
+            or identity.get("root") != str(root)
+            or identity.get("lifetime") != selection.coordinator.lifetime
+            or retained.get("ids") is None
+        ):
+            raise QueueConflictError("bound role configuration conflicts")
+        if not (root / "coordinator").is_dir():
+            raise QueueConflictError("previously bound role root is missing")
+        # The native handshake validates the live root identity against this
+        # protected binding; discovery does not reopen/migrate service databases.
+        owner = retained["ids"]["coordinator"]
+    if selection.connection is not None:
+        client = CoordinatorClient.from_connection_file(selection.connection)
+        if roles:
+            client._guard("connection", {}, roles["coordinator"]["ids"]["coordinator"])
+        return client
+    assert root is not None and owner is not None
+    return CoordinatorClient.from_unix_socket(
+        root / "coordinator" / "daemon.sock", expected_coordinator_id=owner
+    )
+
+
 def _write_binding(path: Path, value: object) -> None:
     temporary = path.with_name(path.name + ".tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -182,12 +236,12 @@ def _bind(
     if selection.coordinator is not None:
         role = selection.coordinator
         configs["coordinator"] = load_coordinator_service_config(
-            role.config, env_file=role.env_file
+            role.config, env_file=role.env_file, _deadline=deadline
         )
     if selection.agent is not None:
         role = selection.agent
         configs["agent"] = load_outbound_agent_service_config(
-            role.config, env_file=role.env_file
+            role.config, env_file=role.env_file, _deadline=deadline
         )
     if not configs:
         return {}, {}
@@ -364,7 +418,8 @@ class AvailableDeployment:
 
 
 def ensure_available(
-    selection: DeploymentSelection, *, attachment_id: str, deadline: float | None = None
+    selection: DeploymentSelection, *, attachment_id: str, deadline: float | None = None,
+    expected_coordinator_id: str | None = None,
 ) -> AvailableDeployment:
     """Initialize/reopen only selected local roles and bound startup dispatch time."""
     deadline = min(
@@ -372,7 +427,11 @@ def ensure_available(
         deadline if deadline is not None else math.inf,
     )
     _check_deadline(deadline)
-    roles, configs = _bind(selection, attachment_id, deadline)
+    try:
+        roles, configs = _bind(selection, attachment_id, deadline)
+    except TimeoutError:
+        _check_deadline(deadline)
+        raise
     if selection.connection is not None:
         client = CoordinatorClient.from_connection_file(selection.connection)
     else:
@@ -389,6 +448,7 @@ def ensure_available(
             raise QueueConflictError(
                 "connection and local coordinator identities conflict"
             )
+    client._guard("ensure", {}, expected_coordinator_id)
     launched: dict[str, subprocess.Popen] = {}
     while True:
         _check_deadline(deadline)

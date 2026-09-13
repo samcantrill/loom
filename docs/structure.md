@@ -1370,11 +1370,13 @@ Do the relevant docs mention any accepted debt or deferred behavior?
 Detailed specification: [mcp.md](features/mcp.md).
 
 `loom.mcp` owns the optional `loom-mcp` stdio executable. Its private SDK adapter
-registers thirteen tools over `loom.coordinator`, preserves native values/errors
+registers fifteen tools over `loom.coordinator` and the native deployment/run owners, preserves native values/errors
 and bounds synchronous work outside the SDK event loop. SDK imports occur only
 when explicitly constructing/running the adapter; base, daemon and native client
 imports remain independent. Scheduling, preparation, durable state, identity guards
-and transfer remain native owners. MCP has no state store or CLI parsing layer.
+and transfer remain native owners. One protected `--deployment` binding supplies
+all tools; only explicit `loom_run` ensures configured local services. MCP has no
+state store or client-side prepare/admit continuation.
 
 `skills/loom-prepare`, `skills/loom-run`, `skills/loom-monitor` and
 `skills/loom-diagnose` contain independently installable project-neutral product

@@ -10,23 +10,27 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager
 import time
+from pathlib import Path
 from typing import Annotated, Any, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import TypeAdapter, WithJsonSchema
 
-from loom.coordinator import CoordinatorClientError, PrepareRunRequest
+from loom.coordinator import CoordinatorClientError, PrepareRunRequest, RunRequest
+from loom import deployment as deployments
+from loom._run import run as native_run
 from loom.diagnostics.run_inspection import decode_run_inspection_response
+from loom.errors import ValidationError
 from loom.queue._coordinator_control import control_error
 from loom.queue._coordinator_transport import (
     CLIENT_CAPACITY,
     CLIENT_WAIT_CAPACITY,
     REQUEST_BUDGET_SECONDS,
 )
-from loom.queue.errors import QueueError
+from loom.queue.errors import QueueError, QueueConflictError
 from loom.queue.preparation import PreparationSource
 from loom.queue.local_daemon import LocalDaemonAdmissionRequest
 from loom.serialization import PlainData, to_plain_data
@@ -41,6 +45,9 @@ _PreparationSourceInput = Annotated[
     dict[str, object],
     WithJsonSchema(TypeAdapter(PreparationSource).json_schema()),
 ]
+
+
+_RunInput = dict[str, object]
 
 
 class _CapacityUnavailable(Exception):
@@ -192,8 +199,8 @@ def _named_values(payload: object) -> dict[str, object]:
 
 
 class _Adapter:
-    def __init__(self, client: Any) -> None:
-        self._client = client
+    def __init__(self, deployment: str | Path) -> None:
+        self._deployment = Path(deployment).resolve()
         self._capacity = _Capacity()
         self._closed = False
 
@@ -215,12 +222,24 @@ class _Adapter:
         except _CapacityUnavailable:
             return _error(control_error("capacity_exhausted", operation, payload))
         except CoordinatorClientError as exc:
+            if exc.operation == "connection":
+                contextual = control_error(exc.code, operation, payload, boundary=exc.boundary)
+                return _error(CoordinatorClientError(
+                    exc.code, boundary=exc.boundary, operation=operation,
+                    ids={**exc.ids, **contextual.ids}, evidence_refs=exc.evidence_refs,
+                    mutation_outcome=contextual.mutation_outcome,
+                ))
             return _error(exc)
-        except (QueueError, TypeError, ValueError):
+        except QueueConflictError:
+            return _error(control_error("conflict", operation, payload))
+        except (QueueError, ValidationError, TypeError, ValueError):
             return _error(control_error("invalid_request", operation, payload))
         except Exception:
             return _error(control_error("internal_error", operation, payload))
         return _result(value, text)
+
+    def _connect(self) -> AbstractContextManager[Any]:
+        return deployments.connect_deployment(deployments.load_deployment(self._deployment))
 
     def _native(
         self,
@@ -231,13 +250,16 @@ class _Adapter:
         *,
         negotiate: bool = True,
     ) -> Any:
-        return self._client._native_call(
-            operation,
-            payload,
-            expected_coordinator_id,
-            deadline=deadline,
-            negotiate=negotiate,
-        )
+        with self._connect() as client:
+            if operation == "cancel_run_operation":
+                return client.cancel_run_operation(
+                    cast(str, payload["operation_id"]),
+                    expected_coordinator_id=expected_coordinator_id, deadline=deadline,
+                )
+            return client._native_call(
+                operation, payload, expected_coordinator_id,
+                deadline=deadline, negotiate=negotiate,
+            )
 
     def _wait_native(
         self,
@@ -247,13 +269,11 @@ class _Adapter:
         expected_coordinator_id: str | None,
         deadline: float,
     ) -> Any:
-        return self._client._wait_native(
-            operation,
-            payload,
-            timeout_seconds,
-            expected_coordinator_id,
-            terminal_deadline=deadline,
-        )
+        with self._connect() as client:
+            return client._wait_native(
+                operation, payload, timeout_seconds, expected_coordinator_id,
+                terminal_deadline=deadline,
+            )
 
     def _inspect_run(
         self, run_uri: str, expected_coordinator_id: str | None, deadline: float
@@ -315,6 +335,9 @@ class _Adapter:
             source: _PreparationSourceInput,
             config_path: str,
             preparation_profile: str,
+            overlays: list[str] | None = None,
+            overrides: list[str] | None = None,
+            run_options: dict[str, object] | None = None,
             expected_coordinator_id: str | None = None,
         ) -> CallToolResult:
             """Durably request native preparation from an authored source and profile."""
@@ -324,6 +347,9 @@ class _Adapter:
                 "source": cast(dict[str, object], source),
                 "config_path": config_path,
                 "preparation_profile": preparation_profile,
+                "overlays": [] if overlays is None else overlays,
+                "overrides": [] if overrides is None else overrides,
+                "run_options": {} if run_options is None else run_options,
             }
             return await self._call(
                 "prepare_run",
@@ -338,6 +364,45 @@ class _Adapter:
                     **request_data,
                     "expected_coordinator_id": expected_coordinator_id,
                 },
+            )
+
+        @server.tool(annotations=mutate)
+        async def loom_run(
+            request: _RunInput, expected_coordinator_id: str | None = None,
+        ) -> CallToolResult:
+            """Ensure configured services and accept durable preparation-to-admission.
+
+            Request uses native preparation and queue_item_id fields; preparation
+            includes operation_id, run_name, source, config_path, preparation_profile,
+            ordered overlays/overrides and sparse run_options. Reconciled intent
+            supplies mode, retry_policy and unresolved native target identities.
+            Returning or disconnecting detaches; applied means admitted, not
+            execution complete. Replay the exact native request after uncertainty.
+            """
+            return await self._call(
+                "start_run",
+                lambda deadline: native_run(
+                    RunRequest.from_dict(request), deployment=self._deployment,
+                    wait=False, _deadline=deadline,
+                    expected_coordinator_id=expected_coordinator_id,
+                ),
+                text="Observed native run acceptance.",
+                payload={"request": request, "expected_coordinator_id": expected_coordinator_id},
+            )
+
+        @server.tool(annotations=mutate)
+        async def loom_cancel_run_operation(
+            operation_id: str, expected_coordinator_id: str | None = None,
+        ) -> CallToolResult:
+            """Request native run cancellation; wait on the returned control ID."""
+            return await self._call(
+                "cancel_run_operation",
+                lambda deadline: self._native(
+                    "cancel_run_operation", {"operation_id": operation_id},
+                    expected_coordinator_id, deadline,
+                ),
+                text=f"Observed cancellation control for run operation {operation_id}.",
+                payload={"operation_id": operation_id, "expected_coordinator_id": expected_coordinator_id},
             )
 
         @server.tool(annotations=read)
@@ -550,6 +615,7 @@ class _Adapter:
         async def loom_submit_run(
             run_uri: str,
             queue_item_id: str,
+            retry_failed_revision: int | None = None,
             expected_coordinator_id: str | None = None,
         ) -> CallToolResult:
             """Submit a prepared run with its stable native queue-item identifier."""
@@ -559,7 +625,7 @@ class _Adapter:
                     "submit",
                     {
                         "request": LocalDaemonAdmissionRequest(
-                            queue_item_id, run_uri
+                            queue_item_id, run_uri, retry_failed_revision
                         ).to_dict()
                     },
                     expected_coordinator_id,
@@ -630,19 +696,16 @@ class _Adapter:
             return
         self._closed = True
         self._capacity.close()
-        close = getattr(self._client, "close", None)
-        if callable(close):
-            close()
 
 
-def create_server(*, client: Any) -> MCPServer:
-    """Register the 13 native coordinator tools without contacting a coordinator."""
-    return _Adapter(client).server()
+def create_server(*, deployment: str | Path) -> MCPServer:
+    """Register native coordinator tools without loading or contacting a deployment."""
+    return _Adapter(deployment).server()
 
 
-def run_server(*, client: Any) -> None:
+def run_server(*, deployment: str | Path) -> None:
     """Run stdio and release only local adapter/client resources on shutdown."""
-    adapter = _Adapter(client)
+    adapter = _Adapter(deployment)
     try:
         adapter.server().run(transport="stdio")
     finally:

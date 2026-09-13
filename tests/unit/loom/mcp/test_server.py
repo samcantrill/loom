@@ -49,12 +49,13 @@ class _Client:
 
 
 def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
-    from loom.mcp import create_server
 
     client = _Client()
     server = create_server(client=client)
     tools = asyncio.run(server.list_tools())
     assert {tool.name for tool in tools} == {
+        "loom_run",
+        "loom_cancel_run_operation",
         "loom_status",
         "loom_prepare_run",
         "loom_get_operation",
@@ -99,7 +100,6 @@ def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
 
 
 def test_queue_item_lookup_precedes_native_admission_detail() -> None:
-    from loom.mcp import create_server
 
     client = _Client()
     result = asyncio.run(
@@ -119,7 +119,6 @@ def test_queue_item_lookup_precedes_native_admission_detail() -> None:
 
 
 def test_invalid_job_selector_is_a_structured_tool_error() -> None:
-    from loom.mcp import create_server
 
     result = asyncio.run(create_server(client=_Client()).call_tool("loom_get_job", {}))
     assert getattr(result, "is_error") is True
@@ -129,7 +128,6 @@ def test_invalid_job_selector_is_a_structured_tool_error() -> None:
 
 
 def test_successful_calls_release_adapter_capacity() -> None:
-    from loom.mcp import create_server
 
     server = create_server(client=_Client())
 
@@ -148,7 +146,6 @@ def test_successful_calls_release_adapter_capacity() -> None:
 def test_compound_lookup_shares_one_absolute_native_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loom.mcp import create_server
     from loom.mcp import _server
 
     class DelayedClient(_Client):
@@ -187,7 +184,6 @@ def test_compound_lookup_shares_one_absolute_native_deadline(
 def test_status_connection_and_status_share_one_absolute_native_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loom.mcp import create_server
     from loom.mcp import _server
 
     class DelayedClient(_Client):
@@ -220,7 +216,6 @@ def test_status_connection_and_status_share_one_absolute_native_deadline(
 
 
 def test_invalid_mutation_keeps_native_not_applied_outcome() -> None:
-    from loom.mcp import create_server
 
     result = asyncio.run(
         create_server(client=_Client()).call_tool(
@@ -232,3 +227,153 @@ def test_invalid_mutation_keeps_native_not_applied_outcome() -> None:
     assert detail["operation"] == "submit"
     assert detail["ids"]["run_uri"] == "file:///run"
     assert detail["mutation_outcome"] == "not_applied"
+
+
+def create_server(*, client):
+    """Substitute native resolution only; public deployment binding has real tests."""
+    from contextlib import contextmanager
+    from loom.mcp._server import _Adapter
+
+    @contextmanager
+    def connect():
+        try:
+            yield client
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()
+
+    adapter = _Adapter("/unused/test-deployment.json")
+    adapter._connect = connect
+    return adapter.server()
+
+
+def test_public_deployment_discovery_is_inert_and_has_no_override(tmp_path, monkeypatch):
+    from loom.mcp import create_server as public_server
+    from loom.mcp import _server
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("discovery attempted deployment IO")
+
+    monkeypatch.setattr(_server.deployments, "load_deployment", forbidden)
+    server = public_server(deployment=tmp_path / "uncreated.json")
+    for tool in asyncio.run(server.list_tools()):
+        properties = tool.model_dump(by_alias=True)["inputSchema"]["properties"]
+        assert not {"deployment", "connection", "endpoint"} & properties.keys()
+        assert tool.annotations is not None
+        assert tool.annotations.read_only_hint == (tool.name not in {
+            "loom_run", "loom_submit_run", "loom_prepare_run", "loom_cancel_job",
+            "loom_cancel_preparation", "loom_cancel_run_operation",
+        })
+
+
+def test_run_delegates_complete_native_intent_and_absolute_deadline(tmp_path, monkeypatch):
+    from loom.mcp import create_server as public_server
+    from loom.mcp import _server
+    from tests.contracts.test_mcp_tools import PREPARE
+
+    captured = []
+    request = {"preparation": {**PREPARE, "overlays": ["a.yaml", "b.yaml"],
+                              "overrides": ["x=1", "x=2"], "run_options": {"tags": {"trial": "mcp-check"}}},
+               "queue_item_id": "queue-one"}
+
+    def run(native, **kwargs):
+        captured.append((native.to_dict(), kwargs))
+        return _Value({"operation_id": "prepare-one", "cleanup": {"coordinator": "borrowed"}})
+
+    monkeypatch.setattr(_server, "native_run", run)
+    server = public_server(deployment=tmp_path / "deployment.json")
+    before = time.monotonic()
+    result = asyncio.run(server.call_tool("loom_run", {
+        "request": request, "expected_coordinator_id": "owner-one",
+    }))
+    assert not getattr(result, "is_error")
+    intent, options = captured.pop()
+    assert intent == request
+    assert options["deployment"] == tmp_path / "deployment.json"
+    assert options["wait"] is False
+    assert options["expected_coordinator_id"] == "owner-one"
+    assert before < options["_deadline"] <= before + 30.1
+    assert getattr(result, "structured_content")["operation_id"] == "prepare-one"
+
+
+def test_run_unknown_outcome_retains_native_recovery(tmp_path, monkeypatch):
+    from loom.mcp import create_server as public_server
+    from loom.mcp import _server
+    from loom.queue._coordinator_control import control_error
+    from tests.contracts.test_mcp_tools import PREPARE
+
+    request = {"preparation": PREPARE, "queue_item_id": "queue-one"}
+    error = control_error("unavailable", "start_run", {"request": request}, dispatched=True)
+
+    def run(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(_server, "native_run", run)
+    result = asyncio.run(public_server(deployment=tmp_path / "selection.json").call_tool(
+        "loom_run", {"request": request}))
+    assert getattr(result, "is_error")
+    assert getattr(result, "structured_content") == error.to_dict()
+    assert getattr(result, "structured_content")["mutation_outcome"] == "unknown"
+
+
+def test_run_cancellation_calls_native_named_method_and_returns_control():
+    class Client(_Client):
+        def cancel_run_operation(self, operation_id, *, expected_coordinator_id, deadline):
+            assert operation_id == "run-one"
+            assert expected_coordinator_id == "owner-one"
+            assert deadline > time.monotonic()
+            return _Value({"operation_id": "cancel-run-one", "kind": "cancel_run", "state": "pending"})
+
+    result = asyncio.run(create_server(client=Client()).call_tool(
+        "loom_cancel_run_operation", {"operation_id": "run-one", "expected_coordinator_id": "owner-one"}))
+    assert not getattr(result, "is_error")
+    assert getattr(result, "structured_content")["operation_id"] == "cancel-run-one"
+
+
+def test_prepare_controls_and_explicit_receipt_retry_reach_native_owner():
+    from tests.contracts.test_mcp_tools import PREPARE
+
+    class Client(_Client):
+        def _native_call(self, operation, payload, *args, **kwargs):
+            self.calls.append((operation, payload, None, 0.0, True))
+            return _Value({"state": "pending"})
+
+    native = Client()
+    server = create_server(client=native)
+    request = {**PREPARE, "overlays": ["a.yaml", "b.yaml"], "overrides": ["x=1", "x=2"], "run_options": {"tags": {"trial": "mcp-check"}}}
+    assert not getattr(asyncio.run(server.call_tool("loom_prepare_run", request)), "is_error")
+    assert native.calls[-1][:2] == ("prepare_run", {"request": request})
+    receipt = {"run_uri": "file:///run", "queue_item_id": "queue-one", "retry_failed_revision": 4}
+    assert not getattr(asyncio.run(server.call_tool("loom_submit_run", receipt)), "is_error")
+    assert native.calls[-1][:2] == ("submit", {"request": receipt})
+
+
+def test_cancelled_sdk_call_holds_capacity_until_native_completion(monkeypatch):
+    from threading import Event
+    from loom.mcp import _server
+
+    monkeypatch.setattr(_server, "CLIENT_CAPACITY", 1)
+    entered, release = Event(), Event()
+    capacity = _server._Capacity()
+
+    def held(deadline):
+        entered.set()
+        assert release.wait(5)
+
+    async def scenario():
+        first = asyncio.create_task(capacity.call(held, waiting=False))
+        assert await asyncio.to_thread(entered.wait, 2)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert capacity._requests.locked()
+        release.set()
+        await capacity.call(lambda deadline: None, waiting=False)
+        assert not capacity._requests.locked()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        capacity.close()

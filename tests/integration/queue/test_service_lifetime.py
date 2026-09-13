@@ -812,3 +812,59 @@ def test_interrupted_run_agent_reopens_without_false_clean_receipt(
         _stop_fixture_process(tmp_path / "outbound")
         _stop_fixture_process(tmp_path / "deployment/coordinator")
         _stop_fixture_supervisor(tmp_path / "outbound")
+
+
+def test_connect_only_selection_is_inert_and_tracks_bound_owner(tmp_path: Path):
+    from loom.deployment import connect_deployment
+    from loom.coordinator import CoordinatorClientError
+
+    selection = load_deployment(_selection(tmp_path))
+    with pytest.raises(CoordinatorClientError) as unavailable:
+        connect_deployment(selection)
+    assert unavailable.value.code == "unavailable"
+    assert not (tmp_path / "deployment").exists()
+    roles, _ = _bind(selection, "connect-test", time.monotonic() + 10)
+    with connect_deployment(selection) as client:
+        assert client._guard("status", {}, None) == roles["coordinator"]["ids"]["coordinator"]
+    shutil.rmtree(tmp_path / "deployment")
+    with pytest.raises(QueueConflictError, match="missing"):
+        connect_deployment(selection)
+    assert not (tmp_path / "deployment").exists()
+
+
+def test_composed_run_absolute_deadline_prevents_dispatch(tmp_path: Path):
+    from loom._run import run
+    from loom.coordinator import CoordinatorClientError
+
+    path = _selection(tmp_path)
+    request = RunRequest(_request(), "deadline-queue")
+    with pytest.raises(CoordinatorClientError) as failure:
+        run(request, deployment=path, wait=False, _deadline=time.monotonic() - 1)
+    error = failure.value
+    assert error.code == "deadline_exceeded"
+    assert error.operation == "start_run"
+    assert error.mutation_outcome == "not_applied"
+    assert error.ids["operation_id"] == request.preparation.operation_id
+    assert error.ids["queue_item_id"] == "deadline-queue"
+    assert not (tmp_path / "deployment").exists()
+
+
+def test_startup_qualification_timeout_is_not_applied_and_creates_no_roots(tmp_path, monkeypatch):
+    from loom._run import run
+    from loom.coordinator import CoordinatorClientError
+    from loom.queue import resident_readiness as readiness
+    from loom.queue._resident_probe import ResidentProbeResult
+
+    path = _selection(tmp_path)
+    def probe(*args, timeout_seconds, **kwargs):
+        assert timeout_seconds <= 0.2
+        time.sleep(timeout_seconds)
+        return ResidentProbeResult(None, "timed out", True)
+
+    monkeypatch.setattr(readiness, "run_resident_probe", probe)
+    with pytest.raises(CoordinatorClientError) as failure:
+        run(RunRequest(_request(), "deadline-queue"), deployment=path,
+            wait=False, _deadline=time.monotonic() + 0.2)
+    assert failure.value.code == "deadline_exceeded"
+    assert failure.value.mutation_outcome == "not_applied"
+    assert not (tmp_path / "deployment").exists()

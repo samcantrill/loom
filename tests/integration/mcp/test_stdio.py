@@ -26,6 +26,8 @@ pytestmark = [
 ]
 
 TOOLS = {
+    "loom_run",
+    "loom_cancel_run_operation",
     "loom_status",
     "loom_prepare_run",
     "loom_get_operation",
@@ -136,6 +138,7 @@ def _coordinator(
                     {
                         "schema_version": 1,
                         "kind": "loom.coordinator-client",
+                        "expected_coordinator_id": daemon._coordinator_id,
                         "transport": {
                             "kind": "https",
                             "url": f"https://localhost:{server.port}",
@@ -153,9 +156,24 @@ def _coordinator(
                 )
             )
             path.chmod(0o600)
-            args = ["--connection", str(path)]
+            connection = path
         else:
-            args = ["--endpoint", str(service.daemon.endpoint)]
+            connection = None
+        selection = tmp_path / "mcp-deployment.json"
+        value = {
+            "schema_version": 1, "kind": "loom.deployment",
+            "coordinator": {"service_config": "coordinator.json", "lifetime": "persistent"},
+            "binding_path": "mcp-binding.json",
+            "preparation": {"source": _request(mode).source.to_dict(), "profile": _request(mode).preparation_profile},
+        }
+        if connection is not None:
+            value["connection"] = str(connection)
+        selection.write_text(json.dumps(value))
+        selection.chmod(0o600)
+        from loom.deployment import _bind, load_deployment
+        _bind(load_deployment(selection), "mcp-fixture", monotonic() + 20)
+        args = ["--deployment", str(selection)]
+
         yield service, daemon, args
     finally:
         server.stop()
@@ -166,9 +184,12 @@ def _coordinator(
 def test_installed_offline_discovery_and_classified_failure(
     tmp_path: Path, protocol_mode: Literal["auto", "legacy"]
 ):
+    from tests.integration.queue.test_service_lifetime import _selection
+    selection = _selection(tmp_path)
+
     async def scenario():
         async with _client(
-            ["--endpoint", str(tmp_path / "offline.sock")], mode=protocol_mode
+            ["--deployment", str(selection)], mode=protocol_mode
         ) as client:
             registered = (await client.list_tools()).tools
             assert {tool.name for tool in registered} == TOOLS
@@ -178,6 +199,8 @@ def test_installed_offline_discovery_and_classified_failure(
                 assert tool.annotations.read_only_hint == (
                     tool.name
                     not in {
+                        "loom_run",
+                        "loom_cancel_run_operation",
                         "loom_prepare_run",
                         "loom_submit_run",
                         "loom_cancel_job",
@@ -271,7 +294,7 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                     **guard,
                 )
             async with _client(
-                [*args, "--expected-coordinator-id", result["coordinator_id"]]
+                args
             ) as client:
                 observed = await _call(
                     client, "loom_get_job", queue_item_id="mcp-target"
@@ -442,8 +465,9 @@ def test_lost_mutation_reply_retains_original_operation_and_reconciles(
         asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("unified", [False, True])
 def test_sdk_cancel_and_eof_do_not_cancel_dispatched_preparation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unified: bool
 ):
     import loom.queue.local_daemon_transport as transport
     from contextlib import suppress
@@ -471,7 +495,11 @@ def test_sdk_cancel_and_eof_do_not_cancel_dispatched_preparation(
         async def scenario():
             async with _client(args) as client:
                 task = asyncio.create_task(
-                    client.call_tool("loom_prepare_run", _request().to_dict())
+                    client.call_tool(
+                        "loom_run" if unified else "loom_prepare_run",
+                        {"request": {"preparation": _request().to_dict(), "queue_item_id": "mcp-unified"}}
+                        if unified else _request().to_dict(),
+                    )
                 )
                 assert await asyncio.to_thread(entered.wait, 10)
                 task.cancel()
@@ -488,9 +516,54 @@ def test_sdk_cancel_and_eof_do_not_cancel_dispatched_preparation(
                 with CoordinatorClient.from_unix_socket(
                     service.daemon.endpoint
                 ) as native:
-                    assert len(native.admissions().admissions) == 1
+                    assert len(native.admissions().admissions) == (2 if unified else 1)
+                    if unified:
+                        assert completed["kind"] == "run"
+                        assert completed["result"]["admission"]["queue_item_id"] == "mcp-unified"
 
         try:
             asyncio.run(scenario())
         finally:
             release.set()
+
+
+def test_cold_run_all_tools_reconnect_to_same_binding_after_restart(tmp_path: Path):
+    from tests.integration.queue.test_service_lifetime import _selection, _stop_fixture_process
+    from loom.deployment import connect_deployment, load_deployment
+
+    selection = _selection(tmp_path, lifetime="persistent")
+    args = ["--deployment", str(selection)]
+    request = {"preparation": _request().to_dict(), "queue_item_id": "cold-mcp"}
+
+    async def scenario():
+        async with _client(args) as client:
+            assert len((await client.list_tools()).tools) == len(TOOLS)
+            assert not (tmp_path / "deployment").exists()
+            offline = await client.call_tool("loom_status", {})
+            assert offline.is_error
+            assert not (tmp_path / "deployment").exists()
+            accepted = await _call(client, "loom_run", request=request)
+            owner = accepted["connection"]["coordinator_id"]
+            assert accepted["operation_id"] == "prepare-1"
+            completed = (await _call(client, "loom_wait_for_operation", operation_id="prepare-1"))["operation"]
+            assert completed["state"] == "applied"
+            assert (await _call(client, "loom_status"))["connection"]["coordinator_id"] == owner
+            control = await _call(client, "loom_cancel_run_operation", operation_id="prepare-1")
+            assert control["operation_id"] != "prepare-1"
+            assert control["kind"] == "cancel_run"
+            await _call(client, "loom_wait_for_operation", operation_id=control["operation_id"])
+        binding = (tmp_path / "binding.json").read_bytes()
+        _stop_fixture_process(tmp_path / "deployment/coordinator")
+        async with _client(args) as client:
+            replay = await _call(client, "loom_run", request=request, expected_coordinator_id=owner)
+            assert replay["connection"]["coordinator_id"] == owner
+            assert replay["operation_id"] == "prepare-1"
+            assert (tmp_path / "binding.json").read_bytes() == binding
+            with connect_deployment(load_deployment(selection)) as native:
+                assert native.describe_connection().coordinator_id == owner
+                assert len(native.admissions().admissions) == 2
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        _stop_fixture_process(tmp_path / "deployment/coordinator")
