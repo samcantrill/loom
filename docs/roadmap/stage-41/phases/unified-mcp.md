@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: 41 / 8
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p8-unified-mcp
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 7 merges; record exact SHA at execution preparation
+- Base revision: `daab4d1eeeb2d5ba827e31f81bbb6e4fc8517eec` (published Phase 7 completion metadata after PR 317)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 8: Unified MCP And Skills
 - Dependencies: Phase 7 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; published predecessor and accepted contracts verified
 
 ## Objective And Context
 
@@ -250,7 +250,37 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on the manifest's persistent stage worktree and
+  canonical Phase 8 branch at the Base revision above. Phase 7 PR 317 merged as
+  `6ca596a806dde5b0594f4a1e96d91bbe188e3e7a`; completion metadata is published,
+  synchronization verified matching stage/local/fetched/advertised develop, and
+  exact local/remote predecessor branches are retired. All predecessor agents
+  and phase-owned processes are terminal. Successor start/preflight passed.
+- Source reconciliation: the delivered optional adapter captures a client at
+  construction and selects endpoint/connection on its CLI. Native `loom.run`
+  owns availability, durable acceptance, bounded observation and cleanup;
+  `deployment.ensure_available` owns creation/restart bindings. Resolve current
+  clients through that native deployment owner after creation/restart; ordinary
+  tools remain connect-only and construction/discovery remain inert. The adapter
+  must not copy binding state or compose private prepare/wait/submit continuation.
+  Current native templates include exact/reconciled mode; decode supplied native
+  intent without dropping invocation controls or adding MCP reconciliation policy.
+- Native integration scope: any missing connect-only resolver, absolute-deadline
+  plumbing or identity/error handoff belongs in the existing deployment/run owner,
+  with its current consumers and causal tests. Preserve the accepted native
+  lifecycle and protected bindings; no new durable schema or deployment mode.
+  Stop for a demonstrated accepted-contract conflict, not a private helper choice.
+- Validation selection: existing MCP unit/contract/stdio and isolated-import
+  consumers; complete invocation/explicit retry; cold startup and creation/restart
+  binding; same-owner errors; capacity/deadline/EOF behavior; relocated skill trials
+  and current example/docs. Add native deployment/run checks if those boundaries
+  change. Both final make gates remain binding. Reuse prior backend qualification
+  and record the actual assistant-session gap separately from local fixtures.
+- Named refinement: none; fixed public/durable/trust contracts are sufficient.
+- Execution delegation: one executor is justified for the coupled optional
+  adapter, native binding/deadline integration, four operational skills and stdio
+  lifecycle tests. The manager owns the manifest, delivery and independent review;
+  no children, extra branches or lifecycle sidecars are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: not started
 - Refiner: not used
