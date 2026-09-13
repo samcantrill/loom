@@ -14,7 +14,7 @@
 - Dependencies: Phase 5 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: cumulative-output acknowledgement replay correction authorized; implementation, fresh validation and same-reviewer confirmation in progress
+- Blockers: approved replay correction and required validation complete; same-reviewer confirmation pending
 
 ## Objective And Context
 
@@ -309,17 +309,29 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   rejection, report-v3 metadata, aggregate bounds, quota refusal, cancellation,
   and interrupted acknowledged cleanup are covered. Public native/container,
   preparation, transport, operation inspection and Slurm example consumers pass.
-- Validation: both required commands passed on committed implementation/test
-  revision `169bc32031e2a31a48af8c6e181d8596d02231f4`, tree
-  `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`. `make validate-pr` passed Ruff,
-  Pyright, baseline (3347 passed, two skipped), config-extra (256 passed,
-  18 skipped), mcp-extra (36 passed), locks/builds and diff checks.
-  `make test-summary` passed all seven suites (3641 passed, 18 skipped,
-  zero failures/errors). Exact logs are
-  `/tmp/loom-stage-41-p6-evidence/validate-pr-9.log` and
-  `/tmp/loom-stage-41-p6-evidence/test-summary-final-2.log`; complete Markdown summary,
-  per-suite JUnit and JSON coverage artifacts are archived under
-  `/tmp/loom-stage-41-p6-evidence/test-summary-final/`.
+- Validation: both required commands passed on corrected implementation/test
+  revision `eba43e47a015769412251f0d3d7ec89f9915104a`, tree
+  `9b6809eb7d6add31ef304ffe68f10f173d10a0e9`. `make validate-pr` passed Ruff,
+  Pyright, baseline (3350 passed, two skipped), config-extra (256 passed,
+  18 skipped), MCP (36 passed), locks/builds and diff checks (2522.84 seconds).
+  `make test-summary` passed all seven suites: 3644 passed, 18 skipped, zero
+  failures/errors (3342.66 seconds wall time; 3184.01 seconds summed suite time).
+  Current evidence is `/tmp/loom-stage41-p6-review-correction-evidence/`:
+  `loom-p6-review-validate-pr-eba43e4.log`,
+  `loom-p6-review-test-summary-eba43e4-retry.log`, `test-summary.md`, and
+  `suites/<suite>/{junit.xml,coverage.json}`. The manager parsed all seven XML
+  suites and byte-verified 25 archived summary, coverage and correction-log files.
+  Initial passing evidence at `169bc32031e2a31a48af8c6e181d8596d02231f4` remains
+  under `/tmp/loom-stage-41-p6-evidence/`; it is superseded by this corrected tree.
+- Unchanged summary retry: the first corrected-tree summary had one native-agent
+  poll recovery timeout in
+  `test_outstanding_poll_recovery_across_coordinator_epoch[committed]`; the new
+  Slurm replay cases passed. The failure log, summary, XML and coverage are
+  retained under `/tmp/loom-stage41-p6-replay-first-failed-evidence/`.
+  All four native recovery variants passed unchanged under selected coverage
+  (169.76 seconds; `loom-p6-review-native-poll-coverage.log` in the current archive),
+  then the full summary passed unchanged. No timeout or assertion was relaxed
+  for this retry; the already passing validate-pr receipt remained fresh.
 - Correction receipts: `/tmp/loom-stage-41-p6-evidence/` retains exploratory,
   failed, deliberately interrupted and correction logs (`validate-pr-1.log`
   through `validate-pr-8.log`, `test-summary-interrupted.log`,
@@ -351,26 +363,25 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   amendments and predecessor readiness receipt remain owned by the manifest
   Quality Gate.
 - Refiner: not used
-- Initial pre-submit gate: passed before the independent-review finding; current
-  correction revalidation is pending. Manager verified clean executor head
-  `ccee3131cb0113ff432c4fccbf8c5d6ea52407a1`, accepted scope/removals, current
-  docs, exact validated revision/tree, both required commands and seven JUnit
-  suites. The archived summary and fourteen XML/coverage files match current
-  harness output byte-for-byte (15 files). All 3659 cases reconcile to 3641
-  passes, zero failures/errors and 18 explicitly gated physical-container skips.
-  Only phase evidence changed after validation. No remaining product blocker was
-  identified; independent PR review is required. No phase-owned process remained
-  in manager inspection, and unrelated work is preserved.
-- Independent implementation review: product blocker at
+- Pre-submit gate: passed on the corrected tree. Accepted scope/removals,
+  current docs, all affected checks, both required gates and seven JUnit suites
+  reconcile. Only phase/manifest evidence metadata follows validation. Physical
+  qualification is unavailable and unclaimed; existing monitor teardown warnings
+  remain explicit. All gate terminals are complete. One quiescent fixture
+  supervisor left by the final summary accepted its authenticated clean-shutdown
+  operation; no phase-owned runtime process remains and unrelated work is preserved.
+  The same independent reviewer's bounded confirmation is pending.
+- Independent implementation review: initial product blocker at
   `af0ec659fd0498436096153ee0d941c1c42eb83e`. A retained multi-chunk artifact
   uploaded before connection loss is already complete at the coordinator. Replay
   sends offset zero, but the existing `write_output_chunk` returns cumulative
   received bytes (the full size for finalized output). `SharedSlurmResult.deliver`
-  currently requires only the just-sent chunk end and rejects this valid replay,
-  so commit, cleanup and settlement cannot finish. Existing lost-ack tests cover
-  interruption after finalization and do not cover this earlier boundary.
+  required only the just-sent chunk end and rejected this valid replay,
+  so commit, cleanup and settlement could not finish. The original lost-ack tests
+  covered interruption after finalization and missed this earlier boundary.
   No other qualified finding was identified; PR identity and existing evidence
-  remain verified, but merge is not eligible.
+  remain verified. The approved correction below now passes fresh validation;
+  merge awaits the same reviewer's confirmation.
 - Concrete correction: advance delivery from the existing bounded cumulative
   acknowledgement, retaining integer/range/progress checks and exact report,
   identity, fence and digest contracts. Add a 64 KiB/two-chunk regression losing
@@ -398,13 +409,13 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   (`/tmp/loom-p6-review-output-replay-affected.log`), the four outage cases passed
   under coverage in 51.09 seconds (`/tmp/loom-p6-review-output-replay-coverage.log`),
   and selected typing passed with zero errors/warnings
-  (`/tmp/loom-p6-review-output-replay-pyright.log`). Fresh committed full gates and
-  the same reviewer's confirmation remain required; no further behavior change
-  is planned while those gates execute.
-- Blocker corrections: three original scopes resolved; the expressly authorized fourth replay correction is implemented and awaits final validation/review (4/4 maximum for this phase)
+  (`/tmp/loom-p6-review-output-replay-pyright.log`). Both fresh committed final
+  gates passed as recorded above. The same reviewer's confirmation is pending;
+  no validation-relevant changes follow the tested revision.
+- Blocker corrections: three original scopes resolved; the expressly authorized fourth replay correction is implemented and validated; same-reviewer confirmation pending (4/4 maximum for this phase)
 - PR and merge: [PR 313](https://github.com/samcantrill/loom/pull/313) is open,
   non-draft and mergeable. Canonical title, exact phase branch and develop target
-  are verified; independent review found the blocker above. The PR remains open
+  are verified; the initial independent finding is corrected and revalidated. The PR remains open
   and unmerged; Phase 7 may start only after correction, accepted review, delivery
   and synchronization.
 - Cleanup: all executor terminals are terminal and no executor-owned runtime
@@ -416,8 +427,8 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 | --- | --- |
 | Implementation and changed paths | Complete in `src/loom/queue` shared transport, bootstrap, original-agent/session relay and existing finalizer; protected `src/loom/pipeline/executors/slurm/ready_stage.py` profile, deployment composition, current execution/Slurm docs and managed-ready-stage-slurm example updated. |
 | Tests added, updated or intentionally removed | New shared publication/ingestion and agent cancellation/cleanup tests, separate compute-process outage/restart journey, decoder/profile/bootstrap/operation/preparation/example consumers, and opt-in site-receipt audit. No required acceptance coverage removed. |
-| Validated revision/tree and evidence | `169bc32031e2a31a48af8c6e181d8596d02231f4` / `fbc4d787c7420a5fe2cc6d6b81098043ee777f65`; both mandatory gates passed. Exact final logs, seven-suite summary/XML/coverage and prior failure/correction receipts are under `/tmp/loom-stage-41-p6-evidence/` as identified above. |
-| Validation-relevant changes after evidence | The approved fourth replay correction and regression tests require fresh affected checks and both final gates; prior receipts remain historical evidence. |
+| Validated revision/tree and evidence | `eba43e47a015769412251f0d3d7ec89f9915104a` / `9b6809eb7d6add31ef304ffe68f10f173d10a0e9`; both mandatory gates passed, summary 3644 passed/18 skipped. Current final logs, seven-suite summary/XML/coverage and correction receipts are under `/tmp/loom-stage41-p6-review-correction-evidence/`; earlier receipts remain as identified above. |
+| Validation-relevant changes after evidence | None. Only phase/manifest evidence metadata follows the validated implementation and tests. |
 | Replaced-code removal / retained primitive consumers | Callback-dependent compute delivery replaced by durable manifest-last publication. Existing protected callback contract consumers reuse the same finalizer; scheduler, containment, provider release, report-v3 and admitted predecessor owners preserved. Phase 9 broader removal unchanged. |
-| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; additional correction authorized; repair, fresh validation and same-reviewer confirmation in progress. |
+| PR, review and merge | [PR 313](https://github.com/samcantrill/loom/pull/313) open and unmerged; review at `af0ec659fd0498436096153ee0d941c1c42eb83e` found the cumulative acknowledgement replay blocker; additional correction authorized, implemented and validated; same-reviewer confirmation pending. |
 | Residual risk and cleanup | Physical Slurm/site/container and durable shared-storage qualification remain explicit gaps. Local fixtures and receipt audit do not claim live qualification. All executor terminals/processes terminal; unrelated services preserved. |

@@ -9,7 +9,7 @@ Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: Phase 6, slurm-result-recovery
 Next phase: Phase 7, unified-sweeps, after Phase 6 merge and synchronization
-Blockers: Phase 6 replay correction is authorized and in progress; fresh validation and same-reviewer confirmation required before delivery
+Blockers: Phase 6 replay correction and required validation complete; same-reviewer confirmation pending before delivery
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -228,8 +228,8 @@ and all approved validation commands remain binding.
 | 2 | [309](https://github.com/samcantrill/loom/pull/309), merge `5a624d1` | Both required gates, manager acceptance and independent review passed; exact evidence in Phase 2 card | No implementation blocker; physical qualification remains with later owners | Preparation-only and explicit retry retained; evidence archived; metadata published/synchronized; exact remote/local phase branches retired |
 | 3 | [310](https://github.com/samcantrill/loom/pull/310), merge `a4bedaa` | Both required gates, manager acceptance and independent review passed; exact evidence in Phase 3 card | No implementation blocker; physical qualification remains with later owners | Ordinary CLI cutover audited; retained consumers mapped to P4/P6/P9; evidence archived; no phase-owned processes remain; metadata published/synchronized; exact remote/local phase branches retired |
 | 4 | [311](https://github.com/samcantrill/loom/pull/311), merge `243c86a` | Both fresh required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 4 card | No implementation blocker; physical qualification unavailable and unclaimed | Examples/removals and evidence archive complete; no phase-owned processes remain; completion metadata published/synchronized; exact remote/local phase branches retired |
-| 5 | pending | Prepared on published `86ed646`; implementation in progress | Required connected fake-scheduler evidence pending; completed-job durability/site qualification stays with Phase 6 | Pending sole agent submission owner and coordinator-path removal audit |
-| 6 | pending | not started | Live site/container and durable shared-storage qualification pending | not started |
+| 5 | [312](https://github.com/samcantrill/loom/pull/312), merge `5e4237d` | Both required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 5 card | No implementation blocker; completed-job durability/site qualification stays with Phase 6 | Sole agent submission owner and removal audit complete; metadata published/synchronized; exact remote/local phase branches retired |
+| 6 | [313](https://github.com/samcantrill/loom/pull/313), open | Implementation and approved replay correction complete; both fresh required gates passed; same-reviewer confirmation pending | Live site/container and durable shared-storage qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; delivery/synchronization pending |
 | 7 | pending | not started | Sweep semantic/replay evidence and shared-owner disposition pending | not started |
 | 8 | pending | not started | Optional MCP/real-session qualification pending | not started |
 | 9 | pending | not started | Final dynamic removal and qualified deployment evidence audit pending | not started |
