@@ -369,6 +369,54 @@ def _require_local_binding(scope: Mapping[str, PlainData] | None, profile: objec
         raise QueueConflictError("local preparation binding identity conflicts")
 
 
+def _project_processor(value: object) -> dict[str, PlainData] | None:
+    """Decode the finite integration selected by protected installation policy."""
+    if value is None:
+        return None
+    if (not isinstance(value, Mapping)
+        or set(value) != {"schema_version", "callable", "evidence_namespace", "recovery_stage"}
+        or type(value["schema_version"]) is not int or value["schema_version"] != 1):
+        raise QueueServiceError("unsupported project preparation capability")
+    reference = value["callable"]
+    if (not isinstance(reference, str) or ":" not in reference
+        or any(not part.isidentifier() for part in reference.replace(":", ".").split("."))
+        or reference.count(":") != 1):
+        raise QueueServiceError("project preparation callable is invalid")
+    validate_queue_id(value["evidence_namespace"], "project evidence namespace")
+    if value["recovery_stage"] is not None:
+        validate_queue_id(value["recovery_stage"], "project recovery stage")
+    return cast(dict[str, PlainData], dict(value))
+
+
+def _project_target_uri(run_root: Path, run_name: str) -> str:
+    """Derive only a native named target inside protected run storage."""
+    from loom.pipeline.stores import path_to_run_uri
+    from .errors import QueueConflictError
+    from .managed_local_preparation import _validate_run_name
+
+    root = run_root.resolve()
+    target = root / _validate_run_name(run_name)
+    if target.resolve().parent != root:
+        raise QueueConflictError("project preparation target escapes protected run root")
+    return path_to_run_uri(target)
+
+
+def _project_binding(value: object) -> dict[str, PlainData] | None:
+    from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"processor", "target_run_uri"}:
+        raise QueueServiceError("project preparation binding is invalid")
+    processor = _project_processor(value["processor"])
+    if processor is None:
+        raise QueueServiceError("project preparation processor is missing")
+    uri = value["target_run_uri"]
+    if not isinstance(uri, str) or path_to_run_uri(run_uri_to_path(uri)) != uri:
+        raise QueueServiceError("project preparation target URI is invalid")
+    return {"processor": processor, "target_run_uri": uri}
+
+
 @dataclass(frozen=True, slots=True)
 class PreparationChildInput:
     """Finite captured input and invocation for the fixed preparation stage."""
@@ -382,12 +430,17 @@ class PreparationChildInput:
     overrides: tuple[str, ...] = ()
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
     local_scope: Mapping[str, PlainData] | None = None
+    project_preparation: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
         object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
+        project = _project_binding(self.project_preparation)
+        if project is not None and self.local_scope is None:
+            raise QueueServiceError("project preparation requires protected local policy")
+        object.__setattr__(self, "project_preparation", project)
         _invocation(self)
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
@@ -403,7 +456,8 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 2 if self.local_scope is None else 3,
+            "schema_version": 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            **({"project_preparation": dict(self.project_preparation)} if self.project_preparation is not None else {}),
             **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
             "operation_id": self.operation_id,
             "preparation_profile": self.preparation_profile,
@@ -428,10 +482,12 @@ class PreparationChildInput:
                 "overlays",
                 "overrides",
                 "run_options",
-            } | ({"local_scope"} if value.get("schema_version") == 3 else set()))
+            } | ({"local_scope"} if value.get("schema_version") in (3, 4) else set())
+                | ({"project_preparation"} if value.get("schema_version") == 4 else set()))
             or type(value.get("schema_version")) is not int
-            or value.get("schema_version") not in (2, 3)
-            or (value.get("schema_version") == 3 and value.get("local_scope") is None)
+            or value.get("schema_version") not in (2, 3, 4)
+            or (value.get("schema_version") in (3, 4) and value.get("local_scope") is None)
+            or (value.get("schema_version") == 4 and value.get("project_preparation") is None)
             or not isinstance(value.get("input_receipt"), Mapping)
         ):
             raise QueueServiceError("preparation child input is invalid")
@@ -445,6 +501,7 @@ class PreparationChildInput:
             cast(tuple[str, ...], value["overrides"]),
             cast(Mapping[str, PlainData], value["run_options"]),
             _local_scope(value.get("local_scope")),
+            _project_binding(value.get("project_preparation")),
         )
 
 

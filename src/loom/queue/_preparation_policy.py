@@ -16,7 +16,7 @@ from loom.serialization import PlainData
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueConfigError, QueueError, QueueServiceError
 from .models import validate_queue_id
-from .preparation import PrepareRunRequest
+from .preparation import PrepareRunRequest, _project_processor
 
 
 _IMPLEMENTED_MODES = frozenset({"shared", "staged"})
@@ -41,6 +41,7 @@ class PreparationProfile:
     source_modes: tuple[str, ...]
     runtime_options: RunOptions
     local_scope: Mapping[str, PlainData] | None = None
+    project_processor: Mapping[str, PlainData] | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -49,6 +50,7 @@ class PreparationProfile:
             "source_modes": list(self.source_modes),
             "runtime_options": self.runtime_options.to_dict(),
             **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
+            **({"project_processor": dict(self.project_processor)} if self.project_processor is not None else {}),
         }
 
 
@@ -99,6 +101,7 @@ class PreparationPolicy:
                 "source_modes": list(profile.source_modes),
                 "runtime_options_digest": hash_mapping(profile.runtime_options.to_dict()),
                 **({"local_scope": dict(profile.local_scope)} if profile.local_scope is not None else {}),
+                **({"project_processor": dict(profile.project_processor)} if profile.project_processor is not None else {}),
             } for alias, profile in sorted(self.profiles.items())],
             "effective_modes": list(self.effective_modes),
         }
@@ -132,7 +135,7 @@ def load_preparation_policy(
     profiles: dict[str, PreparationProfile] = {}
     for alias, raw in raw_profiles.items():
         _alias(alias, "preparation profile")
-        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy"})
+        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy", "project_processor"})
         profile_id = _alias(data["resident_profile_id"], "resident_profile_id")
         matches = {descriptor for descriptor in descriptors if descriptor.profile_id == profile_id}
         if len(matches) != 1:
@@ -163,7 +166,13 @@ def load_preparation_policy(
                 or local_launch_profile.descriptor != next(iter(matches)).to_dict()):
                 raise QueueConfigError("local preparation requires the selected protected local agent")
             scope = {"agent_id": local_agent_id, "binding_fingerprint": local_launch_profile.fingerprint}
-        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope)
+        try:
+            processor = _project_processor(data.get("project_processor"))
+        except QueueServiceError as exc:
+            raise QueueConfigError(str(exc)) from exc
+        if processor is not None and scope is None:
+            raise QueueConfigError("project preparation requires protected local policy")
+        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope, processor)
     return PreparationPolicy(MappingProxyType(roots), MappingProxyType(profiles))
 
 

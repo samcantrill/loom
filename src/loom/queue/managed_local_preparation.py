@@ -114,6 +114,11 @@ def prepare_managed_run(
     _validate_preparation_service(service)
     run_name_text = _validate_run_name(run_name)
     resolved = _resolved_mapping(composed)
+    from .preparation import _project_target_uri
+
+    project = getattr(composed, "project_preparation", None)
+    if project is not None and project["target_run_uri"] != _project_target_uri(service.daemon.run_store_root, run_name_text):
+        raise QueueConflictError("project preparation target binding conflicts")
     pipeline = _pipeline_from_resolved(resolved)
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope, _require_local_binding
 
