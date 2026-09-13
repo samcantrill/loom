@@ -236,21 +236,35 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   The manager owns manifest, PR preparation, independent review and delivery.
   No children or extra implementation branches are permitted.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: prepared; execution pending
+- Implementation: native request-before-send persistence, replay/observation and
+  explicit controls are implemented in existing sweep state; scientific planning
+  remains unchanged. Targeted checks passed (68 tests); stable-candidate final gates pending.
+- Scoped correction 1: the real EarlyStopStage native sweep initially reported
+  `cancelled` instead of `early_stopped` (causal integration failure). Existing
+  managed/remote/Slurm authority finalizers replaced its verified worker reason;
+  native inspection also omitted authority stage reasons. Preserve the verified
+  `early_stop` reason and project it through the existing inspection stage code.
+  Ordinary cancellation is unchanged. The corrected real native early-stop and
+  failure-continuation assertions pass; no backend ownership changes are involved.
+- Scoped correction 2: native CLI collection initially returned zero refs despite
+  an authority-committed output (E2E receipt `/tmp/sweep-targeted.txt`, 42 passed
+  before the failing collection assertion). The CLI now reads committed artifact
+  facts from the retained deployment's native admission authority view, including
+  outputs retained through retry/reuse. Legacy `artifacts.json` is not required.
 - Refiner: not used
 - Pre-submit gate: not run
 - Independent implementation review: required for sweep scientific/control preservation and public removal
-- Blocker corrections: 0/3
+- Blocker corrections: 2/3
 - PR and merge: not started
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
+| Implementation and changed paths | Sweep dispatch/state/status/collection/CLI and public exports; deterministic-sweep example and shared example deployment builder; narrow native terminal-reason and inspection integration. |
+| Tests added, updated or intentionally removed | Native request persistence/lost-response replay, interruption, unchanged ordered overrides/provenance, failure continuation, early-stop/cancel projection, explicit native controls, CLI/E2E and public removal. Deleted direct/whole-run queue fixtures and obsolete record serialization assertions; planner/coordination/collection assertions retained. |
+| Validated revision/tree and evidence | Final targeted selection: 68 passed in `/tmp/sweep-targeted-final.txt`; includes sweep/CLI/package/example and affected inspection contracts. Native collection/retry causal selection: 3 passed in `/tmp/sweep-collection.txt`. Stable candidate and both make gates pending. |
 | Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
+| Replaced-code removal / retained primitive consumers | Removed direct and whole-run queue sweep dispatch functions, result/count records, generated queue requests, queue selector/options, and sweep queue-state mapper. Shared PipelineRunner remains behind pipeline.execution.run_pipeline/public exports; QueueService remains used by queue.controller and queue.status, owned by the later shared-owner audit; sweeps have no execution dependency on them. |
 | PR, review and merge | Pending |
-| Residual risk and cleanup | Sweep semantic/replay evidence and shared-owner disposition pending |
+| Residual risk and cleanup | Native synthetic acceptance only; no physical container, fleet or Slurm provisioning/runs. Predecessor backend qualification reused for unchanged execution boundaries; sweep-specific early-stop projection covered causally. Final process/validation disposition pending. |

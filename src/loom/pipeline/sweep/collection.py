@@ -362,8 +362,8 @@ class SweepCollectedTrial:
                 queue_item_id=_optional_text(
                     status_data.get("queue_item_id"), "status.queue_item_id"
                 ),
-                queue_status=_optional_text(
-                    status_data.get("queue_status"), "status.queue_status"
+                admission_state=_optional_text(
+                    status_data.get("admission_state"), "status.admission_state"
                 ),
                 coordination_state=_optional_text(
                     status_data.get("coordination_state"),
@@ -468,7 +468,6 @@ def collect_sweep_results(
     run_statuses: Mapping[str, object] | None = None,
     run_status_reader: RunStatusReader | None = None,
     artifact_reader: ArtifactReader | None = None,
-    queue_items: Sequence[object] = (),
     coordination_trials: Sequence[object] = (),
     include_unsupported_extraction: bool = False,
     collected_at: str | None = None,
@@ -480,7 +479,6 @@ def collect_sweep_results(
         plan,
         run_statuses=run_statuses,
         run_status_reader=run_status_reader,
-        queue_items=queue_items,
         coordination_trials=coordination_trials,
     )
     status_by_trial_id = {status.trial_id: status for status in status_summary.trials}

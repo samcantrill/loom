@@ -8,7 +8,7 @@ select a best trial, extract metrics, or schedule work in parallel.
 The entrypoint uses the public JSON CLI envelopes for:
 
 - `loom sweep plan SPEC --sweep-dir DIR`
-- `loom sweep run SPEC --config CONFIG --sweep-dir DIR`
+- `loom sweep run SPEC --config CONFIG --deployment DEPLOYMENT --sweep-dir DIR`
 - `loom sweep status DIR`
 - `loom sweep collect DIR`
 
@@ -17,7 +17,7 @@ The entrypoint uses the public JSON CLI envelopes for:
 Run the complete lifecycle from the repository root:
 
 ```sh
-uv run python examples/experiments/deterministic-sweep/run_sweep.py
+uv run --extra config python examples/experiments/deterministic-sweep/run_sweep.py
 ```
 
 To inspect the authored trusted spec directly:
@@ -30,3 +30,8 @@ uv run loom sweep plan examples/experiments/deterministic-sweep/sweep.json \
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` and `LOOM_EXAMPLE_RUN_ROOT` to redirect all
 generated sweep and run state.
+
+The entrypoint writes an explicit local deployment and uses native preparation
+and run operations. Trial run roots match its protected run store. Config paths
+are relative to the selected source. Each waiting trial settles owned services;
+sweep state retains its request, operation and admission for replay.

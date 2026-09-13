@@ -5472,7 +5472,11 @@ class LocalDaemonExecution:
                 status=report.status,
                 reason=LifecycleReason(
                     code=(
-                        "worker.remote_cancelled"
+                        "early_stop"
+                        if report.status is StageStatus.CANCELLED
+                        and isinstance((report.executor_metadata or {}).get("lifecycle_reason"), Mapping)
+                        and cast(Mapping[str, object], (report.executor_metadata or {})["lifecycle_reason"]).get("code") == "early_stop"
+                        else "worker.remote_cancelled"
                         if report.status is StageStatus.CANCELLED
                         else "worker.remote_failed"
                     ),
@@ -5854,7 +5858,11 @@ class LocalDaemonExecution:
                 status=report.status,
                 reason=LifecycleReason(
                     code=(
-                        "worker.slurm_cancelled"
+                        "early_stop"
+                        if report.status is StageStatus.CANCELLED
+                        and isinstance((report.executor_metadata or {}).get("lifecycle_reason"), Mapping)
+                        and cast(Mapping[str, object], (report.executor_metadata or {})["lifecycle_reason"]).get("code") == "early_stop"
+                        else "worker.slurm_cancelled"
                         if report.status is StageStatus.CANCELLED
                         else "worker.slurm_failed"
                     ),
@@ -6509,6 +6517,14 @@ def build_local_daemon_owner_views(
                 "revision": snapshot.revision.to_dict(),
                 "stages": {
                     stage.stage_name: stage.status.value for stage in snapshot.stages
+                },
+                "artifacts": {
+                    f"{stage.stage_name}.{fact.artifact_name}": fact.artifact.to_dict()
+                    for stage in snapshot.stages for fact in stage.artifact_facts
+                },
+                "stage_reasons": {
+                    stage.stage_name: stage.reason.to_dict()
+                    for stage in snapshot.stages if stage.reason is not None
                 },
                 "attempts": [
                     {

@@ -13,11 +13,15 @@ from loom.coordinator import RunRequest
 from loom.queue.preparation import PreparationSource, PrepareRunRequest
 
 
-def run_example(
-    config: Path, output_root: Path, *, container=None, run_options=None, overrides=(),
+def prepare_example_deployment(
+    config: Path,
+    output_root: Path,
+    *,
+    container=None,
     configuration_policy="portable",
-):
-    """Prepare and run importable project code, then settle owned services."""
+    run_root: Path | None = None,
+) -> Path:
+    """Write one explicit local deployment for the current example consumers."""
     config = config.resolve()
     output_root = output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -58,7 +62,8 @@ def run_example(
         "deployment_root": "deployment",
         "run_store_root": str(
             Path(
-                os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs")
+                run_root
+                or os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs")
             ).resolve()
         ),
         "machine_id": "example",
@@ -113,6 +118,28 @@ def run_example(
         path = root / name
         path.write_text(json.dumps(value))
         path.chmod(0o600)
+    return root / "selection.json"
+
+
+def run_example(
+    config: Path,
+    output_root: Path,
+    *,
+    container=None,
+    run_options=None,
+    overrides=(),
+    configuration_policy="portable",
+):
+    """Prepare and run importable project code, then settle owned services."""
+    config = config.resolve()
+    selection = prepare_example_deployment(
+        config,
+        output_root,
+        container=container,
+        configuration_policy=configuration_policy,
+    )
+    root = selection.parent
+    source = PreparationSource("shared", "project", ".", (config.name,))
     preparation = PrepareRunRequest(
         root.name,
         root.name,

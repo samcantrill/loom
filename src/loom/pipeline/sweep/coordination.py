@@ -33,15 +33,6 @@ _RUN_STATUS_TO_TRIAL_STATE = {
     "CANCELLED": TrialState.CANCELLED,
     "INTERRUPTED": TrialState.CANCELLED,
 }
-_QUEUE_STATUS_TO_TRIAL_STATE = {
-    "QUEUED": TrialState.PENDING,
-    "CLAIMED": TrialState.CLAIMED,
-    "DISPATCHED": TrialState.RUNNING,
-    "SUCCEEDED": TrialState.COMPLETED,
-    "FAILED": TrialState.FAILED,
-    "CANCELLED": TrialState.CANCELLED,
-    "UNKNOWN": TrialState.PENDING,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,18 +186,6 @@ def trial_state_from_run_status(value: object) -> TrialState:
         ) from exc
 
 
-def trial_state_from_queue_status(value: object) -> TrialState:
-    """Map a queue item/status-like object to a coordination trial state."""
-
-    status = _status_value(value)
-    try:
-        return _QUEUE_STATUS_TO_TRIAL_STATE[status]
-    except KeyError as exc:
-        raise SweepProtocolError(
-            f"unsupported queue status for trial state: {status}"
-        ) from exc
-
-
 def external_trial_revision(
     *,
     source: str,
@@ -290,6 +269,5 @@ __all__ = [
     "external_trial_revision",
     "project_sweep_coordination",
     "record_sweep_trial_coordination",
-    "trial_state_from_queue_status",
     "trial_state_from_run_status",
 ]

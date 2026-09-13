@@ -407,7 +407,7 @@ stage-worker invocation tests
 SLURM fake-command tests
 Docker fake-command tests
 plugin fake-entry-point tests
-sweep runner tests with fake PipelineRunner
+sweep native request replay and operation observation tests
 failure injection helpers
 test markers for slow/integration/e2e/slurm/network/optional dependencies
 coverage thresholds for critical packages
