@@ -371,3 +371,23 @@ def test_valid_json_from_non_python_is_not_a_python_handshake(tmp_path: Path) ->
     assert not result.ok
     assert result.checks[0].check_id == "python.interpreter"
     assert result.checks[0].status == "FAIL"
+
+
+def test_availability_deadline_bounds_qualification_probes(tmp_path, monkeypatch):
+    import time
+    from loom.queue import resident_readiness as readiness
+    from loom.queue._resident_probe import ResidentProbeResult
+
+    deadline = time.monotonic() + 0.1
+    observed = []
+
+    def probe(*args, timeout_seconds, **kwargs):
+        observed.append(timeout_seconds)
+        time.sleep(timeout_seconds)
+        return ResidentProbeResult(None, "timed out", True)
+
+    monkeypatch.setattr(readiness, "run_resident_probe", probe)
+    with pytest.raises(TimeoutError, match="deadline"):
+        qualify_resident_profile(_profile(tmp_path), _deadline=deadline)
+    assert len(observed) == 1
+    assert 0 < observed[0] <= 0.1

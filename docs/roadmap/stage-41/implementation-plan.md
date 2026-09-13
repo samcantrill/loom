@@ -7,9 +7,9 @@ Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 8, unified-mcp, ready after Phase 7 metadata synchronization
+Current phase: Phase 8, unified-mcp
 Next phase: Phase 9, execution-cutover, after Phase 8 merge and synchronization
-Blockers: none; Phase 7 delivery passed, Phase 8 follows metadata publication and synchronization
+Blockers: none; Phase 8 implementation and manager pre-submit gate passed; PR 319 awaits independent review
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -134,7 +134,7 @@ links directly to all nine walkthroughs.
 | 5 | agent-slurm-jobs | merged | [Phase 5](phases/agent-slurm-jobs.md) | agent/stage-41-p5-agent-slurm-jobs | [312](https://github.com/samcantrill/loom/pull/312) | Agent Slurm operation journal, authorized placement and backend observation | One assigned agent submits, observes, cancels and recovers the exact Slurm job without duplicate submission or capacity accounting. |
 | 6 | slurm-result-recovery | merged | [Phase 6](phases/slurm-result-recovery.md) | agent/stage-41-p6-slurm-result-recovery | [313](https://github.com/samcantrill/loom/pull/313) | Bootstrap result publisher, submit-agent transport and existing coordinator finalizer | A job can finish and its compute process exit during coordinator downtime; the recovered submit agent delivers the same result for one authority commit. |
 | 7 | unified-sweeps | merged | [Phase 7](phases/unified-sweeps.md) | agent/stage-41-p7-unified-sweeps | [317](https://github.com/samcantrill/loom/pull/317) | Sweep expansion/dispatch state and native admission references | Sweep trials use the unified run lifecycle with unchanged experiment meaning and stable retry identities. |
-| 8 | unified-mcp | pending | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | pending | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |
+| 8 | unified-mcp | pr_open | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | [319](https://github.com/samcantrill/loom/pull/319) | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |
 | 9 | execution-cutover | pending | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | pending | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
 
 ## Validation Ownership
@@ -230,6 +230,6 @@ and all approved validation commands remain binding.
 | 4 | [311](https://github.com/samcantrill/loom/pull/311), merge `243c86a` | Both fresh required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 4 card | No implementation blocker; physical qualification unavailable and unclaimed | Examples/removals and evidence archive complete; no phase-owned processes remain; completion metadata published/synchronized; exact remote/local phase branches retired |
 | 5 | [312](https://github.com/samcantrill/loom/pull/312), merge `5e4237d` | Both required gates, manager acceptance, same-reviewer confirmation and gated delivery passed; exact evidence in Phase 5 card | No implementation blocker; completed-job durability/site qualification stays with Phase 6 | Sole agent submission owner and removal audit complete; metadata published/synchronized; exact remote/local phase branches retired |
 | 6 | [313](https://github.com/samcantrill/loom/pull/313), merge `5eeb021` | Both fresh required gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 6 card | No implementation blocker; physical site/storage/container qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired |
-| 7 | [317](https://github.com/samcantrill/loom/pull/317), merge `6ca596a` | Both fresh gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 7 card | No implementation blocker; physical qualification remains explicit | Evidence archived; phase-owned processes terminal; coordination transition and exact remote branch retirement passed; metadata publication/synchronization and local retirement follow this record |
+| 7 | [317](https://github.com/samcantrill/loom/pull/317), merge `6ca596a` | Both fresh gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 7 card | No implementation blocker; physical qualification remains explicit | Evidence archived; phase-owned processes terminal; completion metadata published/synchronized; exact local/remote phase branches retired |
 | 8 | pending | not started | Optional MCP/real-session qualification pending | not started |
 | 9 | pending | not started | Final dynamic removal and qualified deployment evidence audit pending | not started |

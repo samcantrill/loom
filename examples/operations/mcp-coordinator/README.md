@@ -38,7 +38,13 @@ it does not invent either project's parameters, targets or resource budget.
    observes the native outcome. To stop preparation instead, use its operation ID
    with `loom_cancel_preparation`. EOF, a timeout and a diagnosis do not cancel work.
 
-"Prepare and run" in one request covers both steps without another approval.
+For "prepare and run", use `loom_run` with the native preparation request and
+queue identity in one `request`, bound by `loom-mcp --deployment PATH`. This
+accepted operation continues after disconnect and needs no additional approval.
+Retain its operation ID; `applied` means admission, then follow native execution.
+Cancel this operation only when requested through `loom_cancel_run_operation`,
+observing the returned cancellation control ID. The separate prepare-only and
+exact-receipt submission example above remains useful when those are requested.
 Specify the existing profile and intended observation scope. Preparation currently
 requires embedded authority and cannot use a SLURM preparation profile. Installing
 the optional client does not modify worker environments.

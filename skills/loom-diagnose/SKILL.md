@@ -15,6 +15,11 @@ not automatically failed tool calls. A tool error instead supplies a native
 `code`, `boundary`, IDs, evidence references and, for mutations, outcome certainty.
 Preserve those distinctions and the observation's freshness.
 
+Keep scheduler observations (including scheduler exit/status), retained native
+run results and service cleanup evidence separate. A stopped service is not a
+successful experiment; a scheduler observation is not authority publication or
+resource-release proof. Reconnect to the same bound deployment for native facts.
+
 Trace the first evidenced failure to its owner:
 
 - Source access/capture: compare the accepted source mode, alias and selected

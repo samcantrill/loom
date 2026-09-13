@@ -147,7 +147,6 @@ class Spy:
 )
 def test_native_mapping_and_default_arguments(tool, arguments, native, args):
     from mcp import Client
-    from loom.mcp import create_server
 
     spy = Spy()
 
@@ -217,7 +216,6 @@ def test_native_mapping_and_default_arguments(tool, arguments, native, args):
 )
 def test_native_invalid_request_is_not_an_offline_error(tmp_path, tool, arguments):
     from mcp import Client
-    from loom.mcp import create_server
     from loom.coordinator import CoordinatorClient
 
     async def scenario():
@@ -240,7 +238,6 @@ def test_native_invalid_request_is_not_an_offline_error(tmp_path, tool, argument
 
 def test_frozen_operation_evidence_serializes_without_changing_native_state():
     from mcp import Client
-    from loom.mcp import create_server
     from loom.queue import LocalDaemonOperation
     from mcp.types import TextContent
     from loom.serialization import ensure_plain_data
@@ -291,7 +288,6 @@ def test_frozen_operation_evidence_serializes_without_changing_native_state():
 
 def test_source_unknown_fields_reach_native_refusal_instead_of_silent_removal():
     from mcp import Client
-    from loom.mcp import create_server
 
     spy = Spy()
 
@@ -306,3 +302,22 @@ def test_source_unknown_fields_reach_native_refusal_instead_of_silent_removal():
             assert spy.calls == []
 
     asyncio.run(scenario())
+
+
+def create_server(*, client):
+    """Substitute native resolution only; public deployment binding has real tests."""
+    from contextlib import contextmanager
+    from loom.mcp._server import _Adapter
+
+    @contextmanager
+    def connect():
+        try:
+            yield client
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()
+
+    adapter = _Adapter("/unused/test-deployment.json")
+    adapter._connect = connect
+    return adapter.server()

@@ -325,7 +325,7 @@ not private helper choices. You are not alone in the codebase; preserve others' 
   (150.13 seconds; `/tmp/loom-p7-observation-affected.log`). Both required final
   gates pass on the committed correction candidate identified above.
 - Blocker corrections: 4/4 authorized, implemented, validated and independently accepted
-- PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) remotely squash-merged as `6ca596a806dde5b0594f4a1e96d91bbe188e3e7a` at `2026-09-13T14:55:57Z`; reviewed head `2dd5cf9c16ae5094b76631663591e9f47a95d904`. Gated delivery verified the canonical title/develop target, fresh validation, independent acceptance and exact remote branch deletion. Transition to the coordination branch passed; metadata publication, final synchronization and exact local branch retirement follow this record.
+- PR and merge: [PR 317](https://github.com/samcantrill/loom/pull/317) remotely squash-merged as `6ca596a806dde5b0594f4a1e96d91bbe188e3e7a` at `2026-09-13T14:55:57Z`; reviewed head `2dd5cf9c16ae5094b76631663591e9f47a95d904`. Gated delivery verified the canonical title/develop target, fresh validation, independent acceptance and exact remote branch deletion. Completion metadata published as `daab4d1eeeb2d5ba827e31f81bbb6e4fc8517eec`; synchronization passed and the exact local/remote phase branches are retired.
 
 ## Completion Record
 

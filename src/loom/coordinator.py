@@ -116,6 +116,20 @@ class CoordinatorClient(NativeCoordinatorClient):
             expected_coordinator_id=configured if configured is not None else selected,
         )
 
+    def cancel_run_operation(
+        self, operation_id: str, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
+    ) -> LocalDaemonOperation:
+        """Return the native cancellation control operation within an absolute deadline.
+
+        Wait on its returned ID for child/target settlement. After binding this
+        cancels the shared target for all observers; detaching remains separate.
+        """
+        return cast(LocalDaemonOperation, self._native_call(
+            "cancel_run_operation", {"operation_id": operation_id},
+            expected_coordinator_id, deadline=deadline,
+        ))
+
     def observe_run(
         self,
         operation_id: str,

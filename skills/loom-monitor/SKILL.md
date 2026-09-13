@@ -8,8 +8,12 @@ description: Inspect Loom preparation operations, jobs and worker availability, 
 Use current `loom_*` tool schemas. Recover the coordinator identity and operation,
 queue item or admission ID from the retained receipt; pass the identity as
 `expected_coordinator_id`. A mismatch identifies a different namespace, not a
-missing job to recreate.
+missing job to recreate. Reconnect to the same protected deployment selection;
+read tools report offline services without starting them.
 
+- Run operations: `loom_get_operation` or `loom_wait_for_operation`; `applied`
+  establishes admission, then follow the retained admission/run for execution
+  completion. For cancellation, observe the returned control operation ID.
 - Preparation: `loom_get_operation`; for requested observation over time,
   `loom_wait_for_operation`. Explain pending/applied/failed/cancelled from the
   operation and its child admission/report. Publication is established by the

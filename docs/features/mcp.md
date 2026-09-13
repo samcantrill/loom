@@ -23,24 +23,27 @@ environment. Replace every sample path with your chosen absolute path:
 ```sh
 uv venv --python 3.12 /absolute/path/to/client-env
 uv pip install --python /absolute/path/to/client-env/bin/python '/absolute/path/to/loom[mcp]'
-codex mcp add loom -- /absolute/path/to/client-env/bin/loom-mcp --connection /absolute/path/to/client.yaml
+codex mcp add loom -- /absolute/path/to/client-env/bin/loom-mcp --deployment /absolute/path/to/deployment.json
 ```
 
-The client configuration is the existing protected
-[native HTTPS configuration](coordinator-client.md). It contains the endpoint,
-CA and client certificate/key paths; retain its permission requirements. On the
-coordinator host, substitute `--endpoint /absolute/path/to/daemon.sock`. Exactly
-one connection option is required. Add `--expected-coordinator-id ID_FROM_RECEIPT`
-when reconnecting to known work. A tool can also supply that guard; if a default
-is configured, its value must match. The coordinator checks the identity before
-looking up IDs or changing work.
+The protected [deployment selection](../structure.md) selects one coordinator,
+source/profile and optional configured local roles. Resolve its path from the
+server cwd and its references relative to the file. A connection-only selection
+uses protected [native HTTPS settings](coordinator-client.md) with an expected
+coordinator identity. Local creation retains the native binding across restart.
+All tools use that binding; calls cannot override deployment or connection.
+Optional `expected_coordinator_id` must match the protected owner.
+
+Construction and discovery never start services. `loom_run` explicitly ensures
+configured local roles; prepare, query, submit, wait and cancel only connect and
+report availability. The adapter neither provisions workers nor writes secrets.
 
 Codex stores the equivalent server configuration:
 
 ```toml
 [mcp_servers.loom]
 command = "/absolute/path/to/client-env/bin/loom-mcp"
-args = ["--connection", "/absolute/path/to/client.yaml"]
+args = ["--deployment", "/absolute/path/to/deployment.json"]
 tool_timeout_sec = 60
 ```
 
@@ -70,8 +73,10 @@ Tool annotations describe read versus mutation behavior and grant no authority.
 
 | Tool | Main inputs | Result |
 | --- | --- | --- |
+| `loom_run` | Native `request` | Durable run acceptance plus native cleanup evidence |
+| `loom_cancel_run_operation` | `operation_id` | Native cancellation control operation |
 | `loom_status` | None | Connection description plus current native status |
-| `loom_prepare_run` | `operation_id`, `run_name`, `source`, `config_path`, `preparation_profile` | Asynchronous native operation |
+| `loom_prepare_run` | `operation_id`, `run_name`, `source`, `config_path`, `preparation_profile`, ordered `overlays`/`overrides`, sparse `run_options` | Asynchronous native operation |
 | `loom_get_operation` | `operation_id` | Native operation and preparation evidence |
 | `loom_wait_for_operation` | `operation_id`, `timeout_seconds=25` | TERMINAL or TIMEOUT observation |
 | `loom_cancel_preparation` | `operation_id` | Preparation cancellation request/result |
@@ -80,7 +85,7 @@ Tool annotations describe read versus mutation behavior and grant no authority.
 | `loom_inspect_run` | `run_uri` | Native diagnostic success/failure union for an admitted run |
 | `loom_list_agents` | `limit=20`, `cursor=null` | Native agent page |
 | `loom_get_agent` | `agent_id` | Native availability/freshness projection |
-| `loom_submit_run` | `run_uri`, `queue_item_id` | Native admission |
+| `loom_submit_run` | `run_uri`, `queue_item_id`, optional explicit `retry_failed_revision` | Native admission |
 | `loom_wait_for_change` | `admission_id`, `expected_revision`, `timeout_seconds=25` | Native admission change/timeout observation |
 | `loom_cancel_job` | `queue_item_id` | Native cancellation acknowledgement |
 
@@ -102,7 +107,7 @@ For prepared operations, retain `coordinator_id`, `prepared_run`,
 is bounded to 64 KiB. A complete inline `preflight` is returned when it fits.
 If it is null while status/reference are present, a larger full report remains
 pinned. Reading that report requires existing authorized artifact tooling; these
-13 tools do not introduce a separate artifact downloader.
+tools do not introduce a separate artifact downloader.
 
 ## Preparation and reconnect
 
@@ -133,8 +138,16 @@ native assignment transfer. Neither mode uploads arbitrary laptop files or
 installs the eventual target's code/data. See the finite selection, qualification,
 portability and retention limits in [agent preparation](agent-preparation.md).
 
-Observe the operation and use its full prepared receipt to call
-`loom_submit_run`. Preparation on worker B does not pin execution to B: the
+Prepare-only ends at its exact receipt. To prepare and run, pass the native
+`RunRequest` dictionary to `loom_run`: `{"preparation": <the request above>,
+"queue_item_id": "execute-example-01"}`. Native exact/reconciled intent decoders
+preserve supplied invocation controls and retry policy. Returning means durable
+acceptance; `applied` means admitted, then monitor the native run for completion.
+The operation continues through preparation/admission if MCP exits. For a receipt
+already prepared, retain `loom_submit_run`; explicit failed-revision retry uses
+its native `retry_failed_revision` capability and is never inferred from replay.
+Use `loom_cancel_run_operation` for unified cancellation and observe its returned
+control ID; `loom_cancel_preparation` remains prepare-only. Preparation on worker B does not pin execution to B: the
 scheduler may place stages on compatible C. Both existing installations must
 satisfy the target requirements and have the required target code/data access.
 
@@ -169,7 +182,7 @@ individual directory refreshed. Do not duplicate them into every project.
 | Skill | Use and boundary |
 | --- | --- |
 | `loom-prepare` | Authored inputs and explicit existing profile to a prepared receipt; prepare-only stops there |
-| `loom-run` | Prepared receipt to admission, same-ID reconciliation and explicitly requested cancellation |
+| `loom-run` | Unified native run or exact prepared receipt, same-ID reconciliation and explicitly requested cancellation |
 | `loom-monitor` | Native observations and requested bounded waits; a status question does not start indefinite monitoring |
 | `loom-diagnose` | Evidence-based ownership and remedies; small inline checks or larger pinned-report routing |
 
@@ -177,7 +190,7 @@ The same skills support a build/checksum project and a transform/report project.
 Projects supply their configs, resources, targets and environment choice. The
 skills introduce no experiment object, scientific defaults, project registry,
 environment creation, automatic code repair or operator recovery. A request to
-prepare and run authorizes both native steps without an artificial approval gap.
+prepare and run authorizes the unified native operation without an artificial approval gap.
 A diagnosis request or observation timeout does not authorize cancellation.
 
 For a complete generic conversation, see the

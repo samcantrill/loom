@@ -219,6 +219,7 @@ def load_coordinator_service_config(
     env_file: str | Path | None = None,
     current: CoordinatorServiceConfig | None = None,
     _allow_unready: bool = False,
+    _deadline: float | None = None,
 ) -> CoordinatorServiceConfig:
     """Load one protected coordinator role, observing its selected installation.
 
@@ -255,7 +256,7 @@ def load_coordinator_service_config(
     base = source.parent
     root = _path(payload, "deployment_root", base)
     local_agent = _local_agent_service(
-        payload["local_agent"], base, allow_unready=_allow_unready
+        payload["local_agent"], base, allow_unready=_allow_unready, deadline=_deadline
     )
     remote_profiles = tuple(
         _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
@@ -389,6 +390,7 @@ def load_outbound_agent_service_config(
     *,
     env_file: str | Path | None = None,
     _allow_unready: bool = False,
+    _deadline: float | None = None,
 ) -> OutboundAgentServiceConfig:
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
@@ -424,6 +426,7 @@ def load_outbound_agent_service_config(
             base,
             f"resident_profiles[{index}]",
             allow_unready=_allow_unready,
+            deadline=_deadline,
             preparation=preparation,
             preparation_staged=preparation_staged,
         )
@@ -907,7 +910,7 @@ def _normalize_coordinator_payload(
 
 
 def _local_agent_service(
-    value: object, base: Path, *, allow_unready: bool = False
+    value: object, base: Path, *, allow_unready: bool = False, deadline: float | None = None,
 ) -> LocalAgentServiceConfig | None:
     """Load the optional protected agent role used by a local coordinator."""
 
@@ -935,6 +938,7 @@ def _local_agent_service(
             agent_source.parent,
             f"resident_profiles[{index}]",
             allow_unready=allow_unready,
+            deadline=deadline,
         )
         for index, item in enumerate(_sequence(payload, "resident_profiles"))
     )
@@ -1572,6 +1576,7 @@ def _resident_profile(
     label: str,
     *,
     allow_unready: bool = False,
+    deadline: float | None = None,
     preparation: bool = False,
     preparation_staged: bool = False,
 ) -> ResidentExecutionProfile:
@@ -1628,7 +1633,7 @@ def _resident_profile(
             ).items()
         },
     )
-    profile = qualified_resident_profile(profile)
+    profile = qualified_resident_profile(profile, _deadline=deadline)
     result = profile.readiness_result
     assert result is not None
     if not result.ok and not allow_unready:

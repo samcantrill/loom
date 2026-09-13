@@ -2142,7 +2142,7 @@ def test_explicit_mcp_without_extra_has_actionable_stderr() -> None:
                     raise ModuleNotFoundError('MCP SDK is absent', name='mcp')
         sys.meta_path.insert(0, NoSDK())
         from loom.mcp import main
-        sys.argv = ['loom-mcp', '--endpoint', '/tmp/absent.sock']
+        sys.argv = ['loom-mcp', '--deployment', '/tmp/absent.json']
         raise SystemExit(main())
         """
     )

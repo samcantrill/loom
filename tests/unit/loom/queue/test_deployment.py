@@ -113,7 +113,10 @@ def test_protected_readiness_timeout_accepts_bounded_cold_import_window(
 ) -> None:
     source = _coordinator_config(tmp_path)
     payload = _local_agent_payload(source)
-    profile = payload["resident_profiles"][0]
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
     profile["readiness"] = {"timeout_seconds": 120}
     _write_local_agent(source, payload)
     load_coordinator_service_config(source)
