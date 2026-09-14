@@ -267,9 +267,9 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Resolved contract gap: the current event-sink/webhook consumers depend on old runner event emission and retained callback failures. The native request/coordinator authority has no observer selection/dispatch contract. The executor stopped before edits; manager authored the bounded amendment linked above. Independent plan review passed at `1ec0bc01a6a94d6f1a7340de1c645ace2e2bc51f`; the maintainer explicitly approved it on 2026-09-14, authorizing implementation. No planner/refiner or implementation correction has been used.
 - Execution delegation: one executor is justified for the remaining cross-package orchestration removal, consumer/test migration and integrated operator documentation. It owns Phase 9 source/tests/current docs/examples and this card; manager owns the manifest, delivery and independent review. No children, extra branches or lifecycle sidecars.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: observer bridge and failure-policy restoration are committed; remaining consumer/removal changes are implemented and undergoing final validation. Default read-only status/backend/artifact/plan consumers select an existing embedded authority, explicit service selection remains authoritative, and bounded local log inspection follows retained native references with truthful unavailable cases. The manager confirmed these as accepted consumer migrations.
+- Implementation: observer bridge, failure-policy restoration, consumer migrations and remaining engine removal are committed; both required final gates passed. Default read-only status/backend/artifact/plan consumers select an existing embedded authority, explicit service selection remains authoritative, and bounded local log inspection follows retained native references with truthful unavailable cases. The manager confirmed these as accepted consumer migrations.
 - Refiner: not used
-- Pre-submit gate: not run
+- Pre-submit gate: passed both fresh `make validate-pr` and `make test-summary` on `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Only this completion metadata follows the validated candidate.
 - Independent implementation review: required for final hard public/dynamic removal and stage integration
 - Blocker corrections: 2/3. Native runtime options already retained `continue_independent`, but admission finalization ignored it and failed before unrelated branches settled. Manager confirmed restoration within the accepted contract. Consume the existing serialized policy at native readiness/finalization, retain failed descendants and explicit retry semantics, and stop new work after a known failure under the default policy. No new durable policy schema is introduced. The discriminating failure and rechecks are archived under `/tmp/loom-stage41-p9-evidence/native-failure-policy*.log` and `native-policy-settlement.log`.
 - Correction 2: manager reproduced failure plus independent early-stop remaining WAITING/RUNNING with both stage facts terminal. Historical authored parallel behavior gives cancellation precedence for a still-live run. Native cancellation now runs before independent-failure waiting; fresh dispatch refuses an observed cancelled stage. Terminal run guards and existing containment/release ownership remain intact. The regression retains failed/early-stop facts, original reason, cancellation outcome, and no managed binding for a further independent branch. Eleven focused failure/cancellation/late-terminal tests pass (`native-failure-cancellation-owner-recheck.log`).
@@ -326,8 +326,42 @@ the stable candidate.
 | --- | --- |
 | Implementation and changed paths | Native protected observers and committed selected-authority event/failure/link facts; authored failure-policy restoration; remaining execution engine removal; current diagnostics/monitor/examples/operator cutover conversions. |
 | Tests added, updated or intentionally removed | Native observer identity/delivery/persistence diagnostics, failure-policy and descendants, restricted workers, read-only native diagnostics/log availability, historical import/bundle artifacts, hard command/import refusal, and retained native CLI/agent/Slurm suites. See disposition above. |
-| Validated revision/tree and evidence | Pending final stable candidate gates. Focused and failed-run receipts retained under `/tmp/loom-stage41-p9-evidence/`. |
-| Validation-relevant changes after evidence | Broad diagnostic receipts qualify their tested snapshot only. Both final make gates remain required. |
+| Validated revision/tree and evidence | `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Both final gates passed; complete gate logs, seven suite XML/coverage artifacts, report, skips and checksummed archive are under `/tmp/loom-stage41-p9-evidence/gates-final/`. |
+| Validation-relevant changes after evidence | None. This completion record is the only subsequent tracked change. |
 | Replaced-code removal / retained primitive consumers | Implemented; explicit owner mapping above. |
 | PR, review and merge | Manager-owned independent review and delivery pending. |
-| Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Final owned-process and evidence archive audit pending. |
+| Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Owned process audit is empty; exact task orphan PID 1189812 was stopped after identity verification, and both private tmpfs scratch roots were removed. Unrelated processes/roots were preserved. |
+
+
+Final `make validate-pr` passed Ruff, Pyright (zero errors), default tests
+(2,937 passed, two optional-import skips, 320 deselected), config tests
+(274 passed, 15 opt-in physical-container skips, 2,987 deselected), MCP tests
+(44 passed, 3,215 deselected), and sdist/wheel builds. Final `make test-summary`
+passed all seven rows: package 124, unit 2,060, contract 303, integration 429,
+e2e 23, config 274, MCP 44; overall 3,257 passed, zero failures/errors, 15 skipped.
+Per-suite coverage and actual skip reasons are in the archived report/XML.
+
+Failed gates remain qualified evidence, never overwritten as success:
+`gates-8a346be` found an explicit test import missing for Pyright;
+`gates-b63af55` found one obsolete continuation CLI assertion;
+`gates-81ee9dd` found a parsed integer example count asserted as a string.
+Each was corrected before the final candidate. `gates-9fe3df9` preserves a
+passing prior validation gate and failed coverage summary (one recovery wait,
+two resident probe timeouts, two explicit disk-full errors). The local root
+filesystem reached capacity. All five failed cases passed unchanged after
+manager-approved private local tmpfs scratch, with executable fixtures and
+cross-process SQLite locking verified; NAS storage was not substituted.
+Manager's separate early-stop reproducer then required correction 2 above,
+invalidating that earlier candidate for final delivery.
+
+Final validation used private local `/dev/shm` scratch and cache. The first
+corrected-candidate summary passed six rows but its long temporary-directory
+prefix exceeded AF_UNIX path limits in the managed remote journey; its complete
+artifacts remain under `gates-final/summary-long-tmpdir/`. Shortening only the
+scratch root to `/dev/shm/l9` resolved this, and a fresh full summary passed.
+The intermediate no-extra single-case probe skipped for absent dotenv and is
+not passing journey evidence; the final e2e row executed and passed that journey.
+`gates-final/scratch-environment.json` records exact environment differences.
+Tmpfs receipts establish local POSIX lifecycle behavior, not power-loss,
+physical-storage, container fleet or Slurm qualification. No source or test
+assertion was weakened to address storage or temporary-path failures.
