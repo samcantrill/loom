@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 41 / 9
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p9-execution-cutover
@@ -270,10 +270,10 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Implementation: observer bridge, failure-policy restoration, consumer migrations and remaining engine removal are committed; both required final gates passed. Default read-only status/backend/artifact/plan consumers select an existing embedded authority, explicit service selection remains authoritative, and bounded local log inspection follows retained native references with truthful unavailable cases. The manager confirmed these as accepted consumer migrations.
 - Refiner: not used
 - Pre-submit gate: manager acceptance passed for approved scope, source/dynamic removal, preserved consumer assertions, native observer authority/trust, failure/cancellation behavior and qualified operator docs. Both fresh `make validate-pr` and `make test-summary` passed on `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Manager independently parsed all seven XML receipts (3,257 passed, 15 skipped, zero failures/errors), verified the archive hash and inspected the metadata-only delta. Later edits only record phase/manifest acceptance and delivery facts.
-- Independent implementation review: required for final hard public/dynamic removal and stage integration
+- Independent implementation review: pending on PR 321 for final hard public/dynamic removal and stage integration
 - Blocker corrections: 2/3. Native runtime options already retained `continue_independent`, but admission finalization ignored it and failed before unrelated branches settled. Manager confirmed restoration within the accepted contract. Consume the existing serialized policy at native readiness/finalization, retain failed descendants and explicit retry semantics, and stop new work after a known failure under the default policy. No new durable policy schema is introduced. The discriminating failure and rechecks are archived under `/tmp/loom-stage41-p9-evidence/native-failure-policy*.log` and `native-policy-settlement.log`.
 - Correction 2: manager reproduced failure plus independent early-stop remaining WAITING/RUNNING with both stage facts terminal. Historical authored parallel behavior gives cancellation precedence for a still-live run. Native cancellation now runs before independent-failure waiting; fresh dispatch refuses an observed cancelled stage. Terminal run guards and existing containment/release ownership remain intact. The regression retains failed/early-stop facts, original reason, cancellation outcome, and no managed binding for a further independent branch. Eleven focused failure/cancellation/late-terminal tests pass (`native-failure-cancellation-owner-recheck.log`).
-- PR and merge: not started
+- PR and merge: [PR 321](https://github.com/samcantrill/loom/pull/321) is open, non-draft and mergeable against develop with the canonical phase title and branch; independent review and gated delivery remain pending.
 
 ## Removal and coverage disposition
 
@@ -329,7 +329,7 @@ the stable candidate.
 | Validated revision/tree and evidence | `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Both final gates passed; complete gate logs, seven suite XML/coverage artifacts, report, skips and checksummed archive are under `/tmp/loom-stage41-p9-evidence/gates-final/`. |
 | Validation-relevant changes after evidence | None. Subsequent edits only record current phase/manifest acceptance and delivery metadata; manager inspected the delta. |
 | Replaced-code removal / retained primitive consumers | Implemented; explicit owner mapping above. |
-| PR, review and merge | Manager-owned independent review and delivery pending. |
+| PR, review and merge | [PR 321](https://github.com/samcantrill/loom/pull/321) opened against develop; independent review and delivery pending. |
 | Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Owned process audit is empty; exact task orphan PID 1189812 was stopped after identity verification, and both private tmpfs scratch roots were removed. Unrelated processes/roots were preserved. |
 
 
