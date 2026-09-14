@@ -1,10 +1,12 @@
 # Unified run lifecycle
 
-Status: explanatory overview of the Stage 41 baseline approved on 2026-09-10. The canonical
+Status: explanatory overview of the Stage 41 baseline, implemented across nine
+merged phases as of 2026-09-14. The canonical
 [behavior/design plan](../roadmap/stage-41/planning.md),
 [implementation manifest](../roadmap/stage-41/implementation-plan.md) and linked
-phase plans own requirements, contracts, validation and approval state. This is
-planned behavior; documenting it does not make it available in the runtime.
+phase plans own requirements, contracts, validation and approval state. Current
+commands and qualification limits are documented in [native execution](../features/execution.md);
+local validation does not establish physical fleet/container/Slurm qualification.
 
 Stage 41 builds on the delivered [Stage 40 client/preparation/MCP implementation](../roadmap/stage-40/implementation-plan.md).
 The [published-source refinement](../roadmap/stage-41/planning.md#published-baseline-and-amendment-ownership)

@@ -3041,13 +3041,12 @@ environment provisioning and general source deployment remain outside this stage
 
 ## v41 - Unified Run Lifecycle And Agent Execution
 
-Status: approved on 2026-09-10 with nine bounded implementation phases. The
-reviewed behavior/correction is retained; the manager checked the approved phase
-decomposition and documentation. Stage 40 is delivered. On 2026-09-12 the
-maintainer requested published-source refinements and a startup-readiness review.
-The independent amendment review passed with no required corrections; the
-implementation manifest owns the review and landing handoff. No Stage 41 runtime
-work has started.
+Status: all nine implementation phases are merged into develop as of 2026-09-14.
+The final cutover and approved native observer amendment passed both required
+local gates and independent review. The final summary reports 3,260 passed,
+zero failures/errors and 15 opt-in physical-container skips. The implementation
+manifest owns closeout, exact evidence and the remaining physical fleet,
+container, Slurm/shared-storage and live-assistant qualification limits.
 
 Build on Stage 40's native client and assigned preparation. One public run
 connects to or starts configured coordinator/agent services, prepares and admits

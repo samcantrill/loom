@@ -1,15 +1,15 @@
 # Roadmap Stage 41 Implementation Plan
 
-Status: implementation in progress; approved nine-phase baseline
+Status: implementation complete; all nine phases merged into develop
 Roadmap stage: 41
 Stage descriptor: Unified Run Lifecycle And Agent Execution
 Workflow: .codex/workflows/roadmap-stage-implementation.md
 Planning document: [planning.md](planning.md)
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 9, execution-cutover
-Next phase: final closeout after Phase 9 merge and synchronization
-Blockers: none; the maintainer approved the independently reviewed native observer amendment on 2026-09-14
+Current phase: none; Phases 1–9 delivered
+Next phase: none within Stage 41
+Blockers: none
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 published-source refinements, startup review and whole-stage implementation
 requested on 2026-09-12.
@@ -135,7 +135,7 @@ links directly to all nine walkthroughs.
 | 6 | slurm-result-recovery | merged | [Phase 6](phases/slurm-result-recovery.md) | agent/stage-41-p6-slurm-result-recovery | [313](https://github.com/samcantrill/loom/pull/313) | Bootstrap result publisher, submit-agent transport and existing coordinator finalizer | A job can finish and its compute process exit during coordinator downtime; the recovered submit agent delivers the same result for one authority commit. |
 | 7 | unified-sweeps | merged | [Phase 7](phases/unified-sweeps.md) | agent/stage-41-p7-unified-sweeps | [317](https://github.com/samcantrill/loom/pull/317) | Sweep expansion/dispatch state and native admission references | Sweep trials use the unified run lifecycle with unchanged experiment meaning and stable retry identities. |
 | 8 | unified-mcp | merged | [Phase 8](phases/unified-mcp.md) | agent/stage-41-p8-unified-mcp | [319](https://github.com/samcantrill/loom/pull/319) | Existing optional stdio MCP adapter and four operational skills | MCP runs, observes and cancels through the same native service/run owners, with updated skills and no private lifecycle. |
-| 9 | execution-cutover | pr_open | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | [321](https://github.com/samcantrill/loom/pull/321) | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
+| 9 | execution-cutover | merged | [Phase 9](phases/execution-cutover.md) | agent/stage-41-p9-execution-cutover | [321](https://github.com/samcantrill/loom/pull/321) | Remaining shared legacy owners, public exports/configuration and stage integration audit | All production execution entrypoints use the unified lifecycle and the remaining shared obsolete engines are removed. |
 
 ## Validation Ownership
 
@@ -222,7 +222,7 @@ and all approved validation commands remain binding.
 
 ### Phase 9 native observer amendment readiness
 
-- Status: independent review passed and maintainer explicitly approved on 2026-09-14; implementation may resume in the existing Phase 9 worktree/branch.
+- Status: independent review passed and maintainer explicitly approved on 2026-09-14; implementation delivered in Phase 9 with its own validation and independent review receipts.
 - Current source/preparation head: `e662d6388909893b8f1f290c69e8c2dd26844eaf`,
   on the canonical Phase 9 branch in the persistent stage worktree. Runtime source
   matches published Phase 8 metadata `d0e2dd33729cb465d5af313fe22379a6dad5c27d`.
@@ -274,4 +274,55 @@ and all approved validation commands remain binding.
 | 6 | [313](https://github.com/samcantrill/loom/pull/313), merge `5eeb021` | Both fresh required gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 6 card | No implementation blocker; physical site/storage/container qualification unavailable and unclaimed | Evidence archived; phase runtime processes terminal; completion metadata published/synchronized; exact remote/local phase branches retired |
 | 7 | [317](https://github.com/samcantrill/loom/pull/317), merge `6ca596a` | Both fresh gates, manager acceptance, original-reviewer confirmation and gated delivery passed; exact evidence in Phase 7 card | No implementation blocker; physical qualification remains explicit | Evidence archived; phase-owned processes terminal; completion metadata published/synchronized; exact local/remote phase branches retired |
 | 8 | [319](https://github.com/samcantrill/loom/pull/319), merge `928df2e` | Both fresh gates, manager acceptance, independent review and delivery passed; exact evidence in Phase 8 card | Live assistant and physical qualification remain explicit gaps | Evidence archived; metadata published/synchronized; exact local/remote phase branches retired |
-| 9 | [321](https://github.com/samcantrill/loom/pull/321), open | Native observer bridge, remaining execution cutover and current consumers implemented; both fresh gates and manager acceptance passed, with exact evidence in Phase 9 card | Independent implementation review/delivery pending; physical qualification and approved observer delivery limits remain explicit | Evidence archived; owned executor/runtime processes terminal; exact stage cleanup follows delivery |
+| 9 | [321](https://github.com/samcantrill/loom/pull/321), merge `243f526` | Native observer bridge, complete execution cutover and current consumers delivered; both fresh gates, manager acceptance, same-reviewer confirmation and delivery passed; exact evidence in Phase 9 card | No implementation blocker; physical qualification and approved observer delivery limits remain explicit | Evidence archived; all phase agents/runtime processes terminal; exact remote branch retired; transition synchronized the published merge before this closeout |
+
+### Final stage closeout
+
+All nine phase PRs are remotely merged, covering FR-41-01 through FR-41-15 under
+the existing phase and validation ownership tables. The native entrypoints,
+service lifetime, agent-owned native/container/Slurm execution, durable result
+recovery, sweeps, MCP and final legacy removal are delivered. Phase 9 also
+delivers the explicitly approved observer amendment. Phase cards retain the
+actual review revisions, correction dispositions, validation and merge facts;
+the final audit verified every remote phase merge against those records.
+
+Both final required commands passed on candidate
+`10ea8d48cfb315565fb389b3281623a47f4be399`, tree
+`0c7fd731794ca5462fe883ff28c5e781a8b68269`. `make validate-pr` covered static
+checks, isolated default/config/MCP tests and package builds. `make test-summary`
+reported 3,260 passed, zero failures/errors and 15 opt-in physical-container
+skips. The 15 focused observer checks also passed. The independent reviewer
+confirmed final head `c6646a3c89457d92c3389701be021d996b1d58eb`; only inspected
+metadata follows the tested candidate. Earlier phase evidence remains at its
+owner and was reused where unchanged. No extra stage-end test run is required.
+
+Current usage and qualification are described in [native execution](../../features/execution.md),
+[coordinator client](../../features/coordinator-client.md),
+[connected Slurm](../../features/slurm.md) and [MCP](../../features/mcp.md).
+Physical fleet, container, Slurm/shared-storage and live-assistant deployment
+qualification remains unavailable and unclaimed, as recorded by Phases 3/4/6/8.
+Local process and tmpfs tests do not establish physical-storage or power-loss
+behavior. Allocation-native operation, offline starts, automatic provisioning
+and transparent failover remain outside the accepted delivery. Notifications
+retain their approved synchronous best-effort behavior and crash gaps.
+
+All implementation, validation and closeout used the persistent `stage-41`
+worktree with canonical phase branches and the `agent/stage-41` coordination
+branch. Local develop was only clean-fast-forwarded. Final delivery preserved
+the separately reviewed PR 320 container fix; its two changed blobs match the
+published predecessor exactly. Unrelated checkouts and work were preserved.
+The final runtime-process audit is empty and private validation scratch/cache
+roots are removed. Both complete Phase 9 evidence archives and their checked
+hashes are retained in its Completion Record.
+
+Publish this closeout, then use the shared synchronization gate to verify
+matching stage HEAD, local develop, fetched origin/develop and advertised remote
+develop. Retire only the exact verified merged phase branch, clean stage
+worktree and published coordination branch. Actual publication/synchronization
+and cleanup facts belong in the final handoff rather than a self-referential
+commit receipt. No next stage is selected.
+
+Process-improvement disposition: the Loom queue has no entries requiring action.
+The fixed implementation defects and missing observer assertions remain with
+their source/test and phase owners; no new reusable workflow rule or separate
+improvement entry is justified by this closeout.

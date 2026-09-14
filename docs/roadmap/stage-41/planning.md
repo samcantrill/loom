@@ -1,19 +1,20 @@
 # Roadmap Stage 41 Planning: Unified Run Lifecycle And Agent Execution
 
-Status: approved; nine-phase implementation baseline
+Status: approved behavior/design baseline; all nine implementation phases delivered
 Roadmap stage: 41
 Evidence base: published develop `25d97f50d66f44273bf979a5488a312e7f1a15d2`.
 Authoring tree: `/nas/home/can134/work/loom-worktrees/stage-41-startup-plan`,
 branch `agent/stage-41-startup-plan`; clean on entry. Preserve unrelated worktrees.
 Planning route: published-source refinement and requested startup-readiness review.
-Current gate: reviewed amended packet published; startup verified in the stage worktree
-Blockers: none; see the manifest readiness receipt and Phase 1 startup record.
+Current gate: implementation and independent review complete; see the manifest closeout and phase evidence
+Blockers: none; physical qualification limits remain with their phase owners.
 Maintainer approval: behavior and nine-phase structure approved on 2026-09-10;
 the maintainer requested the reviewed refinements and startup review on 2026-09-12.
 
-This is the authoritative behavior/design plan for this stage. The discussion
-brief is an explanatory entrypoint. Source/test evidence describes the baseline;
-new APIs and behavior below are planned, not available runtime functionality.
+This remains the authoritative approved behavior/design baseline. The discussion
+brief is an explanatory entrypoint. The implementation manifest and phase cards
+record delivered behavior and qualification; source references below retain the
+inspected planning baseline and do not replace current API documentation.
 
 ## Current State
 
