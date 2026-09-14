@@ -476,11 +476,32 @@ from loom.pipeline import (
     StageFactorySpec,
     StageSpec,
     StageContext,
-    PipelineRunner,
 )
 ```
 
 The public API should stay small until repeated usage shows that more helpers are worth carrying.
+
+Existing managed coordinators are controlled through the shared native client:
+
+```python
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
+from loom.queue import LocalDaemonAdmissionRequest
+```
+
+Choose the coordinator's Unix socket or a protected HTTPS connection file.
+Submission, observation and cancellation use the same native models on both
+transports, and closing the client leaves admitted work running. The
+[coordinator client guide](features/coordinator-client.md) owns method signatures,
+connection settings, identity guards, bounded waits and error/recovery behavior.
+The existing queue service and legacy socket interfaces remain available.
+
+[Agent preparation](features/agent-preparation.md) lets the same client request
+configuration composition and checks in a specified existing worker environment.
+The coordinator captures selected shared inputs, schedules a normal managed child
+and publishes the checked composition. The durable operation retains replay and
+cancellation evidence; the caller separately submits the prepared receipt.
+Target execution may use another compatible agent. Authoring project code and
+installing its environment remain project/operator responsibilities.
 
 Migration and rename notes for the v0 hardening closeout are in
 [v0 public API migration notes](briefs/v0_public_api_migration_notes.md).

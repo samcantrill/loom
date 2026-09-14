@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from fractions import Fraction
 import os
 import re
 import shutil
@@ -17,8 +18,14 @@ from loom.pipeline.executors.containers import (
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
+    ContainerResourceIntent,
     parse_container_options,
 )
+from loom.pipeline.executors._container_resources import container_resource_selection
+from loom.pipeline.resources import ResourceEntry
+from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
+from loom.pipeline.runtime._resource_controls import resource_control_records
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import utc_timestamp
@@ -32,8 +39,24 @@ from .build import (
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXEC_OPTIONS_FIELDS = frozenset(
-    {"command", "cleanenv", "nv", "rocm", "fakeroot", "no_home"}
+    {
+        "command",
+        "cleanenv",
+        "nv",
+        "rocm",
+        "fakeroot",
+        "no_home",
+        "cpu_memory_enforcement",
+    }
 )
+_MEMORY_BYTE_FACTORS = {
+    "B": 1,
+    "KiB": 1 << 10,
+    "MiB": 1 << 20,
+    "GiB": 1 << 30,
+    "TiB": 1 << 40,
+}
+_APPTAINER_LIMIT_MAX = (1 << 63) - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +102,11 @@ class ApptainerExecOptions:
             return cls()
         mapping = _plain_mapping(data, path="ApptainerExecOptions")
         _reject_unknown(mapping, _EXEC_OPTIONS_FIELDS, path="ApptainerExecOptions")
+        if "cpu_memory_enforcement" in mapping:
+            raise ApptainerOptionError(
+                "ApptainerExecOptions.cpu_memory_enforcement was removed; "
+                "select CPU and memory controls with resource_policy.enforce"
+            )
         return cls(
             command=_text(
                 mapping.get("command", "apptainer"),
@@ -211,6 +239,24 @@ class SubprocessApptainerExecRunner:
         try:
             import subprocess
 
+            if timeout is not None and tuple(run_command.argv[1:]) != ("--version",):
+                from ._timeout import run_timed_exec
+
+                run_command = _with_timeout_namespace(run_command)
+                result = run_timed_exec(run_command.argv, float(timeout))
+                return ApptainerCommandResult(
+                    command=run_command.argv[0],
+                    argv=run_command.argv,
+                    redacted_argv=cast(tuple[str, ...], run_command.redacted_argv),
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    started_at=started_at,
+                    finished_at=self.clock(),
+                    timed_out=result.timed_out,
+                    timeout_seconds=timeout,
+                    error=result.error,
+                )
             completed = subprocess.run(  # noqa: S603
                 list(run_command.argv),
                 check=False,
@@ -219,6 +265,11 @@ class SubprocessApptainerExecRunner:
                 timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001 - command-launch facts are returned.
+            if timeout is not None:
+                from ._timeout import UnsupportedTimeoutError
+
+                if isinstance(exc, UnsupportedTimeoutError):
+                    raise
             return _result_from_exception(
                 command=run_command.argv[0],
                 argv=run_command.argv,
@@ -249,6 +300,18 @@ class SubprocessApptainerExecRunner:
             build_apptainer_version_command(apptainer_options=apptainer_options),
             timeout_seconds=timeout_seconds,
         )
+
+
+def _with_timeout_namespace(command: ApptainerExecCommand) -> ApptainerExecCommand:
+    from ._timeout import namespace_argv
+
+    argv = namespace_argv(command.argv)
+    redacted = namespace_argv(cast(tuple[str, ...], command.redacted_argv))
+    return ApptainerExecCommand(
+        argv=argv,
+        redacted_argv=redacted,
+        metadata={**command.metadata, "argv": list(redacted)},
+    )
 
 
 class FakeApptainerExecRunner:
@@ -332,12 +395,85 @@ def build_apptainer_exec_command(
     worker_command: Sequence[str],
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None,
     host_environment: Mapping[str, str] | None = None,
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
+    resource_selection: Mapping[str, Sequence[str]] | None = None,
 ) -> ApptainerExecCommand:
-    """Return deterministic ``apptainer exec`` argv for one worker command."""
+    """Build argv from full demand and independently selected additional controls.
+
+    A standalone call resolves the new-job defaults; a supplied saved selection
+    is checked against the supplied concrete policy and demand. GPU binding uses
+    allocation-visible host tokens, never inferred device numbers. Driver access
+    and authored/inherited environment remain separate from added binding.
+    """
 
     container = _container_options(container_options)
     options = _exec_options(apptainer_options)
     worker = _argv_tuple(worker_command, path="worker_command")
+    try:
+        policy, entries, selection = container_resource_selection(
+            cast(ContainerResourceIntent | None, container.resources),
+            resource_policy,
+            resource_selection,
+            path="Apptainer resource policy",
+        )
+    except RuntimeResourceError as exc:
+        raise ApptainerOptionError(
+            f"container resource request is invalid: {exc}"
+        ) from exc
+    selected = set(selection["enforce"])
+    unsupported = selected - {"cpu", "memory", "gpu"}
+    if unsupported:
+        raise ApptainerOptionError(
+            f"Apptainer cannot enforce resource(s) {', '.join(sorted(unsupported))}; "
+            "remove them from resource_policy.enforce or use a supporting owner"
+        )
+    gpu = entries.get("gpu")
+    requested_binding_count = 0
+    visible_binding_count = 0
+    if gpu is not None and gpu.amount > 0 and not options.rocm:
+        options = replace(options, nv=True)
+    if "gpu" in selected:
+        from loom.pipeline.executors.gpu_visibility import (
+            CUDA_VISIBLE_DEVICES,
+            requested_gpu_count,
+            validate_cuda_visibility,
+        )
+
+        if options.rocm:
+            raise ApptainerOptionError(
+                "GPU binding requires NVIDIA passthrough; disable rocm or omit gpu enforcement"
+            )
+        environment = cast(ContainerEnvironment, container.environment)
+        if (
+            CUDA_VISIBLE_DEVICES in environment.variables
+            or CUDA_VISIBLE_DEVICES in environment.required_host_variables
+        ):
+            raise ApptainerOptionError(
+                "CUDA_VISIBLE_DEVICES is authored but GPU binding is owned by Loom's resource_policy; "
+                "remove the authored binding or omit gpu from resource_policy.enforce"
+            )
+        try:
+            binding = validate_cuda_visibility(
+                requested_gpu_count(entries),
+                os.environ if host_environment is None else host_environment,
+            )
+        except ApptainerOptionError as exc:
+            raise ApptainerOptionError(
+                f"requested GPU binding is unavailable: {exc}; supply a matching "
+                "allocation binding or omit gpu from resource_policy.enforce"
+            ) from exc
+        container = replace(
+            container,
+            environment=ContainerEnvironment(
+                variables={
+                    **environment.variables,
+                    CUDA_VISIBLE_DEVICES: ",".join(binding.cuda_visible_devices),
+                },
+                required_host_variables=environment.required_host_variables,
+            ),
+        )
+        requested_binding_count = binding.requested_gpu_count
+        visible_binding_count = len(binding.cuda_visible_devices)
     argv: list[str] = [options.command, "exec"]
     redacted: list[str] = [options.command, "exec"]
     if options.cleanenv:
@@ -350,6 +486,7 @@ def build_apptainer_exec_command(
         _append(argv, redacted, "--fakeroot")
     if options.no_home:
         _append(argv, redacted, "--no-home")
+    _append_resource_limits(argv, redacted, entries, selected=selected)
     if container.workdir is not None:
         _append_option(argv, redacted, "--pwd", container.workdir)
     for mount in _sorted_mounts(container):
@@ -374,8 +511,92 @@ def build_apptainer_exec_command(
             "apptainer_options": options.to_dict(),
             "container": container.to_redacted_metadata(),
             "worker_command": list(worker),
+            "resource_policy": policy.to_dict(),
+            "resource_selection": {
+                key: list(value) for key, value in selection.items()
+            },
+            "resource_controls": resource_control_records(
+                entries=entries,
+                policy=policy,
+                selection=selection,
+                owner="apptainer",
+                mechanisms={
+                    "cpu": "container_cpu_flag",
+                    "memory": "container_memory_flag",
+                    "gpu": "cuda_visibility_binding",
+                },
+            ),
+            "gpu_visibility": {
+                "requested_gpu_count": requested_binding_count,
+                "visible_gpu_count": visible_binding_count,
+            },
         },
     )
+
+
+def _append_resource_limits(
+    argv: list[str],
+    redacted: list[str],
+    entries: Mapping[str, ResourceEntry],
+    *,
+    selected: set[str],
+) -> None:
+    """Project direct CPU and memory intent to Apptainer cgroup flags."""
+
+    cpu = entries.get("cpu") if "cpu" in selected else None
+    if cpu is not None:
+        _append_option(argv, redacted, "--cpus", str(_cpu_count(cpu)))
+    memory = entries.get("memory") if "memory" in selected else None
+    if memory is not None:
+        _append_option(argv, redacted, "--memory", str(_memory_bytes(memory)))
+
+
+def _cpu_count(entry: ResourceEntry) -> int:
+    """Return a validated CPU count accepted by the runtime flag."""
+
+    if not isinstance(entry.amount, int) or isinstance(entry.amount, bool):
+        raise ApptainerOptionError("container CPU request must be a positive integer")
+    if entry.amount > _APPTAINER_LIMIT_MAX:
+        raise ApptainerOptionError(
+            "container CPU request is unrepresentable by the Apptainer runtime"
+        )
+    return entry.amount
+
+
+def _memory_bytes(entry: ResourceEntry) -> int:
+    """Return an exact positive byte count accepted by the runtime flag."""
+
+    unit = entry.unit
+    if unit is None:
+        raise ApptainerOptionError("container memory request has an unsupported unit")
+    factor = _MEMORY_BYTE_FACTORS.get(unit)
+    if factor is None:  # ResourceRequest validation owns the public unit contract.
+        raise ApptainerOptionError("container memory request has an unsupported unit")
+    bytes_value = Fraction(entry.amount) * factor
+    if bytes_value.denominator != 1:
+        raise ApptainerOptionError(
+            "container memory request must convert to an exact whole number of bytes"
+        )
+    value = bytes_value.numerator
+    if value <= 0 or value > _APPTAINER_LIMIT_MAX:
+        raise ApptainerOptionError(
+            "container memory request is unrepresentable by the Apptainer runtime"
+        )
+    if not _is_exact_float64_integer(value):
+        raise ApptainerOptionError(
+            "container memory request is not exactly representable by the "
+            "Apptainer runtime"
+        )
+    return value
+
+
+def _is_exact_float64_integer(value: int) -> bool:
+    """Match the exact-integer range of the runtime's float64 byte parser."""
+
+    exponent = value.bit_length() - 1
+    if exponent <= 52:
+        return True
+    return value % (1 << (exponent - 52)) == 0
 
 
 def build_apptainer_version_command(

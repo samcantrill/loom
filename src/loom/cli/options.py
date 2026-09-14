@@ -98,19 +98,6 @@ class SelectorCliOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class ValidateCliOptions:
-    """Validate-command options."""
-
-    check_targets: bool = False
-
-    @classmethod
-    def from_namespace(cls, namespace: Any) -> "ValidateCliOptions":
-        """Build validate options from an argparse namespace."""
-
-        return cls(check_targets=bool(getattr(namespace, "check_targets", False)))
-
-
-@dataclass(frozen=True, slots=True)
 class PlanCliOptions:
     """Plan-command options."""
 
@@ -353,6 +340,5 @@ __all__ = [
     "PreflightCliOptions",
     "RunCliOptions",
     "SelectorCliOptions",
-    "ValidateCliOptions",
     "output_format_from_namespace",
 ]

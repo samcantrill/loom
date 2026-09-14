@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import os
 
 from loom.state_sources import (
     authoritative_service_source,
@@ -150,7 +151,9 @@ def inspect_backend(
     """Inspect one authoritative run without mutating backend state."""
 
     resolved_run_uri = _validate_run_uri(run_uri)
-    store = authority_store or _default_authority_store(authority_config)
+    store = authority_store or _default_authority_store(
+        authority_config, run_uri=run_uri
+    )
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
     source = _authority_state_source(
@@ -283,7 +286,9 @@ def inspect_backend_capabilities(
     """Inspect backend capabilities and optional environment assumptions."""
 
     resolved_run_uri = _validate_run_uri(run_uri)
-    store = authority_store or _default_authority_store(authority_config)
+    store = authority_store or _default_authority_store(
+        authority_config, run_uri=run_uri
+    )
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
     source = _authority_state_source(
@@ -323,6 +328,8 @@ def _validate_run_uri(run_uri: str) -> str:
 
 def _default_authority_store(
     authority_config: AuthorityConfig | None = None,
+    *,
+    run_uri: str | None = None,
 ) -> PerRunAuthorityStore:
     if authority_config is None:
         from loom.pipeline.stores import authority_config_from_env
@@ -330,6 +337,27 @@ def _default_authority_store(
         config = authority_config_from_env()
     else:
         config = authority_config
+    if (
+        authority_config is None
+        and run_uri is not None
+        and config == AuthorityConfig()
+        and not any(
+            os.environ.get(name, "").strip()
+            for name in (
+                "LOOM_AUTHORITY_BACKEND",
+                "LOOM_AUTHORITY_PROFILE",
+                "LOOM_AUTHORITY_ENDPOINT",
+                "LOOM_AUTHORITY_WORKSPACE",
+                "LOOM_AUTHORITY_STATE",
+                "LOOM_AUTHORITY_REFERENCE_ID",
+                "LOOM_AUTHORITY_METADATA_JSON",
+            )
+        )
+    ):
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+        if (run_uri_to_path(run_uri) / ".loom" / "authority.sqlite3").is_file():
+            return SQLitePerRunAuthorityStore(run_uri)
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise BackendDiagnosticsError(
             "transitional SQLite authority is no longer a supported runtime backend; "

@@ -203,7 +203,7 @@ def test_preflight_resource_warnings_and_strict_exit(tmp_path: Path) -> None:
     assert payload["result"]["status"] == "WARN"
     check = payload["result"]["checks"][0]
     assert check["check_id"] == "resources.capabilities"
-    assert check["details"]["diagnostics"][0]["code"] == "resource.ignored"
+    assert check["details"]["diagnostics"][0]["code"] == "resource.not_requested"
     assert stderr.getvalue() == ""
 
     strict_stdout = io.StringIO()
@@ -241,25 +241,4 @@ def test_preflight_missing_config_returns_failed_result(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["result"]["status"] == "FAIL"
     assert any(check["status"] == "FAIL" for check in payload["result"]["checks"])
-    assert stderr.getvalue() == ""
-
-
-def test_run_config_failure_exits_before_store_records(tmp_path: Path) -> None:
-    config_path = tmp_path / "missing.yaml"
-    run_path = tmp_path / "runs" / "blocked"
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", path_to_run_uri(run_path), "--format", "json"],
-            stdout=stdout,
-            stderr=stderr,
-        )
-            == 3
-        )
-
-    payload = json.loads(stdout.getvalue())
-    assert payload["error"]["code"] == "config.error"
-    assert not run_path.exists()
     assert stderr.getvalue() == ""

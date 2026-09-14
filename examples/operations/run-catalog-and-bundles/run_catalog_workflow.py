@@ -18,12 +18,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from examples.support import require_mapping, run_cli_json
-from weave import compose_config
 from loom.io.uris import uri_to_path
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from examples.execution.agent_workers import run_example, worker_records
+from loom.pipeline.stores import LocalRunStore
 
 
 HERE = Path(__file__).resolve().parent
@@ -39,24 +36,19 @@ def main() -> None:
     journey_root = output_root / f"run-catalog-and-bundles-{token}"
     run_root = configured_run_root / f"run-catalog-and-bundles-{token}"
     run_root.mkdir(parents=True, exist_ok=True)
-    baseline_uri = path_to_run_uri(run_root / f"baseline-{token}")
-    challenger_uri = path_to_run_uri(run_root / f"challenger-{token}")
-    baseline = _runner(run_root).run(
-        RunRequest(
-            config=compose_config(HERE / "pipeline.yaml"),
-            run_uri=baseline_uri,
-        )
+    baseline = run_example(HERE / "pipeline.yaml", output_root, run_root=run_root)
+    challenger = run_example(
+        HERE / "pipeline.yaml",
+        output_root,
+        run_root=run_root,
+        overrides=("variant=challenger",),
     )
-    challenger = _runner(run_root).run(
-        RunRequest(
-            config=compose_config(
-                HERE / "pipeline.yaml",
-                overrides=("variant=challenger",),
-            ),
-            run_uri=challenger_uri,
-        )
-    )
-    if baseline.status.name != "SUCCEEDED" or challenger.status.name != "SUCCEEDED":
+    baseline_uri = baseline.observation.admission.run_uri
+    challenger_uri = challenger.observation.admission.run_uri
+    if any(
+        result.observation.admission.state.name != "SUCCEEDED"
+        for result in (baseline, challenger)
+    ):
         raise RuntimeError("expected both example runs to succeed")
 
     index = _result(["runs", "index", str(run_root), "--format", "json"])
@@ -98,7 +90,9 @@ def main() -> None:
         ]
     )
 
-    source_payload = uri_to_path(baseline.artifact_index["produce.payload"].uri)
+    source_payload = uri_to_path(
+        worker_records(baseline)["produce"].outputs["payload"].uri
+    )
     imported_uri = _required_string(imported, "target_run_uri")
     imported_refs = LocalRunStore(journey_root / "imported-runs").read_artifact_index(
         imported_uri
@@ -113,8 +107,9 @@ def main() -> None:
         for entry in require_mapping(section)["entries"]
         if require_mapping(entry)["status"] == "different"
     )
-    if index["indexed_count"] != 2 or len(listed["summaries"]) != 2:
-        raise RuntimeError("run catalog did not contain exactly the two example runs")
+    indexed_uris = {item["run_uri"] for item in listed["summaries"]}
+    if not {baseline_uri, challenger_uri} <= indexed_uris:
+        raise RuntimeError("run catalog did not include both target runs")
     if different_entries == 0:
         raise RuntimeError("run comparison did not report the configured difference")
     if exported["exported_payload_count"] != 1:
@@ -134,17 +129,6 @@ def main() -> None:
 
 def _result(argv: list[str]) -> dict[str, object]:
     return require_mapping(run_cli_json(argv)["result"])
-
-
-def _runner(run_root: Path) -> PipelineRunner:
-    """Create an independent per-run authority store for one local run."""
-
-    return PipelineRunner(
-        run_store=create_authority_backed_serial_run_store(
-            run_root,
-            authority_store=SQLitePerRunAuthorityStore(),
-        )
-    )
 
 
 def _required_string(mapping: dict[str, object], key: str) -> str:

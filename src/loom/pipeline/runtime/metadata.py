@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -35,6 +35,7 @@ from loom.pipeline.runtime.options import (
     parse_run_options,
     validate_stage_runtime_options,
 )
+from loom.pipeline.runtime.resource_policy import ResourcePolicy, coerce_resource_policy
 
 RUNTIME_METADATA_SCHEMA_VERSION = 1
 
@@ -52,6 +53,12 @@ class ResolvedStageRuntimeOptions:
         default_factory=ExecutionOptions
     )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
+    resource_policy: ResourcePolicy | Mapping[str, object] = field(
+        default_factory=ResourcePolicy
+    )
+    resource_selection: Mapping[str, tuple[str, ...]] | Mapping[str, object] | None = (
+        None
+    )
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
@@ -86,6 +93,29 @@ class ResolvedStageRuntimeOptions:
         )
         object.__setattr__(
             self,
+            "resource_policy",
+            coerce_resource_policy(
+                self.resource_policy,
+                path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_policy",
+            ).resolved(),
+        )
+        if self.resource_selection is not None:
+            from loom.pipeline.runtime.resource_policy import (
+                validate_resource_selection,
+            )
+
+            object.__setattr__(
+                self,
+                "resource_selection",
+                validate_resource_selection(
+                    self.resource_selection,
+                    cast(ResourceRequest, self.resources).entries,
+                    cast(ResourcePolicy, self.resource_policy),
+                    path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].resource_selection",
+                ),
+            )
+        object.__setattr__(
+            self,
             "run_environment",
             _coerce_run_environment(self.run_environment),
         )
@@ -105,7 +135,8 @@ class ResolvedStageRuntimeOptions:
         execution = cast(ExecutionOptions, self.execution)
         run_environment = cast(RunEnvironmentRequest, self.run_environment)
         stage_environment = cast(StageEnvironmentRequest, self.stage_environment)
-        return {
+        resource_policy = cast(ResourcePolicy, self.resource_policy)
+        result: dict[str, PlainData] = {
             "stage_id": self.stage_id,
             "executor": self.executor,
             "resources": _resource_request_metadata(resources),
@@ -120,7 +151,52 @@ class ResolvedStageRuntimeOptions:
                 "stage": stage_environment.to_safe_metadata(),
             },
             "adapter_options": _adapter_metadata(self.adapter_options),
+            "resource_policy": resource_policy.to_dict(),
         }
+        if self.resource_selection is not None:
+            result["resource_selection"] = {
+                key: list(value)
+                for key, value in cast(
+                    Mapping[str, tuple[str, ...]], self.resource_selection
+                ).items()
+            }
+        return result
+
+    def _to_worker_metadata(self) -> dict[str, PlainData]:
+        """Retain full normalized demand at the private execution handoff."""
+
+        return {
+            **self.to_safe_metadata(),
+            "resources": cast(ResourceRequest, self.resources).to_dict(),
+        }
+
+    def for_execution(self) -> "ResolvedStageRuntimeOptions":
+        """Finalize direct demand before preparing a new execution handoff.
+
+        Managed callers already supply placement's selection. For direct
+        containers, nonempty runtime demand overrides the authored container
+        fallback; selection is not resolved before that precedence decision.
+        """
+
+        if self.resource_selection is not None:
+            return self
+        resources = cast(ResourceRequest, self.resources)
+        if (
+            self.executor in {"apptainer", "singularity", "docker"}
+            and not resources.entries
+        ):
+            container = self.adapter_options.get("container")
+            raw = container.get("resources") if isinstance(container, Mapping) else None
+            if isinstance(raw, Mapping):
+                resources = ResourceRequest.from_dict(
+                    {"entries": raw.get("entries", {})}
+                )
+        policy = cast(ResourcePolicy, self.resource_policy)
+        return replace(
+            self,
+            resources=resources,
+            resource_selection=policy.select(resources.entries),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +227,7 @@ class RuntimeMetadata:
         execution = cast(ExecutionOptions, options.execution)
         run_environment = cast(RunEnvironmentRequest, options.environment)
         reliability = cast(ReliabilityPolicy | None, options.reliability)
+        resource_policy = cast(ResourcePolicy, options.resource_policy)
         stages = cast(Mapping[str, ResolvedStageRuntimeOptions], self.stages)
         return {
             "schema_version": self.schema_version,
@@ -167,6 +244,7 @@ class RuntimeMetadata:
             "execution": execution.to_safe_metadata(),
             "environment": run_environment.to_safe_metadata(),
             "adapter_options": _adapter_metadata(options.adapter_options),
+            "resource_policy": resource_policy.to_dict(),
             "stages": {
                 stage_id: stage.to_safe_metadata() for stage_id, stage in stages.items()
             },
@@ -189,6 +267,7 @@ def resolve_run_runtime(
     run_execution = cast(ExecutionOptions, normalized.execution)
     run_reliability = cast(ReliabilityPolicy | None, normalized.reliability)
     run_environment = cast(RunEnvironmentRequest, normalized.environment)
+    run_resource_policy = cast(ResourcePolicy, normalized.resource_policy).resolved()
     executor = normalized.executor or "local"
     resolved: dict[str, ResolvedStageRuntimeOptions] = {}
     for stage_id in stage_id_tuple:
@@ -206,6 +285,10 @@ def resolve_run_runtime(
             normalized.adapter_options,
             stage_runtime.adapter_options,
         )
+        stage_resource_policy = cast(
+            ResourcePolicy | None, stage_runtime.resource_policy
+        )
+        stage_axes = stage_runtime.resource_policy_axes
         resolved[stage_id] = ResolvedStageRuntimeOptions(
             stage_id=stage_id,
             executor=executor,
@@ -217,6 +300,18 @@ def resolve_run_runtime(
                 }
             ),
             reliability=resolved_reliability,
+            resource_policy=ResourcePolicy(
+                account_for=(
+                    stage_resource_policy.account_for
+                    if stage_resource_policy is not None and "account_for" in stage_axes
+                    else run_resource_policy.account_for
+                ),
+                enforce=(
+                    stage_resource_policy.enforce
+                    if stage_resource_policy is not None and "enforce" in stage_axes
+                    else run_resource_policy.enforce
+                ),
+            ),
             run_environment=run_environment,
             stage_environment=stage_runtime.environment,
             adapter_options=stage_adapter_options,

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loom Targeted Validation"
+  short_description: "Select sufficient Loom validation evidence"
+  default_prompt: "Use $loom-targeted-validation to select and run checks for this change."

@@ -407,7 +407,7 @@ stage-worker invocation tests
 SLURM fake-command tests
 Docker fake-command tests
 plugin fake-entry-point tests
-sweep runner tests with fake PipelineRunner
+sweep native request replay and operation observation tests
 failure injection helpers
 test markers for slow/integration/e2e/slurm/network/optional dependencies
 coverage thresholds for critical packages
@@ -417,8 +417,10 @@ coverage thresholds for critical packages
 
 Default container executor tests should use fake commands and fake command
 runners. Stage 17 Docker validation exercises command construction, selected
-executor preflight, CLI `loom run --executor docker`, failure inspection, and
-example scripts without a real Docker daemon.
+executor preflight, the retained library runner/Docker executor, failure inspection, and
+example scripts without a real Docker daemon. These checks preserve backend
+assertions and do not qualify a physical runtime or the complete managed
+container journey.
 
 Live Docker acceptance should stay opt-in because it can depend on daemon
 availability, image contents, local path parity, registry access, and network

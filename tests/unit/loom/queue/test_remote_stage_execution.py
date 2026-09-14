@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 from dataclasses import replace
 import json
 from pathlib import Path
+import pickle
 import sqlite3
 import sys
 
@@ -12,7 +14,13 @@ import pytest
 import loom.queue._remote_stage_execution as remote_stage_execution
 import loom.queue.agent_sessions as agent_sessions
 from loom.artifacts import ArtifactRef
-from loom.pipeline.execution.models import StageWorkerRequest, StageWorkerResult
+from loom.pipeline.execution.models import (
+    EXECUTION_FAILURE_SCHEMA_VERSION,
+    ExecutionFailure,
+    STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+    StageWorkerRequest,
+    StageWorkerResult,
+)
 from loom.pipeline.planning import StageFingerprintPayload, StageFingerprintRecord
 from loom.pipeline.status import StageStatus
 from loom.queue import (
@@ -33,6 +41,7 @@ from loom.queue.agent_sessions import (
     _target_remote_delivery,
 )
 from loom.queue.agent_session_transport import _RemoteAgentJournal
+from loom.queue._agent_process_supervisor import ResidentWorkerLaunch, _launch_value
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -46,6 +55,11 @@ from loom.queue._remote_stage_execution import (
     _RemoteOutputArtifact,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.preparation import (
+    PREPARATION_STAGE_TARGET,
+    PreparationChildInput,
+    SharedInputReceipt,
+)
 from loom.scheduling import (
     CapacityAtom,
     ExactQuantity,
@@ -91,9 +105,27 @@ def _profile(tmp_path: Path) -> ResidentExecutionProfile:
     )
 
 
-def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
+def test_preparation_profile_preserves_its_binding_across_process_serialization(
+    tmp_path: Path,
+) -> None:
+    roots = {"projects": tmp_path / "snapshots"}
+    profile = replace(_profile(tmp_path), preparation_shared_roots=roots)
+    retained_launch = profile.launch_profile
+    roots["projects"] = tmp_path / "different-snapshots"
+
+    received = pickle.loads(pickle.dumps(profile))
+    assert received == profile
+    assert received.launch_profile == retained_launch
+    assert received.preparation_shared_roots == {"projects": tmp_path / "snapshots"}
+
+
+def _request(
+    profile: ResidentExecutionProfile,
+    *,
+    stage_config: dict[str, str] | None = None,
+) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
-        1,
+        STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         "run-opaque-1",
         "build",
         1,
@@ -109,7 +141,7 @@ def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
                 stage_name="build",
                 factory_target="pkg.Stage",
                 factory_init={},
-                stage_config={},
+                stage_config={} if stage_config is None else stage_config,
                 fingerprint_fields={},
                 declared_inputs={"source": "seed.data"},
                 bound_inputs={},
@@ -133,7 +165,13 @@ def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
         "/coordinator/stderr",
         "/coordinator/trace",
         "/coordinator/result",
-        {"stage_id": "build", "executor": "local"},
+        {
+            "stage_id": "build",
+            "executor": "local",
+            "resources": {"entries": {}},
+            "resource_policy": {"account_for": "all", "enforce": []},
+            "resource_selection": {"account_for": [], "enforce": []},
+        },
     )
     data = b"input"
     atom = CapacityAtom(
@@ -243,25 +281,74 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
 
 
 def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> None:
-    request = _request(_profile(tmp_path))
-    fingerprint = thaw_plain_data(request.fingerprint, path="fingerprint")
-    assert isinstance(fingerprint, dict)
-    payload = fingerprint["payload"]
-    assert isinstance(payload, dict)
-    payload["stage_config"] = {"cache_path": "/coordinator/private"}
+    request = _request(
+        _profile(tmp_path),
+        stage_config={"cache_path": "/coordinator/private"},
+    )
+    assert _ResidentAssignmentBundle.from_dict(request.to_dict()) == request
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        request.validate_remote_transport()
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        _ResidentAssignmentBundle.from_remote_dict(request.to_dict())
 
+    portable_request = _request(_profile(tmp_path))
+    metadata_request = replace(
+        portable_request,
+        worker_metadata={"coordinator_path": "/coordinator/private"},
+    )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        metadata_request.validate_remote_transport()
     with pytest.raises(QueueServiceError, match="path-bearing"):
         replace(
-            request,
-            worker_metadata={"coordinator_path": "/coordinator/private"},
-        )
-    with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(request, fingerprint=fingerprint)
-    with pytest.raises(QueueServiceError, match="path-bearing"):
-        replace(
-            request.inputs[0],
+            portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
+
+
+def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
+    tmp_path: Path,
+) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    binding = PreparationChildInput(
+        "prepare-1",
+        "existing",
+        "configs/pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+        profile.descriptor.to_dict(),
+    )
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    prepared_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(
+            fingerprint.payload,
+            factory_target=PREPARATION_STAGE_TARGET,
+            stage_config=binding.to_dict(),
+        ),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    preparation = replace(request, fingerprint=prepared_fingerprint.to_dict())
+    assert (
+        _ResidentAssignmentBundle.from_remote_dict(preparation.to_dict()) == preparation
+    )
+    assert preparation.preparation_input == binding
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(
+            preparation,
+            resolved_runtime={
+                **preparation.resolved_runtime,
+                "scratch_path": "/worker/private",
+            },
+        ).validate_remote_transport()
+    ordinary_fingerprint = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(prepared_fingerprint.payload, factory_target="pkg.Stage"),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(
+            request, fingerprint=ordinary_fingerprint.to_dict()
+        ).validate_remote_transport()
 
 
 def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:
@@ -309,6 +396,100 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
         workspace.mark_process_started("execution-2", 102)
 
 
+@pytest.mark.parametrize("status", [StageStatus.SUCCEEDED, StageStatus.FAILED])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
+    tmp_path: Path,
+    status: StageStatus,
+    legacy: bool,
+) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    controls = (
+        {
+            "resource": "gpu",
+            "owner": "managed_provider",
+            "mechanism": "provider_environment_binding",
+            "disposition": "requested",
+        },
+    )
+    launch = ResidentWorkerLaunch(
+        supervisor_id="supervisor-1",
+        continuity_epoch="epoch-1",
+        agent_id="agent-1",
+        session_id="session-1",
+        assignment_id=request.assignment_id,
+        process_execution_id="execution-1",
+        execution_fence="fence-1",
+        launch_operation_id="launch-1",
+        bundle_digest="a" * 64,
+        workspace_root=workspace.root,
+        profile=profile.launch_profile,
+        environment={},
+        schema_version=None if legacy else 2,
+        resource_controls=None if legacy else controls,
+    )
+    workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
+    workspace.mark_process_started("execution-1", 101)
+    output = workspace.root / "result.data"
+    output.write_bytes(b"output")
+    failure = (
+        None
+        if status is StageStatus.SUCCEEDED
+        else ExecutionFailure(
+            schema_version=1,
+            run_uri=f"loom-agent:{request.assignment_id}",
+            stage_name=request.stage_name,
+            attempt=request.attempt,
+            failed_at="2020-01-01T00:00:01Z",
+            executor="local",
+            failure_type="stage_exception",
+            message="application failed after launch",
+        )
+    )
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=status,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+        executor_name="local",
+        failure=failure,
+        outputs={"result": ArtifactRef("result", output.as_uri(), "bytes")}
+        if status is StageStatus.SUCCEEDED
+        else {},
+        executor_metadata={"process_created": False, "application_detail": "retained"},
+    )
+    result_path = workspace.root / "worker-result.json"
+    result_path.write_text(json.dumps(result.to_dict()))
+    original_bytes = result_path.read_bytes()
+    workspace.persist_worker_result(result)
+    report = workspace.retain_outputs()
+    assert report.process_created is True
+    if legacy:
+        assert report.resource_controls is None
+    else:
+        assert report.resource_controls == ({**controls[0], "disposition": "applied"},)
+        if report.failure is not None:
+            failure_controls = report.failure.executor_metadata["resource_controls"]
+            assert isinstance(failure_controls, (list, tuple))
+            assert isinstance(failure_controls[0], Mapping)
+            assert failure_controls[0]["disposition"] == "applied"
+    saved = workspace.worker_result()
+    assert saved is not None
+    assert saved.executor_metadata["application_detail"] == "retained"
+    workspace.persist_worker_result(result)
+    assert workspace.retain_outputs().to_dict() == report.to_dict()
+    assert result_path.read_bytes() == original_bytes
+
+
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
@@ -350,6 +531,11 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
                 )
             },
             exit_code=0,
+            executor_metadata={
+                "request": {"executor": "local", "stage_name": "build"},
+                "command": ["python", "--workspace", str(workspace.root)],
+                "stdout": "private worker output",
+            },
         )
     )
     report = workspace.retain_outputs()
@@ -357,6 +543,18 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
     assert report.outputs[0].metadata == {"quality": "verified"}
     replayed = _RemoteExecutionReport.from_dict(report.to_dict())
     assert replayed.outputs[0].metadata == {"quality": "verified"}
+    assert replayed.schema_version == 3
+    assert replayed.process_created is True
+    assert replayed.executor_metadata is not None
+    assert replayed.executor_metadata["request"] == {
+        "executor": "local",
+        "stage_name": "build",
+    }
+    assert (
+        replayed.to_dict()["executor_metadata"] == report.to_dict()["executor_metadata"]
+    )
+    assert "private worker output" not in json.dumps(report.to_dict())
+    assert str(workspace.root) not in json.dumps(report.to_dict())
     with sqlite3.connect(":memory:") as conn:
         conn.row_factory = sqlite3.Row
         conn.execute(
@@ -382,6 +580,163 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
         )
     assert coordinator_refs["result"].metadata == {"quality": "verified"}
     assert str(workspace.root) not in str(report.to_dict())
+
+
+def test_resident_no_start_failure_is_durable_without_process_identity(
+    tmp_path: Path,
+) -> None:
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="executor_infrastructure",
+        message="selected 'cpu' control has no active claim",
+        details={"process_created": False},
+    )
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:00Z",
+        executor_name="local",
+        failure=failure,
+        exit_code=1,
+    )
+    with pytest.raises(QueueConflictError, match="grant or supervisor"):
+        workspace.persist_failed_before_start(result, fence="wrong-fence")
+    workspace.persist_failed_before_start(result, fence="fence-1")
+    report = workspace.retain_outputs()
+    assert report.process_created is False
+    assert report.failure == failure
+    assert (
+        _RemoteExecutionReport.from_dict(report.to_dict()).to_dict() == report.to_dict()
+    )
+
+
+def test_legacy_report_writer_shape_and_digest_do_not_acquire_current_fields() -> None:
+    legacy = {
+        "schema_version": 1,
+        "assignment_id": "assignment-1",
+        "stage_name": "build",
+        "attempt": 1,
+        "status": "FAILED",
+        "started_at": "2020-01-01T00:00:00Z",
+        "finished_at": "2020-01-01T00:00:01Z",
+        "executor_name": "local",
+        "outputs": [],
+        "failure_type": "stage_exception",
+        "message": "resident stage execution failed",
+        "exception_type": "builtins.RuntimeError",
+        "exit_code": 1,
+    }
+    encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+    report = _RemoteExecutionReport.from_dict(json.loads(encoded))
+    replay = json.dumps(report.to_dict(), sort_keys=True, separators=(",", ":"))
+    assert replay == encoded
+    assert (
+        hashlib.sha256(replay.encode()).digest()
+        == hashlib.sha256(encoded.encode()).digest()
+    )
+    assert report.failure is None
+    assert report.resource_controls is None
+    assert report.process_created is None
+    with pytest.raises(QueueServiceError):
+        _RemoteExecutionReport.from_dict({**legacy, "resource_controls": None})
+    for invalid_version in (True, 1.0, "1"):
+        with pytest.raises(QueueServiceError, match="schema is unsupported"):
+            _RemoteExecutionReport.from_dict(
+                {**legacy, "schema_version": invalid_version}
+            )
+
+
+def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
+    tmp_path: Path,
+) -> None:
+    message = "nested worker failure " + "x" * 2048
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri="loom-agent:assignment-1",
+        stage_name="build",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="executor_infrastructure",
+        message=message,
+        details={"diagnostic_failure": {"message": "nested cause"}},
+    )
+    report = _RemoteExecutionReport(
+        assignment_id="assignment-1",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+        executor_name="local",
+        failure_type=failure.failure_type,
+        message=message,
+        exception_type=failure.exception_type,
+        failure=failure,
+        process_created=None,
+        schema_version=2,
+    )
+    retained = report.to_dict()
+    assert "executor_metadata" not in retained
+    replayed = _RemoteExecutionReport.from_dict(retained)
+    assert replayed.failure == failure
+    assert json.dumps(replayed.to_dict(), sort_keys=True) == json.dumps(
+        retained, sort_keys=True
+    )
+    assert replayed.executor_metadata is None
+    with pytest.raises(QueueServiceError, match="shape is invalid"):
+        _RemoteExecutionReport.from_dict({**retained, "executor_metadata": {}})
+    with pytest.raises(QueueConflictError, match="summary conflicts"):
+        _RemoteExecutionReport(
+            assignment_id="assignment-1",
+            stage_name="wrong-stage",
+            attempt=1,
+            status=StageStatus.FAILED,
+            started_at="2020-01-01T00:00:00Z",
+            finished_at="2020-01-01T00:00:01Z",
+            executor_name="local",
+            failure_type=failure.failure_type,
+            message=message,
+            exception_type=failure.exception_type,
+            failure=failure,
+            schema_version=2,
+        )
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    cancelled = StageWorkerResult(
+        schema_version=1,
+        run_uri=f"loom-agent:{request.assignment_id}",
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.CANCELLED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:00Z",
+        executor_name="local",
+        exit_code=1,
+    )
+    workspace.persist_cancelled_before_start(cancelled)
+    assert workspace.retain_outputs().process_created is False
 
 
 def test_input_publish_before_commit_replay_adopts_only_exact_target(
@@ -435,7 +790,7 @@ def test_input_publish_before_commit_replay_adopts_only_exact_target(
             (len(first), "input-1"),
         )
         conn.commit()
-    (workspace.root / "inputs" / "source").write_bytes(b"conflict")
+    workspace.input_path("source").write_bytes(b"conflict")
     with pytest.raises(QueueConflictError, match="conflicts with durable identity"):
         workspace.stage_input_chunk("input-1", len(first), final, final=True)
     with sqlite3.connect(workspace._db) as conn:
@@ -515,6 +870,51 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         request = _request(profile)
         input_path = tmp_path / "input.data"
         input_path.write_bytes(b"input")
+        binding = PreparationChildInput(
+            "prepare-1",
+            "existing",
+            "configs/pipeline.yaml",
+            SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-1"),
+            profile.descriptor.to_dict(),
+        )
+        fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+        preparation = replace(
+            request,
+            fingerprint=StageFingerprintRecord.create(
+                algorithm=fingerprint.algorithm,
+                payload=replace(
+                    fingerprint.payload,
+                    factory_target=PREPARATION_STAGE_TARGET,
+                    stage_config=binding.to_dict(),
+                ),
+                inputs_summary=fingerprint.inputs_summary,
+            ).to_dict(),
+        )
+        with pytest.raises(QueueServiceError, match="lacks preparation-input-v2"):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=preparation,
+                run_uri="file:///coordinator/run",
+                input_paths={"input-1": input_path},
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+            )
+        with pytest.raises(QueueServiceError, match="path-bearing"):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=_request(
+                    profile,
+                    stage_config={"cache_path": "/coordinator/private"},
+                ),
+                run_uri="file:///coordinator/run",
+                input_paths={"input-1": input_path},
+            )
         _target_remote_delivery(
             daemon,
             session_id=session.session_id,
@@ -729,3 +1129,93 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
             )
     finally:
         daemon.stop()
+
+
+def test_local_assignment_rejects_changed_binding_and_remote_export(tmp_path: Path) -> None:
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    local = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, fingerprint_fields={LOCAL_PREPARATION_SCOPE: {
+            "agent_id": "agent-1", "binding_fingerprint": profile.launch_profile.fingerprint,
+        }}),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    request = replace(request, fingerprint=local.to_dict())
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    # A reopening process receives the durable scope even when config changes.
+    reopened = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    assert reopened.request() == request
+    changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
+    with pytest.raises(QueueConflictError, match="binding identity"):
+        reopened.persist_request(request, changed)
+    with pytest.raises(QueueServiceError, match="unresolved local"):
+        request.validate_remote_transport()
+    with pytest.raises(QueueServiceError, match="unresolved local"):
+        _ResidentAssignmentBundle.from_remote_dict(request.to_dict())
+
+
+@pytest.mark.parametrize("backend", ["apptainer", "docker"])
+def test_local_container_launch_reopens_without_recursive_worker_materialization(
+    tmp_path: Path, backend: str,
+) -> None:
+    from loom.queue._agent_process_supervisor import _launch_from_value
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    image = tmp_path / "installed.sif"
+    image.write_bytes(b"command construction fixture")
+    binding = {
+        "kind": backend,
+        "container": {"image": {"reference": (
+            str(image) if backend == "apptainer" else "sha256:" + "a" * 64
+        )}},
+        "options": {"command": sys.executable},
+        "python_executable": "/opt/installed/bin/python",
+        "daemon_endpoint": None if backend == "apptainer" else "unix:///var/run/docker.sock",
+    }
+    profile = replace(_profile(tmp_path), container=binding)
+    request = _request(profile)
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    scoped = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, fingerprint_fields={LOCAL_PREPARATION_SCOPE: {
+            "agent_id": "agent-1", "binding_fingerprint": profile.launch_profile.fingerprint,
+        }}),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    request = replace(request, fingerprint=scoped.to_dict(), resolved_runtime={
+        **request.resolved_runtime, "resources": {"schema_version": 2, "entries": {}},
+    })
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    launch = ResidentWorkerLaunch(
+        supervisor_id="supervisor-1", continuity_epoch="epoch-1", agent_id="agent-1",
+        session_id="session-1", assignment_id=request.assignment_id,
+        process_execution_id="execution-1", execution_fence="fence-1",
+        launch_operation_id="launch-1", bundle_digest="a" * 64,
+        workspace_root=workspace.root, profile=profile.launch_profile, environment={},
+    )
+    argv, digest, controls = launch.command_argv, launch.spec_digest, launch.resource_controls
+    workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
+
+    reopened = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    retained = reopened.supervisor_launch_json()
+    assert retained is not None
+    decoded = _launch_from_value(json.loads(retained))
+    assert decoded.command_argv == argv
+    assert decoded.spec_digest == digest and decoded.resource_controls == controls
+    worker = reopened.worker_request()
+    assert worker.resolved_runtime == request.resolved_runtime
+    assert worker.fingerprint == scoped
+    assert worker.inputs["source"].uri == reopened.input_path("source").as_uri()
+    # A reachable profile reload cannot replace the retained local binding.
+    changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
+    with pytest.raises(QueueConflictError, match="binding identity"):
+        reopened.persist_request(request, changed)

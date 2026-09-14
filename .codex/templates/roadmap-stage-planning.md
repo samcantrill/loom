@@ -1,125 +1,92 @@
-# Roadmap Stage <N> Planning: <Title>
+# Roadmap Stage <N> Planning
 
+Planning layout: `planning-manifest-and-cards-v1`
 Status: draft
-Roadmap stage: <N>
-Evidence tree: <root> at <revision>; relevant dirty paths: <none or paths>
-Planning route: lean / expanded with trigger
-Current gate:
-Blockers:
+Evidence root / branch / revision / relevant dirty paths:
+Roadmap source:
+Implementation manifest: `docs/roadmap/stage-<N>/implementation-plan.md`
 
-This file is current authoritative state. Update sections in place. Target
-1,500-3,500 words and remove repeated evidence, copied source, speculative
-design, and routine history.
+This manifest owns stage routing, material decisions, and approval. Domain cards
+own detailed contracts; the implementation manifest owns phase shaping and final
+readiness. Link those owners without duplicating their definitions. Git owns
+superseded wording; keep current state sufficient to resume.
 
 ## Current State
 
-| Gate | Locked result | Open decisions or blockers | Next action |
-| --- | --- | --- | --- |
-| Evidence / functionality / design / validation / detailed plan / approval |  |  |  |
+- Outcome and current task:
+- Open decisions/blockers and exact owners:
+- Next action:
 
-## Evidence And Scope
+## Gate Ledger
 
-| Source or area | Current finding | Used for | Related IDs |
-| --- | --- | --- | --- |
-| Roadmap and canonical docs |  |  |  |
-| Source, tests, and config |  |  |  |
-| Adjacent plans |  |  |  |
+| Gate | Owning evidence | Status / next action |
+| --- | --- | --- |
+| Complete draft | indexed contracts and implementation cards | pending |
+| Independent final review | implementation manifest readiness receipt | pending |
+| Approval and landing | approval below and exact landed paths/revision | pending |
 
-- User-visible outcome:
-- Existing end-to-end path:
-- Included scope:
-- Non-goals and deferrals:
-- Current consumers, boundaries, or demonstrated failures:
-- Public or durable surfaces affected:
+## Planning Card Index
+
+| Card | Exact path | Coherent domain scope | Owned IDs | Dependencies | Status |
+| --- | --- | --- | --- | --- | --- |
+| PC-<N>-<card-slug> | `docs/roadmap/stage-<N>/planning/<card-slug>.md` |  |  |  | draft |
+
+Every detailed ID has one authoritative card. Update paths, links, ownership,
+and dependencies together when splitting a card.
+
+## Stage Outcome And Scope
+
+- Operator-visible outcome and current consumers:
+- Included contract areas (card links):
+- Prerequisites and adjacent roadmap dependencies:
+- Stage-wide non-goals and explicit deferrals:
 
 ## Minimum Useful Change
 
-- Smallest useful behavior:
+- Existing end-to-end path:
 - Closest existing capability and reuse decision:
-- Why a new surface is required:
-- Explicitly deferred behavior:
+- Reason for a new or separate surface:
+- Smallest implementation and material boundary/failure it addresses:
 
-## Functional Requirements
+## Cross-Card Constraints
 
-| ID | Required behavior | Scope and non-goals | Dependencies | Validation | Status |
-| --- | --- | --- | --- | --- | --- |
-| FR-1 |  |  |  |  | pending |
+Link authoritative definitions for shared architecture, runtime/provenance,
+public/durable boundaries, and dependency ordering. Do not repeat card text.
 
-## Functionality Agreement
+## Cross-Card Design Review Findings
 
-| ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
-| --- | --- | --- | --- | --- | --- |
-| FQ-1 | FR-1 |  |  |  | repo-resolved / needs discussion / blocked / locked / deferred |
-
-## Behavior Baseline
-
-- Included and default behavior:
-- Failure and unsupported behavior:
-- Reproducibility and durable behavior:
-- Explicit deferrals:
-
-## Minimum Design
-
-- Modules and ownership:
-- Data and control flow:
-- Fixed public, durable, trust-boundary, and cross-phase contracts:
-- Private implementation discretion:
-- Extension and compatibility seams:
-- Import and dependency direction:
-
-## Complexity Delta
-
-| Addition | Current necessity | Simpler alternative | Decision |
-| --- | --- | --- | --- |
-|  | requirement / consumer / boundary / failure |  | keep / simplify / defer |
-
-## Design Agreement
-
-| ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
-| --- | --- | --- | --- | --- | --- |
-| DQ-1 | FR-1 |  |  |  | repo-resolved / needs discussion / blocked / locked / deferred |
-
-## Expanded Design Review
-
-Use only on expanded route.
-
-| Finding | Related IDs | Evidence and consequence | Required action | Status |
-| --- | --- | --- | --- | --- |
-|  |  |  |  | pending |
-
-## Examples And Validation
-
-| Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
-| --- | --- | --- | --- | --- |
-|  |  |  |  | pending |
-
-Causal interactions requiring combined coverage:
-
-- None / details
+Final review findings and their resolution live in the implementation manifest.
+Link any cross-card issue here when needed for routing; card-local decisions
+remain at their contract owner.
 
 ## Phase Shaping
 
-| Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 |  |  |  |  | pending |
+Link the implementation manifest's phase index and phase-boundary evidence.
+Do not maintain another phase allocation table here.
 
-## Quality Gate
+## Specialist Pass Ledger
 
-| Check | Evidence | Result |
-| --- | --- | --- |
-| Behavior and agreements locked |  | pass / block |
-| Minimum design justified |  | pass / block |
-| Complexity delta proportionate |  | pass / block |
-| Contracts and private discretion clear |  | pass / block |
-| Invariant ownership and validation proportionate |  | pass / block |
-| Phases vertical and reviewable |  | pass / block |
-| No unresolved blocker |  | pass / block |
+Only record actual optional help. Final independent review has its receipt in
+the implementation manifest. Follow `.codex/prompts/subagent-lifecycle.md`.
 
-Gate result:
-Accepted risks and revisit triggers:
-
-## Decisions And Deferrals
-
-| Item | Decision or deferral | Rationale | Revisit trigger |
+| Role / runtime | Context mode | Named question / bounded paths | Result and manager verification |
 | --- | --- | --- | --- |
-|  |  |  |  |
+
+For a spawned task, Context mode is `fork_turns=none; file-backed`.
+
+## Decision Log
+
+Record material maintainer choices and reopenings at their owner; link the
+result here only when it changes stage routing. Omit routine chronology.
+
+| Decision | Owning card/IDs | Rationale / remaining action |
+| --- | --- | --- |
+
+## Approval And Landing Handoff
+
+- Approval status and maintainer evidence:
+- Approved scope, accepted risks, and deferrals (owner links):
+- Final readiness receipt (implementation manifest section):
+- Exact roadmap source and packet paths:
+- Landed revision and selected implementation base:
+- Relevant post-review changes and disposition:

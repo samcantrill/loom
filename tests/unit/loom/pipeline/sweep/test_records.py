@@ -5,26 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
 
-from loom.serialization import PlainData
 from loom.pipeline.sweep import (
     SWEEP_EXTRACTION_SCHEMA_VERSION,
     SWEEP_MANIFEST_SCHEMA_VERSION,
     SWEEP_FEEDBACK_SCHEMA_VERSION,
-    SWEEP_DISPATCH_SCHEMA_VERSION,
     SWEEP_MANIFEST_FILE_NAME,
     TRIALS_MANIFEST_FILE_NAME,
-    SweepDispatchRequest,
-    SweepDispatchResult,
-    SweepDispatchStatus,
     SweepExtractionRequest,
     SweepExtractionResult,
     SweepExtractionStatus,
     SweepFeedbackObservation,
     SweepFeedbackStatus,
     SweepManifest,
-    SweepProtocolError,
     SweepProviderIdentity,
     SweepProviderContext,
     SweepTrialFeedbackRecord,
@@ -94,38 +87,6 @@ def test_sweep_plain_data_is_frozen_and_serialization_is_independent() -> None:
     payload["overrides"]["nested"]["items"].append("serialized")
     assert proposal.to_dict()["overrides"] == {"nested": {"items": ["original"]}}
     assert TrialProposal.from_dict(proposal.to_dict()) == proposal
-
-
-def test_dispatch_record_round_trip() -> None:
-    request = SweepDispatchRequest(
-        sweep_id="sweep-1",
-        trial_id="trial-1",
-        trial_index=0,
-        requested_at="2020-01-01T00:00:00Z",
-    )
-    result = SweepDispatchResult(
-        request=request,
-        status=SweepDispatchStatus.ACCEPTED,
-        dispatched_at="2020-01-01T00:00:01Z",
-        result_metadata={"backend": "local"},
-    )
-
-    assert request.to_dict()["schema_version"] == SWEEP_DISPATCH_SCHEMA_VERSION
-    assert result.to_dict()["status"] == "accepted"
-    assert SweepDispatchResult.from_dict(result.to_dict()) == result
-
-
-def test_sweep_schema_version_validation_matches_constructor_and_wire() -> None:
-    fields = {
-        "sweep_id": "sweep-1",
-        "trial_id": "trial-1",
-        "trial_index": 0,
-        "requested_at": "2020-01-01T00:00:00Z",
-    }
-    with pytest.raises(SweepProtocolError, match="schema_version"):
-        SweepDispatchRequest(**fields, schema_version=True)
-    with pytest.raises(SweepProtocolError, match="schema_version"):
-        SweepDispatchRequest.from_dict({**fields, "schema_version": True})
 
 
 def test_feedback_record_carries_observations_and_status() -> None:
@@ -219,36 +180,3 @@ def test_manifest_payload_checks_differentiate_unsupported_and_malformed_records
     _, diagnostics = check_trials_manifest_payload(payload, sweep_dir=str(tmp_path))
     assert diagnostics
     assert diagnostics[0].code == "unsupported_trials_schema_version"
-
-
-def test_feedback_and_dispatch_reject_non_plain_payloads() -> None:
-    with pytest.raises(SweepProtocolError, match="plain"):
-        SweepFeedbackObservation(
-            key="x",
-            value={},
-            metadata=cast(
-                "dict[str, PlainData]", {"bad": cast("PlainData", {1: "one"})}
-            ),
-        )
-
-    with pytest.raises(SweepProtocolError, match="unknown field"):
-        SweepDispatchRequest.from_dict(
-            {
-                "schema_version": SWEEP_DISPATCH_SCHEMA_VERSION,
-                "sweep_id": "sweep-1",
-                "trial_id": "trial-1",
-                "trial_index": 0,
-                "requested_at": "2020-01-01T00:00:00Z",
-                "request_metadata": {},
-                "future_field": True,
-            }
-        )
-
-    with pytest.raises(SweepProtocolError, match="plain"):
-        SweepDispatchRequest(
-            sweep_id="sweep-1",
-            trial_id="trial-1",
-            trial_index=0,
-            requested_at="2020-01-01T00:00:00Z",
-            request_metadata={"bad": object()},  # type: ignore[arg-type]
-        )

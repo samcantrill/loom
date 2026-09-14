@@ -1,7 +1,9 @@
 """Unit tests for the local executor."""
 
 from pathlib import Path
-from typing import cast
+import json
+from dataclasses import replace
+from typing import Any, cast
 
 from loom.pipeline import (
     OutputSpec,
@@ -10,6 +12,8 @@ from loom.pipeline import (
     StageFactorySpec,
     StageSpec,
 )
+from loom.pipeline.execution import StageReportedFailure
+from loom.diagnostics import render_diagnostic_failure
 from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.planning import (
@@ -115,6 +119,52 @@ def test_local_executor_returns_structured_failure(tmp_path: Path) -> None:
     assert result.traceback_path is not None
 
 
+def test_local_executor_failure_is_portable_without_its_traceback_file(
+    tmp_path: Path,
+) -> None:
+    class NestedFailureStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            del context, inputs
+            try:
+                raise FileNotFoundError("missing /worker/dataset/input.json")
+            except FileNotFoundError as cause:
+                cause.add_note("Configure the dataset root for the selected worker.")
+                raise RuntimeError("training stage input preparation failed") from cause
+
+    result = LocalExecutor().execute(_request(tmp_path, NestedFailureStage()))
+
+    assert result.status is StageStatus.FAILED
+    assert result.failure is not None
+    assert result.traceback_path is not None
+    Path(result.traceback_path).unlink()
+    rendered = render_diagnostic_failure(result.failure.details["diagnostic_failure"])
+    assert "training stage input preparation failed" in rendered
+    assert "missing /worker/dataset/input.json" in rendered
+    assert "Configure the dataset root" in str(result.failure.details["traceback"])
+
+
+def test_local_executor_preserves_reported_failure_without_traceback(
+    tmp_path: Path,
+) -> None:
+    class ReportedFailureStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            del context, inputs
+            raise StageReportedFailure({"schema": "domain.failure.v1", "value": [1]})
+
+    result = LocalExecutor().execute(_request(tmp_path, ReportedFailureStage()))
+
+    assert result.status is StageStatus.FAILED
+    assert result.traceback_path is None
+    assert result.failure is not None
+    assert result.failure.message == "stage reported a domain failure"
+    assert (
+        result.failure.exception_type == "loom.pipeline.execution.StageReportedFailure"
+    )
+    assert result.failure.details == {
+        "domain_failure": {"schema": "domain.failure.v1", "value": (1,)}
+    }
+
+
 def test_local_executor_reports_reliability_timeout_as_unsupported(
     tmp_path: Path,
 ) -> None:
@@ -132,3 +182,58 @@ def test_local_executor_reports_reliability_timeout_as_unsupported(
 
 def test_local_executor_does_not_make_resume_decisions() -> None:
     assert PlanAction.REUSE.value == "REUSE"
+
+
+def test_local_stage_and_result_share_admitted_request_view_before_stage_work(
+    tmp_path: Path,
+) -> None:
+    seen = []
+
+    class InspectingStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            seen.append(context.metadata["execution_request"])
+            return {}
+
+    request = _request(tmp_path, InspectingStage())
+    runtime = ResolvedStageRuntimeOptions(
+        stage_id="build",
+        resources={"entries": {"cpu": {"kind": "cpu", "amount": 4}}},
+        resource_policy={"enforce": []},
+    )
+    request = replace(request, resolved_runtime=runtime)
+    result = LocalExecutor().execute(request)
+    assert result.status is StageStatus.SUCCEEDED
+    assert len(seen) == 1
+    assert seen[0]["resolved_runtime"]["resources"]["entries"]["cpu"]["amount"] == 4
+    public = cast(dict[str, Any], result.to_safe_metadata())
+    assert public["executor_metadata"]["request"] == request.to_safe_metadata()
+    assert public["executor_metadata"]["execution_kind"] == "in_process"
+    assert public["executor_metadata"]["command"] is None
+    assert public["status"] == StageStatus.SUCCEEDED.value
+    assert str(tmp_path) not in json.dumps(public)
+    assert "execution_request" not in request.context.metadata
+
+
+def test_early_stop_retains_requested_resources_and_safe_execution_view(
+    tmp_path: Path,
+) -> None:
+    class EarlyStoppingStage:
+        def run(self, context: StageContext, inputs: object) -> object:
+            context.stop_early("enough evidence")
+
+    request = replace(
+        _request(tmp_path, EarlyStoppingStage()),
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build",
+            resources={"entries": {"cpu": {"kind": "cpu", "amount": 4}}},
+            resource_policy={"enforce": []},
+        ),
+    )
+    result = LocalExecutor().execute(request)
+    assert result.status is StageStatus.CANCELLED
+    assert result.failure is None
+    public = cast(dict[str, Any], result.to_safe_metadata())
+    assert public["executor_metadata"]["request"] == request.to_safe_metadata()
+    assert public["executor_metadata"]["execution_kind"] == "in_process"
+    assert public["executor_metadata"]["command"] is None
+    assert str(tmp_path) not in json.dumps(public)

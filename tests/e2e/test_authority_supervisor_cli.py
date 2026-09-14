@@ -15,11 +15,9 @@ pytest.importorskip("yaml")
 
 from loom.cli.main import main
 from loom.pipeline.stores import (
-    LocalRunStore,
     WorkspaceIdentity,
     create_authority_client,
     path_to_run_uri,
-    run_uri_to_path,
 )
 
 
@@ -99,9 +97,10 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         assert restart_payload["result"]["readiness"] == "ready"
         assert restart_payload["result"]["command"] == "restart"
         assert restart_payload["result"]["process_state"] == "running"
-        assert restart_payload["result"]["service_generation"] != start_payload["result"][
-            "service_generation"
-        ]
+        assert (
+            restart_payload["result"]["service_generation"]
+            != start_payload["result"]["service_generation"]
+        )
         assert restart_payload["result"]["process_state"] == "running"
         assert restart_payload["result"]["pid"] != start_payload["result"]["pid"]
 
@@ -141,69 +140,40 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         assert workspace_response.result is not None
         assert workspace_response.result.workspace is not None
 
-        config_path = tmp_path / "pipeline.yaml"
-        config_path.write_text(
-            "pipeline:\n"
-            "  name: online-authority-smoke\n"
-            "  stages:\n"
-            "    - name: build\n"
-            "      factory:\n"
-            "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
-            "      config:\n"
-            "        value: 5\n"
-            "      outputs:\n"
-            "        data:\n"
-            "          artifact_type: json\n"
-            "          codec_key: json.v1\n",
-            encoding="utf-8",
+        from loom.pipeline.execution import create_authority_backed_serial_run_store
+        from loom.pipeline.stores import (
+            AuthorityConfig,
+            AuthorityBackendKind,
+            AuthorityDeploymentProfile,
+        )
+        from tests.support.historical_offline_evidence import complete_manifest
+
+        selected_authority = AuthorityConfig(
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+            endpoint=active_endpoint,
+            workspace_id="workspace-a",
         )
         run_uri = path_to_run_uri(tmp_path / "runs" / "online-authority")
-        run_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    run_uri,
-                    "--authority-backend",
-                    "managed_service",
-                    "--authority-profile",
-                    "managed_service",
-                    "--authority-endpoint",
-                    active_endpoint,
-                    "--authority-workspace",
-                    "workspace-a",
-                    "--format",
-                    "json",
-                ],
-                stdout=run_stdout,
-            )
-            == 0
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs", authority_config=selected_authority
         )
-        run_payload = json.loads(run_stdout.getvalue())
-        assert run_payload["result"]["status"] == "SUCCEEDED"
-        assert (run_uri_to_path(run_uri) / "status.json").is_file()
+        from loom.pipeline.status import RunStatus
 
-        offline_run_uri = path_to_run_uri(tmp_path / "runs" / "offline-import")
-        offline_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    offline_run_uri,
-                    "--offline-first",
-                    "--format",
-                    "json",
-                ],
-                stdout=offline_stdout,
-            )
-            == 0
+        store.create_run(run_uri)
+        store.authority_store.transition_run(
+            run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
         )
-        offline_payload = json.loads(offline_stdout.getvalue())
-        manifest_path = offline_payload["result"]["offline_evidence"]["manifest_path"]
+        store.authority_store.transition_run(
+            run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED
+        )
+        assert store.authority_store.snapshot(run_uri).status.value == "SUCCEEDED"
+
+        manifest = complete_manifest(tmp_path)
+        offline_run_uri = manifest.run_uri
+        manifest_file = tmp_path / "historical-evidence.json"
+        manifest_file.write_text(json.dumps(manifest.to_dict()))
+        manifest_path = str(manifest_file)
         import_stdout = io.StringIO()
         assert (
             main(
@@ -230,46 +200,8 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         assert import_payload["ok"] is True
         assert import_payload["result"]["run_uri"] == offline_run_uri
         assert import_payload["result"]["status"] == "SUCCEEDED"
-        assert import_payload["result"]["imported_stage_count"] == 1
+        assert import_payload["result"]["imported_stage_count"] == 2
 
-        subprocess_run_uri = path_to_run_uri(
-            tmp_path / "runs" / "online-authority-subprocess"
-        )
-        subprocess_stdout = io.StringIO()
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--run-uri",
-                    subprocess_run_uri,
-                    "--executor",
-                    "subprocess",
-                    "--authority-backend",
-                    "managed_service",
-                    "--authority-profile",
-                    "managed_service",
-                    "--authority-endpoint",
-                    active_endpoint,
-                    "--authority-workspace",
-                    "workspace-a",
-                    "--format",
-                    "json",
-                ],
-                stdout=subprocess_stdout,
-            )
-            == 0
-        )
-        subprocess_payload = json.loads(subprocess_stdout.getvalue())
-        assert subprocess_payload["result"]["status"] == "SUCCEEDED"
-        assert (
-            LocalRunStore().read_stage_worker_result(
-                subprocess_run_uri,
-                "build",
-                attempt=1,
-            )
-            is not None
-        )
     finally:
         stop_stdout = io.StringIO()
         main(

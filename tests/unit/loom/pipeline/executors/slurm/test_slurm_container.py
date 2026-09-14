@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from typing import cast
 
 import pytest
 
 from loom.pipeline.executors.containers import (
-    ContainerBuildResult,
-    FakeContainerBuilder,
-    LocalContainerBuildService,
+    ContainerOptions,
+    ContainerResourceIntent,
 )
+from loom.pipeline.runtime.capabilities import ResourceCapability
 from loom.pipeline.executors.slurm import (
     SlurmCommandArgv,
-    resolve_slurm_container_target,
     wrap_slurm_command_with_apptainer,
 )
 from loom.pipeline.executors.slurm.errors import SlurmPlanningError
@@ -80,30 +78,6 @@ def test_wrap_slurm_command_with_apptainer_preserves_worker_argv_and_redacts() -
     assert wrapped.to_dict()["metadata"] == dict(wrapped.metadata)
 
 
-def test_resolve_slurm_container_target_maps_selected_sif_output() -> None:
-    builder = FakeContainerBuilder(
-        "apptainer",
-        existing_outputs=[".loom/containers/analysis.sif"],
-    )
-    service = LocalContainerBuildService({"apptainer": builder})
-
-    resolved = resolve_slurm_container_target(
-        {"target": "analysis-env", "workdir": "/workspace"},
-        build_options=_container_build_options(),
-        build_service=service,
-        requested_by="unit-test",
-    )
-
-    result = cast(ContainerBuildResult, resolved.build_result)
-    assert resolved.container_options == {
-        "workdir": "/workspace",
-        "image": {"reference": ".loom/containers/analysis.sif"},
-    }
-    assert result.target_name == "analysis-env"
-    assert result.status == "reused"
-    assert [call.requested_by for call in builder.calls] == ["unit-test"]
-
-
 def test_slurm_gpu_wrapper_derives_nv_and_rejects_authored_visibility() -> None:
     command = SlurmCommandArgv(launcher_argv=("loom",), command_args=("--version",))
     resources = ResourceRequest(entries={"gpu": ResourceEntry(kind="gpu", amount=1)})
@@ -127,39 +101,26 @@ def test_slurm_gpu_wrapper_derives_nv_and_rejects_authored_visibility() -> None:
         )
 
 
-def test_resolve_slurm_container_target_rejects_missing_or_wrong_targets() -> None:
-    service = LocalContainerBuildService(
-        {
-            "docker": FakeContainerBuilder("docker"),
-            "apptainer": FakeContainerBuilder("apptainer"),
-        }
+def test_slurm_container_wrapper_keeps_cpu_memory_limits_with_scheduler() -> None:
+    command = SlurmCommandArgv(launcher_argv=("loom",), command_args=("--version",))
+    intent = ContainerResourceIntent(
+        entries={
+            "cpu": ResourceEntry(kind="cpu", amount=2),
+            "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),
+        },
+        capabilities={
+            kind: ResourceCapability(support_level="supported")
+            for kind in ("cpu", "memory")
+        },
     )
 
-    with pytest.raises(SlurmPlanningError, match="not defined"):
-        resolve_slurm_container_target(
-            {"target": "missing"},
-            build_options=_container_build_options(),
-            build_service=service,
-            requested_by="unit-test",
-        )
-    with pytest.raises(SlurmPlanningError, match="requires an apptainer"):
-        resolve_slurm_container_target(
-            {"target": "docker-env"},
-            build_options={
-                "targets": {
-                    "docker-env": {
-                        "runtime": "docker",
-                        "source": {"kind": "docker_context", "context_path": "."},
-                        "output": {
-                            "kind": "docker_image",
-                            "reference": "example/image:latest",
-                        },
-                    }
-                }
-            },
-            build_service=service,
-            requested_by="unit-test",
-        )
+    wrapped = wrap_slurm_command_with_apptainer(
+        command,
+        container_options=ContainerOptions(image="analysis.sif", resources=intent),
+    )
+
+    assert "--cpus" not in wrapped.argv
+    assert "--memory" not in wrapped.argv
 
 
 def _container_build_options() -> dict[str, object]:

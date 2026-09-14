@@ -1,6 +1,7 @@
 """Unit tests for plain structured-data helpers."""
 
 from dataclasses import dataclass
+import json
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -103,3 +104,32 @@ def test_freeze_plain_data_accepts_already_frozen_nested_values() -> None:
 
     assert thawed == {"nested": [{"labels": ["a", "b", "changed"]}]}
     assert thaw_plain_data(frozen) == {"nested": [{"labels": ["a", "b"]}]}
+
+
+def test_deep_plain_data_normalization_preserves_canonical_bytes_and_copies() -> None:
+    value: Any = {"": 0.5, "long-key-" * 32: [True, None, "evidence"]}
+    for _ in range(256):
+        value = {"nested": [value]}
+    expected = json.dumps(value, sort_keys=True)
+
+    assert is_plain_data(value)
+    for converted in (
+        ensure_plain_data(value),
+        to_plain_data(value),
+        thaw_plain_data(freeze_plain_data(value)),
+    ):
+        assert converted is not value
+        assert json.dumps(converted, sort_keys=True) == expected
+
+
+def test_plain_data_shared_children_are_copied_without_accepting_cycles() -> None:
+    shared = {"items": [0.5]}
+    copied = thaw_plain_data(freeze_plain_data([shared, shared]))
+    assert isinstance(copied, list)
+    assert copied == [shared, shared]
+    assert copied[0] is not copied[1]
+    cycle: list[Any] = []
+    cycle.append(cycle)
+    assert not is_plain_data(cycle)
+    with pytest.raises(PlainDataError, match="cycl"):
+        freeze_plain_data(cycle)

@@ -1,46 +1,27 @@
 # Failing Run Diagnostics
 
-This example demonstrates v3 diagnostics for a local pipeline whose first stage
-fails under an explicit local authority supervisor. It runs preflight, executes
-the failing run, then inspects status and artifact metadata.
-
 ## Workflow
 
-This workflow uses:
+The run entrypoints use public `loom.run` with a protected installed agent
+profile. Preparation, execution, fenced results and owned-service cleanup follow
+the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
+typed materialized worker results supply output and diagnostic details after
+owned services stop. The short deployment root printed by the script is retained
+for inspection; artifacts default to this example's `runs/` directory. Set
+`LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to relocate artifacts.
 
-- `loom preflight CONFIG`
-- `loom run CONFIG --run-uri RUN_URI`
-- `loom status RUN_URI`
-- `loom artifacts list RUN_URI`
-
-## Variants
-
-Canonical failing run:
-
-```sh
-uv run loom run examples/operations/failing-run/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/failing-run
-```
-
-Explicit co-located authority selection:
-
-```sh
-uv run loom run examples/operations/failing-run/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/failing-run \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
-
-Matching authoritative status read:
-
-```sh
-uv run loom status file:///tmp/loom-examples/failing-run \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
-
-Run from the repository root:
+This example runs preflight and a native pipeline whose first stage fails.
+It reports the native failed admission, failed stage names and artifact count;
+structured failure and logs remain in the materialized worker result.
 
 ```sh
 uv run python examples/operations/failing-run/run_failure_diagnostics.py
 ```
+
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

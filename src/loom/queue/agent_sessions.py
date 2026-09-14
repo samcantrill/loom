@@ -8,7 +8,7 @@ admission, and process launch remain protected agent-local concerns.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import wraps
 import hashlib
@@ -33,7 +33,11 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
-from ._managed_local import _provider_group_descriptor
+from ._managed_local import (
+    GPU_DECLINE_REASONS,
+    ResourceAvailabilityStatus,
+    _provider_group_descriptor,
+)
 from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -62,7 +66,8 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "10"
+PROTOCOL_VERSION = "13"
+SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -384,7 +389,17 @@ class AgentPrincipalPolicy:
     capabilities: tuple[str, ...] = ()
     gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
 
+    external_slurm_profiles: tuple[tuple[str, str], ...] = ()
+
     def __post_init__(self) -> None:
+        profiles = tuple(tuple(item) for item in self.external_slurm_profiles)
+        if any(
+            len(item) != 2
+            or any(not isinstance(value, str) or not value for value in item)
+            for item in profiles
+        ) or len(set(profiles)) != len(profiles):
+            raise QueueServiceError("external SLURM profile inventory is invalid")
+        object.__setattr__(self, "external_slurm_profiles", profiles)
         for name in ("credential_id", "principal_id", "agent_id"):
             _identifier(getattr(self, name), name)
         _identifiers(self.pools, "pools", non_empty=True)
@@ -681,8 +696,19 @@ class AgentOffer:
     gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
     gpu_atoms: tuple[CapacityAtom, ...] = ()
     capacity_atoms: tuple[CapacityAtom, ...] = ()
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
+
+    external_slurm_profiles: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
+        profiles = tuple(tuple(item) for item in self.external_slurm_profiles)
+        if any(
+            len(item) != 2
+            or any(not isinstance(value, str) or not value for value in item)
+            for item in profiles
+        ) or len(set(profiles)) != len(profiles):
+            raise QueueServiceError("external SLURM profile inventory is invalid")
+        object.__setattr__(self, "external_slurm_profiles", profiles)
         for name in (
             "session_id",
             "coordinator_epoch",
@@ -773,7 +799,12 @@ class AgentOffer:
             not isinstance(item, AgentProviderDescriptor) for item in providers
         ) or len({item.descriptor.key for item in providers}) != len(providers):
             raise QueueServiceError("offer provider composition is invalid")
-        if not providers:
+        if not providers and (
+            not self.external_slurm_profiles
+            or capacity_atoms
+            or self.gpu_devices
+            or self.resident_profiles
+        ):
             raise QueueServiceError("offer provider composition is required")
         provider_kinds = {item.descriptor.kind for item in providers}
         if any(
@@ -848,9 +879,50 @@ class AgentOffer:
             "capacity_atoms",
             tuple(sorted(capacity_atoms, key=lambda item: item.key)),
         )
+        statuses = tuple(self.resource_status)
+        if any(not isinstance(item, ResourceAvailabilityStatus) for item in statuses):
+            raise QueueServiceError("offer resource status is invalid")
+        if statuses:
+            keys = {(item.resource_kind, item.local_capacity_key) for item in statuses}
+            expected_keys = {("gpu", device.device_id) for device in devices}
+            if len(keys) != len(statuses) or keys != expected_keys:
+                raise QueueServiceError(
+                    "offer resource status must cover GPU inventory"
+                )
+            available_keys = {atom.key for atom in capacity_gpu_atoms}
+            if any(
+                item.available
+                != ((item.resource_kind, item.local_capacity_key) in available_keys)
+                for item in statuses
+            ):
+                raise QueueServiceError(
+                    "offer resource status conflicts with availability"
+                )
+        object.__setattr__(
+            self,
+            "resource_status",
+            tuple(
+                sorted(
+                    statuses,
+                    key=lambda item: (item.resource_kind, item.local_capacity_key),
+                )
+            ),
+        )
+
+    def decision_value(self) -> dict[str, PlainData]:
+        """Return scheduling content, excluding report identity and sample times."""
+        value = self.value()
+        value.pop("availability_revision")
+        value["resource_status"] = [
+            item.decision_dict() for item in self.resource_status
+        ]
+        return value
 
     def value(self) -> dict[str, PlainData]:
         return {
+            "external_slurm_profiles": [
+                list(item) for item in self.external_slurm_profiles
+            ],
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
             "config_revision": self.config_revision,
@@ -865,11 +937,16 @@ class AgentOffer:
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
             "gpu_devices": [device.to_dict() for device in self.gpu_devices],
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
     def from_value(cls, value: object) -> "AgentOffer":
+        # An earlier native-only offer has exactly the same resource meaning.
+        if isinstance(value, Mapping) and "external_slurm_profiles" not in value:
+            value = {"external_slurm_profiles": [], **value}
         expected = {
+            "external_slurm_profiles",
             "session_id",
             "coordinator_epoch",
             "config_revision",
@@ -883,8 +960,18 @@ class AgentOffer:
             "resident_profiles",
             "gpu_devices",
         }
-        if not isinstance(value, Mapping) or set(value) != expected:
+        if not isinstance(value, Mapping) or set(value) not in (
+            expected,
+            expected | {"resource_status"},
+        ):
             raise QueueServiceError("agent offer is invalid")
+        legacy = "resource_status" not in value
+        status_values = value.get("resource_status", ())
+        if not isinstance(status_values, (list, tuple)):
+            raise QueueServiceError("agent offer resource status is invalid")
+        statuses = tuple(
+            ResourceAvailabilityStatus.from_dict(item) for item in status_values
+        )
         atoms = value["capacity_atoms"]
         if not isinstance(atoms, Sequence) or isinstance(atoms, (str, bytes)):
             raise QueueServiceError("agent offer capacity is invalid")
@@ -937,6 +1024,9 @@ class AgentOffer:
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
+            external_slurm_profiles=tuple(
+                tuple(item) for item in value["external_slurm_profiles"]
+            ),
             session_id=cast(str, value["session_id"]),
             coordinator_epoch=cast(str, value["coordinator_epoch"]),
             config_revision=cast(str, value["config_revision"]),
@@ -957,8 +1047,26 @@ class AgentOffer:
             gpu_devices=tuple(
                 GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
             ),
-            gpu_atoms=tuple(gpu_atoms),
-            capacity_atoms=tuple(capacity_atoms),
+            gpu_atoms=() if legacy else tuple(gpu_atoms),
+            capacity_atoms=tuple(
+                atom
+                for atom in capacity_atoms
+                if not legacy or atom.owner_resource_kind != "gpu"
+            ),
+            resource_status=(
+                tuple(
+                    ResourceAvailabilityStatus(
+                        "gpu",
+                        GpuDeviceDescriptor.from_dict(item).device_id,
+                        False,
+                        "observation_unavailable",
+                        None,
+                    )
+                    for item in gpu_devices
+                )
+                if legacy
+                else statuses
+            ),
         )
 
     @property
@@ -1022,6 +1130,14 @@ def _offer_capacity_atom(value: Mapping[str, object]) -> CapacityAtom:
     return atom
 
 
+def _status_values(value: object) -> Sequence[Mapping[str, object]]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, Mapping) for item in value
+    ):
+        raise QueueServiceError("resource status collection is invalid")
+    return cast(Sequence[Mapping[str, object]], value)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentOfferRenewal:
     """One sequenced extension of an unchanged current offer."""
@@ -1030,6 +1146,7 @@ class AgentOfferRenewal:
     offer_id: str
     availability_revision: str
     sequence: int
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("session_id", "offer_id", "availability_revision"):
@@ -1041,12 +1158,20 @@ class AgentOfferRenewal:
         ):
             raise QueueServiceError("offer renewal sequence must be positive")
 
+        if any(
+            not isinstance(item, ResourceAvailabilityStatus)
+            for item in self.resource_status
+        ):
+            raise QueueServiceError("offer renewal resource status is invalid")
+        object.__setattr__(self, "resource_status", tuple(self.resource_status))
+
     def value(self) -> dict[str, PlainData]:
         return {
             "session_id": self.session_id,
             "offer_id": self.offer_id,
             "availability_revision": self.availability_revision,
             "sequence": self.sequence,
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
@@ -1056,6 +1181,7 @@ class AgentOfferRenewal:
             "offer_id",
             "availability_revision",
             "sequence",
+            "resource_status",
         }:
             raise QueueServiceError("agent offer renewal fields are invalid")
         sequence = value["sequence"]
@@ -1069,6 +1195,10 @@ class AgentOfferRenewal:
             cast(str, value["offer_id"]),
             cast(str, value["availability_revision"]),
             sequence,
+            tuple(
+                ResourceAvailabilityStatus.from_dict(item)
+                for item in _status_values(value["resource_status"])
+            ),
         )
 
 
@@ -1481,15 +1611,49 @@ class AgentSessionView:
             expected, coordinator_epoch, idempotency_key=idempotency_key
         )
 
+    def slurm_work(
+        self,
+        session_id: str,
+        coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).slurm_work(
+            session_id, coordinator_epoch, evidence, cursor
+        )
+
     def publish_offer(
-        self, offer: AgentOffer, *, idempotency_key: str
+        self,
+        offer: AgentOffer,
+        *,
+        idempotency_key: str,
+        expected_availability_revision: str | None = None,
     ) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).publish_offer(
-            offer, idempotency_key=idempotency_key
+            offer,
+            idempotency_key=idempotency_key,
+            expected_availability_revision=expected_availability_revision,
         )
 
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).renew_offer(renewal)
+
+    def recover_poll(
+        self,
+        session_id: str,
+        availability_revision: str,
+        *,
+        sequence: int,
+        wait_timeout_ms: int,
+        coordinator_epoch: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).recover_poll(
+            session_id,
+            availability_revision,
+            sequence=sequence,
+            wait_timeout_ms=wait_timeout_ms,
+            coordinator_epoch=coordinator_epoch,
+        )
 
     def wait_for_work(
         self,
@@ -1564,11 +1728,13 @@ class AgentSessionView:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).decline_assignment(
             session_id,
             assignment_id,
             availability_revision=availability_revision,
+            reason_code=reason_code,
         )
 
     def confirm_started(
@@ -1669,6 +1835,13 @@ class AgentSessionView:
             provider_release_proof=provider_release_proof,
         )
 
+    def service_lifetime(
+        self, session_id: str, coordinator_epoch: str, generation: str, action: str
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).service_lifetime(
+            session_id, coordinator_epoch, generation, action
+        )
+
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
@@ -1724,6 +1897,61 @@ class AgentSessionService:
             policy.revision,
         )
 
+    @_serialized_session_operation
+    def slurm_work(
+        self,
+        session_id: str,
+        coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, PlainData]:
+        rule, revision = self._authorize("poll")
+        with self._daemon._connection() as conn:
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id=?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(session, rule, coordinator_epoch, revision)
+            if SLURM_SUBMISSION_CAPABILITY not in session.capabilities:
+                raise QueueServiceError(
+                    "agent session lacks SLURM submission capability"
+                )
+        execution = self._daemon._execution
+        if execution is None:
+            raise QueueServiceError("SLURM assignment owner is unavailable")
+        if evidence is not None:
+            return execution.acknowledge_slurm_agent(
+                session.agent_id, session.agent_root_id, evidence
+            )
+        tasks = sorted(
+            execution.slurm_agent_tasks(session.agent_id, session.agent_root_id),
+            key=lambda task: cast(
+                str, cast(Mapping[str, PlainData], task["assignment"])["assignment_id"]
+            ),
+        )
+        if cursor is not None:
+            tasks = [
+                task
+                for task in tasks
+                if cast(
+                    str,
+                    cast(Mapping[str, PlainData], task["assignment"])["assignment_id"],
+                )
+                > cursor
+            ]
+        selected = tasks[:1]
+        return {
+            "tasks": cast(PlainData, selected),
+            "next_cursor": None
+            if len(tasks) <= 1
+            else cast(Mapping[str, PlainData], selected[0]["assignment"])[
+                "assignment_id"
+            ],
+        }
+
     def handshake(self) -> Mapping[str, PlainData]:
         self._authorize("handshake")
         coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
@@ -1731,7 +1959,8 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v10",
+                    "agent-sessions-v12",
+                    SLURM_SUBMISSION_CAPABILITY,
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -2359,6 +2588,10 @@ class AgentSessionService:
             if current is None:
                 raise QueueConflictError("offer renewal requires the current offer")
             offer = AgentOffer.from_value(json.loads(str(current["offer_json"])))
+            if [item.decision_dict() for item in renewal.resource_status] != [
+                item.decision_dict() for item in offer.resource_status
+            ]:
+                raise QueueConflictError("offer renewal changes resource availability")
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             conn.execute(
@@ -2371,6 +2604,7 @@ class AgentSessionService:
                 "expires_at": expiry,
                 "sequence": renewal.sequence,
                 "state": "renewed",
+                "resource_status": [item.to_dict() for item in renewal.resource_status],
             }
             conn.execute(
                 "INSERT INTO agent_offer_renewals(principal_id, session_id, sequence, digest, result_json) "
@@ -2385,18 +2619,30 @@ class AgentSessionService:
                 ),
             )
             conn.commit()
-            return result
+            return freeze_plain_data(result, path="agent offer renewal receipt")
 
     @_serialized_offer_operation
     def publish_offer(
-        self, offer: AgentOffer, *, idempotency_key: str
+        self,
+        offer: AgentOffer,
+        *,
+        idempotency_key: str,
+        expected_availability_revision: str | None = None,
     ) -> Mapping[str, PlainData]:
         rule, policy_revision = self._authorize("offer")
         execution = self._daemon._execution  # type: ignore[attr-defined]
         if execution is None:
             raise QueueServiceError("agent offer validation is unavailable")
         _identifier(idempotency_key, "idempotency_key")
-        digest = _digest(offer.value())
+        publication = offer.value()
+        if expected_availability_revision is not None:
+            _identifier(
+                expected_availability_revision, "expected availability revision"
+            )
+            publication["expected_availability_revision"] = (
+                expected_availability_revision
+            )
+        digest = _digest(publication)
         replacement_admission = _replacement_offer_admission(
             self._daemon, offer.session_id
         )
@@ -2434,14 +2680,45 @@ class AgentSessionService:
             ) != (
                 session.config_revision,
                 session.inventory_revision,
-                session.availability_revision,
+                session.availability_revision
+                if expected_availability_revision is None
+                else offer.availability_revision,
             ):
                 raise QueueConflictError(
                     "agent offer revisions do not match its session"
                 )
+            if (
+                expected_availability_revision is not None
+                and session.availability_revision != expected_availability_revision
+            ):
+                raise QueueConflictError(
+                    "agent offer previous availability revision is stale"
+                )
+            if expected_availability_revision is not None and (
+                offer.availability_revision == expected_availability_revision
+                or conn.execute(
+                    "SELECT 1 FROM agent_offers WHERE session_id = ? AND availability_revision = ?",
+                    (offer.session_id, offer.availability_revision),
+                ).fetchone()
+                is not None
+            ):
+                raise QueueConflictError("agent availability revision cannot be reused")
             if offer.pools != session.pools:
                 raise QueueConflictError(
                     "agent offer pools do not match its effective scope"
+                )
+            if (
+                offer.external_slurm_profiles
+                and SLURM_SUBMISSION_CAPABILITY not in session.capabilities
+            ):
+                raise QueueServiceError(
+                    "agent session lacks SLURM submission capability"
+                )
+            if not set(offer.external_slurm_profiles).issubset(
+                rule.external_slurm_profiles
+            ):
+                raise QueueConflictError(
+                    "agent external SLURM inventory is not authorized"
                 )
             if offer.gpu_devices != rule.gpu_devices:
                 raise QueueConflictError(
@@ -2501,6 +2778,14 @@ class AgentSessionService:
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             offer_id = f"offer-{uuid4()}"
+            if expected_availability_revision is not None:
+                conn.execute(
+                    "UPDATE agent_sessions SET availability_revision = ? WHERE session_id = ?",
+                    (offer.availability_revision, session.session_id),
+                )
+                session = replace(
+                    session, availability_revision=offer.availability_revision
+                )
             conn.execute(
                 "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
                 (offer.session_id,),
@@ -2526,6 +2811,7 @@ class AgentSessionService:
                 "accepted_at": accepted,
                 "expires_at": expiry,
                 "state": "retained",
+                "session": session.value(),
             }
             if replacement_admission is not None:
                 projection_json = _canonical_json(
@@ -2570,6 +2856,76 @@ class AgentSessionService:
             )
             conn.commit()
         return freeze_plain_data(value, path="agent offer receipt")
+
+    def recover_poll(
+        self,
+        session_id: str,
+        availability_revision: str,
+        *,
+        sequence: int,
+        wait_timeout_ms: int,
+        coordinator_epoch: str,
+    ) -> Mapping[str, PlainData]:
+        """Read an exact abandoned-epoch poll's committed or fenced outcome."""
+        rule, policy_revision = self._authorize("poll")
+        for value, name in (
+            (session_id, "session_id"),
+            (availability_revision, "availability_revision"),
+            (coordinator_epoch, "coordinator_epoch"),
+        ):
+            _identifier(value, name)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("work poll sequence must be positive")
+        if (
+            isinstance(wait_timeout_ms, bool)
+            or not isinstance(wait_timeout_ms, int)
+            or not 1 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS
+        ):
+            raise QueueServiceError("work poll wait is outside the permitted range")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        if coordinator_epoch == epoch:
+            raise QueueConflictError("current-epoch poll must use ordinary replay")
+        request: dict[str, PlainData] = {
+            "session_id": session_id,
+            "availability_revision": availability_revision,
+            "sequence": sequence,
+            "wait_timeout_ms": wait_timeout_ms,
+            "coordinator_epoch": coordinator_epoch,
+        }
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(session, rule, epoch, policy_revision)
+            row = conn.execute(
+                "SELECT sequence, digest, active, result_json FROM agent_poll_state "
+                "WHERE principal_id = ? AND session_id = ?",
+                (rule.principal_id, session_id),
+            ).fetchone()
+            if row is None:
+                # No request committed before the former process epoch ended.
+                if sequence != 1:
+                    raise QueueConflictError("retained poll history is unavailable")
+                return {"state": "absent"}
+            if int(row["sequence"]) == sequence - 1:
+                # The sole outstanding next request never reached this owner.
+                return {"state": "absent"}
+            if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(
+                request
+            ):
+                raise QueueConflictError("retained poll identity conflicts")
+            if row["result_json"] is not None:
+                return {
+                    **_plain_result(row["result_json"], "agent poll receipt"),
+                    "state": "committed",
+                }
+            if bool(row["active"]):
+                raise AgentPollActiveError("work poll is already active")
+            return {"state": "fenced"}
 
     def wait_for_work(
         self,
@@ -2787,14 +3143,19 @@ class AgentSessionService:
         epoch: str,
         digest: str,
     ) -> Mapping[str, PlainData] | None:
-        """Consume only an already-CAS-targeted delivery for this exact poll."""
+        """Consume only an already-CAS-targeted delivery for this exact session.
+
+        Target ownership survives a coordinator epoch change. Its original
+        delivery/assignment issuer evidence remains unchanged; the current poll
+        still commits under its own current epoch and exact request digest.
+        """
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT assignment_id, request_json FROM agent_deliveries "
-                "WHERE session_id = ? AND availability_revision = ? AND "
-                "coordinator_epoch = ? AND state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
-                (session_id, availability_revision, epoch),
+                "WHERE session_id = ? AND "
+                "state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
+                (session_id,),
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -3065,9 +3426,14 @@ class AgentSessionService:
         assignment_id: str,
         *,
         availability_revision: str,
+        reason_code: str | None = None,
     ) -> AgentSession:
         rule, policy_revision = self._authorize("decline")
         _identifier(availability_revision, "availability_revision")
+        if reason_code is not None and (
+            not isinstance(reason_code, str) or reason_code not in GPU_DECLINE_REASONS
+        ):
+            raise QueueServiceError("remote decline reason is invalid")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             session = self._require_remote_session(
@@ -3082,7 +3448,13 @@ class AgentSessionService:
                     "remote assignment cannot be definitively declined"
                 )
             if str(row["state"]) == "RELEASED":
-                if row["next_availability_revision"] != availability_revision:
+                if (
+                    row["next_availability_revision"] != availability_revision
+                    or self._remote_execution().coordinator.read_decline_reason(
+                        assignment_id
+                    )
+                    != reason_code
+                ):
                     raise QueueConflictError("remote decline replay conflicts")
                 return AgentSession(
                     session.session_id,
@@ -3098,7 +3470,7 @@ class AgentSessionService:
                     session.pools,
                     session.state,
                 )
-        self._remote_execution().remote_decline(assignment_id)
+        self._remote_execution().remote_decline(assignment_id, reason_code=reason_code)
         resumed = AgentSession(
             session.session_id,
             session.coordinator_id,
@@ -3270,7 +3642,7 @@ class AgentSessionService:
             ).fetchone()
             if delivery is None:
                 raise QueueConflictError("remote delivered request is unavailable")
-            request = _ResidentAssignmentBundle.from_dict(
+            request = _ResidentAssignmentBundle.from_remote_dict(
                 json.loads(str(delivery["request_json"]))
             )
             output_mismatch = (
@@ -3813,6 +4185,91 @@ class AgentSessionService:
         if execution is None:
             raise QueueServiceError("remote execution owner is unavailable")
         return execution
+
+    @_serialized_session_operation
+    def service_lifetime(
+        self, session_id: str, coordinator_epoch: str, generation: str, action: str
+    ) -> Mapping[str, PlainData]:
+        """Authorize this process generation's retirement from accepted work."""
+        rule, policy_revision = self._authorize("retire")
+        daemon = self._daemon
+        if coordinator_epoch != daemon._epoch or action not in {"observe", "closed"}:
+            raise QueueConflictError("service retirement generation is stale")
+        _identifier(generation, "service generation")
+        with daemon._connection() as conn:
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                daemon._require_started(),
+                expected_principal=rule.principal_id,
+            )
+            if (
+                session.agent_id != rule.agent_id
+                or session.coordinator_epoch != coordinator_epoch
+            ):
+                raise QueueConflictError("service retirement session is stale")
+            key = "service-agent:" + session.agent_root_id
+            prior = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
+            ).fetchone()
+            record = {} if prior is None else json.loads(prior[0])
+            identity = {
+                "session_id": session_id,
+                "coordinator_epoch": coordinator_epoch,
+                "generation": generation,
+            }
+            if action == "closed":
+                if (
+                    any(record.get(k) != v for k, v in identity.items())
+                    or record.get("state") != "authorized"
+                    or session.state is not AgentSessionState.RETIRED_CLEAN
+                ):
+                    raise QueueConflictError(
+                        "service retirement acknowledgement conflicts"
+                    )
+                state = "closed"
+            else:
+                daemon._lifetime.require_accepting()
+                if record.get("state") == "authorized" and all(
+                    record.get(k) == v for k, v in identity.items()
+                ):
+                    # Assignment eligibility was already closed atomically. New
+                    # startup work waits for a fresh eligible incarnation.
+                    state = "authorized"
+                elif session.state is not AgentSessionState.ACTIVE:
+                    raise QueueConflictError("service retirement session is not active")
+                elif daemon._lifetime.retained():
+                    state = "retained"
+                else:
+                    if not _coordinator_references_empty(conn, session_id):
+                        raise QueueConflictError(
+                            "agent session has unresolved references"
+                        )
+                    conn.execute(
+                        "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    conn.execute(
+                        "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    conn.execute(
+                        "UPDATE agent_sessions SET state = ? WHERE session_id = ?",
+                        (AgentSessionState.RETIRING.value, session_id),
+                    )
+                    state = "authorized"
+            result = {
+                **identity,
+                "coordinator_id": daemon._require_started(),
+                "state": state,
+            }
+            conn.execute(
+                "INSERT INTO daemon_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, _canonical_json(result)),
+            )
+            conn.commit()
+        return result
 
     @_serialized_session_operation
     def retire_clean(
@@ -5009,6 +5466,7 @@ def _target_remote_delivery(
     _identifier(availability_revision, "availability_revision")
     if not isinstance(request, _ResidentAssignmentBundle):
         raise QueueServiceError("targeted delivery request is invalid")
+    request.validate_remote_transport()
     _identifier(request.assignment_id, "assignment_id")
     if not isinstance(run_uri, str) or not run_uri:
         raise QueueServiceError("targeted delivery run identity is invalid")
@@ -5031,6 +5489,31 @@ def _target_remote_delivery(
             or session.coordinator_epoch != daemon._epoch
         ):  # type: ignore[attr-defined]
             raise QueueConflictError("targeted delivery session is stale")
+        from .preparation import (
+            PREPARATION_INPUT_CAPABILITY,
+            PREPARATION_STAGED_INPUT_CAPABILITY,
+            StagedInputReceipt,
+        )
+
+        preparation = request.preparation_input
+        if preparation is not None:
+            supported = (
+                PREPARATION_STAGED_INPUT_CAPABILITY in session.capabilities
+                if isinstance(preparation.input_receipt, StagedInputReceipt)
+                else bool(
+                    {
+                        PREPARATION_INPUT_CAPABILITY,
+                        PREPARATION_STAGED_INPUT_CAPABILITY,
+                    }.intersection(session.capabilities)
+                )
+            )
+            if not supported:
+                required = (
+                    PREPARATION_STAGED_INPUT_CAPABILITY
+                    if isinstance(preparation.input_receipt, StagedInputReceipt)
+                    else PREPARATION_INPUT_CAPABILITY
+                )
+                raise QueueServiceError(f"agent session lacks {required}")
         prior = conn.execute(
             "SELECT request_json, session_id, availability_revision, coordinator_epoch "
             "FROM agent_deliveries WHERE assignment_id = ?",

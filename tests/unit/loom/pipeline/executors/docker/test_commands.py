@@ -25,11 +25,48 @@ from loom.pipeline.executors.docker import (
     command_result_from_exception,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
-from loom.pipeline.runtime import ResourceCapability
+from loom.pipeline.runtime import ResourceCapability, ResourcePolicy
 from loom.serialization import stable_json_dumps
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("enforce", [[], ["gpu"]])
+def test_docker_retains_gpu_intent_and_rejects_only_selected_control(
+    enforce: list[str],
+) -> None:
+    container = ContainerOptions(
+        image="test:latest",
+        resources=ContainerResourceIntent(
+            entries={"gpu": ResourceEntry(kind="gpu", amount=1)},
+            capabilities={"gpu": ResourceCapability(support_level="unsupported")},
+        ),
+    )
+    if enforce:
+        with pytest.raises(DockerOptionError, match="resource_policy.enforce"):
+            build_docker_run_command(
+                container_options=container,
+                worker_command=("true",),
+                resource_policy=ResourcePolicy(enforce=enforce),
+            )
+    else:
+        command = build_docker_run_command(
+            container_options=container,
+            worker_command=("true", "--cpus", "payload-only"),
+            resource_policy=ResourcePolicy(enforce=enforce),
+        )
+        assert "--gpus" not in command.argv
+        assert list(
+            cast(tuple[object, ...], command.metadata["resource_controls"])
+        ) == [
+            {
+                "resource": "gpu",
+                "owner": "docker",
+                "mechanism": None,
+                "disposition": "not_requested",
+            }
+        ]
 
 
 def test_build_docker_run_command_is_deterministic_and_redacted() -> None:
@@ -44,6 +81,7 @@ def test_build_docker_run_command_is_deterministic_and_redacted() -> None:
             "hostname": "loom-stage",
         },
         worker_command=("python", "-c", "print('ok')"),
+        resource_policy=ResourcePolicy(enforce="all"),
     )
 
     assert command.argv == (
@@ -151,7 +189,9 @@ def test_gpu_and_unknown_resources_fail_closed() -> None:
         },
     )
     custom_intent = ContainerResourceIntent(
-        entries={"custom.accelerator": ResourceEntry(kind="custom.accelerator", amount=1)},
+        entries={
+            "custom.accelerator": ResourceEntry(kind="custom.accelerator", amount=1)
+        },
         capabilities={
             "custom.accelerator": ResourceCapability(
                 support_level="supported",
@@ -164,12 +204,30 @@ def test_gpu_and_unknown_resources_fail_closed() -> None:
         build_docker_run_command(
             container_options=ContainerOptions(image="python", resources=gpu_intent),
             worker_command=("python", "-V"),
+            resource_policy=ResourcePolicy(enforce="all"),
         )
     with pytest.raises(DockerOptionError, match="custom.accelerator"):
         build_docker_run_command(
             container_options=ContainerOptions(image="python", resources=custom_intent),
             worker_command=("python", "-V"),
+            resource_policy=ResourcePolicy(enforce="all"),
         )
+
+
+def test_empty_enforcement_never_restores_authored_container_resources() -> None:
+    intent = _container_options().resources
+    assert intent is not None
+
+    command = build_docker_run_command(
+        container_options=_container_options(),
+        worker_command=("python", "-V"),
+    )
+
+    assert "--cpus" not in command.argv
+    assert "--memory" not in command.argv
+    assert stable_json_dumps(command.metadata["container"]) == stable_json_dumps(
+        _container_options().to_redacted_metadata()
+    )
 
 
 def test_command_result_round_trip_and_output_bounding() -> None:

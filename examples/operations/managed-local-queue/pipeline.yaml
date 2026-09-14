@@ -1,0 +1,28 @@
+pipeline:
+  name: managed-local-embedding
+  stages:
+    - name: produce
+      factory:
+        _target_: run_managed_local_queue.ProduceStage
+      resources:
+        entries:
+          cpu: {kind: cpu, amount: 1, unit: count}
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+    - name: consume
+      factory:
+        _target_: run_managed_local_queue.ConsumeStage
+      resources:
+        entries:
+          cpu: {kind: cpu, amount: 1, unit: count}
+      depends_on: [produce]
+      inputs:
+        data: produce.data
+      outputs:
+        report:
+          artifact_type: text
+          codec_key: text.v1
+runtime:
+  executor: local

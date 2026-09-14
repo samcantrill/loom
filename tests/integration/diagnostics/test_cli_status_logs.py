@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import io
 import json
 from pathlib import Path
@@ -20,10 +19,9 @@ from loom.pipeline.status import (
 from loom.pipeline.stores import (
     AuthorityConfig,
     LocalRunStore,
-    authority_config_to_cli_args,
     path_to_run_uri,
 )
-from loom.pipeline.stores.service_authority import LocalAuthorityService
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -31,10 +29,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 @pytest.fixture
-def authority_context() -> Iterator[tuple[AuthorityConfig, tuple[str, ...]]]:
-    with LocalAuthorityService.start() as service:
-        config = service.config()
-        yield config, authority_config_to_cli_args(config)
+def authority_context():
+    # Current native runs publish an embedded per-run authority by default.
+    yield None, ()
 
 
 def _write_pipeline_config(path: Path, *, failing: bool = False) -> None:
@@ -96,63 +93,22 @@ def _run_pipeline(
     executor: str = "local",
 ) -> str:
     config_path = tmp_path / "pipeline.yaml"
-    suffix = f"{executor}-{'failed' if failing else 'ok'}"
-    run_uri = path_to_run_uri(tmp_path / "runs" / suffix)
     _write_pipeline_config(config_path, failing=failing)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    expected = 5 if failing else 0
+    from tests.support.native_run_fixture import run_native_fixture
 
-    argv = [
-        "run",
-        str(config_path),
-        "--run-uri",
-        run_uri,
-    ]
-    if executor != "local":
-        argv.extend(["--executor", executor])
-    argv.extend([*authority_args, "--format", "json"])
-    assert (
-        main(
-            argv,
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == expected
-    )
-    assert stderr.getvalue() == ""
-    return run_uri
+    admission, _ = run_native_fixture(config_path)
+    assert admission.state.value == ("FAILED" if failing else "SUCCEEDED")
+    return admission.run_uri
 
 
-def _run_two_stage_pipeline(
-    tmp_path: Path,
-    *,
-    authority_args: tuple[str, ...],
-) -> str:
+def _run_two_stage_pipeline(tmp_path: Path, *, authority_args: tuple[str, ...]) -> str:
+    from tests.support.native_run_fixture import run_native_fixture
+
     config_path = tmp_path / "pipeline.yaml"
-    run_uri = path_to_run_uri(tmp_path / "runs" / "ok")
     _write_two_stage_pipeline_config(config_path)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                *authority_args,
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == 0
-    )
-    assert stderr.getvalue() == ""
-    return run_uri
+    admission, _ = run_native_fixture(config_path)
+    assert admission.state.value == "SUCCEEDED"
+    return admission.run_uri
 
 
 def test_status_summarizes_successful_run(
@@ -191,7 +147,7 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
     store = create_authority_backed_serial_run_store(
         tmp_path / "runs",
-        authority_config=authority_config,
+        authority_store=SQLitePerRunAuthorityStore(),
     )
     store.create_run(run_uri)
     store.write_run_status(
@@ -265,18 +221,11 @@ def test_status_without_jobs_never_builds_scheduler_runner(
     authority_config, authority_args = authority_context
     import loom.cli.status as status_command
 
-    def fail_scheduler_runner() -> object:
-        raise AssertionError("ordinary status must not query scheduler state")
-
-    monkeypatch.setattr(
-        status_command,
-        "_build_slurm_status_command_runner",
-        fail_scheduler_runner,
-    )
+    assert not hasattr(status_command, "_build_slurm_status_command_runner")
     run_uri = path_to_run_uri(tmp_path / "runs" / "scheduler-free-status")
     store = create_authority_backed_serial_run_store(
         tmp_path / "runs",
-        authority_config=authority_config,
+        authority_store=SQLitePerRunAuthorityStore(),
     )
     store.create_run(run_uri)
     store.write_run_status(
@@ -409,12 +358,12 @@ def test_status_and_logs_report_subprocess_failure_metadata(
     stage = status_payload["result"]["stages"][0]
     failure = stage["failure"]
     assert stage["status"] == "FAILED"
-    assert failure["executor"] == "subprocess"
-    assert failure["exit_code"] == 1
+    assert failure["executor"] == "local"
+    assert failure["exit_code"] is None
     assert failure["signal"] is None
-    assert failure["stdout_path"].endswith("/stages/build/logs/stdout.log")
-    assert failure["stderr_path"].endswith("/stages/build/logs/stderr.log")
-    assert failure["traceback_path"].endswith("/stages/build/logs/traceback.txt")
+    assert failure["stdout_path"].endswith("/logs/stdout.log")
+    assert failure["stderr_path"].endswith("/logs/stderr.log")
+    assert failure["traceback_path"].endswith("/logs/traceback.log")
 
     assert (
         main(
@@ -497,7 +446,8 @@ def test_artifacts_list_and_show_multiple_artifacts(
     assert show_payload["schema_version"] == "loom.cli.artifacts.show.v3"
     assert show_payload["result"]["artifact"]["artifact_type"] == "text"
     assert show_payload["result"]["artifact"]["producer_stage"] == "report"
-    assert show_payload["result"]["stage_provenance"] is not None
+    assert show_payload["result"]["artifact"]["checksum"].startswith("sha256:")
+    assert SQLitePerRunAuthorityStore(run_uri).list_output_commits(run_uri)
     assert stderr.getvalue() == ""
 
 

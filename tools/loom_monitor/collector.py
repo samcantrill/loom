@@ -11,7 +11,6 @@ from typing import Any
 from loom.timestamps import utc_now
 
 from .models import (
-    ActiveAttempt,
     AuthorityData,
     JobRecord,
     JobsData,
@@ -55,12 +54,13 @@ class MonitorCollector:
         self.service = service
         self.workspace_name = workspace_name
         self._clock = clock
-        self._run_inspector = run_inspector or _default_run_inspector
-        self._jobs_inspector = jobs_inspector or _default_jobs_inspector
+        self._run_inspector = run_inspector or self._native_run_inspector
+        self._jobs_inspector = jobs_inspector or self._native_jobs_inspector
         self._logs_inspector = logs_inspector or _default_logs_inspector
-        self._authority_probe = authority_probe or _default_authority_probe
+        self._authority_probe = authority_probe or self._native_health
         self._run_store = run_store
         self._run_store_factory = run_store_factory or _default_run_store
+        self._admissions: dict[str, Any] = {}
         self._lock = RLock()
         self._queue: Observation[QueueData] = Observation(source="queue")
         self._authority: Observation[AuthorityData] = Observation(source="authority")
@@ -76,21 +76,22 @@ class MonitorCollector:
         *,
         clock: Clock = utc_now,
     ) -> "MonitorCollector":
-        """Load one trusted queue config and open its durable repository."""
-
-        from loom.queue import QueueService, load_queue_spec
+        """Attach read-only to a protected coordinator connection or local socket."""
+        from loom.coordinator import CoordinatorClient
 
         path = Path(config_path).expanduser().resolve()
-        spec = load_queue_spec(path)
-        service = QueueService.from_spec(spec)
-        service.start()
-        workspace_name = _workspace_name(path, spec.metadata)
-        return cls(
-            config_path=path,
-            service=service,
-            workspace_name=workspace_name,
-            clock=clock,
+        service = (
+            CoordinatorClient.from_unix_socket(path)
+            if path.is_socket()
+            else CoordinatorClient.from_connection_file(path)
         )
+        return cls(
+            config_path=path, service=service, workspace_name=path.stem, clock=clock
+        )
+
+    def close(self) -> None:
+        """Release client IO without cancelling coordinator work."""
+        self.service.close()
 
     def snapshot(self) -> MonitorSnapshot:
         with self._lock:
@@ -144,7 +145,9 @@ class MonitorCollector:
                     run_uri,
                     run_store=self._get_run_store(),
                 )
-                data = _project_run(summary)
+                data = (
+                    summary if isinstance(summary, RunRecord) else _project_run(summary)
+                )
             except Exception as exc:
                 with self._lock:
                     self._runs[run_uri] = self._runs[run_uri].failed(
@@ -161,13 +164,9 @@ class MonitorCollector:
         with self._lock:
             self._selected = self._selected.refreshing_now()
         try:
-            inspection = self.service.inspect_item(queue_item_id)
-            item = inspection.item
-            if item is None:
-                raise ValueError(f"queue item no longer exists: {queue_item_id}")
-            audit_events = tuple(
-                _queue_event(event) for event in inspection.audit_events
-            )
+            item = self.service.admission_for_queue_item(queue_item_id)
+            # The native query does not claim to export coordinator audit history.
+            audit_events: tuple[TimelineEntry, ...] = ()
             run_events: tuple[TimelineEntry, ...] = ()
             run_events_error = None
             try:
@@ -199,7 +198,7 @@ class MonitorCollector:
                 run_uri,
                 run_store=self._get_run_store(),
             )
-            data = _project_jobs(report)
+            data = report if isinstance(report, JobsData) else _project_jobs(report)
         except Exception as exc:
             with self._lock:
                 self._jobs = self._jobs.failed(exc, at=self._clock())
@@ -255,114 +254,152 @@ class MonitorCollector:
             return self._run_store
 
     def _read_queue(self) -> QueueData:
-        from loom.queue.status import build_queue_pool_status
+        status = self.service.status()
+        admissions = []
+        cursor = None
+        while True:
+            page = self.service.admissions(limit=100, cursor=cursor)
+            admissions.extend(page.admissions)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        self._admissions = {item.queue_item_id: item for item in admissions}
+        items = tuple(
+            QueueRecord(
+                queue_item_id=item.queue_item_id,
+                queue_name="admissions",
+                pool_name=status.coordinator_id,
+                pool_mode="native",
+                run_uri=item.run_uri,
+                status=item.state.value,
+                enqueued_at=item.accepted_at,
+                updated_at=item.accepted_at,
+                dispatch_attempt=0,
+                claim_owner=item.coordinator_id,
+                recovery_detail=None
+                if item.blocked_reason is None
+                else {"reason": item.blocked_reason},
+            )
+            for item in admissions
+        )
+        counts = {
+            state: sum(item.status == state for item in items)
+            for state in (
+                "WAITING",
+                "ACTIVE",
+                "SUCCEEDED",
+                "FAILED",
+                "CANCELLED",
+                "BLOCKED",
+            )
+        }
+        pool = PoolRecord(
+            pool_name=status.coordinator_id,
+            mode="native",
+            controller_limit=None,
+            queued=counts["WAITING"],
+            claimed=0,
+            dispatched=counts["ACTIVE"],
+            succeeded=counts["SUCCEEDED"],
+            failed=counts["FAILED"],
+            cancelled=counts["CANCELLED"],
+            unknown=counts["BLOCKED"],
+            oldest_queued_at=min(
+                (item.enqueued_at for item in items if item.status == "WAITING"),
+                default=None,
+            ),
+        )
+        return QueueData(workspace_name=self.workspace_name, pools=(pool,), items=items)
 
-        service_status = self.service.status()
-        recovery = {
-            record.queue_item_id: record for record in service_status.recovery_records
-        }
-        pool_modes = {
-            pool.pool_name: pool.mode.value for pool in self.service.spec.pools
-        }
-        pools: list[PoolRecord] = []
-        items: list[QueueRecord] = []
-        for configured_pool in self.service.spec.pools:
-            pool_name = configured_pool.pool_name
-            status = build_queue_pool_status(self.service, pool_name=pool_name)
-            snapshot = self.service.read_pool_snapshot(pool_name)
-            active = {
-                attempt.queue_item_id: attempt for attempt in status.active_attempts
-            }
-            queued_times = [
-                item.enqueued_at
-                for item in snapshot.items
-                if item.status.value == "QUEUED"
-            ]
-            pool_recovery = sum(
-                record.queue_item_id in {item.queue_item_id for item in snapshot.items}
-                for record in recovery.values()
+    def _detail_for_run(self, run_uri: str):
+        found = next(
+            (item for item in self._admissions.values() if item.run_uri == run_uri),
+            None,
+        )
+        if found is None:
+            self._read_queue()
+            found = next(
+                (item for item in self._admissions.values() if item.run_uri == run_uri),
+                None,
             )
-            pools.append(
-                PoolRecord(
-                    pool_name=pool_name,
-                    mode=configured_pool.mode.value,
-                    controller_limit=status.controller_max_active_items,
-                    queued=status.counts.queued,
-                    claimed=status.counts.claimed,
-                    dispatched=status.counts.dispatched,
-                    succeeded=status.counts.succeeded,
-                    failed=status.counts.failed,
-                    cancelled=status.counts.cancelled,
-                    unknown=status.counts.unknown,
-                    oldest_queued_at=min(queued_times) if queued_times else None,
-                    recovery_count=pool_recovery,
-                )
-            )
-            items.extend(
-                _project_queue_item(
-                    item,
-                    pool_mode=pool_modes[pool_name],
-                    active_attempt=active.get(item.queue_item_id),
-                    recovery_record=recovery.get(item.queue_item_id),
-                )
-                for item in snapshot.items
-            )
-        return QueueData(
-            workspace_name=self.workspace_name,
-            pools=tuple(pools),
-            items=tuple(items),
+        if found is None:
+            raise LookupError("run is not present in coordinator admissions")
+        return self.service.admission(found.admission_id)
+
+    def _native_health(self) -> AuthorityData:
+        status = self.service.status()
+        return AuthorityData(
+            state=status.service_health, message=status.service_diagnostic
         )
 
-
-def _project_queue_item(
-    item: Any,
-    *,
-    pool_mode: str,
-    active_attempt: Any | None,
-    recovery_record: Any | None,
-) -> QueueRecord:
-    claim = item.claim
-    handle = item.dispatch_handle
-    cancellation = item.cancellation
-    attempt = None
-    if active_attempt is not None:
-        attempt = ActiveAttempt(
-            queue_item_id=active_attempt.queue_item_id,
-            owner_id=active_attempt.owner_id,
-            session_id=active_attempt.session_id,
-            evidence_source=active_attempt.evidence_source,
-            live_observation=active_attempt.live_observation,
-            process=active_attempt.process,
-            assignment=active_attempt.assignment,
-            logs=active_attempt.logs,
+    def _native_run_inspector(self, run_uri: str, *, run_store: Any) -> RunRecord:
+        del run_store
+        detail = self._detail_for_run(run_uri)
+        facts = detail.authority
+        if facts.get("availability") != "available":
+            raise RuntimeError(str(facts.get("diagnostic", "authority unavailable")))
+        artifacts = facts.get("artifacts", {})
+        attempts = {
+            item["stage_name"]: item["attempt"] for item in facts.get("attempts", ())
+        }
+        reasons = facts.get("stage_reasons", {})
+        source = {"owner": "per-run-authority", "authoritative": True}
+        stages = tuple(
+            StageRecord(
+                stage_name=name,
+                status=str(state),
+                attempt=attempts.get(name),
+                message=reasons.get(name, {}).get("message"),
+                failure=None,
+                input_count=None,
+                output_count=sum(str(key).startswith(name + ".") for key in artifacts),
+                log_paths={},
+                log_available={},
+                state_source=source,
+                log_source={"owner": "local-materialization"},
+            )
+            for name, state in facts.get("stages", {}).items()
         )
-    return QueueRecord(
-        queue_item_id=item.queue_item_id,
-        queue_name=item.queue_name,
-        pool_name=item.pool_name,
-        pool_mode=pool_mode,
-        run_uri=item.run_uri,
-        status=item.status.value,
-        enqueued_at=item.enqueued_at,
-        updated_at=item.updated_at,
-        dispatch_attempt=item.dispatch_attempt,
-        requested_resources=dict(item.launch_contract.resources),
-        tags=dict(item.run_intent.tags),
-        claim_owner=None if claim is None else claim.owner_id,
-        claimed_at=None if claim is None else claim.claimed_at,
-        adapter=item.launch_contract.adapter,
-        dispatch_handle_id=None if handle is None else handle.handle_id,
-        dispatched_at=None if handle is None else handle.dispatched_at,
-        cancellation_requested_at=(
-            None if cancellation is None else cancellation.requested_at
-        ),
-        cancellation_requested_by=(
-            None if cancellation is None else cancellation.requested_by
-        ),
-        cancellation_reason=None if cancellation is None else cancellation.reason,
-        active_attempt=attempt,
-        recovery_detail=None if recovery_record is None else recovery_record.detail,
-    )
+        return RunRecord(
+            run_uri=run_uri,
+            status=str(facts["state"]),
+            message=None,
+            artifact_count=len(artifacts),
+            state_source=source,
+            stages=stages,
+            submitted_operations=(),
+        )
+
+    def _native_jobs_inspector(self, run_uri: str, *, run_store: Any) -> JobsData:
+        del run_store
+        detail = self._detail_for_run(run_uri)
+        owner = detail.owners.get("slurm", {})
+        if owner.get("availability") != "available":
+            raise RuntimeError(str(owner.get("diagnostic", "SLURM owner unavailable")))
+        jobs = []
+        for assignment in owner.get("assignments", ()):
+            submission = assignment.get("submission", {})
+            job_id = assignment.get("job_id")
+            if job_id is None:
+                continue
+            jobs.append(
+                JobRecord(
+                    logical_key=assignment["assignment_id"],
+                    stage_name=assignment.get("stage_name"),
+                    scheduler_job_id=job_id,
+                    status=assignment["state"],
+                    source="agent-observation",
+                    scheduler_state=submission.get("scheduler_state") or "UNKNOWN",
+                    loom_run_status=detail.authority.get("state"),
+                    loom_stage_status=assignment.get("loom_result_status"),
+                    exit_code=None,
+                    dependency_state=None,
+                    dependency_job_ids=(),
+                    log_paths={},
+                    warnings=(),
+                )
+            )
+        return JobsData(run_uri=run_uri, jobs=tuple(jobs))
 
 
 def _project_run(summary: Any) -> RunRecord:
@@ -461,23 +498,6 @@ def _project_logs(summary: Any, *, unavailable_reason: str | None) -> LogsData:
     )
 
 
-def _queue_event(event: Any) -> TimelineEntry:
-    detail = _safe_event_detail(event.detail)
-    summary = event.event_type.replace("_", " ")
-    if detail:
-        summary = f"{summary} · {detail}"
-    return TimelineEntry(
-        occurred_at=event.timestamp,
-        source="QUEUE",
-        event_type=event.event_type,
-        summary=summary,
-        sequence=event.sequence,
-        warning=any(
-            word in event.event_type.lower() for word in ("fail", "cancel", "defer")
-        ),
-    )
-
-
 def _run_event(event: Any) -> TimelineEntry:
     stage_name = getattr(event.scope, "stage_name", None)
     detail = _safe_event_detail(event.payload)
@@ -518,26 +538,6 @@ def _safe_event_detail(detail: Mapping[str, Any]) -> str:
     return " ".join(values)
 
 
-def _workspace_name(path: Path, metadata: Mapping[str, Any]) -> str:
-    for key in ("workspace_id", "workspace", "project", "name"):
-        value = metadata.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return path.parent.name or path.stem
-
-
-def _default_run_inspector(run_uri: str, *, run_store: Any) -> Any:
-    from loom.diagnostics.inspection import inspect_run_status
-
-    return inspect_run_status(run_uri, run_store=run_store)
-
-
-def _default_jobs_inspector(run_uri: str, *, run_store: Any) -> Any:
-    from loom.pipeline.executors.slurm.status import inspect_slurm_job_status
-
-    return inspect_slurm_job_status(run_uri, run_store=run_store)
-
-
 def _default_logs_inspector(
     run_uri: str,
     stage_name: str,
@@ -558,57 +558,6 @@ def _default_logs_inspector(
 
 
 def _default_run_store() -> Any:
-    from loom.pipeline.execution import create_authority_backed_serial_run_store
-    from loom.pipeline.stores import authority_config_from_env
+    from loom.pipeline.stores import LocalRunStore
 
-    return create_authority_backed_serial_run_store(
-        "runs",
-        authority_config=authority_config_from_env(),
-        workspace_root=Path.cwd(),
-        owner_id="loom-monitor",
-    )
-
-
-def _default_authority_probe() -> AuthorityData:
-    from loom.pipeline.stores import authority_config_from_env
-    from loom.pipeline.stores.authority_factory import resolve_authority_for_factory
-
-    config = authority_config_from_env()
-    resolution = resolve_authority_for_factory(
-        config,
-        workspace_root=Path.cwd(),
-        readiness_timeout_seconds=2.0,
-    )
-    readiness = resolution.readiness
-    if readiness is not None:
-        if not readiness.ready:
-            diagnostics = "; ".join(
-                diagnostic.message for diagnostic in readiness.diagnostics
-            )
-            raise RuntimeError(diagnostics or readiness.readiness.value)
-        return AuthorityData(
-            state="READY",
-            workspace_id=readiness.workspace_id,
-            service_generation=readiness.service_generation,
-        )
-    if resolution.reference is None:
-        registry_record = (
-            None if resolution.registry is None else resolution.registry.record
-        )
-        if config.endpoint is not None or registry_record is not None:
-            diagnostics = "; ".join(
-                diagnostic.message for diagnostic in resolution.result.diagnostics
-            )
-            raise RuntimeError(diagnostics or "authority readiness was unavailable")
-        return AuthorityData(
-            state="UNOBSERVED",
-            message="no authority endpoint or live registry reference was found",
-            workspace_id=config.workspace_id,
-        )
-    diagnostics = "; ".join(
-        diagnostic.message for diagnostic in resolution.result.diagnostics
-    )
-    raise RuntimeError(diagnostics or "authority readiness was unavailable")
-
-
-__all__ = ["MonitorCollector"]
+    return LocalRunStore()

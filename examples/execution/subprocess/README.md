@@ -1,57 +1,28 @@
 # Subprocess Pipeline Example
 
-This example demonstrates v5 subprocess execution with local synthetic stages:
-
-1. Run the same two-stage pipeline locally and with `--executor subprocess`.
-2. Run subprocess execution against an explicit local authority supervisor.
-3. Run a subprocess stage that fails, then inspect persisted status and stderr
-   logs.
-4. Prepare one stage attempt with Python APIs and invoke it through
-   `loom stage run --run-uri RUN_URI --stage STAGE_NAME`.
-
 ## Workflow
 
-This workflow uses:
+The run entrypoints use public `loom.run` with a protected installed agent
+profile. Preparation, execution, fenced results and owned-service cleanup follow
+the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
+typed materialized worker results supply output and diagnostic details after
+owned services stop. The short deployment root printed by the script is retained
+for inspection; artifacts default to this example's `runs/` directory. Set
+`LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to relocate artifacts.
 
-- `loom run CONFIG --run-uri RUN_URI`
-- `loom run CONFIG --run-uri RUN_URI --executor subprocess`
-- `loom stage run --run-uri RUN_URI --stage STAGE_NAME`
-
-## Variants
-
-Canonical local command:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-local
-```
-
-Subprocess executor variant:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-workers \
-  --executor subprocess
-```
-
-Explicit co-located authority selection:
-
-```sh
-uv run loom run examples/execution/subprocess/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/subprocess-workers \
-  --executor subprocess \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
-
-Run from the repository root:
+The success script runs two stages in supervised native workers and reports
+materialized outputs. The failure script retains the failed stage's stderr and
+structured failure. The restricted resident worker is internal to native execution.
 
 ```sh
 uv run python examples/execution/subprocess/run_subprocess_pipeline.py
 uv run python examples/execution/subprocess/run_failure_diagnostics.py
-uv run python examples/execution/subprocess/run_direct_worker.py
 ```
 
-The scripts write run state under `examples/execution/subprocess/runs/` by
-default. Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` or
-`LOOM_EXAMPLE_RUN_ROOT=/tmp/loom-example-runs` to write somewhere else.
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

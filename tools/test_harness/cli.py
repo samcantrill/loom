@@ -15,11 +15,12 @@ from typing import Mapping, Sequence
 from xml.etree import ElementTree
 
 
-DEFAULT_MARKER_EXPR = (
-    "not slow and not slurm and not network and not optional_dependency"
+DEFAULT_MARKER_EXPR = "not slow and not slurm and not network and not optional_dependency and not mcp_extra"
+CONFIG_EXTRA_MARKER_EXPR = "optional_dependency and not mcp_extra"
+MCP_EXTRA_MARKER_EXPR = "mcp_extra"
+LOCAL_ALL_MARKER_EXPR = (
+    "not slurm and not network and not optional_dependency and not mcp_extra"
 )
-CONFIG_EXTRA_MARKER_EXPR = "optional_dependency"
-LOCAL_ALL_MARKER_EXPR = "not slurm and not network and not optional_dependency"
 SUMMARY_OUTPUT = Path("build/test-summary.md")
 SUMMARY_ARTIFACT_DIR = Path("build/test-summary")
 SOURCE_COVERAGE_ROOT = "src/loom"
@@ -114,6 +115,7 @@ SUITES: dict[str, Suite] = {
     "integration": Suite("integration", Path("tests/integration"), DEFAULT_MARKER_EXPR),
     "e2e": Suite("e2e", Path("tests/e2e"), DEFAULT_MARKER_EXPR),
     "config-extra": Suite("config-extra", Path("tests"), CONFIG_EXTRA_MARKER_EXPR),
+    "mcp-extra": Suite("mcp-extra", Path("tests"), MCP_EXTRA_MARKER_EXPR),
 }
 
 GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
@@ -324,7 +326,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def run_summary_suite(name: str) -> SuiteSummary:
     suite = SUITES[name]
-    if name != "config-extra" and not has_tests(suite.cwd / suite.path):
+    if name not in {"config-extra", "mcp-extra"} and not has_tests(
+        suite.cwd / suite.path
+    ):
         counts = Counts()
         return SuiteSummary(
             suite=suite.name,
@@ -438,8 +442,10 @@ def uv_command_for_suite(name: str) -> list[str]:
         "--group",
         "dev",
     ]
-    if name in {"config-extra", "e2e"}:
+    if name in {"config-extra", "mcp-extra", "e2e"}:
         command.extend(["--extra", "config"])
+    if name == "mcp-extra":
+        command.extend(["--extra", "mcp"])
     return command
 
 
@@ -509,7 +515,7 @@ def run_suite(name: str) -> Result:
             ["tests", "-m", LOCAL_ALL_MARKER_EXPR],
             f'uv run pytest tests -m "{LOCAL_ALL_MARKER_EXPR}"',
         )
-    if name == "config-extra":
+    if name in {"config-extra", "mcp-extra"}:
         suite = SUITES[name]
         return run_pytest(
             suite.name,

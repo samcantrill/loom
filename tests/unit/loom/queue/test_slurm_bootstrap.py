@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +12,10 @@ from loom.queue.slurm_bootstrap import (
     SlurmBootstrapClientConfig,
     _read_job_private_capability,
     _unlink_job_private_capability,
+    run_slurm_bootstrap,
 )
+import loom.queue.slurm_bootstrap as slurm_bootstrap
+from loom.pipeline import ProcessContainmentOwner
 
 
 def _config_value(tmp_path: Path) -> dict[str, str]:
@@ -78,3 +83,183 @@ def test_job_private_capability_is_regular_bounded_and_unlinked(tmp_path: Path) 
     (tmp_path / "link").symlink_to(target)
     with pytest.raises(QueueServiceError, match="regular file"):
         _read_job_private_capability(tmp_path / "link")
+
+
+@pytest.mark.parametrize("pending_responses", [0, 2, None])
+def test_bootstrap_passes_outer_boundary_containment_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_responses: int | None
+) -> None:
+    config_path = tmp_path / "bootstrap.json"
+    config_path.write_text(json.dumps(_config_value(tmp_path)), encoding="utf-8")
+    config_path.chmod(0o600)
+    config = SlurmBootstrapClientConfig.from_file(config_path)
+    config = replace(config, bootstrap_deadline_seconds=3, reconnect_seconds=1)
+    captured: dict[str, object] = {}
+    actions: list[str] = []
+    now = [10.0]
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
+    )
+
+    class FakeClient:
+        def handshake(self, *, role: str) -> dict[str, object]:
+            assert role == "slurm_bootstrap"
+            return {
+                "capabilities": ["slurm-ready-stage-bootstrap-v1"],
+                "profile_id": "training",
+                "profile_descriptor": {},
+                "credential_policy_revision": "slurm-policy-1",
+            }
+
+        def call_application(
+            self, role: str, action: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            assert role == "slurm_bootstrap"
+            actions.append(action)
+            if action == "inputs_ready":
+                if (
+                    pending_responses is None
+                    or actions.count(action) <= pending_responses
+                ):
+                    return {"state": "awaiting_submission_ack"}
+                return {"state": "input_ready"}
+            if action == "register":
+                return {
+                    "assignment_id": "assignment-1",
+                    "delivery": {},
+                    "result_identity": {},
+                }
+            if action == "grant":
+                return {"fence": "fence-1"}
+            if action == "start":
+                return {"permitted": True}
+            return {}
+
+        def close(self) -> None:
+            pass
+
+    class FakeWorkspace:
+        def __init__(self, _root: Path, _assignment_id: str) -> None:
+            self.root = tmp_path / "resident-workspace"
+            self.root.mkdir()
+
+        def persist_registration(self, _registration: object) -> None:
+            pass
+
+        def persist_delivery(self, _delivery: object) -> None:
+            pass
+
+        def accept_inputs(self) -> None:
+            pass
+
+        def worker_request(self) -> object:
+            return object()
+
+        def retain_result(self, _result: object) -> SimpleNamespace:
+            return SimpleNamespace(to_dict=lambda: {}, outputs=())
+
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setattr(slurm_bootstrap.os, "chdir", lambda _path: None)
+    monkeypatch.setattr(slurm_bootstrap.sys, "path", list(slurm_bootstrap.sys.path))
+    monkeypatch.setattr(
+        slurm_bootstrap, "LocalDaemonAgentHttpClient", lambda _tls: FakeClient()
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap.SchedulingComponentDescriptor,
+        "from_dict",
+        lambda _value: SimpleNamespace(configuration_fingerprint="profile-v1"),
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap, "_read_job_private_capability", lambda _path: b"capability"
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap, "_unlink_job_private_capability", lambda _path: None
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap.SlurmStageDelivery,
+        "from_dict",
+        lambda _value: SimpleNamespace(
+            assignment_id="assignment-1",
+            profile_id="training",
+            project_fingerprint="project-v1",
+            environment_fingerprint="environment-v1",
+            executor_fingerprint="executor-v1",
+            executor_name="local",
+            inputs=(),
+        ),
+    )
+    monkeypatch.setattr(
+        slurm_bootstrap,
+        "SharedSlurmResult",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            publish=lambda *_args: actions.append("publish")
+        ),
+    )
+    monkeypatch.setattr(
+        FakeWorkspace, "output_chunk", lambda *_args: (b"", True), raising=False
+    )
+    monkeypatch.setattr(slurm_bootstrap, "SlurmBootstrapWorkspace", FakeWorkspace)
+    monkeypatch.setattr(
+        slurm_bootstrap,
+        "execute_resident_stage_worker_request",
+        lambda **kwargs: captured.update(kwargs) or object(),
+    )
+
+    if pending_responses is None:
+        with pytest.raises(
+            QueueServiceError, match="deadline expired; no offline grant"
+        ):
+            run_slurm_bootstrap(
+                operation_id="operation-1", request_digest="digest-1", config=config
+            )
+        assert actions == ["register", "inputs_ready", "inputs_ready", "inputs_ready"]
+        assert captured == {}
+        (diagnostic,) = config.workspace_root.glob("bootstrap-failure-*.json")
+        assert json.loads(diagnostic.read_text())["offline_grant"] is False
+    else:
+        run_slurm_bootstrap(
+            operation_id="operation-1", request_digest="digest-1", config=config
+        )
+        assert actions[: pending_responses + 4] == [
+            "register",
+            *(["inputs_ready"] * (pending_responses + 1)),
+            "grant",
+            "start",
+        ]
+        assert (
+            captured["process_containment_owner"]
+            is ProcessContainmentOwner.OUTER_BOUNDARY
+        )
+
+
+def test_prestart_reconnect_deadline_never_grants_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue.agent_session_transport import _IndeterminateAgentProtocolError
+
+    now = [10.0]
+    calls = []
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(
+        slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
+    )
+
+    def disconnected():
+        calls.append(now[0])
+        raise _IndeterminateAgentProtocolError("coordinator unavailable")
+
+    diagnostic = tmp_path / "failure.json"
+    with pytest.raises(QueueServiceError, match="no offline grant"):
+        slurm_bootstrap._before_start_retry(
+            disconnected, deadline=12, delay=1, diagnostic=diagnostic
+        )
+    assert calls == [10, 11]
+    assert json.loads(diagnostic.read_text())["offline_grant"] is False
+    with pytest.raises(QueueServiceError, match="deadline expired"):
+        slurm_bootstrap._before_start_retry(
+            lambda: {"fence": "must-not-be-used"},
+            deadline=12,
+            delay=1,
+            diagnostic=diagnostic,
+        )

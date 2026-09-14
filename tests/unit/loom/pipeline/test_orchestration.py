@@ -42,8 +42,10 @@ from loom.pipeline.stores.authority import (
     PreparedAttemptRequest,
 )
 from loom.scheduling import (
+    AttributeConstraintEvaluator,
     Candidate,
     FifoSchedulingPolicy,
+    HardConstraintSpec,
     PolicyDecisionState,
     SchedulingKernel,
 )
@@ -174,12 +176,24 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         authority=authority, store=store, owner_id="coordinator"
     )
     plan = _plan(run_uri, _stage("train"))
+    constraint = HardConstraintSpec(
+        "software",
+        "attribute",
+        {"attributes": {"profile": "existing"}},
+        AttributeConstraintEvaluator.descriptor,
+    )
+    placement = resolve_stage_placement(
+        authored=ResourceRequest(),
+        runtime=None,
+        planners={},
+        policy=StagePlacementPolicy(hard_constraints=(constraint,)),
+    )
     initial = authority.open_run(run_uri)
     first = orchestrator.reconcile(
         admission_id="admission-1",
         plan=plan,
         authority_snapshot=initial,
-        placements={"train": _placement()},
+        placements={"train": placement},
         execution_requirements=_requirements(plan),
         ready_at=10,
     )[0]
@@ -194,7 +208,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         admission_id="admission-1",
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
-        placements={"train": _placement()},
+        placements={"train": placement},
         execution_requirements=_requirements(plan),
         ready_at=20,
     )[0]
@@ -205,6 +219,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
     assert replay.projection_revision == 2
     assert len(authority.open_run(run_uri).stages[0].attempts) == 1
     assert replay_store.list_stage_work() == (replay,)
+    assert replay.placement.hard_constraints == (constraint,)
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite"])

@@ -31,3 +31,12 @@ class ConsumeStage:
                 "report", f"consumed {value}", artifact_type="text", codec_key="text.v1"
             )
         }
+
+
+class StopEarlyStage:
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        del inputs
+        context.stop_early("This example intentionally cancels the run.")
+        return {}

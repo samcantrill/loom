@@ -27,7 +27,7 @@ RunStore:
 ArtifactStore:
   artifact bytes, object save/load, and ArtifactRef creation
 
-PipelineRunner:
+Native coordinator:
   execution lifecycle and state transitions
 
 Stage implementations:
@@ -1845,7 +1845,7 @@ Build in this order:
 9. Implement failure metadata read/write.
 10. Implement artifact index read/write and update helpers.
 11. Add scan/recovery helpers for existing runs.
-12. Connect `PipelineRunner` to `RunStore`.
+12. Connect the native coordinator to `RunStore`.
 13. Add CLI-backed status/log/artifact inspection later.
 14. Add append-only run events and conservative local run-level locks.
 

@@ -7,6 +7,16 @@ saga. Clients provide only a queue identity and run URI.
 
 from __future__ import annotations
 
+from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
+from ._managed_local import (
+    ResourceAvailabilityStatus,
+    ObserveRequest,
+    GpuResourceProvider,
+    _CompositeAgentResourceProvider,
+)
+from .run import _public_operation_id
+
+from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -14,6 +24,7 @@ from enum import StrEnum
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -21,7 +32,7 @@ import sqlite3
 import stat
 from threading import Event, RLock, Thread
 import time
-from typing import TYPE_CHECKING, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -39,6 +50,7 @@ from loom.scheduling import (
 
 from .agent_sessions import (
     AgentControl,
+    AgentOffer,
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
@@ -53,21 +65,29 @@ from ._agent_process_supervisor import (
 )
 from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
+from ._preparation_policy import PreparationPolicy
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
+    from ._preparation_operations import PreparationCallbacks
     from .coordinator_authority import CoordinatorAuthorityFactory
     from .local_daemon_execution import (
         LocalDaemonExecution,
         LocalDaemonExecutionOutcome,
     )
+    from .preparation import PrepareRunRequest
+    from .run import RunRequest
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 12
+_COORDINATOR_SCHEMA_VERSION = 16
+_AGENT_SCHEMA_VERSION = 12
+# Outbound session roots and coordinator roots independently reject old forms.
+_LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
 _DEPLOYMENT_BINDING_FILE = "deployment-binding.json"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _default_admission_priority(_run_uri: str) -> int:
@@ -625,9 +645,9 @@ class LocalDaemonConfig:
     """Protected configuration for one local coordinator and agent."""
 
     coordinator_root: Path
-    agent_root: Path
+    agent_root: Path | None
     run_store_root: Path
-    resident_worker_launch_profile: ResidentWorkerLaunchProfile
+    resident_worker_launch_profile: ResidentWorkerLaunchProfile | None
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
@@ -647,10 +667,30 @@ class LocalDaemonConfig:
     deployment_configuration_fingerprint: str | None = None
     active_configuration_fingerprint: str | None = None
     coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
+    gpu_occupancy_policy: GpuOccupancyPolicy | None = None
+    preparation_policy: PreparationPolicy | None = None
+    resident_preparation_ready: bool = False
+    resident_preparation_staged_ready: bool = False
+
+    @property
+    def preparation_enabled(self) -> bool:
+        return self.preparation_policy is not None and bool(
+            self.preparation_policy.effective_modes
+        )
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
-        agent = Path(self.agent_root)
+        if type(self.resident_preparation_ready) is not bool:
+            raise QueueServiceError("resident preparation readiness must be boolean")
+        if type(self.resident_preparation_staged_ready) is not bool:
+            raise QueueServiceError(
+                "resident staged preparation readiness must be boolean"
+            )
+        if self.preparation_policy is not None and not isinstance(
+            self.preparation_policy, PreparationPolicy
+        ):
+            raise QueueServiceError("preparation policy is invalid")
+        agent = None if self.agent_root is None else Path(self.agent_root)
         run_store = Path(self.run_store_root)
         deployment_root = (
             None if self.deployment_root is None else Path(self.deployment_root)
@@ -683,23 +723,30 @@ class LocalDaemonConfig:
         if not callable(authority_factory):
             raise QueueServiceError("coordinator authority factory is invalid")
         profile = self.resident_worker_launch_profile
-        if not isinstance(profile, ResidentWorkerLaunchProfile):
-            raise QueueServiceError("resident worker launch profile is required")
-        try:
-            descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
-        except (QueueServiceError, ValueError, TypeError) as exc:
+        if (agent is None) != (profile is None):
             raise QueueServiceError(
-                "resident worker launch profile is invalid"
-            ) from exc
-        if descriptor.to_dict() != profile.descriptor:
-            raise QueueServiceError("resident worker launch descriptor must be exact")
-        if coordinator == agent:
+                "local-agent root and resident worker launch profile must agree"
+            )
+        if profile is not None and not isinstance(profile, ResidentWorkerLaunchProfile):
+            raise QueueServiceError("resident worker launch profile is invalid")
+        if profile is not None:
+            try:
+                descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
+            except (QueueServiceError, ValueError, TypeError) as exc:
+                raise QueueServiceError(
+                    "resident worker launch profile is invalid"
+                ) from exc
+            if descriptor.to_dict() != profile.descriptor:
+                raise QueueServiceError(
+                    "resident worker launch descriptor must be exact"
+                )
+        if agent is not None and coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
             )
         if deployment_root is not None and (
             coordinator != deployment_root / "coordinator"
-            or agent != deployment_root / "agent"
+            or (agent is not None and agent != deployment_root / "agent")
         ):
             raise QueueServiceError(
                 "deployment roots must be the coordinator and agent bundle subroots"
@@ -709,7 +756,7 @@ class LocalDaemonConfig:
         if (
             isinstance(self.cpu_capacity, bool)
             or not isinstance(self.cpu_capacity, int)
-            or self.cpu_capacity < 1
+            or self.cpu_capacity < (1 if agent is not None else 0)
         ):
             raise QueueServiceError("cpu_capacity must be a positive integer")
         if (
@@ -721,6 +768,15 @@ class LocalDaemonConfig:
                 "memory_capacity_bytes must be a non-negative integer"
             )
         gpu_devices = tuple(self.gpu_devices)
+        if agent is None and (
+            self.cpu_capacity
+            or self.memory_capacity_bytes
+            or gpu_devices
+            or self.agent_resource_providers not in (None, ())
+        ):
+            raise QueueServiceError(
+                "coordinator-only configuration has local agent state"
+            )
         if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
             raise QueueServiceError("gpu_devices must be configured GPU devices")
         if len({item.descriptor.device_id for item in gpu_devices}) != len(gpu_devices):
@@ -728,12 +784,13 @@ class LocalDaemonConfig:
         if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
             raise QueueServiceError("configured GPU bindings must be unique")
         providers = self.agent_resource_providers
-        if providers is None:
+        if agent is None:
+            providers = ()
+        elif providers is None:
             # This compatibility construction belongs to trusted configuration,
             # never to the daemon runtime.  Deployments that need a different
             # physical provider pass the complete composition explicitly.
             from ._managed_local import (
-                GpuResourceProvider,
                 AtomResourceProvider,
                 _configured_provider_descriptor,
             )
@@ -819,6 +876,18 @@ class LocalDaemonConfig:
                                 for device in gpu_devices
                                 if device.descriptor.healthy
                             },
+                            occupancy_monitor=(
+                                None
+                                if self.gpu_occupancy_policy is None
+                                else GpuOccupancyMonitor(
+                                    tuple(
+                                        device.binding_value
+                                        for device in gpu_devices
+                                        if device.descriptor.healthy
+                                    ),
+                                    policy=self.gpu_occupancy_policy,
+                                )
+                            ),
                         ),
                     )
                     if gpu_devices
@@ -826,7 +895,7 @@ class LocalDaemonConfig:
                 ),
             )
         providers = tuple(providers)
-        if not providers:
+        if agent is not None and not providers:
             raise QueueServiceError("agent resource provider composition is required")
         if any(
             not hasattr(item, "descriptor")
@@ -835,25 +904,39 @@ class LocalDaemonConfig:
             for item in providers
         ):
             raise QueueServiceError("agent resource providers are invalid")
-        from ._managed_local import ObserveRequest, _compose_agent_resource_providers
-
-        try:
-            provider_owners = _compose_agent_resource_providers(providers)
-            provider_capacity = tuple(
-                atom
-                for kind, provider in sorted(provider_owners.items())
-                for atom in provider.observe(
-                    ObserveRequest(
-                        self.machine_id,
-                        "configured-local-agent",
-                        f"configured-capacity:{kind}",
-                    )
-                ).atoms
+        provider_capacity: tuple[CapacityAtom, ...] = ()
+        if agent is not None:
+            from ._managed_local import (
+                ObserveRequest,
+                _compose_agent_resource_providers,
             )
-        except Exception as exc:
-            raise QueueServiceError(
-                "agent resource provider capacity is invalid"
-            ) from exc
+
+            try:
+                provider_owners = _compose_agent_resource_providers(providers)
+                provider_capacity = tuple(
+                    atom
+                    for kind, provider in sorted(provider_owners.items())
+                    for atom in provider.observe(
+                        ObserveRequest(
+                            self.machine_id,
+                            "configured-local-agent",
+                            f"configured-capacity:{kind}",
+                        )
+                    ).atoms
+                )
+                # A busy/unverified device remains configured inventory. Its
+                # live provider observation alone owns current availability.
+                configured = {atom.key: atom for atom in provider_capacity}
+                for member in providers:
+                    if isinstance(member, GpuResourceProvider):
+                        configured.update(
+                            (atom.key, atom) for atom in member.configured_atoms
+                        )
+                provider_capacity = tuple(configured[key] for key in sorted(configured))
+            except Exception as exc:
+                raise QueueServiceError(
+                    "agent resource provider capacity is invalid"
+                ) from exc
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -946,23 +1029,27 @@ class LocalDaemonConfig:
 
     @property
     def agent_journal(self) -> Path:
+        if self.agent_root is None:
+            raise QueueServiceError("coordinator has no local agent journal")
         return self.agent_root / "journal.sqlite"
 
     @property
     def slurm_transfer_root(self) -> Path:
         return self.coordinator_root / "slurm-transfers"
 
-    @property
-    def slurm_script_root(self) -> Path:
-        return self.coordinator_root / "slurm-scripts"
-
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonAdmissionRequest:
-    """The complete public submission shape."""
+    """Submit prepared work, or explicitly retry an observed failed revision.
+
+    Ordinary replay only observes the retained admission. ``retry_failed_revision``
+    authorizes one continuation of that FAILED admission through its existing
+    coordinator and intent; replay of the same revision cannot authorize another.
+    """
 
     queue_item_id: str
     run_uri: str
+    retry_failed_revision: int | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -971,16 +1058,36 @@ class LocalDaemonAdmissionRequest:
         ):
             if not isinstance(value, str) or not value:
                 raise QueueServiceError(f"{name} must be a non-empty string")
+        if self.retry_failed_revision is not None and (
+            isinstance(self.retry_failed_revision, bool)
+            or not isinstance(self.retry_failed_revision, int)
+            or self.retry_failed_revision < 1
+        ):
+            raise QueueServiceError("retry failed revision must be a positive integer")
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"queue_item_id": self.queue_item_id, "run_uri": self.run_uri}
+        result: dict[str, PlainData] = {
+            "queue_item_id": self.queue_item_id,
+            "run_uri": self.run_uri,
+        }
+        if self.retry_failed_revision is not None:
+            result["retry_failed_revision"] = self.retry_failed_revision
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonAdmissionRequest":
-        _exact_fields(data, {"queue_item_id", "run_uri"}, "admission request")
+        fields = {"queue_item_id", "run_uri"}
+        if "retry_failed_revision" in data:
+            fields.add("retry_failed_revision")
+        _exact_fields(data, fields, "admission request")
         return cls(
             queue_item_id=_required_string(data, "queue_item_id"),
             run_uri=_required_string(data, "run_uri"),
+            retry_failed_revision=(
+                _required_int(data, "retry_failed_revision")
+                if "retry_failed_revision" in data
+                else None
+            ),
         )
 
 
@@ -1115,7 +1222,7 @@ class LocalDaemonAdmissionDetail:
 
 @dataclass(frozen=True, slots=True)
 class DaemonStatus:
-    """Constant-size, redacted coordinator health summary.
+    """Bounded, redacted coordinator health and configured local resources.
 
     Detailed admissions deliberately live behind ``admissions()`` and
     ``admission()``.  Keeping the summary separate prevents a status read from
@@ -1134,6 +1241,7 @@ class DaemonStatus:
     accepted_time_health: str
     accepted_time_diagnostic: str | None
     accepted_time_revision: int
+    local_resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     @property
     def scheduling_ready(self) -> bool:
@@ -1156,10 +1264,14 @@ class DaemonStatus:
             "accepted_time_health": self.accepted_time_health,
             "accepted_time_diagnostic": self.accepted_time_diagnostic,
             "accepted_time_revision": self.accepted_time_revision,
+            "local_resource_status": [
+                item.to_dict() for item in self.local_resource_status
+            ],
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "DaemonStatus":
+        data = {"local_resource_status": [], **data}
         _exact_fields(
             data,
             {
@@ -1176,10 +1288,14 @@ class DaemonStatus:
                 "accepted_time_health",
                 "accepted_time_diagnostic",
                 "accepted_time_revision",
+                "local_resource_status",
             },
             "local daemon status",
         )
         return cls(
+            local_resource_status=_resource_status_from_value(
+                data["local_resource_status"]
+            ),
             coordinator_id=_required_string(data, "coordinator_id"),
             coordinator_epoch=_required_string(data, "coordinator_epoch"),
             as_of=_required_string(data, "as_of"),
@@ -1257,6 +1373,7 @@ class AgentProjection:
     pools: tuple[str, ...]
     capabilities: tuple[str, ...]
     available: bool
+    resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -1270,10 +1387,12 @@ class AgentProjection:
             "pools": list(self.pools),
             "capabilities": list(self.capabilities),
             "available": self.available,
+            "resource_status": [item.to_dict() for item in self.resource_status],
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
+        data = {"resource_status": [], **data}
         _exact_fields(
             data,
             {
@@ -1287,6 +1406,7 @@ class AgentProjection:
                 "pools",
                 "capabilities",
                 "available",
+                "resource_status",
             },
             "agent projection",
         )
@@ -1302,6 +1422,7 @@ class AgentProjection:
         ):
             raise QueueServiceError("agent projection is invalid")
         return cls(
+            resource_status=_resource_status_from_value(data["resource_status"]),
             agent_id=_required_string(data, "agent_id"),
             session_id=_required_string(data, "session_id"),
             state=_required_string(data, "state"),
@@ -1415,8 +1536,13 @@ class LocalDaemon:
         prepare_role_reload: (
             Callable[[LocalDaemonConfig], Callable[[], None]] | None
         ) = None,
+        preparation: PreparationCallbacks | None = None,
+        event_observers: Any = None,
     ) -> None:
         self.config = config
+        from ._lifecycle_observers import LifecycleObservers
+
+        self._event_observers = event_observers or LifecycleObservers()
         self._clock = clock
         self._trusted_scheduling_loader = trusted_scheduling_loader
         self._prepare_role_reload = prepare_role_reload
@@ -1432,8 +1558,19 @@ class LocalDaemon:
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
         self._service_error: str | None = None
+        self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
+        from ._preparation_operations import CoordinatorPreparations
+
+        self._preparations = CoordinatorPreparations(self, preparation)
+        from ._service_lifetime import CoordinatorLifetime
+
+        self._lifetime = CoordinatorLifetime(self)
+
+    @property
+    def preparation_available(self) -> bool:
+        return self._preparations.available
 
     @classmethod
     def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
@@ -1449,21 +1586,28 @@ class LocalDaemon:
         staged = replace(
             config,
             coordinator_root=staging / "coordinator",
-            agent_root=staging / "agent",
+            agent_root=(None if config.agent_root is None else staging / "agent"),
             deployment_root=staging,
         )
         try:
             staging.mkdir(mode=0o700)
             cls.initialize(staged)
             coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
-            agent_id = _open_root(staged.agent_root, role="local-agent")
+            agent_id = (
+                None
+                if staged.agent_root is None
+                else _open_root(staged.agent_root, role="local-agent")
+            )
             binding = {
-                "schema_version": 2,
-                "role_kind": "coordinator-bundle",
+                "schema_version": 3,
+                "role_kind": "coordinator"
+                if agent_id is None
+                else "coordinator-bundle",
                 "coordinator_id": coordinator_id,
-                "agent_id": agent_id,
                 "immutable_fingerprint": (staged.deployment_configuration_fingerprint),
             }
+            if agent_id is not None:
+                binding["agent_id"] = agent_id
             binding_path = staging / _DEPLOYMENT_BINDING_FILE
             binding_path.write_text(
                 json.dumps(
@@ -1494,7 +1638,9 @@ class LocalDaemon:
     def initialize(cls, config: LocalDaemonConfig) -> None:
         """Create fresh owner-private roots; existing/legacy roots are rejected."""
 
-        if config.coordinator_root.exists() or config.agent_root.exists():
+        if config.coordinator_root.exists() or (
+            config.agent_root is not None and config.agent_root.exists()
+        ):
             raise QueueServiceError(
                 "local daemon requires fresh roots; migration and compatibility "
                 "with existing managed-local state are unsupported"
@@ -1517,19 +1663,22 @@ class LocalDaemon:
                     "VALUES ('active_configuration_revision', '1')"
                 )
                 conn.commit()
-            cls.initialize_agent_root(config.agent_root)
-            from ._agent_process_supervisor import (
-                AgentProcessSupervisorService,
-                SupervisorLaunchConfiguration,
-            )
+            agent_id: str | None = None
+            if config.agent_root is not None:
+                cls.initialize_agent_root(config.agent_root)
+                from ._agent_process_supervisor import (
+                    AgentProcessSupervisorService,
+                    SupervisorLaunchConfiguration,
+                )
 
-            agent_id = _open_root(config.agent_root, role="local-agent")
-            AgentProcessSupervisorService.initialize_process_free(
-                config.agent_root,
-                configuration=SupervisorLaunchConfiguration(
-                    agent_id, (config.resident_worker_launch_profile,)
-                ),
-            )
+                agent_id = _open_root(config.agent_root, role="local-agent")
+                profile = config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueServiceError("local agent profile is unavailable")
+                AgentProcessSupervisorService.initialize_process_free(
+                    config.agent_root,
+                    configuration=SupervisorLaunchConfiguration(agent_id, (profile,)),
+                )
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
             initialize_local_daemon_owner_stores(
@@ -1539,6 +1688,19 @@ class LocalDaemon:
             )
         except Exception:
             raise
+
+    @classmethod
+    def upgrade_coordinator_root(cls, config: LocalDaemonConfig) -> tuple[str, int]:
+        """Upgrade a stopped, protected deployment's coordinator from 12 to the current version.
+
+        The native owner checks the role lock, deployment binding and database
+        structure, retains a private SQLite backup and commits the schema change
+        atomically. Worker roots and journals are opened read-only for identity
+        validation and retain their existing version and contents.
+        """
+        from ._coordinator_upgrade import upgrade_coordinator_root
+
+        return upgrade_coordinator_root(config)
 
     @classmethod
     def initialize_agent_root(cls, root: Path) -> None:
@@ -1559,30 +1721,28 @@ class LocalDaemon:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
-        try:
-            agent_lock = _acquire_lock(self.config.agent_root)
-        except Exception:
-            coordinator_lock.close()
-            raise
+        agent_lock = None
+        if self.config.agent_root is not None:
+            try:
+                agent_lock = _acquire_lock(self.config.agent_root)
+            except Exception:
+                coordinator_lock.close()
+                raise
         created_supervisor: AgentProcessSupervisorClient | None = None
-        owner_ids: tuple[str, str] | None = None
+        owner_ids: tuple[str, str | None] | None = None
         try:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
-            agent_id = _open_root(self.config.agent_root, role="local-agent")
+            agent_id = (
+                None
+                if self.config.agent_root is None
+                else _open_root(self.config.agent_root, role="local-agent")
+            )
             verified_local_owner_subject = (
                 f"uid:{self.config.coordinator_root.stat().st_uid}"
             )
             owner_ids = coordinator_id, agent_id
-            from ._agent_process_supervisor import (
-                AgentProcessSupervisorService,
-                SupervisorLaunchConfiguration,
-            )
-
-            supervisor_configuration = SupervisorLaunchConfiguration(
-                agent_id, (self.config.resident_worker_launch_profile,)
-            )
             from .local_daemon_execution import local_daemon_owner_work_is_retained
 
             # Recover only a fully prepared reload intent that is bound to the
@@ -1615,6 +1775,7 @@ class LocalDaemon:
                 raise QueueStorageError(
                     "active scheduling configuration is unavailable"
                 )
+            self._event_observers.start()
             # This is the same cross-owner proof used by normal shutdown.  It
             # rejects unavailable owner state before process creation and
             # identifies retained work that must keep a newly started service
@@ -1622,19 +1783,31 @@ class LocalDaemon:
             local_daemon_owner_work_is_retained(
                 self.config, coordinator_id=coordinator_id, agent_id=agent_id
             )
-            try:
-                AgentProcessSupervisorClient(
-                    self.config.agent_root, supervisor_configuration
+            if agent_id is not None and self.config.agent_root is not None:
+                from ._agent_process_supervisor import (
+                    AgentProcessSupervisorService,
+                    SupervisorLaunchConfiguration,
                 )
-            except AgentProcessSupervisorError as exc:
-                if str(exc) != "managed supervisor endpoint is unavailable":
-                    raise
-                created_supervisor = (
-                    AgentProcessSupervisorService.start_empty_initialized(
-                        self.config.agent_root,
-                        configuration=supervisor_configuration,
+
+                profile = self.config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueServiceError("local agent profile is unavailable")
+                supervisor_configuration = SupervisorLaunchConfiguration(
+                    agent_id, (profile,)
+                )
+                try:
+                    AgentProcessSupervisorClient(
+                        self.config.agent_root, supervisor_configuration
                     )
-                )
+                except AgentProcessSupervisorError as exc:
+                    if str(exc) != "managed supervisor endpoint is unavailable":
+                        raise
+                    created_supervisor = (
+                        AgentProcessSupervisorService.start_empty_initialized(
+                            self.config.agent_root,
+                            configuration=supervisor_configuration,
+                        )
+                    )
             self._coordinator_id = coordinator_id
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
@@ -1671,7 +1844,8 @@ class LocalDaemon:
                     coordinator_id=owner_ids[0],
                     agent_id=owner_ids[1],
                 )
-            agent_lock.close()
+            if agent_lock is not None:
+                agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
             self._agent_id = None
@@ -1698,20 +1872,21 @@ class LocalDaemon:
             # local launch has joined the continuous supervisor and completed
             # ordinary result/output/provider replay.
             execution.resume_retained_local_work()
-        except Exception:
+        except Exception as exc:
             if created_supervisor is not None:
                 self._shutdown_created_supervisor_if_empty(
                     created_supervisor,
                     coordinator_id=coordinator_id,
                     agent_id=agent_id,
                 )
-            agent_lock.close()
+            if agent_lock is not None:
+                agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
             self._agent_id = None
             raise QueueServiceError(
                 "retained daemon owner state is unavailable"
-            ) from None
+            ) from exc
         thread = Thread(
             target=self._serve,
             name="loom-local-daemon-runtime",
@@ -1724,6 +1899,7 @@ class LocalDaemon:
         self._epoch = epoch
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
+        self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
         self._wake.set()
@@ -1741,12 +1917,14 @@ class LocalDaemon:
         supervisor: AgentProcessSupervisorClient,
         *,
         coordinator_id: str,
-        agent_id: str,
+        agent_id: str | None,
     ) -> None:
         """Retire only the empty cross-owner service this start created."""
 
         from .local_daemon_execution import local_daemon_owner_work_is_retained
 
+        if agent_id is None:
+            return
         try:
             if not local_daemon_owner_work_is_retained(
                 self.config, coordinator_id=coordinator_id, agent_id=agent_id
@@ -1767,11 +1945,16 @@ class LocalDaemon:
         if self._execution is not None:
             self._execution.close()
             try:
-                self._execution.shutdown_clean()
+                if not self._lifetime.clean_shutdown_verified:
+                    self._execution.shutdown_clean()
             except (QueueConflictError, QueueServiceError):
                 # A busy or unavailable cross-owner proof deliberately leaves
                 # the detached process running for recovery.
-                pass
+                _LOGGER.warning(
+                    "local daemon retained its supervisor during shutdown; "
+                    "preserve the deployment and inspect the shutdown refusal",
+                    exc_info=True,
+                )
         self._execution = None
         for lock in (self._agent_lock, self._coordinator_lock):
             if lock is not None:
@@ -1878,18 +2061,19 @@ class LocalDaemon:
                 running += int(
                     execution.execute(
                         "SELECT COUNT(*) FROM slurm_stage_assignments "
-                        "WHERE state NOT IN ('rejected', 'released')"
+                        "WHERE state != 'released'"
                     ).fetchone()[0]
                 )
-            with sqlite3.connect(
-                f"{self.config.agent_journal.resolve().as_uri()}?mode=rw", uri=True
-            ) as journal:
-                running += int(
-                    journal.execute(
-                        "SELECT COUNT(*) FROM assignments "
-                        "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
-                    ).fetchone()[0]
-                )
+            if self.config.agent_root is not None:
+                with sqlite3.connect(
+                    f"{self.config.agent_journal.resolve().as_uri()}?mode=rw", uri=True
+                ) as journal:
+                    running += int(
+                        journal.execute(
+                            "SELECT COUNT(*) FROM assignments "
+                            "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
+                        ).fetchone()[0]
+                    )
         except (sqlite3.Error, OSError):
             # The coordinator remains observable even if a private owner store
             # is temporarily unavailable; health carries that condition.
@@ -1901,11 +2085,28 @@ class LocalDaemon:
         owners_available = local_daemon_owner_stores_available(
             self.config,
             coordinator_id=coordinator_id,
-            agent_id=self._require_agent_id(),
+            agent_id=self._agent_id,
+        )
+        local_profile_ready = (
+            self.config.agent_root is None
+            or self._execution is None
+            or self._execution.local_profile_ready
         )
         as_of = self._clock()
         parse_timestamp(as_of)
+        local_status = tuple(
+            status
+            for provider in self._local_resource_providers()
+            for status in provider.observe(
+                ObserveRequest(
+                    self.config.machine_id,
+                    self._epoch or "status",
+                    "status:cached-resources",
+                )
+            ).resource_status
+        )
         return DaemonStatus(
+            local_resource_status=local_status,
             coordinator_id=coordinator_id,
             coordinator_epoch=self._epoch or "",
             as_of=as_of,
@@ -1916,6 +2117,7 @@ class LocalDaemon:
                 and time_health == "healthy"
                 and owners_available
                 and assignment_counts_available
+                and local_profile_ready
                 else "degraded"
             ),
             service_diagnostic=(
@@ -1927,7 +2129,11 @@ class LocalDaemon:
                     else (
                         "owner_status_unavailable"
                         if not owners_available or not assignment_counts_available
-                        else self._service_error
+                        else (
+                            "resident_profile_unready"
+                            if not local_profile_ready
+                            else self._service_error
+                        )
                     )
                 )
             ),
@@ -1978,7 +2184,7 @@ class LocalDaemon:
             self.config,
             (admission,),
             coordinator_id=self._require_started(),
-            agent_id=self._require_agent_id(),
+            agent_id=self._agent_id,
             clock=self._clock,
             admission_revision=admission.revision,
         )
@@ -2043,7 +2249,9 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(conn.execute(query, (*values, limit + 1)))
             values_out = tuple(
-                _agent_projection(conn, row, coordinator_epoch=self._epoch)
+                _agent_projection(
+                    conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+                )
                 for row in rows[:limit]
             )
         next_cursor = (
@@ -2064,7 +2272,9 @@ class LocalDaemon:
             ).fetchone()
             if row is None:
                 raise QueueServiceError("managed agent was not found")
-            return _agent_projection(conn, row, coordinator_epoch=self._epoch)
+            return _agent_projection(
+                conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+            )
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
         """Read the one typed durable operation receipt without a history scan."""
@@ -2097,6 +2307,31 @@ class LocalDaemon:
         if management_operation is not None:
             return management_operation
         raise QueueServiceError("managed operation was not found")
+
+    def prepare_run(
+        self, request: "PrepareRunRequest", *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Accept one durable intent; capture and publication reconcile separately."""
+        return self._preparations.accept(request, principal_id)
+
+    def start_run(
+        self, request: "RunRequest", *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Retain preparation and its exact admission continuation atomically."""
+        return self._preparations.accept_run(request, principal_id)
+
+    def cancel_run_operation(
+        self, operation_id: str, *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Retain independent cancellation, serialized against target admission."""
+        return self._preparations.cancel_run(operation_id, principal_id)
+
+    def cancel_preparation(
+        self, operation_id: str, *, principal_id: str
+    ) -> LocalDaemonOperation:
+        """Request cancellation; terminal state requires native no-work/release proof."""
+        _required_string({"operation_id": operation_id}, "operation_id")
+        return self._preparations.cancel(operation_id, principal_id)
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
@@ -2179,21 +2414,44 @@ class LocalDaemon:
                 return AdmissionWaitResult(
                     AdmissionWaitKind.TIMEOUT, admission, current
                 )
-            self._wake.set()
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
+
+    def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
+        """Read the installed execution owners, including owners retained by reload."""
+        execution = self._execution
+        if execution is None:
+            return tuple(self.config.agent_resource_providers or ())
+        return tuple(
+            member
+            for owner in execution.providers.values()
+            for member in (
+                owner.members
+                if isinstance(owner, _CompositeAgentResourceProvider)
+                else (owner,)
+            )
+        )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
+        self._preparations.reconcile()
+        for provider in self._local_resource_providers():
+            if isinstance(provider, GpuResourceProvider):
+                provider.refresh_occupancy()
         with self._cycle_lock:
+            self._event_observers.flush_prepared()
+            # A reload may replace providers while the bounded query runs.
+            # Its new provider starts unknown and is refreshed next cycle.
             time_healthy = self._sample_clock_health()
             execution = self._execution
             if execution is None:
                 raise QueueServiceError("local daemon execution is absent")
             execution.open_owner_stores()
+            self._resume_pending_admission_retries(execution)
             self._resume_pending_recoveries(execution)
             execution.begin_cycle()
+            self._repair_cancelled_admissions(execution)
             with self._connection() as conn:
                 admissions = tuple(
                     _admission_from_row(row)
@@ -2224,6 +2482,12 @@ class LocalDaemon:
                 except Exception:  # one unhealthy run cannot stop other admissions
                     self._record_admission_health(admission.admission_id, "unavailable")
                 else:
+                    if outcome.state in {
+                        LocalDaemonAdmissionState.SUCCEEDED,
+                        LocalDaemonAdmissionState.FAILED,
+                        LocalDaemonAdmissionState.CANCELLED,
+                    }:
+                        self._event_observers.flush_prepared(admission.run_uri)
                     self._record_admission_health(
                         admission.admission_id,
                         (
@@ -2296,11 +2560,64 @@ class LocalDaemon:
                 self._service_error = None
             self._wake.wait(self.config.poll_interval_seconds)
 
-    def _submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
+    def _submit(
+        self,
+        request: LocalDaemonAdmissionRequest,
+        *,
+        preparation_operation_id: str | None = None,
+        run_operation_id: str | None = None,
+    ) -> LocalDaemonAdmission:
         coordinator_id = self._require_started()
         from .local_daemon_execution import load_managed_local_intent
 
         with self._cycle_lock:
+            self._lifetime.require_accepting()
+            from ._preparation_operations import (
+                PREPARATION_RUN_PREFIX,
+                PreparationChildReserved,
+            )
+            from loom.pipeline.stores import run_uri_to_path
+
+            if preparation_operation_id is None:
+                try:
+                    run_name = run_uri_to_path(request.run_uri).name
+                except ValueError:
+                    run_name = ""
+                if run_name.startswith(PREPARATION_RUN_PREFIX):
+                    raise PreparationChildReserved(
+                        "preparation child run identity is reserved"
+                    )
+
+            with self._connection() as conn:
+                reserved = conn.execute(
+                    "SELECT operation_id, child_name, selected_json FROM preparation_operations WHERE child_name = ?",
+                    (request.queue_item_id,),
+                ).fetchone()
+                if preparation_operation_id is not None:
+                    if (
+                        reserved is None
+                        or reserved["operation_id"] != preparation_operation_id
+                    ):
+                        raise QueueConflictError(
+                            "preparation child admission ownership conflicts"
+                        )
+                    selected = json.loads(str(reserved["selected_json"]))
+                    from loom.pipeline.stores import path_to_run_uri
+
+                    if request.run_uri != path_to_run_uri(
+                        Path(selected["run_store_root"]) / str(reserved["child_name"])
+                    ):
+                        raise QueueConflictError(
+                            "preparation child run identity conflicts"
+                        )
+                elif (
+                    request.queue_item_id.startswith(PREPARATION_RUN_PREFIX)
+                    or reserved is not None
+                ):
+                    raise PreparationChildReserved(
+                        "preparation child queue identity is reserved"
+                    )
+            self._preparations.check_target_submission(request, run_operation_id)
             execution = self._execution
             if execution is None:
                 raise QueueServiceError("coordinator execution is unavailable")
@@ -2325,12 +2642,18 @@ class LocalDaemon:
                     existing.intent_digest == intent.digest
                     and existing.queue_item_id == request.queue_item_id
                 ):
+                    if request.retry_failed_revision is not None:
+                        return self._retry_failed_admission(
+                            existing, request, execution
+                        )
                     return existing
                 raise QueueConflictError("managed run admission intent conflicts")
             if other is not None:
                 raise QueueConflictError(
                     "queue item identity already admits another run"
                 )
+            if request.retry_failed_revision is not None:
+                raise QueueConflictError("retry requires an existing failed admission")
 
             intent = load_managed_local_intent(self.config, request.run_uri)
             execution.validate_fresh_intent(intent)
@@ -2364,11 +2687,145 @@ class LocalDaemon:
                         self._next_enqueue_sequence(conn),
                     ),
                 )
+                if run_operation_id is not None:
+                    admitted = conn.execute(
+                        "SELECT * FROM managed_admissions WHERE admission_id = ?",
+                        (admission_id,),
+                    ).fetchone()
+                    assert admitted is not None
+                    self._preparations.retain_admission(
+                        conn, run_operation_id, _admission_from_row(admitted)
+                    )
                 conn.commit()
         self._wake.set()
         return self._admission(admission_id)
 
-    def _cancel(self, queue_item_id: str, *, principal_id: str) -> LocalDaemonAdmission:
+    def _retry_failed_admission(
+        self,
+        admission: LocalDaemonAdmission,
+        request: LocalDaemonAdmissionRequest,
+        execution: LocalDaemonExecution,
+    ) -> LocalDaemonAdmission:
+        # The coordinator journal bridges its local admission update and the
+        # authority's atomic, replayable lifecycle continuation across restart.
+        key = (
+            f"admission-retry:{admission.admission_id}:{request.retry_failed_revision}"
+        )
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            if (
+                admission.state is not LocalDaemonAdmissionState.FAILED
+                or admission.revision != request.retry_failed_revision
+                or admission.cancellation_operation_id is not None
+            ):
+                raise QueueConflictError("retry failed admission revision is stale")
+            snapshot = execution.validate_admission_retry(admission)
+            record = {
+                "admission_id": admission.admission_id,
+                "failed_revision": admission.revision,
+                "authority_revision": snapshot.revision.to_dict(),
+                "state": "pending",
+            }
+            with self._connection() as conn:
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
+                    (key, json.dumps(record)),
+                )
+                conn.commit()
+        else:
+            record = json.loads(str(row["value"]))
+        if record["state"] == "pending":
+            self._apply_admission_retry(key, record, execution)
+        self._wake.set()
+        return self._admission(admission.admission_id)
+
+    def _apply_admission_retry(
+        self, key: str, record: dict[str, Any], execution: LocalDaemonExecution
+    ) -> None:
+        from loom.pipeline.stores.read_models import BackendRevision
+
+        admission = self._admission(record["admission_id"])
+        if (
+            admission.state is not LocalDaemonAdmissionState.FAILED
+            or admission.revision != record["failed_revision"]
+            or admission.cancellation_operation_id is not None
+        ):
+            raise QueueConflictError("pending admission retry conflicts")
+        execution.resume_failed_admission(
+            admission,
+            operation_id=key,
+            expected_revision=BackendRevision.from_dict(record["authority_revision"]),
+        )
+        record["state"] = "applied"
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
+                "revision = revision + 1 WHERE admission_id = ?",
+                (
+                    LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
+                    admission.admission_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE daemon_metadata SET value = ? WHERE key = ?",
+                (json.dumps(record), key),
+            )
+            conn.commit()
+
+    def _resume_pending_admission_retries(
+        self, execution: LocalDaemonExecution
+    ) -> None:
+        with self._connection() as conn:
+            pending = tuple(
+                conn.execute(
+                    "SELECT key, value FROM daemon_metadata "
+                    "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending'"
+                )
+            )
+        for row in pending:
+            try:
+                self._apply_admission_retry(
+                    str(row["key"]), json.loads(str(row["value"])), execution
+                )
+            except Exception:
+                self._record_admission_health(
+                    json.loads(str(row["value"]))["admission_id"], "unavailable"
+                )
+
+    def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
+        if self._cancelled_admission_repairs is None:
+            with self._connection() as conn:
+                self._cancelled_admission_repairs = deque(
+                    str(row["admission_id"])
+                    for row in conn.execute(
+                        "SELECT admission_id FROM managed_admissions "
+                        "WHERE state = ? AND cancellation_operation_id IS NULL "
+                        "ORDER BY enqueue_sequence, admission_id",
+                        (LocalDaemonAdmissionState.CANCELLED.value,),
+                    )
+                )
+        pending = self._cancelled_admission_repairs
+        for _ in range(min(16, len(pending))):
+            admission_id = pending.popleft()
+            try:
+                execution.repair_cancelled_admission(self._admission(admission_id))
+            except Exception:
+                self._record_admission_health(admission_id, "unavailable")
+                pending.append(admission_id)
+            else:
+                self._record_admission_health(admission_id, "healthy")
+
+    def _cancel(
+        self,
+        queue_item_id: str,
+        *,
+        principal_id: str,
+        repair_revision: int | None = None,
+    ) -> LocalDaemonAdmission:
         self._require_started()
         if not isinstance(principal_id, str) or not principal_id:
             raise QueueServiceError("cancellation principal is required")
@@ -2381,7 +2838,12 @@ class LocalDaemon:
             if row is None:
                 raise AdmissionNotFoundError("managed admission was not found")
             admission = _admission_from_row(row)
-            if admission.state in {
+            repairing_cancelled = (
+                admission.state is LocalDaemonAdmissionState.CANCELLED
+                and repair_revision == admission.revision
+                and admission.cancellation_operation_id is None
+            )
+            if not repairing_cancelled and admission.state in {
                 LocalDaemonAdmissionState.SUCCEEDED,
                 LocalDaemonAdmissionState.FAILED,
                 LocalDaemonAdmissionState.CANCELLED,
@@ -2416,6 +2878,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
+        _public_operation_id(control.operation_id)
         authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
@@ -2555,6 +3018,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Install one complete protected coordinator scheduling epoch."""
 
+        _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._cycle_lock:
@@ -2621,6 +3085,8 @@ class LocalDaemon:
                     request.operation_id, candidate_fingerprint
                 )
             except Exception:
+                if self._execution is not None:
+                    self._execution.local_profile_ready = False
                 if replacement_fingerprint is not None:
                     return self._pending_scheduling_reload(request.operation_id)
                 return self._reject_scheduling_reload(
@@ -2634,6 +3100,7 @@ class LocalDaemon:
                         replacement, next_epoch
                     )
                 except Exception:
+                    execution.local_profile_ready = False
                     if replacement_fingerprint is not None:
                         return self._pending_scheduling_reload(request.operation_id)
                     return self._reject_scheduling_reload(
@@ -2709,6 +3176,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
+        _public_operation_id(request.recovery_id)
         authorizer = self._authorizer()
         authorizer.require_operator(principal, "recover_unknown")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -2780,6 +3248,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Fence one completely classified old session before successor bind."""
 
+        _public_operation_id(request.operation_id)
         execution = self._execution
         if execution is None:
             raise QueueServiceError("replacement coordinator execution is unavailable")
@@ -3152,8 +3621,8 @@ class LocalDaemon:
             getattr(replacement, name) != getattr(self.config, name)
             for name in immutable
         ) or (
-            replacement.resident_worker_launch_profile.fingerprint
-            != self.config.resident_worker_launch_profile.fingerprint
+            replacement.resident_worker_launch_profile
+            != self.config.resident_worker_launch_profile
         ):
             raise QueueConflictError(
                 "scheduling reload cannot replace process or agent-owned configuration"
@@ -3190,7 +3659,6 @@ class LocalDaemon:
                 raise TimeoutError(
                     "managed local admission did not reach terminal state"
                 )
-            self._wake.set()
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
     def _cancellation_operation_id(self, admission_id: str) -> str | None:
@@ -3329,6 +3797,7 @@ class LocalDaemon:
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
     ) -> TimeRecoveryReceipt:
+        _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "recover_time")
         encoded = json.dumps(
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -3477,9 +3946,12 @@ class LocalDaemon:
 
     @contextmanager
     def _agent_connection(self) -> Iterator[sqlite3.Connection]:
+        agent_root = self.config.agent_root
+        if agent_root is None:
+            raise QueueStorageError("coordinator has no local agent control state")
         try:
             conn = sqlite3.connect(
-                f"{self.config.agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
+                f"{agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
                 uri=True,
                 timeout=30,
             )
@@ -3610,6 +4082,26 @@ class LocalDaemonClientView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.operation(operation_id)
 
+    def prepare_run(self, request: "PrepareRunRequest") -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.prepare_run(request, principal_id=self._principal.subject)
+
+    def start_run(self, request: "RunRequest") -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.start_run(request, principal_id=self._principal.subject)
+
+    def cancel_run_operation(self, operation_id: str) -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.cancel_run_operation(
+            operation_id, principal_id=self._principal.subject
+        )
+
+    def cancel_preparation(self, operation_id: str) -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.cancel_preparation(
+            operation_id, principal_id=self._principal.subject
+        )
+
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
     ) -> OperationWaitResult:
@@ -3735,6 +4227,16 @@ class LocalDaemonSlurmBootstrapView:
                 "cluster": record.cluster,
                 "incarnation": record.bootstrap_incarnation,
                 "delivery": record.delivery.to_dict(),
+                "result_identity": self._execution().slurm_result_identity(record),
+                "result_storage": dict(
+                    self._execution()
+                    ._slurm_profile(
+                        record.assignment.profile_id,
+                        record.assignment.profile_configuration_fingerprint,
+                    )
+                    .result_storage
+                    or {}
+                ),
             },
             path="SLURM bootstrap registration",
         )
@@ -3756,8 +4258,9 @@ class LocalDaemonSlurmBootstrapView:
             offset=offset,
         )
 
-    def inputs_ready(self, assignment_id: str, incarnation: str) -> None:
-        self._execution().slurm_inputs_ready(
+    def inputs_ready(self, assignment_id: str, incarnation: str) -> bool:
+        """Acknowledge durable inputs, or return false while submission is pending."""
+        return self._execution().slurm_inputs_ready(
             principal_id=self._principal.subject,
             credential_id=self._principal.credential_id,
             assignment_id=assignment_id,
@@ -3879,80 +4382,176 @@ def _initialize_root(path: Path, *, role: str) -> None:
             "INSERT INTO root_metadata (key, value) VALUES ('stable_id', ?)",
             (f"{role}-{uuid4()}",),
         )
-        conn.execute(f"PRAGMA user_version = {_LOCAL_DAEMON_SCHEMA_VERSION}")
+        conn.execute(
+            f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION if role == 'coordinator' else _AGENT_SCHEMA_VERSION}"
+        )
         if role == "coordinator":
-            conn.execute(
-                "CREATE TABLE daemon_metadata "
-                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            conn.executemany(
-                "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
-                (
-                    ("accepted_time_health", "healthy"),
-                    ("accepted_time_revision", "0"),
-                ),
-            )
-            conn.execute(
-                "CREATE TABLE coordinator_epochs "
-                "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
-            )
-            conn.execute(
-                """
-                CREATE TABLE managed_admissions (
-                    admission_id TEXT PRIMARY KEY,
-                    queue_item_id TEXT NOT NULL UNIQUE,
-                    coordinator_id TEXT NOT NULL,
-                    run_uri TEXT NOT NULL,
-                    intent_digest TEXT NOT NULL,
-                    execution_owner TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    accepted_at TEXT NOT NULL,
-                    authority_operation_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-                    run_priority INTEGER NOT NULL,
-                    enqueue_sequence INTEGER NOT NULL UNIQUE,
-                    cancellation_operation_id TEXT,
-                    cancellation_principal_id TEXT,
-                    blocked_reason TEXT,
-                    UNIQUE(coordinator_id, run_uri)
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO daemon_metadata(key, value) VALUES "
-                "('admission_enqueue_sequence', '0')"
-            )
-            conn.execute(
-                "CREATE TABLE admission_reconciliation_health ("
-                "admission_id TEXT PRIMARY KEY REFERENCES managed_admissions(admission_id), "
-                "health TEXT NOT NULL, observed_at TEXT NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE scheduling_reloads ("
-                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, state TEXT NOT NULL, "
-                "result_code TEXT, scheduling_epoch TEXT, "
-                "configuration_revision INTEGER, replacement_fingerprint TEXT)"
-            )
-            conn.execute(
-                "CREATE TABLE recovery_operations ("
-                "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
-                "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
-                "evidence_json TEXT, result_json TEXT NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE time_recoveries ("
-                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
-                "result_json TEXT NOT NULL)"
-            )
+            _initialize_coordinator_schema(conn)
         initialize_agent_session_schema(conn, coordinator=role == "coordinator")
         conn.commit()
     database.chmod(0o600)
 
 
-def _open_root(path: Path, *, role: str) -> str:
+def _initialize_coordinator_schema(
+    conn: sqlite3.Connection, *, preparation: bool = True
+) -> None:
+    conn.execute(
+        "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.executemany(
+        "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
+        (
+            ("accepted_time_health", "healthy"),
+            ("accepted_time_revision", "0"),
+        ),
+    )
+    conn.execute(
+        "CREATE TABLE coordinator_epochs "
+        "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE managed_admissions (
+            admission_id TEXT PRIMARY KEY,
+            queue_item_id TEXT NOT NULL UNIQUE,
+            coordinator_id TEXT NOT NULL,
+            run_uri TEXT NOT NULL,
+            intent_digest TEXT NOT NULL,
+            execution_owner TEXT NOT NULL,
+            state TEXT NOT NULL,
+            accepted_at TEXT NOT NULL,
+            authority_operation_id TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+            run_priority INTEGER NOT NULL,
+            enqueue_sequence INTEGER NOT NULL UNIQUE,
+            cancellation_operation_id TEXT,
+            cancellation_principal_id TEXT,
+            blocked_reason TEXT,
+            UNIQUE(coordinator_id, run_uri)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO daemon_metadata(key, value) VALUES "
+        "('admission_enqueue_sequence', '0')"
+    )
+    conn.execute(
+        "CREATE TABLE admission_reconciliation_health ("
+        "admission_id TEXT PRIMARY KEY REFERENCES managed_admissions(admission_id), "
+        "health TEXT NOT NULL, observed_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE scheduling_reloads ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, state TEXT NOT NULL, "
+        "result_code TEXT, scheduling_epoch TEXT, "
+        "configuration_revision INTEGER, replacement_fingerprint TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE recovery_operations ("
+        "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+        "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
+        "evidence_json TEXT, result_json TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE time_recoveries ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+        "result_json TEXT NOT NULL)"
+    )
+    if preparation:
+        _initialize_preparation_schema(conn)
+
+
+def _initialize_preparation_schema(
+    conn: sqlite3.Connection, *, legacy: bool = False
+) -> None:
+    conn.execute(
+        "CREATE TABLE preparation_operations ("
+        "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+        + (
+            "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
+            if legacy
+            else "kind TEXT NOT NULL, queue_item_id TEXT, "
+        )
+        + "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+        + (
+            "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
+            if legacy
+            else "selected_json TEXT NOT NULL, target_name TEXT, "
+        )
+        + "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
+        "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
+        "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
+        "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)))"
+    )
+
+    conn.execute(
+        "CREATE TABLE preparation_cancellations ("
+        "operation_id TEXT PRIMARY KEY, target_operation_id TEXT NOT NULL UNIQUE "
+        "REFERENCES preparation_operations(operation_id), state TEXT NOT NULL, "
+        "result_code TEXT, result_json TEXT NOT NULL)"
+    )
+
+
+def _validate_coordinator_schema(
+    conn: sqlite3.Connection, *, preparation: bool, legacy_preparation: bool = False
+) -> None:
+    """Validate durable table/identity constraints against the initialization owner."""
+
+    def shape(database: sqlite3.Connection, table: str) -> tuple[object, ...]:
+        columns = tuple(
+            tuple(row) for row in database.execute(f'PRAGMA table_info("{table}")')
+        )
+        indexes = []
+        for index in database.execute(f'PRAGMA index_list("{table}")'):
+            if index[2]:
+                name = str(index[1]).replace('"', '""')
+                indexes.append(
+                    tuple(
+                        row[2]
+                        for row in database.execute(f'PRAGMA index_info("{name}")')
+                    )
+                )
+        foreign_keys = tuple(
+            tuple(row)
+            for row in database.execute(f'PRAGMA foreign_key_list("{table}")')
+        )
+        return columns, tuple(sorted(indexes)), foreign_keys
+
+    try:
+        with sqlite3.connect(":memory:") as expected:
+            _initialize_coordinator_schema(
+                expected, preparation=preparation and not legacy_preparation
+            )
+            if legacy_preparation:
+                _initialize_preparation_schema(expected, legacy=True)
+            tables = tuple(
+                row[0]
+                for row in expected.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            )
+            if any(shape(conn, table) != shape(expected, table) for table in tables):
+                raise QueueStorageError(
+                    "coordinator control schema is incomplete or incompatible"
+                )
+        if (
+            not preparation
+            and conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('preparation_operations', 'preparation_cancellations')"
+            ).fetchone()
+            is not None
+        ):
+            raise QueueStorageError(
+                "coordinator predecessor contains partial preparation state"
+            )
+    except sqlite3.Error as exc:
+        raise QueueStorageError("coordinator control schema is invalid") from exc
+
+
+def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> str:
     _validate_private_directory(path)
     database = path / "control.sqlite"
     if not database.is_file():
@@ -3962,11 +4561,30 @@ def _open_root(path: Path, *, role: str) -> str:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version != _LOCAL_DAEMON_SCHEMA_VERSION:
+        expected_version = (
+            schema_version
+            if schema_version is not None
+            else (
+                _COORDINATOR_SCHEMA_VERSION
+                if role == "coordinator"
+                else _AGENT_SCHEMA_VERSION
+            )
+        )
+        if version != expected_version:
+            if role == "coordinator" and version in (12, 15):
+                raise QueueStorageError(
+                    f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
+                )
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
+        if role == "coordinator":
+            _validate_coordinator_schema(
+                conn,
+                preparation=version in (15, _COORDINATOR_SCHEMA_VERSION),
+                legacy_preparation=version == 15,
+            )
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")
@@ -3976,7 +4594,9 @@ def _open_root(path: Path, *, role: str) -> str:
     return values["stable_id"]
 
 
-def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
+def _validate_deployment_binding(
+    config: LocalDaemonConfig, *, coordinator_id: str | None = None
+) -> None:
     target = config.deployment_root
     if target is None:
         raise QueueServiceError("coordinator deployment root is required")
@@ -3992,13 +4612,18 @@ def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
         binding = json.loads(binding_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise QueueServiceError("coordinator deployment binding is invalid") from exc
-    expected = {
-        "schema_version": 2,
-        "role_kind": "coordinator-bundle",
-        "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
-        "agent_id": _open_root(config.agent_root, role="local-agent"),
+    expected: dict[str, object] = {
+        "schema_version": 3,
+        "role_kind": "coordinator"
+        if config.agent_root is None
+        else "coordinator-bundle",
+        "coordinator_id": coordinator_id
+        if coordinator_id is not None
+        else _open_root(config.coordinator_root, role="coordinator"),
         "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
+    if config.agent_root is not None:
+        expected["agent_id"] = _open_root(config.agent_root, role="local-agent")
     if binding != expected:
         raise QueueServiceError("coordinator deployment binding is invalid")
 
@@ -4012,7 +4637,11 @@ def _validate_private_directory(path: Path) -> None:
 
 
 def _validate_distinct_roots(config: LocalDaemonConfig) -> None:
-    if not config.coordinator_root.exists() or not config.agent_root.exists():
+    if not config.coordinator_root.exists():
+        raise QueueServiceError("local daemon initialized roots are missing")
+    if config.agent_root is None:
+        return
+    if not config.agent_root.exists():
         raise QueueServiceError("local daemon initialized roots are missing")
     if (
         config.coordinator_root.resolve() == config.agent_root.resolve()
@@ -4115,11 +4744,22 @@ def _decode_agent_cursor(cursor: str) -> str:
     return value
 
 
+def _resource_status_from_value(
+    value: object,
+) -> tuple[ResourceAvailabilityStatus, ...]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, Mapping) for item in value
+    ):
+        raise QueueServiceError("resource status projection is invalid")
+    return tuple(ResourceAvailabilityStatus.from_dict(item) for item in value)
+
+
 def _agent_projection(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
     *,
     coordinator_epoch: str | None,
+    as_of: str,
 ) -> AgentProjection:
     pools = json.loads(str(row["pools_json"]))
     capabilities = json.loads(str(row["capabilities_json"]))
@@ -4128,7 +4768,8 @@ def _agent_projection(
     accepted = conn.execute(
         "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
     ).fetchone()
-    accepted_at = None if accepted is None else str(accepted["value"])
+    parse_timestamp(as_of)
+    accepted_at = as_of if accepted is None else max(as_of, str(accepted["value"]))
     offered = None
     if (
         accepted_at is not None
@@ -4151,7 +4792,33 @@ def _agent_projection(
         isinstance(item, str) and item for item in capabilities
     ):
         raise QueueStorageError("agent session projection is invalid")
+    latest = conn.execute(
+        "SELECT offer_id, offer_json, availability_revision FROM agent_offers WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+        (str(row["session_id"]),),
+    ).fetchone()
+    statuses: tuple[ResourceAvailabilityStatus, ...] = ()
+    if latest is not None:
+        statuses = AgentOffer.from_value(
+            json.loads(str(latest["offer_json"]))
+        ).resource_status
+        renewal = conn.execute(
+            "SELECT result_json FROM agent_offer_renewals WHERE session_id = ?",
+            (str(row["session_id"]),),
+        ).fetchone()
+        if renewal is not None:
+            receipt = json.loads(str(renewal["result_json"]))
+            if (
+                receipt.get("offer_id") == str(latest["offer_id"])
+                and "resource_status" in receipt
+            ):
+                statuses = _resource_status_from_value(receipt["resource_status"])
+        if offered is None:
+            statuses = tuple(
+                replace(item, available=False, reason_code="observation_stale")
+                for item in statuses
+            )
     return AgentProjection(
+        resource_status=statuses,
         agent_id=str(row["agent_id"]),
         session_id=str(row["session_id"]),
         state=str(row["state"]),
@@ -4191,6 +4858,14 @@ def _operation_projection(
             "recovery",
             "SELECT state, NULL AS result_code, result_json AS effect_json FROM recovery_operations WHERE recovery_id = ?",
         ),
+        (
+            "prepare_run",
+            "SELECT kind, state, result_code, result_json AS effect_json FROM preparation_operations WHERE operation_id = ?",
+        ),
+        (
+            "cancel_run",
+            "SELECT state, result_code, result_json AS effect_json FROM preparation_cancellations WHERE operation_id = ?",
+        ),
     )
     matches: list[LocalDaemonOperation] = []
     for kind, query in queries:
@@ -4208,7 +4883,7 @@ def _operation_projection(
         matches.append(
             LocalDaemonOperation(
                 operation_id=operation_id,
-                kind=kind,
+                kind=str(row["kind"]) if "kind" in row.keys() else kind,
                 state=str(row["state"]),
                 code=(None if row["result_code"] is None else str(row["result_code"])),
                 result=result,
@@ -4289,6 +4964,16 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
     if config.active_configuration_fingerprint is not None:
         return config.active_configuration_fingerprint
     payload = {
+        **(
+            {"resident_preparation_staged_ready": True}
+            if config.resident_preparation_staged_ready
+            else {}
+        ),
+        **(
+            {"resident_preparation_ready": True}
+            if config.resident_preparation_ready
+            else {}
+        ),
         "machine_id": config.machine_id,
         "cpu_capacity": config.cpu_capacity,
         "memory_capacity_bytes": config.memory_capacity_bytes,
@@ -4302,13 +4987,17 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             for item in config.gpu_devices
         ],
         "agent_policy": repr(config.agent_policy),
-        "resident_worker_launch_profile": {
-            "project_root": str(config.resident_worker_launch_profile.project_root),
-            "python_executable": str(
-                config.resident_worker_launch_profile.python_executable
-            ),
-            "descriptor": config.resident_worker_launch_profile.descriptor,
-        },
+        "resident_worker_launch_profile": (
+            None
+            if config.resident_worker_launch_profile is None
+            else {
+                "project_root": str(config.resident_worker_launch_profile.project_root),
+                "python_executable": str(
+                    config.resident_worker_launch_profile.python_executable
+                ),
+                "descriptor": config.resident_worker_launch_profile.descriptor,
+            }
+        ),
         "remote_profiles": [item.to_dict() for item in config.remote_profiles],
         "slurm_profiles": [
             {
@@ -4322,6 +5011,11 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             item.to_dict() for item in config.scheduling_components.descriptors
         ],
     }
+    if (
+        config.gpu_occupancy_policy is not None
+        and config.gpu_occupancy_policy != GpuOccupancyPolicy()
+    ):
+        payload["gpu_occupancy"] = config.gpu_occupancy_policy.to_dict()
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()

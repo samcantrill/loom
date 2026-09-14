@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from pathlib import Path
 import time
 
+from loom.pipeline.context import ProcessContainmentOwner
 from loom.pipeline.execution.stage_worker import (
     execute_resident_stage_worker_request,
 )
 from loom.pipeline.stores.atomic import atomic_write_json
 
 from ._remote_stage_execution import _ResidentAssignmentWorkspace
+from .preparation import PREPARATION_INPUT_CONTEXT_ENV
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -30,9 +34,14 @@ def main(argv: list[str] | None = None) -> int:
     while not gate.is_file():
         time.sleep(0.01)
     request = workspace.worker_request()
+    os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
+    preparation = workspace.preparation_context()
+    if preparation is not None:
+        os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(preparation, sort_keys=True, separators=(",", ":"))
     result = execute_resident_stage_worker_request(
         worker_request=request,
         workspace_root=workspace_root,
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
     )
     atomic_write_json(workspace_root / "worker-result.json", result.to_dict())
     return 0

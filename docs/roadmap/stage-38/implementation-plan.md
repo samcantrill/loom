@@ -1,0 +1,204 @@
+# Roadmap Stage 38 Implementation Plan
+
+Status: complete — all phases merged and final integrated review passed
+Roadmap stage: 38
+Planning document: docs/roadmap/stage-38/planning.md
+Artifact layout: manifest-and-phase-plans-v1
+Target branch: develop
+Current phase: none — all phases merged
+Blockers: none. PR #280 merged at `468ac31`; its tree exactly matches validated
+head `5141eb6`. Final integrated review and three post-merge live-container checks
+pass. Phase worktrees/branches are retired and evidence remains in the integration tree.
+Phase 2 merged through PR #278 at `0c0dbf2`; full gates and independent closure passed at `04443ed`.
+The maintainer authorized this specific correction and a fresh bounded independent
+verification, without resetting other budgets. Targeted checks pass 80 tests and
+the latest SIF smoke passes one test. Both full gates passed with 2,994 summary
+passes and five optional skips; only roadmap metadata changed afterward.
+Positive runtime-limit proof remains deferred to a compatible host.
+Phase 3's independent design review passed with identity-safe signal/reap ordering.
+
+## Summary
+
+- Goal: preserve useful local validation/resource behavior while retaining
+  corrected upstream execution and adding truthful container timeout cleanup.
+- Approved requirements: FR-1 through FR-5 in planning.md, derived from the
+  maintainer's selective-port execution request, with the 2026-09-07 FQ-5/DQ-5
+  scheduling-only CPU/RAM amendment and separately approved FQ-6/DQ-6 bounded
+  coordinator-responsiveness amendment. No host settings may be changed.
+- Key constraints: FQ-1 through FQ-6 and DQ-1 through DQ-6. The timeout outcome
+  is approved; its lifecycle mechanism must be reviewed before implementation.
+- Minimum useful change: three ordered vertical increments over existing owners.
+- Excluded complexity: new resource registries, durable cleanup ledgers,
+  scheduler replacements, blanket historical-patch application.
+- Validation source: planning.md, Upstream Correctness Audit and Examples And
+  Validation; each phase card owns its exact acceptance and commands.
+- Out of scope: rphys science, determinism, remote submission, domain-failure
+  transport, and retirement of the original dirty checkout.
+
+## Shared Constraints
+
+- Loom remains generic and import-light. No dependency from Loom to rphys or
+  from low-level container command code to daemon supervision internals.
+- Keep run-root normalization/clearing and merge precedence, explicit NVIDIA
+  passthrough, zero-request handling, GPU redaction, and frozen serialization.
+- Resource validation, physical allocation, runtime enforcement, process
+  containment, and terminal-result publication remain distinct responsibilities.
+- Preserve existing durable schemas unless a reviewed current boundary proves
+  a change necessary. No phase can infer physical cleanup from launcher exit.
+- Preserve the original dirty control checkout and parked Stage 81 worktree.
+  Use the worktree root recorded once in planning.md, isolated phase branches,
+  exact current develop bases, and ordered non-stacked PRs targeting develop.
+- Every implementation receives independent correctness review, fresh local
+  validation, and accurate evidence. Hosted CI is intentionally disabled.
+- Missing live-runtime checks are limitations, not passing enforcement proof.
+  Host administration and implicit image pulls are not implementation steps.
+- Preserve CPU/RAM requests and managed reservations when direct enforcement
+  is explicitly disabled. GPU, SLURM, ownership, and release remain separate.
+- Make admission status waits passive without changing lock ownership, periodic
+  reconciliation, mutation wakeups, deadlines, replacement fences, or release.
+  One additional bounded amendment is expressly authorized; the three historical
+  corrections stay consumed and no general correction budget is reset.
+
+## Phase Index
+
+| Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | stage-target-validation | merged | [phase plan](phases/stage-target-validation.md) | agent/stage-38-p1-stage-target-validation | [#277](https://github.com/samcantrill/loom/pull/277) | CLI validation, focused tests and docs | Respect stage-owned configuration during target checking |
+| 2 | direct-container-resources | merged | [phase plan](phases/direct-container-resources.md) | agent/stage-38-p2-direct-container-resources | [#278](https://github.com/samcantrill/loom/pull/278) | Direct resource policy/mapping, capabilities/preflight, A-9 SLURM correction, bounded retry/passive-wait corrections, tests/docs | Retain scheduling intent with explicit CPU/RAM enforcement policy and responsive managed control |
+| 3 | container-timeout-lifecycle | merged | [phase plan](phases/container-timeout-lifecycle.md) | agent/stage-38-p3-container-timeout-lifecycle (retired) | [#280](https://github.com/samcantrill/loom/pull/280) | Container timeout/result gate and existing legacy/resident managed group owners, tests/docs | Truthful deadlines and supported-process cleanup |
+
+## Quality Gate
+
+- Planning gate: passed for the validation phase; independently reviewed
+  upstream defects A-9 and legacy A-10 have bounded later dispositions.
+- Manager review: scope and first two increments match the approved draft;
+  detailed timeout design is explicitly held for its expanded pre-implementation
+  review. Earlier increments may proceed independently once their gates pass,
+  as the maintainer's draft explicitly permits.
+- Independent baseline review: passed; current resident daemon retention
+  verified separately from the confirmed legacy adapter containment gap.
+- First-phase startup: manager verified scope, source, tests, locked baseline,
+  independent audit, phase packet, and approval; no blocker.
+- Implementation readiness: Phase 1 is merged; Phase 2 resource mapping and
+  its first two corrections are independently reviewed. The third retry
+  candidate does not resolve the observed coordinator lock delays. The approved
+  scheduling-only policy design passed independent review. The separately approved
+  passive-wait correction has measured cause-backed evidence; independent
+  combined startup review passed with no findings. The amendments are implemented
+  at `8702e06`; fresh full gates and the scheduling-only live smoke passed.
+  Independent review accepted the queue correction but found policy-diagnostic
+  gaps. Bounded correction `6b831e7` closes namespace selection and explicit/global
+  fallback warnings. The separately approved `04443ed` correction adds visible
+  mapping warnings for mixed explicit/implicit stages without inventing runtime
+  limits. Fresh full gates and independent closure passed; PR #278 merged at `0c0dbf2`.
+  Phase 3's independently reviewed mechanism is implemented and its local gates
+  pass at `6afbaef`; independent verification closed the bounded-cleanup correction.
+  Both fresh combined-tree gates also pass after the published-base refresh.
+- Policy amendment: use `cpu_memory_enforcement` in existing Apptainer/Singularity
+  adapter options, with `runtime` default and explicit `scheduling_only`. The
+  selected-policy live smoke is required; positive hard-limit proof on a suitable
+  host is separately deferred, never relabelled as passing. Existing 3/3 fault
+  corrections remain consumed. Coordinator changes have separate bounded authority
+  below; neither approval bypasses independent review or fresh full gates.
+- Accepted risks: host-dependent cgroup/runtime availability; original control
+  checkout cannot be advanced by discarding or stashing its dirty contents.
+- Revisit triggers: a materially broader lifecycle/public contract, unrelated
+  upstream gate failure, source overlap, or unavailable required runtime proof.
+- Phase 3 preparation: isolated worktree at published `71d2452`, incorporating
+  PR #279 role-environment changes without modifying those owners. The approved
+  SIF now proves `--pid` availability. Fresh descendant probes show launcher KILL
+  can be observed before namespace init/child termination. The card owns exact
+  evidence and the bounded refinement of positive cleanup proof. Independent
+  review `2441182` accepts the kernel/init group barrier; correction `0786e55`
+  locks non-reaping root observation, identity retention through the final signal,
+  one reap, then observation-only settlement. Manager source verification applies
+  that same contract to both existing queue group owners: legacy `local.py` and
+  resident `_agent_process_supervisor.py`. No new owner, public protocol or durable
+  schema is approved. The manager completed implementation after an empty executor
+  handoff. Final production/test revision `3fd6f65` passes both full gates, with
+  3,010 summary passes and 13 separate live-runtime passes. Independent review
+  of PR #280 at `ae81bbf` found that repeated managed containment calls restart
+  the observation wait budget. Capacity remains retained safely, but synchronous
+  control calls can exceed the accepted bound. Use one absolute, non-renewable
+  cleanup deadline in the existing handle; after expiry, later calls must observe
+  immediately without another wait or signal/reap sequence. The maintainer now
+  approves this one additional bounded correction and independent verification;
+  the phase's original 3/3 allowance remains consumed. Exact review and validation
+  evidence lives in the card; independent closure, fresh gates and merge are complete.
+- Phase 3 review closure and refresh: the authorized `6afbaef` correction has no
+  remaining code findings; both full gates passed with 3,015 summary passes and
+  18 opt-in skips. Upstream PR #281 advanced develop to `43d02a1` during validation.
+  Refresh merge `f1aaa9c` has the byte-identical phase delta and no overlapping
+  changed paths. Manager review found no new ownership contract; all 26 combined
+  transport/process-group/live-container checks pass. Both full gates on that
+  combined tree pass: 3,024 summary passes and 18 opt-in skips. Earlier receipts
+  remain retained under their exact revisions. PR #280 merged at `468ac31`; final
+  integrated review below confirms that the selected changes compose correctly.
+- Previously approved A-13 pre-grant retry correction: reproduce a transient pre-grant control-response
+  failure, reuse the existing bounded assignment retry owner, and independently
+  review cancellation/replay and exhausted-retry retention. No global retry,
+  automatic restart adoption, deadline extension, or capacity-release redesign.
+  The original uninstrumented full-suite trigger remains unproven; a matching
+  deterministic failure mode is documented in planning.md.
+- Independent amendment review: no policy-design blocker; manager corrected
+  FQ/DQ traceability and the earlier A-13 authority label. Combined startup has
+  since passed; independent implementation review and fresh full gates also passed.
+  Existing profile composition preserves the
+  proposed option payload and resource demand in a read-only diagnostic; this
+  is not a policy implementation receipt.
+- Coordinator amendment authority: maintainer approves one bounded,
+  cause-backed responsiveness correction and resumption of the scheduling-only
+  work after design review. The previous missing-authority stop is superseded;
+  3/3 historical corrections stay consumed, with no new general correction budget.
+  Diagnosis shows a 15.575-second acquisition wait overlapping 271 short cycles;
+  making the two admission waits passive reduced the largest observed wait to
+  0.112 seconds. Both three-case diagnostic runs passed; this is cause evidence,
+  not a full gate receipt. Remove only their reconciliation wakeups, preserving
+  the service loop and mutation wakeups. Independent startup review passed with
+  no findings; regression coverage and both full gates now pass at `8702e06`.
+  Independent review accepted this queue correction; the separate `04443ed`
+  policy-warning correction passed its newly approved verification without findings.
+
+## Completion
+
+| Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
+| --- | --- | --- | --- | --- |
+| 1 | #277 merged at `133505b` | CLI guard and A-11 test correction implemented; targeted 24 + 15 passed; both required gates passed at `74f117c` | independent review passed with no findings | phase worktree and branches removed; generated evidence retained in clean integration worktree |
+| 2 | [#278](https://github.com/samcantrill/loom/pull/278) merged to develop at `0c0dbf2` | `04443ed`: 80 focused passes, both full gates passed, 2,994 summary passes / five optional skips, SIF smoke 1 passed; merged tree equals reviewed head | independent review passed; hard-limit proof deferred | receipts preserved in integration `build/stage-38-p2-04443ed`; phase worktree and local/remote branches removed |
+| 3 | [#280](https://github.com/samcantrill/loom/pull/280) merged to develop at `468ac31` | `f1aaa9c`: both full gates, 3,024 summary passes / 18 opt-in skips, 26 focused composition cases including 13 real-container cases; merged tree equals validated/reviewed PR head `5141eb6` | independent code review and correction verification closed; final integrated review passed; supported runtime and conservative capacity retention remain explicit | phase worktree and local/remote branches removed; final receipts/distributions/test logs preserved in integration `build/stage-38-p3-f1aaa9c` |
+
+## Final Integrated Review
+
+Manager review passed on merged develop revision
+`468ac31d32106ee93198c26d4fe6f574f3648b9e`. The complete tree equals validated PR
+head `5141eb6`; its production/tests equal the fully validated refreshed tree
+`f1aaa9c`. PR #277 (`133505b`), PR #278 (`0c0dbf2`) and upstream PR #281 (`43d02a1`)
+are verified ancestors. Independent baseline review, all three implementation
+reviews and the bounded cleanup-budget verification are complete without unresolved findings.
+
+| Requirement | Integrated evidence and result |
+| --- | --- |
+| FR-1: stage-owned target validation | Public authored-config CLI regressions preserve inert stage/factory/metadata data, generic target checking, invalid-factory failures, counts and warnings; current CLI projection preserves source configuration. Covered by the passing current full gates. |
+| FR-2: resource mapping and explicit scheduling-only policy | Exact CPU/byte mapping, canonical rejection, no invented limits, effective profile/namespace policy and diagnostics remain covered. The post-merge live checks below additionally combine retained CPU/RAM intent with the actual timeout runner. |
+| FR-3: supported timeout lifecycle | Real startup/normal timeout, cooperating/resistant descendants, root-first exit, interruption, uncertain cleanup, early result and normal completion pass. The non-renewable deadline regression is mutation-sensitive; managed signal/reap order and capacity retention pass for existing owners. Frozen timeout metadata reaches classification and durable records. |
+| FR-4: retained upstream behavior | Run-root option/profile and plain-serialization implementations retain the audited upstream behavior; GPU projection remains additive and protected tokens stay redacted. Reviewed SLURM corrections retain scheduler-owned limits and whole-value visibility rejection. Current transport coverage exercises optional/local coordinator composition, retry/cancel, restart, execution, commit and release. No scientific, environment-installation or host-administration changes were introduced by this stage. |
+| FR-5: delivery and preservation | Ordered remote merges, independently closed findings, exact-tree local receipts and post-merge composition checks are verified. All original dirty-checkout hashes and the approved SIF checksum still match. Phase worktrees/branches are removed; the original and concurrently owned develop/Stage 81/Stage 85 checkouts are not repurposed or reset. |
+
+Post-merge receipt: integration `build/stage-38-integrated-smoke.jsonl`. A locked
+Python 3.12 environment imported the actual merged checkout and used the approved
+SIF through production command construction and the built-in timeout runner:
+
+- Unmapped resources: normal completion, no CPU/RAM flags.
+- Scheduling-only with two CPUs and 512 MiB intent: normal completion, retained
+  request metadata, no CPU/RAM flags.
+- The same scheduling-only intent with a one-second timeout: exit 124 with the
+  primary deadline explanation, settled cleanup and no CPU/RAM flags.
+
+All three cases pass. Full-suite evidence is preserved in
+`build/stage-38-p3-f1aaa9c/test-summary.md` with 3,024 passes, zero failures/errors
+and 18 opt-in skips. All 13 timeout hooks passed in the separate 26-case selection.
+The five other opt-in runtime hooks are not claimed as executed. Positive hard
+CPU/RAM enforcement remains explicitly deferred to a compatible host; absence of
+new flags never means inherited host/scheduler limits are removed. The evidenced
+timeout runtime/mode and actual outer-owner-loss limitations remain documented.
+This completes the selective Loom port, not a scientific rphys experiment smoke.

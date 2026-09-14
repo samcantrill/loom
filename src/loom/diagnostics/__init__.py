@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         RunInspectionTruncation,
         RunLocationReachability,
     )
+    from .diagnostic_failure import DiagnosticFailureError
     from loom.serialization import PlainData
 
 
@@ -47,6 +48,13 @@ def run_preflight(request: PreflightRequest) -> PreflightResult:
     from .preflight import run_preflight as _run_preflight
 
     return _run_preflight(request)
+
+
+def run_preflight_composed(composed: object, request: PreflightRequest) -> PreflightResult:
+    """Run preflight checks over one supplied, already-composed configuration."""
+    from .preflight import run_preflight_composed as _run_preflight_composed
+
+    return _run_preflight_composed(composed, request)
 
 
 def inspect_run(run_uri: str, **kwargs: object) -> "RunInspectionResponse":
@@ -72,6 +80,13 @@ def projection_callable(
     return _projection_callable(**kwargs)
 
 
+def render_diagnostic_failure(value: object) -> str:
+    """Validate and render private Loom inspection-failure diagnostics."""
+    from .diagnostic_failure import render_diagnostic_failure as _render
+
+    return _render(value)
+
+
 def __getattr__(name: str) -> object:
     if name in {
         "BackendCapabilitiesResult",
@@ -84,6 +99,10 @@ def __getattr__(name: str) -> object:
         from . import backend
 
         return getattr(backend, name)
+    if name == "DiagnosticFailureError":
+        from .diagnostic_failure import DiagnosticFailureError
+
+        return DiagnosticFailureError
     if name in {
         "RunInspectionAxis",
         "RunInspectionAxisName",
@@ -121,6 +140,7 @@ __all__ = [
     "inspect_backend_capabilities",
     "parse_projection_revision",
     "run_preflight",
+    "run_preflight_composed",
     "RunInspectionAxis",
     "RunInspectionAxisName",
     "RunInspectionFailure",
@@ -135,4 +155,6 @@ __all__ = [
     "inspect_run",
     "decode_run_inspection_response",
     "projection_callable",
+    "DiagnosticFailureError",
+    "render_diagnostic_failure",
 ]

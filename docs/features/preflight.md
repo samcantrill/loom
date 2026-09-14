@@ -12,6 +12,20 @@ clear about checks it could not perform.
 Preflight is best-effort validation. It is not a substitute for normal runtime
 checks.
 
+`loom.diagnostics.preflight.run_preflight_composed(composed, request)` checks an
+already-composed object through the same selected checks as `run_preflight`.
+It does not reload `config_path`, run recipes again or apply another overlay or
+override pass. Nonempty `request.overlays` or `request.overrides` are rejected;
+the request supplies checking context, not new composition intent. The existing
+path-based entrypoint retains its normal loading behavior.
+
+[Agent preparation](agent-preparation.md) uses this supplied-object entrypoint
+in the selected worker environment, with CONFIG, PIPELINE, SELECTORS and RUNTIME
+groups. It retains required failures, warnings and applicability evidence in the
+native result. Resident readiness owns installation qualification; coordinator
+run/store/authority checks stay off the worker scratch directory. The coordinator
+publishes the same checked composition without executing recipes again.
+
 Queue service preflight is documented in [queue.md](queue.md). The command
 `loom queue preflight CONFIG` checks queue config loading, SQLite repository
 reachability, authority configuration evidence, managed-pool reconciliation
@@ -332,12 +346,10 @@ Apptainer executor requires apptainer or singularity
 Preflight should report executor availability as a check result, not as an
 unstructured exception.
 
-Current subprocess checks run only when `subprocess` is the selected executor.
-They verify that the current Python executable is available and that the public
-`loom stage run` worker command can be resolved through `loom.cli.main` without
-launching user stage code. Missing Python or worker command availability is
-reported as selected-executor availability failure, distinct from an unknown
-executor name.
+Installed native profiles are checked through explicit role preflight and
+readiness. These checks resolve the selected interpreter, imports, capacity and
+container capabilities without invoking authored stage code. They do not expose
+a public direct-worker continuation command.
 
 Reliability timeout checks are capability diagnostics, not process probes. A
 selected timeout policy reports whether the executor support level is

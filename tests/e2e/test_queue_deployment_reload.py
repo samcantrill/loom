@@ -28,21 +28,32 @@ from tests.support.mutual_tls import (
 pytestmark = pytest.mark.e2e
 
 
+@pytest.mark.optional_dependency
 def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "coordinator.json"
     payload = _coordinator_payload(tmp_path, cpu_capacity=1)
+    payload["poll_interval_seconds"] = "${oc.env:LOOM_ROLE_POLL}"
+    environment = tmp_path / "coordinator.env"
+    _write_protected_text(environment, "LOOM_ROLE_POLL=0.01\n")
     _write_protected(source, payload)
-    initialized = _run_cli("queue", "daemon-init", str(source), "--format", "json")
+    initialized = _run_cli(
+        "queue",
+        "daemon-init",
+        str(source),
+        "--env-file",
+        str(environment),
+        "--format",
+        "json",
+    )
     assert initialized.returncode == 0, initialized.stderr
 
     endpoint = tmp_path / "deployment" / "coordinator" / "daemon.sock"
-    first = _start_service(source)
+    first = _start_service(source, environment)
     try:
         before = _wait_for_status(first, endpoint)
-        payload["embedded_profile"]["cpu_capacity"] = 2  # type: ignore[index]
-        _write_protected(source, payload)
+        _write_protected_text(environment, "LOOM_ROLE_POLL=0.02\n")
         reloaded = _run_cli(
             "queue",
             "daemon-scheduling-reload",
@@ -65,7 +76,7 @@ def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
     finally:
         _stop_service(first)
 
-    restarted = _start_service(source)
+    restarted = _start_service(source, environment)
     try:
         restored = _wait_for_status(restarted, endpoint)
         assert restored.coordinator_id == before.coordinator_id
@@ -182,28 +193,14 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
 
 def _coordinator_payload(tmp_path: Path, *, cpu_capacity: int) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "loom.coordinator-service",
         "deployment_root": "deployment",
         "run_store_root": "runs",
         "machine_id": "e2e-machine",
         "poll_interval_seconds": 0.01,
         "max_accepted_time_step_seconds": 60,
-        "embedded_profile": {
-            "descriptor": {
-                "profile_id": "e2e-local",
-                "revision": "v1",
-                "project_fingerprint": "project-1",
-                "environment_fingerprint": "environment-1",
-                "executor_fingerprint": "executor-1",
-            },
-            "project_root": str(tmp_path),
-            "python_executable": sys.executable,
-            "cpu_capacity": cpu_capacity,
-            "memory_capacity_bytes": 0,
-            "gpu_devices": [],
-            "environment": {},
-        },
+        "local_agent": None,
         "remote_profiles": [],
         "agent_policy": {
             "revision": "policy-1",
@@ -282,7 +279,7 @@ def _outbound_agent_payload(
     cpu_capacity: int,
 ) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "loom.outbound-agent-service",
         "agent_root": "remote-agent",
         "url": f"https://localhost:{port}",
@@ -334,6 +331,11 @@ def _write_protected(path: Path, payload: object) -> None:
     path.chmod(0o600)
 
 
+def _write_protected_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+
+
 def _cli_command(*args: str) -> list[str]:
     return [
         sys.executable,
@@ -354,9 +356,15 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _start_service(source: Path) -> subprocess.Popen[str]:
+def _start_service(
+    source: Path, environment: Path | None = None
+) -> subprocess.Popen[str]:
+    arguments = ["queue", "daemon-serve", str(source)]
+    if environment is not None:
+        arguments.extend(("--env-file", str(environment)))
+    arguments.extend(("--format", "json"))
     return subprocess.Popen(
-        _cli_command("queue", "daemon-serve", str(source), "--format", "json"),
+        _cli_command(*arguments),
         cwd=Path(__file__).parents[2],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

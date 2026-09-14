@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 from loom.pipeline.stores import AuthorityConfig, LocalRunStorePaths
 from loom.pipeline.stores.authority import PerRunAuthorityStore
@@ -160,80 +160,6 @@ class RuntimeServices:
             workspace_id=cast(str | None, getattr(run_store, "workspace_id", None)),
             owner_id=cast(str | None, getattr(run_store, "owner_id", None)),
         )
-
-
-_RUNTIME_METHOD_FIELDS: dict[str, str] = {}
-for _field_name, _protocol in (
-    ("lifecycle", RunLifecycleStore),
-    ("documents", RunDocumentStore),
-    ("freshness", RunFreshnessStore),
-    ("run_status", RunStatusStore),
-    ("plans", RunPlanStore),
-    ("prepared_runs", RunPreparedRunStore),
-    ("artifact_index", RunArtifactIndexStore),
-    ("config", RunConfigStore),
-    ("provenance", RunProvenanceStore),
-    ("events", RunEventStore),
-    ("event_sink_failures", RunEventSinkFailureStore),
-    ("event_observer_links", RunEventObserverLinkStore),
-    ("locks", RunLockStore),
-    ("inspection", RunInspectionStore),
-    ("runtime_metadata", RunRuntimeMetadataStore),
-    ("submitted_operations", RunSubmittedOperationStore),
-    ("reliability", RunReliabilityStore),
-    ("stage_state", StageStateStore),
-    ("stage_logs", StageLogStore),
-    ("stage_workspaces", StageWorkspaceStore),
-    ("worker_results", StageWorkerResultStore),
-    ("local_paths", LocalRunStorePaths),
-):
-    for _method_name, _method in _protocol.__dict__.items():
-        if callable(_method) and not _method_name.startswith("_"):
-            _RUNTIME_METHOD_FIELDS.setdefault(_method_name, _field_name)
-
-# Optional transition-aware extensions used by execution lifecycle helpers. They
-# deliberately remain outside the minimum public facets so simple read/write
-# stores are still valid implementations.
-_RUNTIME_METHOD_FIELDS["write_run_status_with_intent"] = "run_status"
-_RUNTIME_METHOD_FIELDS["write_stage_status_with_intent"] = "stage_state"
-_RUNTIME_METHOD_FIELDS["renew_run_lock"] = "locks"
-_RUNTIME_METHOD_FIELDS["prepare_checksum_repair"] = "stage_state"
-_RUNTIME_METHOD_FIELDS["authorize_checksum_repair_output"] = "stage_state"
-
-
-class _RuntimeStoreFacade(LegacyRunStore, RunReliabilityStore, LocalRunStorePaths):
-    """Private compatibility object for helpers not yet facet-aware."""
-
-    __slots__ = ("_services",)
-
-    def __init__(self, services: RuntimeServices) -> None:
-        self._services = services
-
-    def __getattribute__(self, name: str) -> object:
-        if name.startswith("_"):
-            return object.__getattribute__(self, name)
-        services = object.__getattribute__(self, "_services")
-        if name in {
-            "authority_config",
-            "authority_store",
-            "workspace_coordination_store",
-            "workspace_id",
-            "owner_id",
-        }:
-            aliases = {"workspace_coordination_store": "coordination_store"}
-            if name == "authority_config":
-                return lambda: services.authority_config
-            return getattr(services, aliases.get(name, name))
-        field_name = _RUNTIME_METHOD_FIELDS.get(name)
-        if field_name is None:
-            raise AttributeError(name)
-        return getattr(getattr(services, field_name), name)
-
-
-def runtime_store_facade(services: RuntimeServices) -> LegacyRunStore:
-    """Return the private adapter used while execution helpers become facet-aware."""
-
-    return cast(LegacyRunStore, cast(Any, _RuntimeStoreFacade)(services))
 
 
 __all__ = ["RuntimeServices"]

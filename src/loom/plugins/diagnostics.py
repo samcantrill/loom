@@ -227,7 +227,7 @@ _PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = {
             contract=("supported", "Executor defines stage execution behavior."),
             python_injection=(
                 "supported",
-                "PipelineRunner accepts an explicitly built executor.",
+                "Coordinator-authorized agent workers use configured executor backends.",
             ),
             registry=(
                 "supported",

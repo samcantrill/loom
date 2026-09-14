@@ -177,3 +177,10 @@ def test_public_import_paths() -> None:
     assert capture_command_provenance
     assert StageProvenance
     assert RunProvenance
+
+
+def test_queue_managed_preparation_import_is_explicit() -> None:
+    from loom.queue import ManagedLocalPreparationReceipt, prepare_managed_run
+
+    assert ManagedLocalPreparationReceipt
+    assert callable(prepare_managed_run)

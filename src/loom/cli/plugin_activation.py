@@ -12,8 +12,6 @@ from loom.pipeline.resources import (
     ResourceValidatorRegistry,
 )
 from loom.plugins import (
-    LOOM_CODECS_GROUP,
-    LOOM_RESOURCE_VALIDATORS_GROUP,
     PluginRecord,
     list_entry_points,
     load_codec_entry_points,
@@ -52,12 +50,7 @@ def build_selected_registries(
     selected = tuple(records)
     codecs = create_default_codec_registry() if base_codecs is None else base_codecs
     executors = (
-        create_default_executor_registry(
-            worker_plugin_selectors=plugin_selectors_for_groups(
-                selected,
-                groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
-            )
-        )
+        create_default_executor_registry()
         if executor_registry is None
         else executor_registry
     )

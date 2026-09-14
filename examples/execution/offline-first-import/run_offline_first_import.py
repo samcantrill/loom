@@ -32,22 +32,21 @@ def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"offline-import-{uuid4().hex[:8]}")
-    config_path = HERE / "pipeline.yaml"
 
     authority = start_authority_session(output_root)
     try:
-        offline = run_cli_json(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--offline-first",
-                "--format",
-                "json",
-            ]
-        )
-        evidence = require_mapping(offline["result"]["offline_evidence"])
+        from examples.historical_evidence import complete_manifest
+        import json
+
+        manifest = complete_manifest(output_root, name=Path(run_uri).name)
+        run_uri = manifest.run_uri
+        manifest_path = output_root / "historical-manifest.json"
+        manifest_path.write_text(json.dumps(manifest.to_dict()))
+        evidence = {
+            "manifest_path": str(manifest_path),
+            "manifest_status": "complete",
+            "state_source": {"label": "offline_evidence"},
+        }
         pre_import_status = run_cli_json(
             ["status", run_uri, *authority.authority_args, "--format", "json"],
             expected=int(ExitCode.RUN_STATE),

@@ -493,7 +493,7 @@ from weave import (
     instantiate,
     register_recipe,
 )
-from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
+from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext
 from loom.diagnostics import PreflightRequest, run_preflight
 ```
 
@@ -829,7 +829,7 @@ failures, and finalizes runs.
 Current execution modules:
 
 ```text
-runner.py      PipelineRunner facade and local serial orchestration
+native coordinator/agent modules own all run orchestration
 eventing.py    typed local lifecycle event append helpers
 event_sinks.py import-light observer sink registry and observer fact records
 run_locks.py   runner-held run lock owner/acquire/release helpers
@@ -863,12 +863,7 @@ relay. Historical whole-run/single-job/`afterok` controllers remain separate
 owners. No generic external-scheduler package or protocol is added for this one
 consumer.
 
-When Stage 29 is implemented, `PipelineRunner` remains the synchronous public
-facade but managed execution delegates readiness/progress to the durable
-orchestrator and executes one prepared, assignment-fenced stage at a time through
-the agent boundary. The current in-memory serial/thread-pool loop and full-run
-lock must not remain a second managed scheduling owner. Direct/delegated
-compatibility behavior must stay explicit rather than silently sharing state.
+The native coordinator is the sole run orchestrator. Clients, sweeps and MCP use its operations; installed agent workers execute fenced ready attempts.
 
 ### 6.7 Stores and State
 
@@ -1025,6 +1020,12 @@ executors, project stage modules, or command registration. Check implementations
 that need heavier public APIs should import them inside runner code rather than
 through the package root.
 
+Native exception-to-plain-data capture is shared lower-layer serialization code
+in private `loom.serialization._diagnostic_capture`. Execution owners use it
+without importing diagnostics. The existing diagnostic projection import and
+renderer facade retain `loom.diagnostic.v1` and its public error behavior; this
+does not introduce another failure format or a new exception base class.
+
 `loom.testing` is a separate opt-in downstream test-support package. It may
 depend on public runtime contracts to execute caller-supplied conformance cases,
 but `loom`, runtime modules, package roots, plugin discovery, and CLI modules
@@ -1038,14 +1039,17 @@ directories, write run-store documents, or replace execution-time validation.
 
 ### 6.11 Sweeps
 
-Detailed specification: [sweeps.md](features/sweeps.md)
+Current behavior and interfaces: [sweeps.md](features/sweeps.md).
 
-`loom.pipeline.sweep` is reserved for a future module that expands parameter
-sets into multiple run configurations and coordinates trial execution through
-the same config, planning, execution, and store APIs as normal runs.
+`loom.pipeline.sweep` expands deterministic manual/grid specifications into
+ordered trial plans. Execution persists each trial's exact native run request
+before submission and projects coordinator operation/admission observations.
+Status and collection preserve trial provenance, early-stop meaning and
+committed artifact references, including outputs retained through retry.
 
-Sweeps should remain generic when implemented. They should not become a
-hyperparameter optimizer, experiment database, or scheduler replacement.
+The sweep layer selects experiments; native coordinator, agent and authority
+owners retain execution, placement and finalization. It remains domain-neutral
+and does not introduce a separate scheduler or experiment database.
 
 ### 6.12 Plugins
 
@@ -1074,6 +1078,42 @@ as validate, plan, run, stage, sweep, status, logs, and artifacts.
 The CLI must not duplicate config, pipeline, store, or resume logic.
 
 ---
+
+### 6.14 Coordinator Client
+
+Detailed specification: [coordinator-client.md](features/coordinator-client.md)
+
+`loom.coordinator` is the public integration layer for direct Python/CLI control
+of an existing coordinator. It composes native queue values and transport
+mechanics with the existing diagnostic inspection decoder. It owns connection
+selection and the typed facade, while coordinator application views retain
+authorization, admission and durable state.
+
+Shared control validation, dispatch and codecs belong below this facade in the
+queue infrastructure so Unix, HTTPS and the legacy socket adapter reuse the
+same behavior. Queue, scheduling and execution modules must not import
+`loom.coordinator` or diagnostics to share that behavior. Transport owners retain
+authentication, framing and bounded I/O; the worker transport retains its
+journal, polling, process supervision and worker-specific errors. The facade
+imports no MCP SDK, starts no service and owns no job lifetime.
+
+### 6.15 Agent Preparation
+
+Detailed specification: [agent-preparation.md](features/agent-preparation.md)
+
+The native coordinator surface exposes preparation request values and operations.
+Queue owns accepted intent, source/profile snapshots, capture references,
+child/target linkage, finalization claims, bounded operation projections and
+retained-root upgrade. Existing managed admission, execution, artifact transfer
+and publication owners retain their responsibilities.
+
+`loom.preparation` is an integration layer above queue and diagnostics. Its fixed
+managed child composes once in the selected worker environment and commits a
+checked-composition report. Service wiring supplies coordinator finalization;
+queue and lower execution code do not import diagnostics or project recipes.
+`diagnostics.preflight` shares checks between path-based and supplied-composition
+entrypoints. `queue.managed_local_preparation` remains the canonical publisher
+and normalizes recipe evidence for fresh writes and replay.
 
 ## 7. Documentation Map
 
@@ -1318,3 +1358,49 @@ Is CLI behavior a thin wrapper around Python APIs?
 Are tests placed near the source boundary they protect?
 Do the relevant docs mention any accepted debt or deferred behavior?
 ```
+
+
+## MCP and operational skills
+
+Detailed specification: [mcp.md](features/mcp.md).
+
+`loom.mcp` owns the optional `loom-mcp` stdio executable. Its private SDK adapter
+registers fifteen tools over `loom.coordinator` and the native deployment/run owners, preserves native values/errors
+and bounds synchronous work outside the SDK event loop. SDK imports occur only
+when explicitly constructing/running the adapter; base, daemon and native client
+imports remain independent. Scheduling, preparation, durable state, identity guards
+and transfer remain native owners. One protected `--deployment` binding supplies
+all tools; only explicit `loom_run` ensures configured local services. MCP has no
+state store or client-side prepare/admit continuation.
+
+`skills/loom-prepare`, `skills/loom-run`, `skills/loom-monitor` and
+`skills/loom-diagnose` contain independently installable project-neutral product
+instructions. They are separate from `.agents/skills` contributor workflows and
+do not select scientific parameters, project environments or resource budgets.
+`make test-mcp-extra` and its summary lane use an isolated locked SDK/config
+environment; config-only and base lanes exclude the MCP marker.
+
+
+### Native managed terminal publication
+
+The POSIX local supervisor requires `ps -e -o pid= -o pgid=` to observe owned
+process-group membership. Before any containment signal, success requires a
+zero exit status from the unreaped root and no other group members. Missing or
+invalid process observations, surviving work, nonzero exits, and signals cannot
+qualify a successful worker result. Containment still owns stopping and releasing
+unfinished work; a prior failed worker result remains the primary failure.
+
+The supervisor retains this success qualification with its contained receipt.
+The parent copies it into the durable result's `managed_successful_exit`
+executor metadata, overwriting child-supplied values. Result replay requires this
+qualification, including after clean supervisor continuity rotation; legacy
+results without it cannot authorize success. Supervisor schema 2 is
+upgraded to schema 3 with old receipts explicitly unqualified. This observation
+establishes process completion only; domain code still owns aggregate scientific
+success and must report failures from work it joins.
+
+The native parent retains the admitted stage head in the prepared worker
+request's `managed_output_predecessor` metadata and supplies that exact predecessor
+to initial and replayed managed output commits. The authority's existing fenced
+transaction owns immutable output history and terminal success; replay after a
+lost response does not substitute the new head for the original predecessor.

@@ -1,49 +1,27 @@
 # Runtime Profile Run
 
-This example demonstrates v4 runtime configuration through `runtime` and
-`runtime_profiles`, local preflight diagnostics for requested resources, CLI
-tags/notes, explicit authority-backed execution, and the safe persisted
-`runtime.json` summary.
-
 ## Workflow
 
-This workflow uses:
+The run entrypoints use public `loom.run` with a protected installed agent
+profile. Preparation, execution, fenced results and owned-service cleanup follow
+the [configured lifecycle](../../../docs/downstream-operations.md#configured-startup-and-ordinary-run). The native admission supplies run status;
+typed materialized worker results supply output and diagnostic details after
+owned services stop. The short deployment root printed by the script is retained
+for inspection; artifacts default to this example's `runs/` directory. Set
+`LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to relocate artifacts.
 
-- `loom preflight CONFIG --check runtime --check resources`
-- `loom run CONFIG --run-uri RUN_URI --tag KEY=VALUE --note TEXT`
-
-## Variants
-
-Canonical command:
-
-```sh
-uv run loom run examples/execution/runtime-profile/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/runtime-profile \
-  --tag invocation=cli \
-  --note "runtime example executed"
-```
-
-Explicit co-located authority selection:
-
-```sh
-uv run loom run examples/execution/runtime-profile/pipeline.yaml \
-  --run-uri file:///tmp/loom-examples/runtime-profile \
-  --tag invocation=cli \
-  --note "runtime example executed" \
-  --authority-backend co_located_service \
-  --authority-profile co_located
-```
-
-Focused preflight before running:
-
-```sh
-uv run loom preflight examples/execution/runtime-profile/pipeline.yaml \
-  --check runtime \
-  --check resources
-```
-
-Run from the repository root:
+This example preserves authored runtime tags, notes and per-stage resources,
+adds invocation tags/notes, and reads the persisted safe `runtime.json` summary.
+The installed agent profile selects the worker environment.
 
 ```sh
 uv run python examples/execution/runtime-profile/run_runtime_profile.py
 ```
+
+## Variants
+
+Deployment selection owns ordinary-run backend and lifetime policy. Existing
+status/log commands can inspect a matching retained run. For a run created with
+co-located service authority, those diagnostic commands accept
+`--authority-backend co_located_service --authority-profile co_located`; these
+flags do not override the ordinary managed run's installed profile.

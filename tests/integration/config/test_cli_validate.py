@@ -5,11 +5,15 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
 from loom.cli.main import main
-from tests.support.config_samples import construction_event_log, reset_instantiate_probe_state
+from tests.support.config_samples import (
+    construction_event_log,
+    reset_instantiate_probe_state,
+)
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -38,21 +42,7 @@ def _write_valid_config(path: Path) -> None:
     )
 
 
-def test_validate_static_default_does_not_construct_targets(tmp_path: Path) -> None:
-    reset_instantiate_probe_state()
-    config_path = tmp_path / "pipeline.yaml"
-    _write_valid_config(config_path)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
-
-    assert stdout.getvalue() == f"OK validate {config_path}: 1 stage\n"
-    assert stderr.getvalue() == ""
-    assert construction_event_log == []
-
-
-def test_validate_check_targets_constructs_stage_and_generic_targets(tmp_path: Path) -> None:
+def test_validate_static_does_not_construct_project_targets(tmp_path: Path) -> None:
     reset_instantiate_probe_state()
     config_path = tmp_path / "pipeline.yaml"
     _write_valid_config(config_path)
@@ -61,20 +51,64 @@ def test_validate_check_targets_constructs_stage_and_generic_targets(tmp_path: P
 
     assert (
         main(
-            ["validate", str(config_path), "--check-targets", "--format", "json"],
+            ["validate", str(config_path), "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )
         == 0
     )
 
+    assert json.loads(stdout.getvalue()) == {
+        "schema_version": "loom.cli.validate.v3",
+        "ok": True,
+        "warnings": [],
+        "result": {
+            "config_path": str(config_path),
+            "pipeline_name": "demo",
+            "stage_count": 1,
+        },
+    }
     assert stderr.getvalue() == ""
-    payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.validate.v2"
-    assert payload["warnings"][0]["code"] == "validate.target_constructors_may_run"
-    assert payload["result"]["stage_count"] == 1
-    assert payload["result"]["target_count"] == 3
-    assert construction_event_log == ["service-child", "parent"]
+    assert construction_event_log == []
+
+
+def test_validate_static_does_not_import_a_fresh_project_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module_name = "fresh_static_project_target"
+    marker_path = tmp_path / "target-events.txt"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker_path)!r}).write_text('imported\\n', encoding='utf-8')\n"
+        "class FailingProjectStage:\n"
+        "    def __init__(self) -> None:\n"
+        f"        Path({str(marker_path)!r}).write_text('constructed\\n', encoding='utf-8')\n"
+        "        raise RuntimeError('fresh constructor sentinel')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        "pipeline:\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        f"        _target_: {module_name}:FailingProjectStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n",
+        encoding="utf-8",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert module_name not in sys.modules
+    assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
+
+    assert stdout.getvalue() == f"OK validate {config_path}: 1 stage\n"
+    assert stderr.getvalue() == ""
+    assert module_name not in sys.modules
+    assert not marker_path.exists()
 
 
 def test_validate_invalid_pipeline_returns_pipeline_error(tmp_path: Path) -> None:

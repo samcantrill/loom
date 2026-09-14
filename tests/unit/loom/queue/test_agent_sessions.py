@@ -1293,13 +1293,15 @@ def test_retirement_secret_rejects_before_mutation_and_is_redacted(
             idempotency_key="offer-secret-proof",
         )
         proof = _proof(session)
-        before = _sqlite_snapshot(config.control_database)
-        with pytest.raises(QueueServiceError, match="proof is invalid"):
-            _view(daemon).retire_clean(
-                replace(proof, retirement_secret="02" * 32),
-                idempotency_key="retire-wrong-secret",
-            )
-        assert _sqlite_snapshot(config.control_database) == before
+        # Background clock-health sampling is not a retirement mutation.
+        with daemon._cycle_lock:
+            before = _sqlite_snapshot(config.control_database)
+            with pytest.raises(QueueServiceError, match="proof is invalid"):
+                _view(daemon).retire_clean(
+                    replace(proof, retirement_secret="02" * 32),
+                    idempotency_key="retire-wrong-secret",
+                )
+            assert _sqlite_snapshot(config.control_database) == before
 
         _view(daemon).retire_clean(proof, idempotency_key="retire-right-secret")
         coordinator_state = "\n".join(_sqlite_snapshot(config.control_database))
@@ -1872,12 +1874,14 @@ def test_old_roots_are_rejected_by_the_hard_cutover(
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
+    assert config.agent_root is not None
     for path in (config.control_database, config.agent_root / "control.sqlite"):
         with sqlite3.connect(path) as conn:
             conn.execute(f"PRAGMA user_version = {old_version}")
             conn.commit()
     with pytest.raises(QueueStorageError, match="fresh roots are required"):
         LocalDaemon(config).start()
+    assert config.agent_root is not None
     for path in (config.control_database, config.agent_root / "control.sqlite"):
         with sqlite3.connect(path) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == old_version
@@ -1905,6 +1909,7 @@ def test_current_version_incomplete_session_schema_is_rejected_not_repaired(
 
     trigger_config = _config(tmp_path / "missing-trigger")
     LocalDaemon.initialize(trigger_config)
+    assert trigger_config.agent_root is not None
     with sqlite3.connect(trigger_config.agent_root / "control.sqlite") as conn:
         conn.execute("DROP TRIGGER agent_reference_revision_update")
         conn.commit()
@@ -1977,5 +1982,122 @@ def test_every_agent_operation_is_causally_outside_execution_owners(
         assert _sqlite_snapshot(config.execution_database) == execution_before
         assert _sqlite_snapshot(config.agent_journal) == provider_before
         assert _file_snapshot(config.run_store_root) == artifacts_before
+    finally:
+        daemon.stop()
+
+
+def test_gpu_availability_update_is_atomic_replayable_and_inspectable(
+    tmp_path: Path,
+) -> None:
+    from loom.queue._managed_local import ResourceAvailabilityStatus
+    from loom.queue._remote_stage_execution import GpuDeviceDescriptor
+
+    devices = tuple(GpuDeviceDescriptor(f"gpu-{i}", "model", 1024) for i in range(2))
+    policy = _policy()
+    policy = replace(policy, agents=(replace(policy.agents[0], gpu_devices=devices),))
+    config = _config(tmp_path, policy)
+    LocalDaemon.initialize(config)
+    now = ["2026-01-01T00:00:00Z"]
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    daemon.start()
+    try:
+        session = _register(daemon)
+        initial = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            0,
+            0,
+            30,
+            _provider_descriptors("gpu"),
+            gpu_devices=devices,
+            gpu_atoms=tuple(d.capacity_atom() for d in devices),
+            resource_status=tuple(
+                ResourceAvailabilityStatus(
+                    "gpu", d.device_id, True, "available", now[0]
+                )
+                for d in devices
+            ),
+        )
+        _view(daemon).publish_offer(initial, idempotency_key="idle")
+        busy = replace(
+            initial,
+            availability_revision="availability-2",
+            gpu_atoms=(devices[1].capacity_atom(),),
+            capacity_atoms=(),
+            resource_status=(
+                replace(
+                    initial.resource_status[0],
+                    available=False,
+                    reason_code="external_process_detected",
+                ),
+                initial.resource_status[1],
+            ),
+        )
+        receipt = _view(daemon).publish_offer(
+            busy,
+            idempotency_key="busy",
+            expected_availability_revision="availability-1",
+        )
+        receipt_session = receipt["session"]
+        assert isinstance(receipt_session, Mapping)
+        assert receipt_session["availability_revision"] == "availability-2"
+        assert (
+            _view(daemon).publish_offer(
+                busy,
+                idempotency_key="busy",
+                expected_availability_revision="availability-1",
+            )
+            == receipt
+        )
+        with pytest.raises(QueueConflictError, match="previous availability"):
+            _view(daemon).publish_offer(
+                replace(initial, availability_revision="availability-3"),
+                idempotency_key="stale-update",
+                expected_availability_revision="availability-1",
+            )
+        with pytest.raises(QueueConflictError, match="cannot be reused"):
+            _view(daemon).publish_offer(
+                initial,
+                idempotency_key="reuse-old",
+                expected_availability_revision="availability-2",
+            )
+        projection = daemon.agent("agent-a")
+        assert projection.available
+        assert projection.resource_status == busy.resource_status
+        now[0] = "2026-01-01T00:00:10Z"
+        refreshed = tuple(
+            replace(item, observed_at=now[0]) for item in busy.resource_status
+        )
+        _view(daemon).renew_offer(
+            AgentOfferRenewal(
+                session.session_id,
+                str(receipt["offer_id"]),
+                "availability-2",
+                1,
+                refreshed,
+            )
+        )
+        assert daemon.agent("agent-a").resource_status == refreshed
+        now[0] = "2026-01-01T00:00:41Z"
+        expired = daemon.agent("agent-a")
+        assert not expired.available
+        assert {item.reason_code for item in expired.resource_status} == {
+            "observation_stale"
+        }
+        assert not any(item.available for item in expired.resource_status)
+        legacy = initial.value()
+        legacy.pop("resource_status")
+        historical = AgentOffer.from_value(legacy)
+        assert historical.gpu_devices == devices
+        assert historical.gpu_atoms == ()
+        assert not any(
+            atom.owner_resource_kind == "gpu" for atom in historical.capacity_atoms
+        )
+        assert {item.reason_code for item in historical.resource_status} == {
+            "observation_unavailable"
+        }
     finally:
         daemon.stop()

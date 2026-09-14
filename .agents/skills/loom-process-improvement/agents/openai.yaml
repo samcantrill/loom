@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loom Process Improvement"
+  short_description: "Promote reusable Loom workflow improvements"
+  default_prompt: "Use $loom-process-improvement to assess this recurring workflow problem."

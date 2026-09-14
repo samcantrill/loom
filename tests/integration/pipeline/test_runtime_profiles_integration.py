@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 
 from loom.pipeline import RunStoreOptions, StageRuntimeOptions, merge_run_options
-from loom.pipeline.execution import create_offline_evidence_run_store
+from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 
@@ -25,9 +25,7 @@ def test_config_shaped_runtime_profile_dicts_merge_with_known_stage_ids() -> Non
             "tags": {"suite": "integration"},
             "stage_options": {
                 "extract": {
-                    "resources": {
-                        "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                    }
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                 }
             },
         },
@@ -54,9 +52,7 @@ def test_config_shaped_runtime_profile_dicts_merge_with_known_stage_ids() -> Non
             "tags": {"invocation": "api"},
             "stage_options": {
                 "train": {
-                    "resources": {
-                        "entries": {"cpu": {"kind": "cpu", "amount": 4}}
-                    }
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 4}}}
                 }
             },
         },
@@ -70,7 +66,9 @@ def test_config_shaped_runtime_profile_dicts_merge_with_known_stage_ids() -> Non
     assert set(result.stage_options) == {"extract", "train"}
 
 
-def test_profile_null_clearing_skips_profile_and_known_stage_validation_is_deterministic() -> None:
+def test_profile_null_clearing_skips_profile_and_known_stage_validation_is_deterministic() -> (
+    None
+):
     result = merge_run_options(
         base={
             "profile": "cluster",
@@ -139,7 +137,9 @@ def test_profile_merge_preserves_run_and_stage_reliability_contracts() -> None:
     )
 
 
-def test_profile_selected_root_persists_a_run_in_that_collection(tmp_path: Path) -> None:
+def test_profile_selected_root_persists_a_run_in_that_collection(
+    tmp_path: Path,
+) -> None:
     root = str(tmp_path / "profile-runs")
     options = merge_run_options(
         base={"profile": "cluster"},
@@ -148,7 +148,7 @@ def test_profile_selected_root_persists_a_run_in_that_collection(tmp_path: Path)
     assert isinstance(options.run_store, RunStoreOptions)
     assert options.run_store.root is not None
 
-    store = create_offline_evidence_run_store(options.run_store.root)
+    store = LocalRunStore(options.run_store.root)
     run_uri = store.allocate_run_uri()
     store.create_run(run_uri)
 

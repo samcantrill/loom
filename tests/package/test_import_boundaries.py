@@ -20,7 +20,8 @@ def test_import_does_not_import_deferred_modules() -> None:
 
         import loom
 
-        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
+        assert callable(loom.run)
+        for forbidden in ("weave", "loom.pipeline", "loom.cli", "loom._run", "loom.deployment", "loom.coordinator"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
         for forbidden in ("omegaconf", "yaml", "pydantic", "fastapi", "starlette"):
@@ -35,6 +36,55 @@ def test_import_does_not_import_deferred_modules() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_execution_failure_capture_does_not_import_diagnostics() -> None:
+    script = dedent(
+        """
+        import sys
+        import loom.pipeline.executors.local
+        import loom.pipeline.execution.stage_worker
+        assert not any(name == "loom.diagnostics" or name.startswith("loom.diagnostics.")
+                       for name in sys.modules), "execution imported higher-level diagnostics"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp() -> (
+    None
+):
+    script = dedent(
+        """
+        import sys
+        import socket
+        import subprocess
+        import threading
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("import or factory attempted service activity")
+
+        socket.create_connection = unexpected
+        threading.Thread.start = unexpected
+        subprocess.Popen = unexpected
+        from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest, RunObservation
+        from loom.queue import LocalDaemonSocketClient, QueueServiceError
+        with CoordinatorClient.from_unix_socket('/nonexistent/loom.sock'):
+            pass
+        LocalDaemonSocketClient('/nonexistent/legacy.sock')
+        assert issubclass(CoordinatorClientError, QueueServiceError)
+        for forbidden in ('mcp', 'torch', 'numpy', 'pandas', 'tests.support'):
+            assert not any(name == forbidden or name.startswith(forbidden + '.')
+                           for name in sys.modules), forbidden
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_import_serialization_does_not_import_io() -> None:
@@ -64,7 +114,8 @@ def test_import_io_does_not_import_config_or_pipeline() -> None:
 
         import loom.io
 
-        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
+        assert callable(loom.run)
+        for forbidden in ("weave", "loom.pipeline", "loom.cli", "loom._run", "loom.deployment", "loom.coordinator"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.io")
         print("ok")
@@ -331,10 +382,7 @@ def test_import_queue_control_modules_do_not_import_authority_or_config() -> Non
         """
         import sys
 
-        import loom.queue.client
         import loom.queue.config
-        import loom.queue.controller
-        import loom.queue.service
 
         for forbidden in (
             "weave",
@@ -652,39 +700,9 @@ def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() ->
     assert result.stdout.strip() == "ok"
 
 
-def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> (
+def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> (
     None
 ):
-    script = dedent(
-        """
-        import sys
-
-        import loom.queue.local
-        import loom.queue.resources
-
-        for forbidden in (
-            "loom.authority",
-            "loom.authority._repository",
-            "loom.pipeline.executors",
-            "loom.pipeline.executors.slurm",
-            "loom.cli",
-            "fastapi",
-            "starlette",
-        ):
-            if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through queue local modules")
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
-
-
-def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> None:
     script = dedent(
         """
         import sys
@@ -712,35 +730,6 @@ def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback()
     )
     assert "SQLitePerRunAuthorityStore" not in production
     assert "sqlite_authority" not in production
-
-
-def test_import_queue_slurm_adapter_uses_public_scheduler_boundary_only() -> None:
-    script = dedent(
-        """
-        import sys
-
-        import loom.queue.slurm
-
-        if "loom.pipeline.executors.slurm.commands" not in sys.modules:
-            raise SystemExit("SLURM command boundary was not imported")
-        for forbidden in (
-            "loom.authority",
-            "loom.authority._repository",
-            "loom.cli",
-            "fastapi",
-            "starlette",
-        ):
-            if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through queue SLURM adapter")
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
 
 
 def test_import_queue_preflight_avoids_private_authority_and_scheduler_modules() -> (
@@ -1212,7 +1201,8 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
             "CONTINUE_INDEPENDENT_FAILURE_POLICY",
             "DEFAULT_FAILURE_POLICY",
-            "DEFAULT_MAX_PARALLEL_STAGES",
+                "DEFAULT_MAX_PARALLEL_STAGES",
+                "ALL_RESOURCES",
             "RUNTIME_CONFIG_SECTION",
             "RUNTIME_METADATA_SCHEMA_VERSION",
             "RUNTIME_PROFILES_CONFIG_SECTION",
@@ -1236,7 +1226,8 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION",
             "ResourceCapability",
             "ResourceEnforcementExpectation",
-            "ResourceSupportLevel",
+                "ResourceSupportLevel",
+                "ResourcePolicy",
             "RuntimeConfigSections",
             "RuntimeMetadata",
             "MemoryResourcePlanner",
@@ -1429,8 +1420,6 @@ def test_import_slurm_dry_run_modules_does_not_import_forbidden_layers() -> None
         """
         import sys
 
-        import loom.pipeline.executors.slurm.artifacts
-        import loom.pipeline.executors.slurm.planning
         import loom.pipeline.executors.slurm.rendering
 
         for forbidden in (
@@ -1672,7 +1661,6 @@ def test_import_cli_diagnostics_commands_remain_import_light() -> None:
         import loom.cli.status
         import loom.cli.logs
         import loom.cli.artifacts
-        import loom.cli.cancel
         import loom.cli.runs
 
         for forbidden in (
@@ -1793,73 +1781,6 @@ def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
                 ],
             }
         )
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
-
-
-def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
-    script = dedent(
-        """
-        import sys
-        from tempfile import TemporaryDirectory
-
-        def assert_forbidden_absent(phase):
-            for forbidden in (
-                "weave",
-                "loom.cli",
-                "project",
-                "yaml",
-                "omegaconf",
-                "pydantic",
-            ):
-                if forbidden in sys.modules:
-                    raise SystemExit(f"{forbidden} was imported {phase}")
-
-        from loom.pipeline import PipelineRunner, PipelineSpec, RunRequest
-        from loom.pipeline.execution import create_authority_backed_serial_run_store
-        from loom.pipeline.status import RunStatus
-        from loom.pipeline.stores import path_to_run_uri
-        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-        assert_forbidden_absent("before direct pipeline run")
-
-        spec = PipelineSpec.from_config(
-            {
-                "name": "direct-boundary",
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
-                        },
-                        "config": {"value": 42},
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    }
-                ],
-            }
-        )
-        with TemporaryDirectory() as tmpdir:
-            run_store = create_authority_backed_serial_run_store(
-                tmpdir,
-                authority_store=SQLitePerRunAuthorityStore(),
-            )
-            run_uri = path_to_run_uri(f"{tmpdir}/run1")
-            result = PipelineRunner(run_store=run_store).run(
-                RunRequest(pipeline=spec, run_uri=run_uri)
-            )
-            if result.status is not RunStatus.SUCCEEDED:
-                raise SystemExit(f"run failed with status {result.status!r}")
-            if set(run_store.read_artifact_index(run_uri)) != {"build.data"}:
-                raise SystemExit("direct run did not write expected artifact index")
-
-        assert_forbidden_absent("during direct pipeline run")
         print("ok")
         """
     )
@@ -2046,3 +1967,52 @@ def test_core_runtime_imports_do_not_depend_on_weave() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_native_imports_do_not_load_optional_mcp_sdk() -> None:
+    script = dedent(
+        """
+        import importlib.abc
+        import sys
+        class NoSDK(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'mcp' or fullname.startswith('mcp.'):
+                    raise ModuleNotFoundError('MCP SDK is absent', name='mcp')
+        sys.meta_path.insert(0, NoSDK())
+        import loom
+        import loom.coordinator
+        import loom.queue.local_daemon
+        import loom.mcp
+        assert 'mcp' not in sys.modules
+        print('ok')
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_explicit_mcp_without_extra_has_actionable_stderr() -> None:
+    script = dedent(
+        """
+        import importlib.abc
+        import sys
+        class NoSDK(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'mcp' or fullname.startswith('mcp.'):
+                    raise ModuleNotFoundError('MCP SDK is absent', name='mcp')
+        sys.meta_path.insert(0, NoSDK())
+        from loom.mcp import main
+        sys.argv = ['loom-mcp', '--deployment', '/tmp/absent.json']
+        raise SystemExit(main())
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "loom[mcp]" in result.stderr
+    assert "Traceback" not in result.stderr

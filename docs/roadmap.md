@@ -162,6 +162,8 @@ written.
 | v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
 | v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
 | v29 | Durable dependency-aware stage scheduler and multi-machine agent pools | One managed system that admits runs, schedules each dependency-ready stage attempt across authenticated agent resources, moves artifacts safely, and preserves fenced lifecycle truth through restart, disconnection, cancellation, and recovery. |
+| v40 | Coordinator client, agent preparation, and MCP | One native Unix/HTTPS coordinator client, preparation in existing worker environments, and project-neutral Codex tools/skills over the same durable operations. |
+| v41 | Unified run lifecycle and agent execution | One configured run across cold/persistent local services, fleets and connected Slurm, with agent-owned execution, durable restart/result reconciliation and removal of parallel execution pathways. |
 
 ## v0 - Local Runtime Kernel
 
@@ -2961,6 +2963,123 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md`](roadmap/stage-29/phases/slurm-ready-stage-delegation.md)
 - [`docs/roadmap/stage-29/phases/agent-controls-cancellation.md`](roadmap/stage-29/phases/agent-controls-cancellation.md)
 - [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
+## v38 - Selective Container Port And Correctness Review
+
+Status: Phases 1 and 2 merged; Phase 2 PR #278 landed at `0c0dbf2`. Explicit scheduling-only
+CPU/RAM policy implemented. The approved passive-wait correction removes reader-driven
+reconciliation wakeups and passed independent review. The scheduling-only SIF smoke
+passes. The approved `04443ed` reporting correction warns for implicit stages
+inheriting unenforced CPU/RAM intent and preserves no invented direct limits
+when unmapped. Both fresh full gates and independent verification passed;
+The merged tree matches the reviewed and validated phase head.
+Container lifecycle implementation retains its explicit design review.
+
+Preserve useful local changes without reverting newer upstream run-root, GPU,
+serialization, or managed-execution contracts. The ordered increments are:
+
+1. Keep stage-owned target graphs inert during generic CLI target validation.
+2. Preserve resource requests with an explicit choice of runtime CPU/memory
+   limits or scheduling-only execution, truthful diagnostics, separate live
+   acceptance, and a bounded malformed-allocation grammar correction.
+3. Establish reviewed, tested timeout cleanup and containment ownership before
+   enabling direct-container deadlines; resolve the confirmed legacy queue
+   root-exit/descendant-release gap at its actual owner.
+
+Every implementation requires independent correctness review, current local
+validation, and a PR merged to develop. The original dirty checkout remains
+preserved. Scientific operations, determinism, remote submission APIs, and rphys
+domain-failure transport are excluded.
+
+- [Planning and upstream audit](roadmap/stage-38/planning.md)
+- [Implementation manifest](roadmap/stage-38/implementation-plan.md)
+
+## v39 - Independent Resource Accounting And Enforcement
+
+Status: complete two-phase plan and migration rules approved after independent
+design and plan reviews; Phase 1 in progress. Separate agent capacity, one job-demand representation,
+Loom accounting selection and execution controls. Support explicit no additional
+enforcement, truthful backend/SLURM delegation, and unchanged lifecycle cleanup.
+Replace adapter-specific CPU/RAM policy only after its consumers migrate.
+
+This work is independent of rphys Stage 81's failure transport and Stage 85's
+deployment configuration. It does not authorize host-setting changes, scientific
+changes or protected physical execution.
+
+- [Current planning and design tasks](roadmap/stage-39/planning.md)
+- [Implementation manifest](roadmap/stage-39/implementation-plan.md)
+
+## v40 - Coordinator Client, Agent Preparation, And MCP
+
+Status: expanded design and independent plan reviews passed after one bounded
+correction. Manager documentation checks passed; the maintainer approved the
+Stage 40 behavior and revised four-phase delivery on 2026-09-10. Focused
+independent plan/startup review passed with no blockers or required corrections.
+All four implementation phases are merged into develop as of 2026-09-11, with
+passing required local gates and independent reviews. The implementation
+manifest records revisions, evidence and the remaining live Codex/physical NAS
+deployment limitations.
+
+Unify Python, CLI and MCP access to the coordinator through local Unix or
+authenticated HTTPS connections. Add coordinator-owned preparation that schedules
+an ordinary managed child on an eligible worker in a specified existing
+environment, then publishes its checked composition through the current managed
+publisher. Support shared NAS and explicit staged preparation inputs. Preserve
+existing client behavior, admission identities, authority and worker ownership.
+
+Four phases deliver native coordinator control, complete shared-storage
+preparation with its coordinator-only root upgrade, staged input transfer over
+that lifecycle, then optional stdio MCP and four portable Loom skills. Each phase
+contains smaller validated implementation steps within one PR. Preparation
+initially retains embedded coordinator
+authority and the current no-configured-SLURM-profile limitation. Source staging
+does not install code or deliver arbitrary target-stage files. Scientific choices,
+environment provisioning and general source deployment remain outside this stage.
+
+- [Detailed behavior and implementation guide](briefs/mcp-implementation-plan.md)
+- [Planning and design review](roadmap/stage-40/planning.md)
+- [Implementation manifest and phase cards](roadmap/stage-40/implementation-plan.md)
+
+## v41 - Unified Run Lifecycle And Agent Execution
+
+Status: all nine implementation phases are merged into develop as of 2026-09-14.
+The final cutover and approved native observer amendment passed both required
+local gates and independent review. The final summary reports 3,260 passed,
+zero failures/errors and 15 opt-in physical-container skips. The implementation
+manifest owns closeout, exact evidence and the remaining physical fleet,
+container, Slurm/shared-storage and live-assistant qualification limits.
+
+Build on Stage 40's native client and assigned preparation. One public run
+connects to or starts configured coordinator/agent services, prepares and admits
+work, observes the same managed lifecycle across native/container and connected
+Slurm execution, and stops only run-owned services after all work settles.
+Persistent services and retained state survive client exit. The agent service
+spans attempts; a stage worker executes one attempt.
+
+Move Slurm submission and monitoring behind agent execution while preserving
+exact submission identity, grant/start fencing and authority-owned output
+commits. Retain typed results on qualified shared storage so restarted services
+can publish work completed during coordinator downtime. New stage starts still
+require the coordinator; allocation acquisition, offline starts, HA and
+multi-node allocation integration are deferred.
+
+The user selected a hard cutover without compatibility adapters: remove direct,
+offline and independent whole-run Slurm execution, convert sweeps/MCP/examples,
+and retain only shared primitives with current consumers. Stage 40's preserved
+legacy surfaces and preparation limits describe its own delivery boundary;
+Stage 41 deliberately replaces/extends them after that prerequisite lands.
+Existing outputs are not deleted, and old-version work must settle before an
+operator replaces incompatible services.
+
+Nine phases deliver preparation/publication, durable run operations, service
+startup/lifetime, native/container workers, Slurm job ownership, durable Slurm
+results, sweeps, MCP/skills and the final shared cutover. Each phase owns its tests,
+docs and replaced-code removal; the last phase completes shared removals and
+integration rather than accumulating all cleanup.
+
+- [Plain-language lifecycle and deployment overview](briefs/unified-execution-lifecycle.md)
+- [Behavior, design and validation](roadmap/stage-41/planning.md)
+- [Implementation manifest and phase plans](roadmap/stage-41/implementation-plan.md)
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist

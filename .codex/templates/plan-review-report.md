@@ -1,4 +1,11 @@
-# Optional Plan Review
+# Independent Plan Review Fields
+
+Record in the implementation manifest readiness receipt; do not create a sidecar.
+
+- Reviewed revision/tree and packet paths:
+- Source assumptions/revision:
+- Independent reviewer and result:
+- Post-review changes and affected confirmation:
 
 ## Findings
 

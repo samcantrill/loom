@@ -1,31 +1,29 @@
 # Loom Workflow Modernization
 
-Status: core lean conversion applied; validation not run
+## Current Shape
 
-## Goal
+- Repository skills in .agents/skills route planning, implementation, targeted
+  validation, and reusable process improvement. Workflow procedures retain one
+  canonical owner; normal invocation names a skill and a stage.
+- Planning produces one complete manager-authored packet, one independent final
+  review, and maintainer approval/landing. New planning manifests index coherent
+  domain cards. Existing single-file approved packets remain valid.
+- Implementation manifests own readiness, traceability, phase identity/order,
+  and execution context. Each phase is an independently acceptable merge; there
+  is no numerical word, phase, or slice target.
+- Each implementation stage retains one worktree and coordination branch with
+  separate phase branches/PRs. The manager prompt and tools/phase_workflow.py own
+  the existing isolation, reviewed delivery, publication, and synchronization gate.
+- Manager implementation is the default; every phase PR has independent review.
+  Named uncertainty, qualified repair, and executor delegation remain bounded.
+- Validation is selected by affected behavior and consumers. Broad/unbounded
+  impact or explicit approved obligations require full gates. Summary targets
+  execute tests and are not an automatic formatting step. Approved Stage 40/41
+  checks, product contracts, phase order, and review evidence remain binding.
+- Planning owns optional terminal compaction after verified implementation facts.
+  docs/improvement-log.md tracks reusable lessons without owning product blockers.
 
-Adopt the useful RPhys workflow improvements while reducing context, artifacts,
-and routine subagent cost.
-
-## Applied Shape
-
-- Manager-local roadmap planning on the lean path.
-- Zero normal planning spawns.
-- One normal phase spawn: loom_phase_executor.
-- Optional design reviewer, phase planner, refiner, plan reviewer, and PR
-  reviewer only for a named expanded risk or qualified blocker.
-- fork_turns=none and pointer-only handoffs.
-- Current-state planning, compact manifest, and one phase execution plan per
-  phase.
-- No new assignment, PR-body, review, refinement, or merge sidecars.
-- Direct-to-develop phase PRs with no routine stack.
-- Current Loom validation commands retained.
-- Legacy paths remain as small compatibility stubs.
-
-## Follow-Ups
-
-1. Run reference and repository validation.
-2. Audit legacy pr_open roadmap metadata before resuming an old plan.
-3. Decide whether to consolidate suite evidence into make validate-pr.
-4. Consider optional Loom code intelligence separately.
-5. Dry-run planning on the next unstarted roadmap stage before product execution.
+The Git implementation and its delivery evidence are recorded in
+[the refinement plan](refined-stage-implementation.md). Current workflows own
+policy; completed plan receipts are historical evidence. Agent models, runtime
+code, the Git helper, and test harness behavior are unchanged by skill alignment.

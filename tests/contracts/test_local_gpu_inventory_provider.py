@@ -21,7 +21,9 @@ class _Runner:
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         assert tuple(argv) == (
             "nvidia-smi",
-            "--query-gpu=index,uuid,pci.bus_id",
+            "--query-gpu=index,uuid,name,memory.total,pci.bus_id",
             "--format=csv,noheader,nounits",
         )
-        return subprocess.CompletedProcess(argv, 0, "0, GPU-a, 00000000:01:00.0\n", "")
+        return subprocess.CompletedProcess(
+            argv, 0, "0, GPU-a, test-model, 1024, 00000000:01:00.0\n", ""
+        )

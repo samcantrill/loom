@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import os
+import json
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
@@ -17,7 +19,9 @@ from typing import Any, cast
 
 import pytest
 
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.local_daemon_execution as local_daemon_execution
+import loom.queue.local_daemon as local_daemon_module
 from loom.queue import (
     AdmissionNotFoundError,
     AgentControl,
@@ -51,6 +55,7 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.pipeline.orchestration import (
+    CoordinatorStoreError,
     ExecutionRequirement,
     SchedulingProjectionState,
     StageWorkRecord,
@@ -95,6 +100,23 @@ class _IncompatibleCpuPlanner(CpuResourcePlanner):
     claim_contracts = (ResourceClaimContractDescriptor("cpu", 2, "test-cpu-claim-v2"),)
 
 
+@pytest.mark.parametrize("revision", (None, 1, 17))
+def test_admission_request_round_trips_optional_failed_retry_revision(revision) -> None:
+    request = LocalDaemonAdmissionRequest(
+        "item", "file:///run", retry_failed_revision=revision
+    )
+    assert LocalDaemonAdmissionRequest.from_dict(request.to_dict()) == request
+    assert ("retry_failed_revision" in request.to_dict()) == (revision is not None)
+
+
+@pytest.mark.parametrize("revision", (True, 0, -1, "1"))
+def test_admission_request_rejects_invalid_failed_retry_revision(revision) -> None:
+    with pytest.raises(QueueServiceError):
+        LocalDaemonAdmissionRequest(
+            "item", "file:///run", retry_failed_revision=revision
+        )
+
+
 def test_recovery_request_round_trips_complete_immutable_identity() -> None:
     request = RecoverUnknownAssignment(
         recovery_id="recovery-1",
@@ -127,6 +149,7 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         daemon._coordinator_id = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'stable_id'"
         ).fetchone()[0]
+    assert config.agent_root is not None
     with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
         daemon._agent_id = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'stable_id'"
@@ -256,6 +279,83 @@ def test_admission_wait_observes_revision_without_status_history(
         daemon.wait_admission(
             "admission-1", expected_revision=changed.revision + 1, timeout=0
         )
+
+
+def test_coordinator_client_unix_handshake_and_identity_guard(tmp_path: Path) -> None:
+    """The new facade negotiates before control and guards every request."""
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    assert config.agent_root is not None
+    with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+        daemon._agent_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    daemon._coordinator_lock = object()
+    daemon._agent_lock = object()
+    daemon._epoch = "test-epoch"
+    daemon._scheduling_epoch = "test-scheduling-epoch"
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
+        description = client.describe_connection()
+        assert description.transport == "unix"
+        assert description.coordinator_id == daemon._coordinator_id
+        assert description.capabilities == ("daemon-control-v1",)
+        assert client.status().coordinator_id == daemon._coordinator_id
+        with pytest.raises(CoordinatorClientError) as raised:
+            CoordinatorClient.from_unix_socket(
+                config.endpoint, expected_coordinator_id="different-coordinator"
+            ).status()
+    finally:
+        server.stop()
+    assert raised.value.code == "conflict"
+    assert raised.value.boundary == "coordinator"
+    assert raised.value.ids["expected_coordinator_id"] == "different-coordinator"
+    assert raised.value.ids["observed_coordinator_id"] == daemon._coordinator_id
+
+
+def test_nonterminal_admission_waits_are_passive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES ('admission-1', 'item-1', ?, 'file:///run', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'operation-1', 0, 1, NULL, NULL)",
+            (daemon._coordinator_id,),
+        )
+        conn.commit()
+    wake_calls: list[None] = []
+
+    def record_wake() -> None:
+        wake_calls.append(None)
+
+    def stop_after_observation(_seconds: float) -> None:
+        raise RuntimeError("stop after one nonterminal observation")
+
+    monkeypatch.setattr(daemon._wake, "set", record_wake)
+    monkeypatch.setattr(local_daemon_module.time, "sleep", stop_after_observation)
+    with pytest.raises(RuntimeError, match="stop after one"):
+        daemon.wait_admission(
+            "admission-1",
+            expected_revision=daemon._admission("admission-1").revision,  # noqa: SLF001
+            timeout=1,
+        )
+    with pytest.raises(RuntimeError, match="stop after one"):
+        daemon._wait("item-1", timeout_seconds=1)  # noqa: SLF001
+    assert wake_calls == []
 
 
 def test_admission_revision_is_targeted_and_noop_writes_are_isolated(
@@ -433,9 +533,25 @@ def test_management_agent_and_operation_reads_are_current_and_typed(
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
             )
+            expired_offer = AgentOffer(
+                session_id="session-current",
+                coordinator_epoch=daemon._epoch or "",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                cpu=1,
+                memory_bytes=0,
+                ttl_seconds=1,
+                provider_composition=(
+                    AgentProviderDescriptor(
+                        CpuResourcePlanner.descriptor,
+                        CpuResourcePlanner.claim_contracts,
+                    ),
+                ),
+            )
             conn.execute(
-                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', '{}', '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
-                (daemon._epoch,),
+                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', ?, '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
+                (daemon._epoch, json.dumps(expired_offer.value())),
             )
             conn.commit()
 
@@ -833,8 +949,9 @@ def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
     )
     try:
         now[0] = "2026-08-29T00:01:00Z"
-        with pytest.raises(QueueServiceError, match="degraded|step"):
-            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with daemon._cycle_lock:  # noqa: SLF001 - use the live clock owner
+            with pytest.raises(QueueServiceError, match="degraded|step"):
+                daemon._accepted_snapshot()  # noqa: SLF001
         status = daemon.status()
         assert status.accepted_time_health == "degraded"
         assert status.accepted_time_diagnostic == "clock_step_exceeds_policy"
@@ -886,13 +1003,15 @@ def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> Non
     )
     try:
         now[0] = "2026-08-29T00:00:00Z"
-        with pytest.raises(QueueServiceError, match="regressed|degraded"):
-            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with daemon._cycle_lock:  # noqa: SLF001 - use the live clock owner
+            with pytest.raises(QueueServiceError, match="regressed|degraded"):
+                daemon._accepted_snapshot()  # noqa: SLF001
+        degraded = daemon.status()
         with pytest.raises(QueueConflictError, match="still below"):
             operator.recover_time(
                 TimeRecoveryRequest(
                     "recover-clock-regressed",
-                    1,
+                    degraded.accepted_time_revision,
                     initial.coordinator_epoch,
                     "clock is still behind",
                 )
@@ -1162,6 +1281,7 @@ def test_scheduling_reload_rejects_changed_supervisor_launch_identity(
     config = _config(tmp_path)
     alternate_project = tmp_path / "alternate-project"
     alternate_project.mkdir()
+    assert config.resident_worker_launch_profile is not None
     replacement = replace(
         config,
         resident_worker_launch_profile=replace(
@@ -1584,6 +1704,11 @@ def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
     reference_owner: str,
 ) -> None:
     profile = SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(tmp_path),
+            "compute_root": str(tmp_path),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="cpu",
         max_outstanding=1,
@@ -1862,6 +1987,56 @@ def test_start_rejects_missing_expected_owner_store_without_retaining_locks(
     assert not store_path.exists()
 
 
+def test_shutdown_logs_owner_failure_chain_without_discarding_retention_or_locks(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    status = daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    supervisor = execution.supervisor
+    assert supervisor is not None
+    original_pid = supervisor.service_process_id
+    store = config.execution_database
+    backup = store.with_suffix(".unavailable")
+    store.rename(backup)
+    try:
+        assert not local_daemon_execution.local_daemon_owner_stores_available(
+            config, coordinator_id=status.coordinator_id, agent_id=execution.agent_id
+        )
+        daemon.stop()
+        refusal = next(
+            record
+            for record in caplog.records
+            if record.name == "loom.queue.local_daemon"
+            and "retained its supervisor during shutdown" in record.getMessage()
+        )
+        assert refusal.exc_info is not None
+        failure = refusal.exc_info[1]
+        assert isinstance(failure, QueueServiceError)
+        causes: list[BaseException] = []
+        while failure is not None:
+            causes.append(failure)
+            failure = failure.__cause__
+        assert any(isinstance(cause, CoordinatorStoreError) for cause in causes)
+        assert "retained daemon owner state is unavailable" in caplog.text
+        assert "coordinator store is missing" in caplog.text
+        assert "preserve the deployment and inspect the shutdown refusal" in caplog.text
+        assert not store.exists()
+        assert supervisor.status()["service_process_id"] == original_pid
+        assert config.agent_root is not None
+        for root in (config.coordinator_root, config.agent_root):
+            with (root / "owner.lock").open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    finally:
+        backup.replace(store)
+        daemon.stop()
+        supervisor.shutdown_clean()
+
+
 @pytest.mark.parametrize(
     "store_path",
     ("control_database", "execution_database", "agent_journal"),
@@ -1959,12 +2134,13 @@ def test_failed_execution_construction_releases_daemon_ownership(
     restarted.stop()
 
 
-def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
+def test_slurm_cancellation_fanout_defers_external_calls_to_the_agent() -> None:
     """An epoch request is not mistaken for scheduler containment."""
 
     known = SimpleNamespace(
         state="accepted",
         assignment=SimpleNamespace(
+            assignment_id="known-assignment",
             operation_id="known",
             profile_id="profile-a",
             profile_configuration_fingerprint="config-a",
@@ -1973,6 +2149,7 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     unknown = SimpleNamespace(
         state="submitting",
         assignment=SimpleNamespace(
+            assignment_id="unknown-assignment",
             operation_id="unknown",
             profile_id="profile-a",
             profile_configuration_fingerprint="config-a",
@@ -2002,42 +2179,37 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     subject = cast(Any, execution)
     subject.slurm_assignments = _Assignments()
     subject.slurm_submissions = _Submissions()
+    subject._slurm_agent = None
+    subject.daemon = None
     subject._slurm_profile = lambda profile_id, fingerprint: (
         f"resolved:{profile_id}:{fingerprint}"
     )
 
     assert execution._fan_out_slurm_cancellation("run://example") is True
-    assert calls == [("known", "resolved:profile-a:config-a")]
+    assert calls == [], "the coordinator cannot call scancel, even for a known job"
 
 
-def test_slurm_cancellation_waits_for_exact_provider_release() -> None:
+def test_slurm_cancellation_waits_for_the_agent_release_acknowledgement() -> None:
     record = SimpleNamespace(
         state="logical_released",
-        assignment=SimpleNamespace(
-            assignment_id="assignment-1",
-            operation_id="operation-1",
-            attempt_id="attempt-1",
-        ),
+        assignment=SimpleNamespace(assignment_id="assignment-1"),
     )
+    retained = [record]
     execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
     subject = cast(Any, execution)
     subject.slurm_assignments = SimpleNamespace(
-        list_run_unreleased=lambda _run_uri: (record,)
+        list_run_unreleased=lambda _run_uri: tuple(retained)
     )
-    subject.slurm_submissions = SimpleNamespace(
-        find=lambda _operation_id: SimpleNamespace()
-    )
-
-    def unavailable(_assignment_id: str) -> None:
-        raise QueueConflictError("provider release is unavailable")
-
-    subject._release_slurm_assignment = unavailable
+    subject.daemon = None
+    subject._drive_local_slurm = lambda _record: None
     assert execution._fan_out_slurm_cancellation("run://example") is True
 
-    released: list[str] = []
-    subject._release_slurm_assignment = released.append
+    def acknowledged(candidate: object) -> None:
+        assert candidate is record
+        retained.clear()
+
+    subject._drive_local_slurm = acknowledged
     assert execution._fan_out_slurm_cancellation("run://example") is False
-    assert released == ["assignment-1"]
 
 
 def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
@@ -2122,16 +2294,20 @@ def test_live_owner_loss_degrades_service_and_blocks_scheduling(
         daemon.stop()
 
 
+@pytest.mark.parametrize("version", [0, 14])
 def test_schema_mismatch_requires_fresh_root_without_migration(
     tmp_path: Path,
+    version: int,
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     with sqlite3.connect(config.control_database) as conn:
-        conn.execute("PRAGMA user_version = 0")
+        conn.execute(f"PRAGMA user_version = {version}")
 
+    before = config.control_database.read_bytes()
     with pytest.raises(QueueStorageError, match="fresh roots"):
         LocalDaemon(config).start()
+    assert config.control_database.read_bytes() == before
 
 
 def test_scoped_view_rejects_client_principal_for_operator_action(
@@ -2147,5 +2323,88 @@ def test_scoped_view_rejects_client_principal_for_operator_action(
         )
         with pytest.raises(QueueServiceError, match="not authorized"):
             operator.status()
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("change_policy", (False, True))
+def test_gpu_monitoring_follows_execution_owners_across_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change_policy: bool
+) -> None:
+    from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
+    from loom.queue._managed_local import GpuResourceProvider
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    busy = False
+    observed_policies: list[GpuOccupancyPolicy] = []
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        observed_policies.append(observer.policy)
+        return {
+            uuid: GpuProcessObservation(
+                uuid, True, busy, "external_process_detected" if busy else "available"
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    first_policy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    config = replace(
+        _config(tmp_path),
+        agent_resource_providers=None,
+        gpu_devices=(
+            ConfiguredGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        ),
+        gpu_occupancy_policy=first_policy,
+    )
+    next_policy = GpuOccupancyPolicy(0.02, 2, 0.1) if change_policy else first_policy
+    replacement = replace(
+        config, agent_resource_providers=None, gpu_occupancy_policy=next_policy
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        original = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        original.refresh_occupancy(force=True)
+        assert daemon.status().local_resource_status[0].available
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        receipt = operator.reload_scheduling(
+            CoordinatorSchedulingReload(
+                "gpu-reload", before.scheduling_epoch, "update monitoring"
+            )
+        )
+        assert receipt["state"] == "applied"
+        installed = next(
+            item
+            for item in daemon._local_resource_providers()
+            if isinstance(item, GpuResourceProvider)
+        )
+        assert (installed is original) is (not change_policy)
+        busy = True
+        # The daemon cycle must refresh the same cache that owns admission.
+        status = daemon.status().local_resource_status[0]
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            daemon.reconcile_once()
+            status = daemon.status().local_resource_status[0]
+            if status.reason_code == "external_process_detected":
+                break
+            time.sleep(0.02)
+        assert status.reason_code == "external_process_detected"
+        assert not status.available
+        assert observed_policies[-1] == next_policy
     finally:
         daemon.stop()

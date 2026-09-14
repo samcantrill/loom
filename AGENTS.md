@@ -42,23 +42,32 @@ diagnostics, failure behavior, dependency direction, and public imports.
 
 ## Local Checks
 
-Use:
+Use `$loom-targeted-validation` for behavior changes and coverage planning.
+Select checks by affected contracts and consumers. Bounded changes need selected
+tests and applicable static checks; wider changes need affected suites. Use
+`make validate-pr` for broad/unbounded impact or explicitly required gates.
+Ordinary prose changes normally need diff and affected documentation checks.
 
-    make validate-pr
-    make test-summary
+Preserve approved phase obligations until deliberately revised with rationale
+at their owner. This includes both `make validate-pr` and `make test-summary`
+where existing cards require them. Summary targets execute tests again; use them
+when explicitly required or when their report is needed, not as an automatic
+second run. tests/README.md owns commands and environments.
 
-make validate-pr is the implementation gate. make test-summary writes
-build/test-summary.md for PR evidence. Reuse a successful receipt only while no
-source, test, dependency, build, or validation configuration change has made it
-stale.
+Record selections, validated revision/tree, results, skipped/unavailable cases,
+and subsequent relevant changes. Reuse fresh evidence across handoffs. Repeat
+or expand only for relevant changes, failures, missing evidence, or unresolved
+risk. Never present a subset or skipped physical acceptance as full coverage.
 
 ## Workflow Layers
 
+- .agents/skills owns intent routing and reusable selection guidance.
 - .codex/workflows owns entry conditions, sequencing, gates, and manager choices.
 - .codex/prompts owns bounded task procedures.
 - .codex/agents owns model, sandbox, and stable role authority.
 - .codex/templates owns durable artifact shape.
 - .codex/plans owns reusable project-scoped workflow plans.
+- docs/improvement-log.md owns reusable pattern evidence and promotion state.
 
 Do not duplicate full procedures across these layers.
 
@@ -66,9 +75,11 @@ Do not duplicate full procedures across these layers.
 
 Manager-local work is the default.
 
-A normal planning workflow uses no subagent. A normal implementation phase uses
-one spawned loom_phase_executor. Spawn another role only when the workflow names
-a concrete expanded-path risk, independent-review need, or qualified blocker.
+A normal planning workflow uses manager authorship and one independent
+loom_plan_reviewer of the complete packet. A normal implementation phase uses
+manager implementation and one independent loom_phase_reviewer. Delegate execution
+to loom_phase_executor only when size or context isolation justifies it. Other
+roles require a named unresolved question or qualified blocker.
 
 - Use fork_turns=none for every workflow subagent.
 - Hand off paths and exact headings, not conversation history, prompt bodies,
@@ -89,84 +100,56 @@ history, and fallback mechanics only when an anomaly affects the gate.
 
 ## Roadmap Planning
 
-Start with .codex/workflows/roadmap-stage-planning.md.
+Use `$loom-roadmap-planning`, which routes to
+.codex/workflows/roadmap-stage-planning.md. The workflow owns complete drafting,
+independent final review, maintainer approval, and landing before implementation.
+Functionality and design prompts are authoring guidance, not intermediate
+approval gates. Ask about material product choices; resolve repository-backed
+mechanics locally and reuse existing approval when it applies.
 
-Durable artifacts:
+Planning manifests route to coherent domain cards; implementation manifests own
+phase order and readiness; execution cards own phase scope and evidence. Keep
+one authoritative owner for each contract and ID. No word, phase-count, or slice
+quota applies. Prefer independently mergeable outcomes with supported boundaries.
+Keep producer, consumer, docs, and tests together when they establish one invariant.
 
-- docs/roadmap/stage-<N>/planning.md
-- docs/roadmap/stage-<N>/implementation-plan.md
-- docs/roadmap/stage-<N>/phases/<phase-slug>.md
-
-planning.md is current authoritative state, not a transcript. Update sections in
-place and use Git history for superseded wording. Target 1,500-3,500 words unless
-irreducible contract detail requires more.
-
-Use the lean route unless current evidence shows a novel or unresolved public,
-durable, trust-boundary, cross-owner, irreversible migration, or causally
-interacting validation decision with material consequences.
-
-Lean planning is manager-local:
-
-1. Evidence, minimum useful outcome, requirements, and functionality agreement.
-2. Minimum design, complexity delta, design agreement, validation, and phase
-   shaping.
-3. Compact implementation manifest and phase execution plans.
-4. Manager quality gate and maintainer approval.
-
-On the expanded route, use at most:
-
-- one loom_design_safety_reviewer pass for removal-first design implications;
-- one loom_plan_reviewer pass when the manifest or linked phase plans need
-  independent quality review; and
-- one bounded correction for concrete findings.
-
-Ask the maintainer only about ambiguous product, public-contract, durable,
-compatibility, or material future-refactor choices. Ask one question at a time,
-state the recommendation and tradeoff, record the answer, and continue. Resolve
-repository-backed workflow mechanics locally.
-
-Use the artifact layout marker manifest-and-phase-plans-v1. The implementation
-plan is a compact manifest. Phase-specific detail belongs in one linked phase
-execution plan. Prefer one to three vertical phases, with a recorded reason for
-larger stage shapes.
-
-Do not rewrite completed historical plans solely to use the current layout.
-Audit a legacy plan with pending, pr_open, approved, or blocked phases before
-resuming it.
+Grandfather existing approved layouts and review receipts. Audit pending legacy
+work when resumed without rewriting completed history. Planning does not execute
+product phases. Optional terminal compaction belongs to planning and consumes
+verified implementation facts; it is not a product-completion requirement.
 
 ## Phase Implementation
 
-Start with .codex/workflows/roadmap-stage-implementation.md and follow
+Use `$loom-roadmap-implementation`, which routes to
+.codex/workflows/roadmap-stage-implementation.md, and follow
 .codex/prompts/phase-loop-management.md.
 
-Every phase uses:
+Every stage uses one persistent worktree, including startup review, code/tests,
+metadata and closeout. Each phase keeps branch agent/stage-<N>-p<P>-<phase-slug>
+and one PR targeting develop. The named agent/stage-<N> coordination branch owns
+post-merge metadata and closeout in that same worktree.
 
-- Branch: agent/stage-<N>-p<P>-<phase-slug>
-- One dedicated worktree
-- One PR targeting develop
+Record the clean control checkout, worktree root and stage path once in the
+manifest. Preserve unrelated checkouts. Bootstrap before startup review or any
+writes. The manager prompt owns the mandatory tools/phase_workflow.py Git gate;
+use its verified cwd/branch before each assignment or manager write/test/review
+pass. Never edit or commit local develop; only clean fast-forwards are allowed.
 
-Discover the control checkout and GitHub repository from the current
-environment. The manager must record one worktree root. If none is provided,
-use a loom-worktrees sibling of the control checkout. Do not repeat host-specific
-absolute paths across prompts and templates.
-
-Routine stacked PRs are not supported. A later phase starts after its predecessor
-is remotely merged, explicitly blocked, or eligible for the narrow local
-continuation fallback. Local continuation may support local work after a
-transient remote-merge failure, but the next PR cannot open until the prior merge
-lands and the next branch is based on current origin/develop.
+A later phase starts only after predecessor remote merge, published metadata and
+matching stage/local/remote revisions. Routine stacked PRs and local continuation
+before remote merge are not supported. Finish all agents/background processes
+before a stage branch transition.
 
 Normal phase path:
 
-1. Manager verifies the manifest and prepares the existing phase plan.
-2. Optional loom_phase_planner refinement only for an expanded-path risk.
-3. One loom_phase_executor implementation and phase-test pass.
-4. Optional loom_phase_refiner only for a qualified blocker.
-5. Manager-local validation evidence, pre-submit gate, and PR preparation.
-6. Manager-local review on the fast path; optional independent
-   loom_phase_reviewer on the expanded path or for a material residual risk.
+1. Manager verifies readiness in the stage worktree and prepares the phase plan.
+2. Optional loom_phase_planner refinement for a named uncertainty.
+3. Manager implementation and phase tests; optional loom_phase_executor.
+4. Optional loom_phase_refiner for a qualified blocker.
+5. Manager validation evidence, pre-submit gate and PR preparation.
+6. One independent loom_phase_reviewer reviews the actual PR head.
 7. Local-validation-gated automatic squash merge to develop.
-8. Concise manifest/phase metadata update and cleanup.
+8. Publish phase metadata on the coordination branch, synchronize, then continue.
 
 Do not create new assignment, implementation handoff, PR-body, PR-review,
 refinement, or merge-record sidecars. Record concise current state in the phase
@@ -174,14 +157,15 @@ execution plan and send the PR body directly to GitHub.
 
 ## Budgets And Findings
 
-- Plan review: zero spawned passes on the lean path; one review and one bounded
-  correction on the expanded path.
-- Phase planning: zero spawned passes on the fast path; one refinement on the
-  expanded path.
-- Implementation: one executor.
+- Plan review: one required independent final pass; manager correction and at
+  most one targeted confirmation for substantive changes (one runtime replacement
+  if unavailable). Optional named design help does not replace this review.
+- Phase planning: manager preparation; at most one refinement for a named
+  unresolved question.
+- Implementation: manager-local; at most one executor when justified.
 - Implementation refinement: at most one refiner for a qualified blocker.
-- PR review: manager-local on fast path; at most one spawned reviewer on
-  expanded path.
+- Phase PR review: one required independent reviewer; affected corrections
+  return to that reviewer within the existing correction budget.
 - Blocker resolution: at most three total scoped corrections per phase,
   including any refiner pass.
 
@@ -203,7 +187,7 @@ Merge automatically when:
 - the PR is not draft and is mergeable;
 - scope matches the phase;
 - required local validation passes with a fresh receipt;
-- manager review or the required expanded review has no blocker; and
+- the required independent phase review has no blocker; and
 - the PR body matches the diff and tests.
 
 Hosted CI is intentionally disabled; do not wait for or require GitHub-hosted
@@ -211,9 +195,16 @@ checks. Do not wait for human GitHub approval. Use admin merge only for a
 review-only protection rule after local validation and review pass. Never bypass
 failing local validation, a wrong target, conflicts, or known blockers.
 
-After merge, safely update the control checkout, record concise status and
-evidence, commit the metadata directly to develop when permitted, and remove the
-worktree and branch. Never reset or discard unrelated work to update develop.
+After merge, use the manager's transition gate, record concise metadata on the
+coordination branch and publish to develop when permitted, then synchronize.
+Retire only verified merged phase branches. Retain the stage worktree and
+coordination branch until final closeout is published and synchronized. Never
+reset or discard unrelated work. A missing required independent review needs an
+explicit recorded maintainer override with accepted risk; manager review alone
+is not independent. Ordinary non-phase work retains proportionate review.
+
+Hosted-check or protection rejections must be inspected and reported. The narrow
+review-only admin exception never bypasses failing checks or known blockers.
 
 Use only these phase statuses:
 
@@ -226,10 +217,21 @@ Use only these phase statuses:
 
 ## Definition Of Done
 
-Planning is ready when behavior and design agreements, proportionality,
-validation, phase shaping, manifest/phase consistency, risks, and maintainer
-approval are current with no unresolved blocker.
+Planning is ready when accepted contracts, proportionality, validation, phase
+boundaries, traceability, and independent readiness review have no blocker, the
+maintainer has approved the concrete packet, and the exact artifacts are landed
+and available on the selected implementation base.
 
 A phase is done when its implementation and tests match the phase plan,
 validation and review gates pass, its PR is remotely merged into develop,
-metadata is current, and cleanup is complete or explicitly blocked.
+metadata is published, and the synchronization gate passes. A stage is done
+only after final closeout is published and exact stage cleanup is verified;
+unresolved dirty, unknown or unmerged work blocks completion.
+
+## Process Improvement
+
+Use `$loom-process-improvement` for recurring or demonstrated shared workflow,
+design, contract, skill, or tooling weaknesses. The improvement log records the
+reusable lesson, one promotion owner, action, and verification. Technical defects
+and phase acceptance stay with their immediate owner. Logging adds no phase
+scope or delivery gate.

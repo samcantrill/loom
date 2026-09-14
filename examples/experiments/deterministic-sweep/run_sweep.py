@@ -18,6 +18,7 @@ REPO_ROOT = next(
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from examples.execution.agent_workers import prepare_example_deployment
 from examples.support import require_mapping, run_cli_json
 from loom.pipeline.stores import path_to_run_uri
 
@@ -32,7 +33,9 @@ def main() -> None:
     invocation_id = uuid4().hex[:8]
     journey_root = output_root / f"deterministic-sweep-{invocation_id}"
     sweep_dir = journey_root / "sweep-state"
-    spec = require_mapping(json.loads((HERE / "sweep.json").read_text(encoding="utf-8")))
+    spec = require_mapping(
+        json.loads((HERE / "sweep.json").read_text(encoding="utf-8"))
+    )
     spec["run_uri_root"] = path_to_run_uri(
         run_root / f"deterministic-sweep-{invocation_id}"
     )
@@ -40,6 +43,11 @@ def main() -> None:
     rendered_spec.parent.mkdir(parents=True, exist_ok=True)
     rendered_spec.write_text(json.dumps(spec), encoding="utf-8")
 
+    selection = prepare_example_deployment(
+        HERE / "pipeline.yaml",
+        journey_root,
+        run_root=run_root / f"deterministic-sweep-{invocation_id}",
+    )
     plan = _result(
         [
             "sweep",
@@ -57,7 +65,9 @@ def main() -> None:
             "run",
             str(rendered_spec),
             "--config",
-            str(HERE / "pipeline.yaml"),
+            "pipeline.yaml",
+            "--deployment",
+            str(selection),
             "--sweep-dir",
             str(sweep_dir),
             "--format",
@@ -71,7 +81,13 @@ def main() -> None:
     succeeded_trials = _required_int(require_mapping(status["counts"]), "succeeded")
     collected_trials = len(collection["trials"])
     artifact_count = _required_int(collection, "artifact_count")
-    if (planned_trials, run_status, succeeded_trials, collected_trials, artifact_count) != (
+    if (
+        planned_trials,
+        run_status,
+        succeeded_trials,
+        collected_trials,
+        artifact_count,
+    ) != (
         2,
         "succeeded",
         2,

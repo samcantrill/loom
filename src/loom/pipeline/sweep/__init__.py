@@ -1,23 +1,6 @@
 """Deterministic sweep contracts and persisted manifest records."""
 
-from .dispatch import (
-    SWEEP_DISPATCH_SCHEMA_VERSION,
-    DirectSweepRunResult,
-    DirectSweepTrialResult,
-    QueueSweepDispatchResult,
-    QueueSweepTrialResult,
-    SweepDispatchRequest,
-    SweepDispatchResult,
-    SweepDispatchStatus,
-    SweepQueueDispatchStatus,
-    SweepRunStatus,
-    build_dispatch_requests,
-    build_queue_enqueue_request,
-    build_queue_item_id,
-    build_trial_run_request,
-    enqueue_sweep_trials,
-    run_sweep_direct,
-)
+from .dispatch import run_sweep, observe_sweep, cancel_sweep_trial, retry_sweep_trial
 from .coordination import (
     SweepCoordinationIdentityResult,
     SweepCoordinationProjection,
@@ -26,7 +9,6 @@ from .coordination import (
     external_trial_revision,
     project_sweep_coordination,
     record_sweep_trial_coordination,
-    trial_state_from_queue_status,
     trial_state_from_run_status,
 )
 from .collection import (
@@ -124,22 +106,10 @@ from .status import (
 from .trials import SweepTrialRecord
 
 __all__ = [
-    "SWEEP_DISPATCH_SCHEMA_VERSION",
-    "DirectSweepRunResult",
-    "DirectSweepTrialResult",
-    "QueueSweepDispatchResult",
-    "QueueSweepTrialResult",
-    "SweepDispatchRequest",
-    "SweepDispatchResult",
-    "SweepDispatchStatus",
-    "SweepQueueDispatchStatus",
-    "SweepRunStatus",
-    "build_dispatch_requests",
-    "build_queue_enqueue_request",
-    "build_queue_item_id",
-    "build_trial_run_request",
-    "enqueue_sweep_trials",
-    "run_sweep_direct",
+    "run_sweep",
+    "observe_sweep",
+    "cancel_sweep_trial",
+    "retry_sweep_trial",
     "SweepCoordinationIdentityResult",
     "SweepCoordinationProjection",
     "SweepTrialCoordinationResult",
@@ -147,7 +117,6 @@ __all__ = [
     "external_trial_revision",
     "project_sweep_coordination",
     "record_sweep_trial_coordination",
-    "trial_state_from_queue_status",
     "trial_state_from_run_status",
     "SWEEP_COLLECTION_SCHEMA_VERSION",
     "SweepCollectedArtifact",

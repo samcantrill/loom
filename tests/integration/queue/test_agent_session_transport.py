@@ -18,13 +18,16 @@ from collections.abc import Mapping
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any, cast
+from types import SimpleNamespace
 
 import pytest
 
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.agent_session_transport as agent_session_transport
 import loom.queue.deployment as queue_deployment
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.pipeline import PipelineSpec
+from loom.pipeline.execution.models import ExecutionFailure
 from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
@@ -83,11 +86,13 @@ from loom.queue._agent_process_supervisor import (
     SupervisorLaunchState,
 )
 from loom.queue._remote_stage_execution import (
+    AgentResourceInventory,
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
     ResidentGpuDevice,
     ResidentProfileDescriptor,
+    _RemoteExecutionReport,
 )
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -121,11 +126,12 @@ from loom.queue.agent_sessions import (
 )
 from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
 from loom.scheduling import (
+    ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
 )
-from loom.serialization import PlainData, json_dumps_pretty
+from loom.serialization import PlainData, freeze_plain_data, json_dumps_pretty
 from tests.support.mutual_tls import (
     certificate_fingerprint as _fingerprint,
     mutual_tls_credentials as _credentials,
@@ -227,11 +233,7 @@ def test_agent_listener_prepares_tls_rotation_before_atomic_install(
         credentials["server"].with_suffix(".crt"),
         credentials["server"].with_suffix(".key"),
         credentials["ca"].with_suffix(".crt"),
-        {
-            _fingerprint(credentials["agent"].with_suffix(".crt")): (
-                "agent-credential"
-            )
-        },
+        {_fingerprint(credentials["agent"].with_suffix(".crt")): ("agent-credential")},
     )
     server = LocalDaemonAgentHttpServer(daemon, initial)
     server.start()
@@ -269,8 +271,13 @@ def test_agent_listener_prepares_tls_rotation_before_atomic_install(
         daemon.stop()
 
 
-def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("cancel_before_grant", (False, True))
+@pytest.mark.parametrize("with_local_agent", (False, True))
+def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_before_grant: bool,
+    with_local_agent: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -302,9 +309,10 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
     )
     daemon_config = LocalDaemonConfig(
         tmp_path / "coordinator",
-        tmp_path / "coordinator-agent",
+        tmp_path / "coordinator-agent" if with_local_agent else None,
         store.root,
-        _local_launch_profile(),
+        _local_launch_profile() if with_local_agent else None,
+        cpu_capacity=1 if with_local_agent else 0,
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -343,6 +351,19 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         agent_resource_provider_factory=provider_factory,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+    original_client_init = LocalDaemonAgentHttpClient.__init__
+    client_incarnations = 0
+
+    def record_client_incarnation(
+        client: LocalDaemonAgentHttpClient, *args: Any, **kwargs: Any
+    ) -> None:
+        nonlocal client_incarnations
+        original_client_init(client, *args, **kwargs)
+        client_incarnations += 1
+
+    monkeypatch.setattr(
+        LocalDaemonAgentHttpClient, "__init__", record_client_incarnation
+    )
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_OFFER_TTL_SECONDS", 1)
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
     original_complete = _RemoteAgentJournal.complete_offer_renewal
@@ -360,6 +381,26 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         _RemoteAgentJournal,
         "complete_offer_renewal",
         lose_first_renewal_response,
+    )
+    original_dispatch = agent_session_transport._dispatch
+    lost_control_response = Event()
+
+    def lose_delivered_control_response(
+        view: object, operation: str, value: Mapping[str, object]
+    ) -> Mapping[str, PlainData]:
+        result = original_dispatch(view, operation, value)
+        if (
+            operation == "assignment_control"
+            and isinstance(result, Mapping)
+            and (result.get("control") is not None) is cancel_before_grant
+            and not lost_control_response.is_set()
+        ):
+            lost_control_response.set()
+            raise ConnectionError("simulated lost pre-grant control response")
+        return result
+
+    monkeypatch.setattr(
+        agent_session_transport, "_dispatch", lose_delivered_control_response
     )
     service = OutboundAgentServiceConfig(
         client_config,
@@ -423,15 +464,73 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
-        coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
-        assert (
-            coordinator.wait("idle-renewal-item", timeout_seconds=15).state
-            is LocalDaemonAdmissionState.SUCCEEDED
+        first_pregrant_poll = Event()
+        release_pregrant_poll = Event()
+        original_pregrant_poll = (
+            LocalDaemonAgentHttpClient._cancel_pregrant_if_requested
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
-        # One composition per client incarnation; the injected lost response
-        # deliberately forces one reconnect, never one reconstruction per offer.
-        assert 1 <= provider_factory.calls <= 2
+        pregrant_polls = 0
+
+        def pause_after_first_pregrant_poll(
+            client: LocalDaemonAgentHttpClient, *args: Any, **kwargs: Any
+        ) -> Mapping[str, PlainData] | None:
+            nonlocal pregrant_polls
+            result = original_pregrant_poll(client, *args, **kwargs)
+            pregrant_polls += 1
+            if cancel_before_grant and pregrant_polls == 1:
+                first_pregrant_poll.set()
+                assert release_pregrant_poll.wait(10)
+            return result
+
+        monkeypatch.setattr(
+            LocalDaemonAgentHttpClient,
+            "_cancel_pregrant_if_requested",
+            pause_after_first_pregrant_poll,
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
+        if cancel_before_grant:
+            assert first_pregrant_poll.wait(10)
+            coordinator.cancel("idle-renewal-item")
+            deadline = monotonic() + 10
+            control = None
+            while monotonic() < deadline:
+                with sqlite3.connect(daemon_config.control_database) as conn:
+                    control = conn.execute(
+                        "SELECT result_code, acknowledged, state "
+                        "FROM remote_assignment_controls"
+                    ).fetchone()
+                if control is not None:
+                    break
+                sleep(0.02)
+            assert control is not None
+            release_pregrant_poll.set()
+            assert (
+                coordinator.wait("idle-renewal-item", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            assert authority.open_run(run_uri).status is RunStatus.CANCELLED
+            with sqlite3.connect(daemon_config.control_database) as conn:
+                control = conn.execute(
+                    "SELECT result_code, acknowledged, state "
+                    "FROM remote_assignment_controls"
+                ).fetchone()
+            assert control == ("never_started", 1, "applied")
+            with sqlite3.connect(
+                cast(Path, client_config.agent_root)
+                / "supervisor"
+                / "supervisor.sqlite"
+            ) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+        else:
+            assert (
+                coordinator.wait("idle-renewal-item", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert lost_control_response.is_set()
+        # One composition at most per client incarnation, never one
+        # reconstruction per offer. Additional transport reconnects are valid.
+        assert 1 <= provider_factory.calls <= client_incarnations
     finally:
         stop.set()
         thread.join(timeout=7)
@@ -446,6 +545,42 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
     ):
         sleep(0.01)
     assert _supervisor_process_ids(cast(Path, client_config.agent_root)) == ()
+
+
+def test_assignment_retry_exhaustion_preserves_the_indeterminate_pregrant_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shared pre-grant retry owner never converts exhaustion to a grant."""
+
+    client = object.__new__(LocalDaemonAgentHttpClient)
+    attempts = 0
+    clock_values = iter((0.0, 0.0, 1.0))
+
+    def indeterminate_operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise agent_session_transport._IndeterminateAgentProtocolError(  # noqa: SLF001
+            "lost control response"
+        )
+
+    monkeypatch.setattr(
+        agent_session_transport, "_ASSIGNMENT_RECONCILIATION_SECONDS", 1
+    )
+    monkeypatch.setattr(
+        agent_session_transport, "monotonic", lambda: next(clock_values)
+    )
+    monkeypatch.setattr(
+        client,
+        "handshake",
+        lambda: (_ for _ in ()).throw(
+            agent_session_transport._IndeterminateAgentProtocolError("unavailable")
+        ),
+    )
+    monkeypatch.setattr(agent_session_transport, "sleep", lambda _seconds: None)
+
+    with pytest.raises(agent_session_transport._IndeterminateAgentProtocolError):
+        client._assignment_call("session-1", "assignment-1", indeterminate_operation)  # noqa: SLF001
+    assert attempts == 2
 
 
 def test_outbound_service_stop_during_initial_close_cleans_its_supervisor(
@@ -1031,9 +1166,7 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
     )
     replacement = replace(base, active_configuration_fingerprint="2" * 64)
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
-    client = LocalDaemonAgentHttpClient(
-        base, trusted_config_loader=lambda: replacement
-    )
+    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
     registration = AgentRegistration(
         idempotency_key="register-crash-reload",
         coordinator_id="coordinator-a",
@@ -1272,6 +1405,159 @@ def test_agent_reload_canonicalizes_bound_profile_set_without_update_path(
         client.close()
 
 
+def test_agent_resource_inventory_overrides_profile_capacity_as_one_domain(
+    tmp_path: Path,
+) -> None:
+    first = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "first", "1", "project-1", "environment-1", "executor-1"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=1,
+    )
+    second = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "second", "1", "project-2", "environment-2", "executor-2"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=9,
+    )
+
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=tmp_path / "agent",
+        resident_profiles=(first, second),
+        resource_inventory=AgentResourceInventory(cpu_capacity=4),
+    )
+
+    assert config.capacity_profile.cpu_capacity == 4
+    assert config.capacity_profile.descriptor == first.descriptor
+
+
+@pytest.mark.parametrize("cpu,memory,accepted", ((8, 8, 8), (4, 8, 4), (8, 4, 4)))
+def test_shared_inventory_prepares_competing_profile_claims(
+    tmp_path: Path, cpu: int, memory: int, accepted: int
+) -> None:
+    profiles = tuple(
+        ResidentExecutionProfile(
+            ResidentProfileDescriptor(name, "1", name, "environment", "executor"),
+            tmp_path,
+            Path(sys.executable),
+            cpu_capacity=index + 1,
+        )
+        for index, name in enumerate(("first", "second"))
+    )
+    inventory = AgentResourceInventory(
+        cpu,
+        memory,
+        tuple(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor(f"GPU-{index}", "synthetic", 1024), f"GPU-{index}"
+            )
+            for index in range(8)
+        ),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        profiles,
+        resource_inventory=inventory,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    session = AgentSession(
+        "session",
+        "coordinator",
+        "epoch",
+        "agent",
+        client.agent_root_id,
+        "policy",
+        "config",
+        "inventory",
+        "availability",
+        (),
+        ("default",),
+        AgentSessionState.ACTIVE,
+    )
+    held: list[tuple[ManagedAssignment, tuple[ClaimCommand, ...]]] = []
+    try:
+        providers, journal = client._runtime_owners(session)
+        capacity = {
+            atom.local_capacity_key: atom
+            for atom in config.capacity_profile.capacity_atoms("agent")
+        }
+        for index in range(accepted + 1):
+            profile = profiles[index % len(profiles)]
+            assert client._profile_for_descriptor(profile.descriptor) == profile
+            current, current_journal = client._runtime_owners(session)
+            assignment = ManagedAssignment(
+                f"assignment-{index}",
+                f"run-{index}",
+                f"work-{index}",
+                profile.descriptor.profile_id,
+                1,
+                f"attempt-{index}",
+                "agent",
+                session.session_id,
+                f"offer-{index}",
+                f"claim-{index}",
+            )
+            selected = (
+                replace(capacity["agent:cpu"], amount=ExactQuantity(1)),
+                replace(capacity["agent:memory"], amount=ExactQuantity(1)),
+                capacity[f"agent:GPU-{index % 8}"],
+            )
+            commands = tuple(
+                ClaimCommand(
+                    assignment,
+                    f"prepare-{index}-{atom.owner_resource_kind}",
+                    ResourceClaim(
+                        atom.owner_resource_kind,
+                        providers[atom.owner_resource_kind].claim_contracts[0],
+                        (atom,),
+                        1,
+                    ),
+                    providers[atom.owner_resource_kind].descriptor,
+                )
+                for atom in selected
+            )
+            current_journal.persist_request(
+                assignment, {"profile": profile.descriptor.to_dict()}
+            )
+            state = current_journal.prepare_composite(assignment, commands, current)
+            if index < accepted:
+                assert state is AssignmentState.PREPARED
+                held.append((assignment, commands))
+            else:
+                assert state is AssignmentState.DECLINED
+                journal.release_declined(assignment.assignment_id, "after-decline")
+        held_gpus = [
+            atom.local_capacity_key
+            for _, commands in held
+            for command in commands
+            if command.claim.resource_kind == "gpu"
+            for atom in command.claim.atoms
+        ]
+        assert len(set(held_gpus)) == accepted
+        assert {item.stage_name for item, _ in held} == {"first", "second"}
+        for assignment, commands in held:
+            journal.abort_pregrant(assignment.assignment_id, commands, providers)
+            journal.release_declined(assignment.assignment_id, "after-abort")
+        assert journal.retained_claim_commands() == ()
+    finally:
+        if client._supervisor is not None:
+            client._supervisor.shutdown_for_test()
+        client.close()
+
+
 def _prepare_remote_producer_run(
     store: LocalRunStore,
     *,
@@ -1279,6 +1565,12 @@ def _prepare_remote_producer_run(
     machine_id: str,
     value: int,
     requirement: ExecutionRequirement | None = None,
+    resource_entries: Mapping[str, object] | None = None,
+    account_for: str | list[str] = "all",
+    sequential: bool = False,
+    enforce: tuple[str, ...] = (),
+    native_failure: bool = False,
+    reported_failure: bool = False,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1289,18 +1581,45 @@ def _prepare_remote_producer_run(
                 "name": "build",
                 "factory": {
                     "_target_": (
-                        "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        "tests.support.pipeline_execution_stages.NestedFailureStage"
+                        if native_failure
+                        else "tests.support.pipeline_execution_stages.ReportedFailureStage"
+                        if reported_failure
+                        else "tests.support.pipeline_execution_stages.JsonProducerStage"
                     )
                 },
-                "config": {"value": value},
+                "config": {
+                    "value": value,
+                    **({"structured_float": True} if reported_failure else {}),
+                },
                 "resources": {
-                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                    "entries": (
+                        resource_entries
+                        if resource_entries is not None
+                        else {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                    )
                 },
                 "placement": {"target": machine_id},
                 "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
             }
         ],
     }
+    if sequential:
+        pipeline_config["stages"].append(
+            {
+                "name": "consume",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                },
+                "depends_on": ["build"],
+                "inputs": {"data": "build.data"},
+                "resources": {
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                },
+                "placement": {"target": machine_id},
+                "outputs": {"text": {"artifact_type": "text", "codec_key": "text.v1"}},
+            }
+        )
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,
@@ -1323,6 +1642,9 @@ def _prepare_remote_producer_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={
+            "resource_policy": {"account_for": account_for, "enforce": list(enforce)}
+        },
         execution_requirements={
             stage_name: (
                 requirement
@@ -1711,6 +2033,10 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         assert control[0] == "contained"
         assert control[1] is not None
         assert authority.open_run(run_uri).stages[0].status is StageStatus.CANCELLED
+        assert coordinator.wait("recovery-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.CANCELLED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.CANCELLED
         release_agent.set()
         with pytest.raises(QueueConflictError):
             worker.result(timeout=10)
@@ -1936,6 +2262,8 @@ def _prepare_gpu_environment_run(
     fallback_after_seconds: int | None = None,
     target: str | None = None,
     capture_requirement: ExecutionRequirement | None = None,
+    delay_seconds: float = 0,
+    enforce_gpu: bool = True,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1975,6 +2303,7 @@ def _prepare_gpu_environment_run(
                 "tests.support.pipeline_execution_stages.EnvironmentProducerStage"
             )
         },
+        "config": {"delay_seconds": delay_seconds},
         "resources": {
             "entries": {
                 "gpu": {
@@ -2020,6 +2349,15 @@ def _prepare_gpu_environment_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        options={
+            "stage_options": {
+                "capture": {
+                    "resource_policy": {
+                        "enforce": ["gpu"] if enforce_gpu else [],
+                    }
+                }
+            }
+        },
         execution_requirements={
             **_execution_requirements(spec),
             "capture": capture_requirement
@@ -2038,9 +2376,13 @@ def _sqlite_dump(path: Path) -> tuple[str, ...]:
         return tuple(conn.iterdump())
 
 
+@pytest.mark.parametrize("gpu", (False, True))
 def test_restarted_agent_with_retained_claim_exposes_no_capacity(
     tmp_path: Path,
+    gpu: bool,
 ) -> None:
+    from loom.queue.gpu.occupancy import GpuOccupancyPolicy
+
     agent_root = _fresh_remote_agent_root(tmp_path)
     project_root = tmp_path / "resident-project"
     project_root.mkdir()
@@ -2051,6 +2393,13 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         descriptor,
         project_root,
         Path(sys.executable),
+        gpu_devices=(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        )
+        if gpu
+        else (),
     )
     remote_config = AgentTlsClientConfig(
         "https://localhost:1",
@@ -2073,17 +2422,24 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         "offer-1",
         "claim-1",
     )
-    planner = CpuResourcePlanner()
-    atom = profile.capacity_atoms("agent-a")[0]
+    planner = GpuResourcePlanner() if gpu else CpuResourcePlanner()
+    kind = "gpu" if gpu else "cpu"
+    atom = next(
+        item
+        for item in profile.capacity_atoms("agent-a")
+        if item.owner_resource_kind == kind
+    )
     claim = ResourceClaim(
-        "cpu",
+        kind,
         planner.claim_contracts[0],
         (atom,),
         1,
     )
-    provider_descriptor = _resident_provider_descriptors(profile, "agent-a")[
-        0
-    ].descriptor
+    provider_descriptor = next(
+        item.descriptor
+        for item in _resident_provider_descriptors(profile, "agent-a")
+        if item.descriptor.kind == kind
+    )
     command = ClaimCommand(
         assignment, "assignment-1:prepare:0", claim, provider_descriptor
     )
@@ -2100,7 +2456,13 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
             assignment,
             (command,),
             {
-                "cpu": AtomResourceProvider(
+                kind: GpuResourceProvider(
+                    planner.claim_contracts,
+                    (atom,),
+                    bindings={atom.local_capacity_key: "GPU-private"},
+                )
+                if gpu
+                else AtomResourceProvider(
                     provider_descriptor,
                     planner.claim_contracts,
                     (atom,),
@@ -2110,7 +2472,13 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         is AssignmentState.PREPARED
     )
 
-    restarted = LocalDaemonAgentHttpClient(remote_config)
+    # Existing version-12 root and claim survive enabling the default policy.
+    restarted = LocalDaemonAgentHttpClient(
+        replace(
+            remote_config, gpu_occupancy_policy=GpuOccupancyPolicy() if gpu else None
+        )
+    )
+    assert execution_journal.retained_claim_commands() == (command,)
     try:
         offer = AgentOffer(
             "session-1",
@@ -2196,19 +2564,41 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
 
 
 @pytest.mark.parametrize(
-    "restart_barrier",
+    ("restart_barrier", "shared_inventory"),
     (
-        "before_supervisor_accept",
-        "after_supervisor_accept",
-        "before_result_commit",
-        "before_coordinator_release",
+        ("before_supervisor_accept", False),
+        ("after_supervisor_accept", False),
+        ("before_result_commit", False),
+        ("before_coordinator_release", False),
+        ("after_supervisor_accept", True),
+        ("failed_before_result_commit", False),
+        ("binding_failure_before_result_commit", False),
+        ("binding_failure_after_no_start_commit", False),
+        ("missing_claim_before_result_commit", False),
+        ("native_failure_before_result_commit", False),
+        ("reported_failure_before_result_commit", False),
+        ("diagnostic_write", False),
     ),
 )
 def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart_barrier: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restart_barrier: str,
+    shared_inventory: bool,
 ) -> None:
     """A fresh application joins one exact operation across every crash barrier."""
 
+    no_start = restart_barrier in {
+        "failed_before_result_commit",
+        "binding_failure_before_result_commit",
+        "binding_failure_after_no_start_commit",
+        "missing_claim_before_result_commit",
+    }
+    native_failure = restart_barrier in {
+        "native_failure_before_result_commit",
+        "diagnostic_write",
+    }
+    reported_failure = restart_barrier == "reported_failure_before_result_commit"
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -2226,6 +2616,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 "agent-a",
                 ("default",),
                 capabilities,
+                gpu_devices=(
+                    (GpuDeviceDescriptor("GPU-shared", "synthetic", 1024),)
+                    if shared_inventory
+                    else ()
+                ),
             ),
         )
     )
@@ -2233,9 +2628,29 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     run_uri, authority = _prepare_remote_producer_run(
         runs,
         run_name="restart-run",
+        account_for=[]
+        if restart_barrier == "missing_claim_before_result_commit"
+        else "all",
+        enforce=("cpu",) if no_start else (),
+        native_failure=native_failure,
+        reported_failure=reported_failure,
         machine_id="agent-a",
         value=42,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
+        resource_entries=(
+            {
+                "cpu": {"kind": "cpu", "amount": 1, "unit": "count"},
+                "memory": {"kind": "memory", "amount": 128, "unit": "B"},
+                "gpu": {
+                    "kind": "gpu",
+                    "amount": 1,
+                    "unit": "count",
+                    "attributes": {"allocation_mode": "exclusive"},
+                },
+            }
+            if shared_inventory
+            else None
+        ),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -2274,6 +2689,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         credentials["agent"].with_suffix(".key"),
         _fresh_remote_agent_root(tmp_path),
         (profile,),
+        resource_inventory=(
+            AgentResourceInventory(
+                cpu_capacity=2,
+                memory_capacity_bytes=1024,
+                gpu_devices=(
+                    ResidentGpuDevice(
+                        GpuDeviceDescriptor("GPU-shared", "synthetic", 1024),
+                        "GPU-shared",
+                    ),
+                ),
+            )
+            if shared_inventory
+            else None
+        ),
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
@@ -2293,21 +2722,56 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 capabilities,
             )
         )
+        capacity = remote_config.capacity_profile
+        descriptors, atoms, live_claims, statuses = agent._offer_provider_snapshot(
+            session_id=session.session_id,
+            availability_revision=session.availability_revision,
+            capacity_profile=capacity,
+        )
         offer = AgentOffer(
             session.session_id,
             session.coordinator_epoch,
             session.config_revision,
             session.inventory_revision,
             session.availability_revision,
-            1,
-            0,
+            capacity.cpu_capacity,
+            capacity.memory_capacity_bytes,
             30,
-            _resident_provider_descriptors(profile, session.agent_id),
+            descriptors,
+            gpu_devices=tuple(item.descriptor for item in capacity.gpu_devices),
             resident_profiles=(descriptor,),
+            capacity_atoms=atoms,
+            gpu_atoms=tuple(
+                atom for atom in atoms if atom.owner_resource_kind == "gpu"
+            ),
+            reflected_claim_ids=live_claims,
         )
         agent.publish_offer(offer, idempotency_key="offer-restart")
         supervisor = agent._supervisor  # noqa: SLF001 - causal service boundary
         assert supervisor is not None
+        execution_owner = daemon._execution
+        assert execution_owner is not None
+        original_write_failure = execution_owner.run_store.write_stage_failure
+        interrupted_write = Event()
+        retained_report: str | None = None
+
+        def forbidden_launch(*_args, **_kwargs):
+            pytest.fail("failed control setup must not reach the supervisor")
+
+        if no_start:
+            monkeypatch.setattr(supervisor, "launch", forbidden_launch)
+        if restart_barrier in {
+            "binding_failure_before_result_commit",
+            "binding_failure_after_no_start_commit",
+        }:
+            providers, _journal = agent._runtime_owners(session)
+
+            def unavailable_binding(_command):
+                raise OSError("binding unavailable at /worker/configured-binding")
+
+            monkeypatch.setattr(
+                providers["cpu"], "worker_environment", unavailable_binding
+            )
         if restart_barrier in {
             "before_supervisor_accept",
             "after_supervisor_accept",
@@ -2321,7 +2785,46 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 raise RuntimeError("simulated agent application restart")
 
             monkeypatch.setattr(supervisor, "launch", interrupt_launch)
-        elif restart_barrier == "before_result_commit":
+        elif restart_barrier == "binding_failure_after_no_start_commit":
+            assert agent._execution_journal is not None
+            original_no_start_commit = agent._execution_journal._set_start_failed
+
+            def interrupt_no_start_commit(*args, **kwargs):
+                original_no_start_commit(*args, **kwargs)
+                raise RuntimeError("simulated agent application restart")
+
+            monkeypatch.setattr(
+                agent._execution_journal, "_set_start_failed", interrupt_no_start_commit
+            )
+        elif restart_barrier == "diagnostic_write":
+
+            def interrupt_diagnostic_write(*args, **kwargs):
+                interrupted_write.set()
+                raise OSError("diagnostic persistence interrupted")
+
+            monkeypatch.setattr(
+                execution_owner.run_store,
+                "write_stage_failure",
+                interrupt_diagnostic_write,
+            )
+            original_commit_result = agent.commit_result
+
+            def interrupt_after_failed_projection(*args, **kwargs):
+                try:
+                    return original_commit_result(*args, **kwargs)
+                except QueueServiceError as exc:
+                    assert interrupted_write.is_set()
+                    raise RuntimeError("simulated agent application restart") from exc
+
+            monkeypatch.setattr(
+                agent, "commit_result", interrupt_after_failed_projection
+            )
+        elif (
+            restart_barrier == "before_result_commit"
+            or no_start
+            or native_failure
+            or reported_failure
+        ):
 
             def interrupt_result(*args: object, **kwargs: object) -> object:
                 raise RuntimeError("simulated agent application restart")
@@ -2344,19 +2847,81 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 sequence=1,
                 wait_timeout_ms=5_000,
             )
-            coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
-            with pytest.raises(RuntimeError, match="application restart"):
-                execution.result(timeout=20)
+            submitted = coordinator.submit(
+                LocalDaemonAdmissionRequest("restart-item", run_uri)
+            )
+            if restart_barrier == "diagnostic_write":
+                with pytest.raises(RuntimeError, match="application restart"):
+                    execution.result(timeout=20)
+                assert interrupted_write.is_set()
+                with sqlite3.connect(config.control_database) as conn:
+                    assert (
+                        conn.execute("SELECT state FROM remote_assignments").fetchone()[
+                            0
+                        ]
+                        == "RESULT_RETAINED"
+                    )
+                    retained_report = conn.execute(
+                        "SELECT report_json FROM remote_assignments"
+                    ).fetchone()[0]
+                assert runs.read_stage_failure(run_uri, "build") is None
+                assert agent._execution_journal is not None
+                assert agent._execution_journal.retained_claim_commands()
+                # This direct owner call shares the daemon's mutation boundary.
+                with daemon._cycle_lock:
+                    reconciled = execution_owner.reconcile_admission(
+                        daemon.admission_for_run_uri(run_uri)
+                    )
+                assert reconciled.state is LocalDaemonAdmissionState.ACTIVE
+                monkeypatch.setattr(
+                    execution_owner.run_store,
+                    "write_stage_failure",
+                    original_write_failure,
+                )
+            else:
+                with pytest.raises(RuntimeError, match="application restart"):
+                    execution.result(timeout=20)
+        if restart_barrier == "binding_failure_after_no_start_commit":
+            assert agent._execution_journal is not None
+            retained_commands = agent._execution_journal.retained_claim_commands()
+            assert retained_commands
+            retained_assignment = retained_commands[0].assignment.assignment_id
+            retained = agent._execution_journal.read_result(retained_assignment)
+            assert retained is not None
+            assert isinstance(retained.failure, ExecutionFailure)
+            assert "binding unavailable at /worker/configured-binding" in str(
+                retained.failure.details
+            )
+            assert not tuple(
+                cast(Path, remote_config.agent_root).rglob("worker-result.json")
+            )
+        if shared_inventory:
+            assert agent._execution_journal is not None
+            assert {
+                command.claim.resource_kind
+                for command in agent._execution_journal.retained_claim_commands()
+            } == {"cpu", "memory", "gpu"}
         supervisor_id = supervisor.supervisor_id
         agent.close()
         replacement = LocalDaemonAgentHttpClient(remote_config)
         replacement_supervisor = replacement._supervisor  # noqa: SLF001
         assert replacement_supervisor is not None
         assert replacement_supervisor.supervisor_id == supervisor_id
+        if no_start:
+            monkeypatch.setattr(replacement_supervisor, "launch", forbidden_launch)
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
+        assert replacement.resume_retained_work() == ()
+        if restart_barrier == "diagnostic_write":
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT report_json FROM remote_assignments"
+                    ).fetchone()[0]
+                    == retained_report
+                )
         released = cast(Mapping[str, object], replayed["session"])
         replacement.publish_offer(
             replace(
@@ -2371,12 +2936,123 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         with sqlite3.connect(
             cast(Path, remote_config.agent_root) / "supervisor" / "supervisor.sqlite"
         ) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
-        assert (
-            coordinator.wait("restart-item", timeout_seconds=10).state
-            is LocalDaemonAdmissionState.SUCCEEDED
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == (
+                0 if no_start else 1
+            )
+        assert coordinator.wait("restart-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.FAILED
+            if no_start or native_failure or reported_failure
+            else LocalDaemonAdmissionState.SUCCEEDED
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert authority.open_run(run_uri).status is (
+            RunStatus.FAILED
+            if no_start or native_failure or reported_failure
+            else RunStatus.SUCCEEDED
+        )
+        if restart_barrier == "before_result_commit":
+            stored_result = runs.read_stage_worker_result(run_uri, "build", attempt=1)
+            assert stored_result is not None
+            receipt = cast(Mapping[str, Any], stored_result["executor_metadata"])
+            assert receipt["execution_kind"] == "resident_stage_worker"
+            assert "loom.queue._resident_stage_worker" in receipt["command"]
+            assert receipt["request"]["executor_name"] == "local"
+            assert str(tmp_path) not in json.dumps(receipt)
+        if no_start:
+            stored = runs.read_stage_worker_result(run_uri, "build", attempt=1)
+            assert stored is not None
+            public_request = cast(Mapping[str, Any], stored["executor_metadata"])[
+                "request"
+            ]
+            assert public_request["stage_name"] == "build"
+            assert public_request["executor_name"] == "local"
+            assert str(tmp_path) not in json.dumps(public_request)
+            failure = runs.read_stage_failure(run_uri, "build")
+            assert failure is not None
+            assert "enforce" in str(failure["message"])
+            if restart_barrier == "missing_claim_before_result_commit":
+                assert "no active claim" in str(failure["message"])
+            if restart_barrier in {
+                "binding_failure_before_result_commit",
+                "binding_failure_after_no_start_commit",
+            }:
+                assert (
+                    "binding unavailable at /worker/configured-binding"
+                    in json.dumps(failure)
+                )
+            with sqlite3.connect(config.execution_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT state FROM coordinator_assignments"
+                    ).fetchone()[0]
+                    == "released"
+                )
+            assert replacement._execution_journal is not None
+            assert replacement._execution_journal.retained_claim_commands() == ()
+        if native_failure or reported_failure:
+            import io
+            from loom.cli.main import main
+            from loom.queue import LocalDaemonSocketServer
+
+            failure = runs.read_stage_failure(run_uri, "build")
+            assert failure is not None and failure["run_uri"] == run_uri
+            if native_failure:
+                assert "missing /worker/data/product.json" in json.dumps(failure)
+            else:
+                assert failure["details"] == {
+                    "domain_failure": {"record": {"threshold": 0.5}}
+                }
+                assert "private-native" not in json.dumps(failure)
+            socket_server = LocalDaemonSocketServer(daemon, config.endpoint)
+            socket_server.start()
+            original_open = Path.open
+
+            def without_worker_files(path: Path, *args, **kwargs):
+                if path.is_relative_to(cast(Path, remote_config.agent_root)):
+                    raise AssertionError("client inspection must not read worker files")
+                return original_open(path, *args, **kwargs)
+
+            try:
+                with monkeypatch.context() as inspection_patch:
+                    inspection_patch.setattr(Path, "open", without_worker_files)
+                    command = [
+                        "queue",
+                        "daemon-admission",
+                        "--endpoint",
+                        str(config.endpoint),
+                        submitted.admission_id,
+                    ]
+                    text_output, json_output = io.StringIO(), io.StringIO()
+                    errors = io.StringIO()
+                    assert main(command, stdout=text_output, stderr=errors) == 0, (
+                        errors.getvalue()
+                    )
+                    assert (
+                        main(
+                            [*command, "--format", "json"],
+                            stdout=json_output,
+                            stderr=io.StringIO(),
+                        )
+                        == 0
+                    )
+                rendered = text_output.getvalue()
+                if native_failure:
+                    assert "could not prepare the experiment input" in rendered
+                    assert "candidate product path is unusable" in rendered
+                    assert (
+                        "builtins.FileNotFoundError: missing /worker/data/product.json"
+                        in rendered
+                    )
+                    assert "Prepare the product on the selected worker." in rendered
+                else:
+                    assert "stage reported a domain failure" in rendered
+                    assert "private-native" not in rendered
+                view = json.loads(json_output.getvalue())["result"]["owners"][
+                    "run_result"
+                ]
+                assert view["availability"] == "available"
+                assert view["failures"] == [failure]
+            finally:
+                socket_server.stop()
     finally:
         if replacement is not None:
             replacement_supervisor = replacement._supervisor  # noqa: SLF001
@@ -2700,7 +3376,14 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
         daemon.stop()
 
 
-def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("account_for", "sequential"), [("all", False), ([], False), ([], True)]
+)
+def test_two_remote_agents_execute_two_globally_selected_runs(
+    tmp_path: Path,
+    account_for: str | list[str],
+    sequential: bool,
+) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -2725,6 +3408,8 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     run_a, authority_a = _prepare_remote_producer_run(
         store,
         run_name="remote-a",
+        account_for=account_for,
+        sequential=sequential,
         machine_id="agent-a",
         value=1,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -2732,6 +3417,8 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     run_b, authority_b = _prepare_remote_producer_run(
         store,
         run_name="remote-b",
+        account_for=account_for,
+        sequential=sequential,
         machine_id="agent-b",
         value=2,
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
@@ -2826,6 +3513,40 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         )
         return session
 
+    def execute_pipeline(client: LocalDaemonAgentHttpClient, session: AgentSession):
+        from loom.queue.agent_sessions import _session_from_value
+
+        results = []
+        for sequence in range(1, 3 if sequential else 2):
+            if sequence > 1:
+                client.publish_offer(
+                    AgentOffer(
+                        session.session_id,
+                        session.coordinator_epoch,
+                        session.config_revision,
+                        session.inventory_revision,
+                        session.availability_revision,
+                        1,
+                        0,
+                        30,
+                        _resident_provider_descriptors(profile, session.agent_id),
+                        resident_profiles=(descriptor,),
+                    ),
+                    idempotency_key=f"followup-{session.session_id}",
+                )
+            result = client.execute_one(
+                session.session_id,
+                session.availability_revision,
+                sequence=sequence,
+                wait_timeout_ms=5_000,
+            )
+            assert result["state"] == "RELEASED", result
+            results.append(result)
+            session = _session_from_value(
+                cast(Mapping[str, PlainData], result["session"])
+            )
+        return results
+
     try:
         session_a = register(agent_a, "a")
         session_b = register(agent_b, "b")
@@ -2834,35 +3555,32 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         )
         with ThreadPoolExecutor(max_workers=2) as workers:
             execution_a = workers.submit(
-                agent_a.execute_one,
-                session_a.session_id,
-                session_a.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
+                execute_pipeline,
+                agent_a,
+                session_a,
             )
             execution_b = workers.submit(
-                agent_b.execute_one,
-                session_b.session_id,
-                session_b.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
+                execute_pipeline,
+                agent_b,
+                session_b,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("item-a", run_a))
             coordinator.submit(LocalDaemonAdmissionRequest("item-b", run_b))
-            result_a = execution_a.result(timeout=20)
-            result_b = execution_b.result(timeout=20)
+            result_a = execution_a.result(timeout=30)
+            result_b = execution_b.result(timeout=30)
         completed_a = coordinator.wait("item-a", timeout_seconds=10)
         completed_b = coordinator.wait("item-b", timeout_seconds=10)
 
-        assert result_a["state"] == "RELEASED"
-        assert result_b["state"] == "RELEASED"
+        assert len(result_a) == len(result_b) == (2 if sequential else 1)
         assert completed_a.state is LocalDaemonAdmissionState.SUCCEEDED
         assert completed_b.state is LocalDaemonAdmissionState.SUCCEEDED
         for snapshot in (authority_a.open_run(run_a), authority_b.open_run(run_b)):
             assert snapshot.status is RunStatus.SUCCEEDED
-            assert snapshot.stages[0].status is StageStatus.SUCCEEDED
-            output = snapshot.stages[0].artifact_facts[0].artifact
-            assert Path(output.uri.removeprefix("file://")).is_file()
+            assert len(snapshot.stages) == (2 if sequential else 1)
+            for stage in snapshot.stages:
+                assert stage.status is StageStatus.SUCCEEDED
+                output = stage.artifact_facts[0].artifact
+                assert Path(output.uri.removeprefix("file://")).is_file()
         with sqlite3.connect(config.execution_database) as conn:
             assignments = tuple(
                 conn.execute(
@@ -2870,9 +3588,15 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
                     "ORDER BY agent_id"
                 )
             )
-        assert assignments == (
-            ("agent-a", "released"),
-            ("agent-b", "released"),
+            if account_for == []:
+                assert (
+                    conn.execute("SELECT COUNT(*) FROM coordinator_atoms").fetchone()[0]
+                    == 0
+                )
+        assert assignments == tuple(
+            (agent_id, "released")
+            for agent_id in ("agent-a", "agent-b")
+            for _ in range(2 if sequential else 1)
         )
     finally:
         agent_a.close()
@@ -3017,8 +3741,11 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
         daemon.stop()
 
 
+@pytest.mark.parametrize("enforce_gpu", [False, True])
 def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enforce_gpu: bool,
 ) -> None:
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     credentials = _credentials(tmp_path / "tls")
@@ -3052,6 +3779,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     remote_run, remote_authority = _prepare_gpu_environment_run(
         store,
         run_name="remote-model-preferred",
+        enforce_gpu=enforce_gpu,
         preferred_models=("large", "small"),
         include_cpu_preprocess=True,
         capture_requirement=ExecutionRequirement(
@@ -3061,6 +3789,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     local_run, local_authority = _prepare_gpu_environment_run(
         store,
         run_name="local-model-preferred",
+        enforce_gpu=enforce_gpu,
         preferred_models=("small", "large"),
     )
     config = LocalDaemonConfig(
@@ -3272,12 +4001,28 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                 local_snapshot.stages[0].artifact_facts[0].artifact
             ),
         )
-        assert remote_output["value"] == remote_binding
-        assert local_output["value"] == local_binding
+        assert remote_output["value"] == (remote_binding if enforce_gpu else None)
+        assert local_output["value"] == (local_binding if enforce_gpu else None)
         assert preprocess_output["value"] is None
         assert preprocess_output["pid"] != os.getpid()
         assert remote_output["pid"] != os.getpid()
         assert local_output["pid"] != os.getpid()
+
+        for run_uri in (remote_run, local_run):
+            result = store.read_stage_worker_result(run_uri, "capture", attempt=1)
+            assert result is not None
+            metadata = result["executor_metadata"]
+            assert isinstance(metadata, dict)
+            controls = metadata["resource_controls"]
+            assert isinstance(controls, list)
+            assert {
+                "resource": "gpu",
+                "owner": "managed_provider",
+                "mechanism": "provider_environment_binding" if enforce_gpu else None,
+                "disposition": "applied" if enforce_gpu else "not_requested",
+            } in controls
+            assert local_binding not in json.dumps(controls)
+            assert remote_binding not in json.dumps(controls)
 
         with sqlite3.connect(config.execution_database) as conn:
             assignments = set(
@@ -3468,6 +4213,110 @@ def test_gpu_model_fallback_uses_daemon_accepted_time(
         daemon.stop()
 
 
+def _nested_report_detail(depth: int) -> Any:
+    value: Any = 0.5
+    for _ in range(depth):
+        value = {"nested": value}
+    return value
+
+
+def _failure_report(details: Mapping[str, PlainData]) -> _RemoteExecutionReport:
+    failure = ExecutionFailure(
+        1,
+        "loom-agent:assignment-1",
+        "build",
+        1,
+        "2020-01-01T00:00:01Z",
+        "local",
+        "stage_exception",
+        "stage failed",
+        details=details,
+    )
+    return _RemoteExecutionReport(
+        assignment_id="assignment-1",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at=failure.failed_at,
+        executor_name="local",
+        failure_type=failure.failure_type,
+        message=failure.message,
+        failure=failure,
+        schema_version=2,
+    )
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"threshold": 0.5, "": None, "key-" * 50: "path evidence"},
+        {"items": [0.5] * 256},
+        {str(index): 0.5 for index in range(256)},
+        _nested_report_detail(511),
+    ],
+    ids=["plain-types", "list-limit", "object-limit", "depth-limit"],
+)
+def test_report_failure_decoder_preserves_bounded_plain_data_and_codec_round_trip(
+    details: Mapping[str, PlainData],
+) -> None:
+    report = _failure_report(details)
+    encoded = json.dumps({"report": report.to_dict()}).encode()
+    decoded = _decode(encoded, failure_report=True)
+    replayed = _RemoteExecutionReport.from_dict(decoded["report"])
+    assert json.dumps({"report": replayed.to_dict()}).encode() == encoded
+    with pytest.raises(QueueServiceError):
+        _decode(encoded)
+    with pytest.raises(QueueServiceError):
+        _decode_run_inspection_response(encoded)
+
+
+@pytest.mark.parametrize(
+    ("details", "message"),
+    [
+        (_nested_report_detail(512), "maximum depth 512"),
+        ({"items": [0.5] * 257}, "maximum 256 items"),
+        ({str(index): 0.5 for index in range(257)}, "maximum 256 entries"),
+        ({"traceback": "x" * 65_536}, "maximum 65536 bytes"),
+    ],
+    ids=["depth-overflow", "list-overflow", "object-overflow", "byte-overflow"],
+)
+def test_report_failure_decoder_rejects_genuine_overflow(
+    details: Mapping[str, PlainData], message: str
+) -> None:
+    encoded = json.dumps({"report": _failure_report(details).to_dict()}).encode()
+    with pytest.raises(QueueServiceError, match=message):
+        _decode(encoded, failure_report=True)
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_report_failure_decoder_rejects_nonfinite_numbers(number: str) -> None:
+    encoded = (
+        '{"report":{"schema_version":2,"failure":{"details":{"x":' + number + "}}}}"
+    ).encode()
+    with pytest.raises(QueueServiceError, match="JSON.*(invalid|non-finite)"):
+        _decode(encoded, failure_report=True)
+
+
+def test_failure_report_exception_cannot_widen_surrounding_or_legacy_fields() -> None:
+    value: dict[str, Any] = {"report": _failure_report({"threshold": 0.5}).to_dict()}
+    for misplaced in (
+        {"failure": value["report"]["failure"]},
+        {**value, "authorization_revision": 0.5},
+        {**value, "unknown": _nested_report_detail(9)},
+        {**value, "": "invalid envelope key"},
+        {"report": {**value["report"], "schema_version": 1}},
+        {"report": {**value["report"], "schema_version": 2.0}},
+    ):
+        with pytest.raises(QueueServiceError):
+            _decode(json.dumps(misplaced).encode(), failure_report=True)
+    with pytest.raises(QueueServiceError, match="JSON is invalid"):
+        _decode(
+            b'{"report":{"schema_version":2,"failure":{"x":1,"x":2}}}',
+            failure_report=True,
+        )
+
+
 def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() -> None:
     with pytest.raises(QueueServiceError, match="JSON is invalid"):
         _decode(b'{"value":1,"value":2}')
@@ -3477,6 +4326,10 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b'{"a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":1}}}}}}}}}')
     with pytest.raises(QueueServiceError, match="too large"):
         _decode(b"{" + b" " * 65_536 + b"}")
+    with pytest.raises(QueueServiceError, match="deeply nested"):
+        _decode(b'{"nested":' * 1500 + b"0" + b"}" * 1500)
+    with pytest.raises(QueueServiceError, match="JSON value is invalid"):
+        _decode(b'{"value":0.5}')
 
 
 def test_run_inspection_response_decoder_preserves_phase_one_limits() -> None:
@@ -3747,9 +4600,11 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
         daemon.stop()
 
 
+@pytest.mark.parametrize("with_local_agent", (False, True))
 def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    with_local_agent: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -3847,9 +4702,10 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
 
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
-        tmp_path / "coordinator-agent",
+        tmp_path / "coordinator-agent" if with_local_agent else None,
         run_root,
-        _local_launch_profile(),
+        _local_launch_profile() if with_local_agent else None,
+        cpu_capacity=1 if with_local_agent else 0,
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -3889,6 +4745,29 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
     try:
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        admission = coordinator.submit(
+            LocalDaemonAdmissionRequest("remote-item", run_uri)
+        )
+        detail = coordinator.admission(admission.admission_id)
+        assert detail.admission.run_uri == run_uri
+        assert detail.authority["availability"] == "available"
+        local_execution = detail.owners["execution"]
+        assert isinstance(local_execution, Mapping)
+        assert local_execution["availability"] == (
+            "available" if with_local_agent else "unavailable"
+        )
+        with pytest.raises(TimeoutError):
+            coordinator.wait("remote-item", timeout_seconds=0.05)
+        assert daemon.status().service_health == "healthy"
+        assert daemon.status().running_assignments == 0
+        if not with_local_agent:
+            assert not (tmp_path / "coordinator-agent").exists()
+            assert config.agent_resource_providers == ()
+            assert daemon._execution is not None
+            assert daemon._execution.supervisor is None
         handshake = agent.handshake()
         session = agent.register(
             AgentRegistration(
@@ -3902,24 +4781,6 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 ("default",),
                 capabilities,
             )
-        )
-        agent.publish_offer(
-            AgentOffer(
-                session.session_id,
-                session.coordinator_epoch,
-                session.config_revision,
-                session.inventory_revision,
-                session.availability_revision,
-                1,
-                0,
-                30,
-                _resident_provider_descriptors(profile, session.agent_id),
-                resident_profiles=(descriptor,),
-            ),
-            idempotency_key="offer-remote-1",
-        )
-        coordinator = daemon.client_view(
-            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         original_target_delivery = local_daemon_execution._target_remote_delivery
         stale_target_once = False
@@ -4034,6 +4895,21 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
             return original_confirm(*args, **kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(agent, "confirm_started", confirm_across_restart)
+        agent.publish_offer(
+            AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                session.config_revision,
+                session.inventory_revision,
+                session.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, session.agent_id),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="offer-remote-1",
+        )
         with ThreadPoolExecutor(max_workers=1) as workers:
             execution = workers.submit(
                 agent.execute_one,
@@ -4042,7 +4918,6 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 sequence=1,
                 wait_timeout_ms=5_000,
             )
-            coordinator.submit(LocalDaemonAdmissionRequest("remote-item", run_uri))
             declined = execution.result(timeout=20)
             next_session = cast(Mapping[str, object], declined["session"])
             next_availability = str(next_session["availability_revision"])
@@ -4107,6 +4982,13 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         assert restarted
         assert daemon.status().coordinator_epoch != original_epoch
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+        detail = coordinator.admission(admission.admission_id)
+        assert detail.admission.state is LocalDaemonAdmissionState.SUCCEEDED
+        assert detail.authority["state"] == RunStatus.SUCCEEDED.value
+        assignments_view = detail.owners["assignment"]
+        assert isinstance(assignments_view, Mapping)
+        assert assignments_view["availability"] == "available"
+        assert assignments_view["state"] == "populated"
         snapshot = authority.open_run(run_uri)
         assert snapshot.status is RunStatus.SUCCEEDED
         assert [stage.status for stage in snapshot.stages] == [
@@ -4230,6 +5112,7 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
                 (repaired.session_id,),
             ).fetchone()[0]
         assert str(first_secret) not in str(verifier)
+        assert config.agent_root is not None
         with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM agent_sessions_local").fetchone()[0]
@@ -4561,6 +5444,713 @@ def test_loopback_operator_scope_denial_matches_direct_before_persistence(
         daemon.stop()
 
 
+@pytest.mark.parametrize("transport", ["unix", "https"])
+def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transport: str,
+) -> None:
+    """A committed admission survives a dropped reply on either real transport."""
+    import loom.queue.local_daemon_transport as unix_transport
+    from loom.queue import LocalDaemonSocketClient, LocalDaemonSocketServer
+
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, _authority = _prepare_remote_producer_run(
+        store,
+        run_name="native-control",
+        machine_id="agent-a",
+        value=7,
+    )
+    policy = AgentPolicyConfig(
+        agents=_policy().agents,
+        principals=(
+            TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+        ),
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        None,
+        store.root,
+        None,
+        cpu_capacity=0,
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    projection_calls: list[str] = []
+
+    def inspect_run(uri: str) -> Mapping[str, PlainData]:
+        projection_calls.append(uri)
+        return {"schema_version": 1, "code": "unavailable"}
+
+    dropped = Event()
+    if transport == "unix":
+        server = LocalDaemonSocketServer(
+            daemon, config.endpoint, inspect_run=inspect_run
+        )
+        server.start()
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
+        write = unix_transport._write_message
+
+        def drop_unix(
+            connection: socket.socket, value: Mapping[str, PlainData]
+        ) -> None:
+            result = value.get("result")
+            if (
+                isinstance(result, Mapping)
+                and result.get("queue_item_id") == "original-item"
+                and not dropped.is_set()
+            ):
+                dropped.set()
+                connection.shutdown(socket.SHUT_RDWR)
+                return
+            write(connection, value)
+
+        monkeypatch.setattr(unix_transport, "_write_message", drop_unix)
+    else:
+        credentials = _credentials(tmp_path / "tls")
+        server = LocalDaemonAgentHttpServer(
+            daemon,
+            AgentTlsServerConfig(
+                "localhost",
+                0,
+                credentials["server"].with_suffix(".crt"),
+                credentials["server"].with_suffix(".key"),
+                credentials["ca"].with_suffix(".crt"),
+                {
+                    _fingerprint(
+                        credentials["other"].with_suffix(".crt")
+                    ): "client-credential"
+                },
+            ),
+            inspect_run=inspect_run,
+        )
+        server.start()
+        connection_path = tmp_path / "client.yaml"
+        connection_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "loom.coordinator-client",
+                    "transport": {
+                        "kind": "https",
+                        "url": f"https://localhost:{server.port}",
+                        "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                        "certificate_path": str(
+                            credentials["other"].with_suffix(".crt")
+                        ),
+                        "private_key_path": str(
+                            credentials["other"].with_suffix(".key")
+                        ),
+                    },
+                }
+            )
+        )
+        connection_path.chmod(0o600)
+        client = CoordinatorClient.from_connection_file(connection_path)
+        reply = agent_session_transport._Handler._reply
+
+        def drop_http(
+            handler: agent_session_transport._Handler,
+            status: int,
+            value: Mapping[str, object],
+        ) -> None:
+            result = value.get("result")
+            if (
+                isinstance(result, Mapping)
+                and result.get("queue_item_id") == "original-item"
+                and not dropped.is_set()
+            ):
+                dropped.set()
+                handler.close_connection = True
+                handler.connection.shutdown(socket.SHUT_RDWR)
+                return
+            reply(handler, status, value)
+
+        monkeypatch.setattr(agent_session_transport._Handler, "_reply", drop_http)
+    try:
+        description = client.describe_connection()
+        assert description.transport == transport
+        assert description.source_modes == ()
+        assert description.preparation_profiles == ()
+        assert client.status().coordinator_id == daemon._coordinator_id
+        assert client.agents().agents == ()
+        request = LocalDaemonAdmissionRequest("original-item", run_uri)
+        for operation, payload in (
+            ("inspect_run", {"run_uri": run_uri}),
+            ("admission", {"admission_id": "absent"}),
+            ("submit", {"request": request.to_dict()}),
+        ):
+            with pytest.raises(CoordinatorClientError) as caught:
+                # Bypass negotiation so this proves the actual request guard,
+                # independently of the already successful handshake.
+                client._native_call(
+                    operation, payload, "wrong-coordinator", negotiate=False
+                )
+            assert caught.value.code == "conflict"
+            assert (
+                caught.value.ids["observed_coordinator_id"]
+                == description.coordinator_id
+            )
+            assert caught.value.mutation_outcome == (
+                "not_applied" if operation == "submit" else None
+            )
+        assert daemon.admissions().admissions == ()
+        assert projection_calls == []
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.inspect_run(run_uri)
+        assert caught.value.code == "not_found"
+        assert projection_calls == []
+        if transport == "unix":
+            assert (
+                LocalDaemonSocketClient(config.endpoint).inspect_run(run_uri)["code"]
+                == "unavailable"
+            )
+            assert projection_calls == [run_uri]
+        with pytest.raises(CoordinatorClientError) as lost:
+            client.submit(request)
+        assert dropped.is_set(), (lost.value.code, str(lost.value))
+        assert lost.value.mutation_outcome == "unknown"
+        assert lost.value.ids["queue_item_id"] == "original-item"
+        assert lost.value.ids["run_uri"] == run_uri
+        admitted = client.admission_for_queue_item("original-item")
+        replay = client.submit(request)
+        assert replay.admission_id == admitted.admission_id
+        assert replay.intent_digest == admitted.intent_digest
+        assert len(client.admissions().admissions) == 1
+        detail = client.admission(admitted.admission_id).admission
+        assert detail.admission_id == replay.admission_id
+        assert detail.intent_digest == replay.intent_digest
+        assert detail.revision >= replay.revision
+        assert client.inspect_run(run_uri).to_dict() == {
+            "schema_version": 1,
+            "code": "unavailable",
+        }
+        changed = client.wait_admission(
+            admitted.admission_id, expected_revision=0, timeout_seconds=0
+        )
+        assert changed.kind.value in {"CHANGED", "TERMINAL"}
+        for method, identity in (
+            (client.agent, "missing-agent"),
+            (client.operation, "missing-operation"),
+        ):
+            with pytest.raises(CoordinatorClientError) as caught:
+                method(identity)
+            assert caught.value.code == "not_found"
+            assert caught.value.mutation_outcome is None
+        cancelled = client.cancel("original-item")
+        assert cancelled.cancellation_operation_id is not None
+        # Client disconnect does not delete the accepted admission or its intent.
+        client.close()
+        assert (
+            daemon.admission_for_queue_item("original-item").admission_id
+            == admitted.admission_id
+        )
+    finally:
+        client.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_native_https_wait_saturation_keeps_client_and_worker_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from threading import Lock
+
+    credentials = _credentials(tmp_path / "tls")
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, _authority = _prepare_remote_producer_run(
+        store,
+        run_name="wait-capacity",
+        machine_id="agent-a",
+        value=1,
+    )
+    policy = AgentPolicyConfig(
+        agents=_policy().agents,
+        principals=(
+            TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+        ),
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        None,
+        store.root,
+        None,
+        cpu_capacity=0,
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "client-credential",
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential",
+            },
+        ),
+    )
+    server.start()
+    connection_path = tmp_path / "client.yaml"
+    connection_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "loom.coordinator-client",
+                "transport": {
+                    "kind": "https",
+                    "url": f"https://localhost:{server.port}",
+                    "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                    "certificate_path": str(credentials["other"].with_suffix(".crt")),
+                    "private_key_path": str(credentials["other"].with_suffix(".key")),
+                },
+            }
+        )
+    )
+    connection_path.chmod(0o600)
+    client = CoordinatorClient.from_connection_file(connection_path)
+    worker = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+        )
+    )
+    admitted = client.submit(LocalDaemonAdmissionRequest("waiting-item", run_uri))
+    original = daemon.wait_admission
+    entered = Event()
+    release = Event()
+    lock = Lock()
+    active = maximum = 0
+
+    def paused(admission_id: str, *, expected_revision: int, timeout: float | None):  # type: ignore[no-untyped-def]
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+            if active == 6:
+                entered.set()
+        try:
+            assert release.wait(10), (
+                "ordinary control failed to release the observation fixture"
+            )
+            return original(
+                admission_id, expected_revision=expected_revision, timeout=0
+            )
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(daemon, "wait_admission", paused)
+    observers = [
+        CoordinatorClient.from_connection_file(connection_path) for _ in range(8)
+    ]
+    try:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [
+                executor.submit(
+                    observer.wait_admission,
+                    admitted.admission_id,
+                    admitted.revision,
+                    0.5,
+                )
+                for observer in observers
+            ]
+            try:
+                assert entered.wait(8), [
+                    repr(future.exception()) for future in futures if future.done()
+                ]
+                assert client.status().coordinator_id == daemon._coordinator_id
+                assert worker.handshake()["coordinator_id"] == daemon._coordinator_id
+                cancelled = client.cancel("waiting-item")
+                assert cancelled.cancellation_operation_id is not None
+                assert maximum == 6
+            finally:
+                release.set()
+            for future in futures:
+                assert (
+                    future.result(timeout=10).admission.queue_item_id == "waiting-item"
+                )
+    finally:
+        release.set()
+        for observer in observers:
+            observer.close()
+        client.close()
+        worker.close()
+        server.stop()
+        daemon.stop()
+
+
+@pytest.fixture
+def native_control_endpoint(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """A coordinator-only TLS service; the native client has no agent root."""
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        agents=_policy().agents,
+        principals=(
+            TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+        ),
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        None,
+        tmp_path / "runs",
+        None,
+        cpu_capacity=0,
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "client-credential",
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential",
+            },
+        ),
+    )
+    server.start()
+    connection_path = tmp_path / "client.yaml"
+    connection_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "loom.coordinator-client",
+                "transport": {
+                    "kind": "https",
+                    "url": f"https://localhost:{server.port}",
+                    "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                    "certificate_path": str(credentials["other"].with_suffix(".crt")),
+                    "private_key_path": str(credentials["other"].with_suffix(".key")),
+                },
+            }
+        )
+    )
+    connection_path.chmod(0o600)
+    try:
+        yield daemon, server, connection_path, credentials
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("location", ["headers", "body"])
+def test_native_https_trickle_consumes_one_http_call_budget(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,
+    location: str,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue import _coordinator_transport as control_io
+
+    _daemon, _server, connection_path, _credentials = native_control_endpoint
+    monkeypatch.setattr(control_io, "HTTP_CALL_SECONDS", 0.5)
+    monkeypatch.setattr(control_io, "REQUEST_BUDGET_SECONDS", 3.0)
+    original = agent_session_transport._Handler._reply
+    finished = Event()
+    stop = Event()
+
+    def trickle(
+        handler: agent_session_transport._Handler,
+        status: int,
+        payload: Mapping[str, object],
+    ) -> None:
+        if status != 200 or handler.path != "/v1/client/status":
+            original(handler, status, payload)
+            return
+        handler.close_connection = True
+        try:
+            if location == "headers":
+                handler.wfile.write(b"HTTP/1.1 200 OK\r\nX-Trickle: ")
+            else:
+                handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            for _ in range(100):
+                handler.wfile.write(b"x")
+                if stop.wait(0.04):
+                    break
+        except OSError:
+            pass  # The client closes its socket when the cumulative budget expires.
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(agent_session_transport._Handler, "_reply", trickle)
+    started = monotonic()
+    try:
+        with CoordinatorClient.from_connection_file(connection_path) as client:
+            with pytest.raises(CoordinatorClientError) as caught:
+                client.status()
+        assert caught.value.code == "deadline_exceeded"
+        assert caught.value.mutation_outcome is None
+        assert (
+            monotonic() - started < 1.5
+        )  # Separate HTTP cap, below the 3-second overall budget.
+    finally:
+        stop.set()
+        assert finished.wait(2)
+
+
+@pytest.mark.parametrize("connection_kind", ["unix", "https"])
+def test_coordinator_cli_submit_inspect_cancel_and_wait_with_either_connection(
+    native_control_endpoint,
+    connection_kind: str,  # type: ignore[no-untyped-def]
+) -> None:
+    import io
+
+    from loom.cli.main import main
+    from loom.queue import LocalDaemonSocketServer
+
+    daemon, _http_server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root),
+        run_name="cli-workflow",
+        machine_id="agent-a",
+        value=3,
+    )
+    socket_server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    socket_server.start()
+    options = (
+        ["--endpoint", str(daemon.config.endpoint)]
+        if connection_kind == "unix"
+        else ["--connection", str(connection_path)]
+    )
+
+    def cli(command: str, *arguments: str) -> Mapping[str, Any]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(
+            [
+                "queue",
+                command,
+                *options,
+                "--expected-coordinator-id",
+                daemon._coordinator_id,
+                *arguments,
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        assert code == 0, stderr.getvalue()
+        return json.loads(stdout.getvalue())["result"]
+
+    try:
+        admission = cli("daemon-submit", "cli-item", run_uri)
+        assert cli("daemon-status")["coordinator_id"] == daemon._coordinator_id
+        assert cli("daemon-admissions")["admissions"][0]["queue_item_id"] == "cli-item"
+        assert (
+            cli("daemon-admission", admission["admission_id"])["admission"]["run_uri"]
+            == run_uri
+        )
+        assert cli("daemon-agents")["agents"] == []
+        cancellation = cli("daemon-cancel", "cli-item")
+        assert cancellation["cancellation_operation_id"] is not None
+        terminal = cli("daemon-wait", "cli-item", "--timeout", "5")
+        assert terminal["admission_id"] == admission["admission_id"]
+        assert terminal["state"] in {"CANCELLED", "BLOCKED"}
+    finally:
+        socket_server.stop()
+
+
+def test_native_client_bounds_stalled_setup_and_does_not_dispatch_after_expiry(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from threading import Lock
+    from loom.queue import _coordinator_transport as control_io
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    client = CoordinatorClient.from_connection_file(connection_path)
+    # Smaller private counts make the causal capacity test fast. Stalled work
+    # must retain a slot even after its original caller has timed out.
+    client._transport._capacity = control_io.ControlCapacity(total=2, waits=1)
+    monkeypatch.setattr(control_io, "REQUEST_BUDGET_SECONDS", 0.5)
+    original = control_io.https_connection
+    entered = Event()
+    release = Event()
+    lock = Lock()
+    started = 0
+
+    def delayed(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(control_io, "https_connection", delayed)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(client.cancel, f"original-{index}")
+                for index in range(2)
+            ]
+            assert entered.wait(2)
+            for index, future in enumerate(futures):
+                with pytest.raises(CoordinatorClientError) as caught:
+                    future.result(timeout=2)
+                assert caught.value.code == "deadline_exceeded"
+                assert caught.value.mutation_outcome == "not_applied"
+                assert caught.value.ids["queue_item_id"] == f"original-{index}"
+            with pytest.raises(CoordinatorClientError) as saturated:
+                client.status()
+            assert saturated.value.code == "capacity_exhausted"
+            assert started == 2
+            pending = tuple(client._transport._active)
+            release.set()
+            assert all(exchange.completed.wait(2) for exchange in pending)
+        assert daemon.admissions().admissions == ()
+    finally:
+        release.set()
+        client.close()
+
+
+def test_native_submit_error_after_commit_does_not_claim_refusal(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue.errors import QueueStorageError
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root),
+        run_name="post-commit-read-fault",
+        machine_id="agent-a",
+        value=9,
+    )
+    submit = daemon._submit
+
+    def failed_receipt(request: LocalDaemonAdmissionRequest):  # type: ignore[no-untyped-def]
+        submit(request)
+        raise QueueStorageError("post-commit admission receipt read failed")
+
+    monkeypatch.setattr(daemon, "_submit", failed_receipt)
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.submit(LocalDaemonAdmissionRequest("same-item", run_uri))
+        assert caught.value.code == "unavailable"
+        assert caught.value.mutation_outcome == "unknown"
+        assert caught.value.ids["queue_item_id"] == "same-item"
+        assert client.admission_for_queue_item("same-item").run_uri == run_uri
+        assert len(daemon.admissions().admissions) == 1
+
+
+def test_native_admission_preserves_nested_failures_and_refuses_oversized_projection(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from loom.queue._coordinator_control import MAX_RESPONSE_BYTES
+
+    daemon, _server, connection_path, _credentials = native_control_endpoint
+    run_uri, _authority = _prepare_remote_producer_run(
+        LocalRunStore(daemon.config.run_store_root),
+        run_name="failure-projection",
+        machine_id="agent-a",
+        value=2,
+    )
+    failure = _failure_report({"worker_detail": _nested_report_detail(50)}).failure
+    assert failure is not None
+    owner: dict[str, PlainData] = {
+        "availability": "available",
+        "failures": [failure.to_dict()],
+    }
+    inspect_admission = daemon.admission
+
+    def projection(admission_id: str):  # type: ignore[no-untyped-def]
+        observed = inspect_admission(admission_id)
+        return replace(observed, owners={**observed.owners, "run_result": owner})
+
+    monkeypatch.setattr(daemon, "admission", projection)
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        admitted = client.submit(LocalDaemonAdmissionRequest("failure-item", run_uri))
+        decoded = client.admission(admitted.admission_id)
+        assert (
+            cast(Mapping[str, object], decoded.to_dict()["owners"])["run_result"]
+            == owner
+        )
+        owner["extra_evidence"] = "x" * MAX_RESPONSE_BYTES
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.admission(admitted.admission_id)
+        assert caught.value.code == "result_too_large"
+        assert caught.value.mutation_outcome is None
+        assert caught.value.ids["admission_id"] == admitted.admission_id
+
+
+@pytest.mark.parametrize("rejection", ["wrong_ca", "worker_role"])
+def test_native_https_authentication_rejects_before_mutation(
+    native_control_endpoint,
+    rejection: str,  # type: ignore[no-untyped-def]
+) -> None:
+    daemon, _server, connection_path, credentials = native_control_endpoint
+    settings = json.loads(connection_path.read_text())
+    if rejection == "wrong_ca":
+        settings["transport"]["server_ca_path"] = str(
+            credentials["agent"].with_suffix(".crt")
+        )
+    else:
+        settings["transport"]["certificate_path"] = str(
+            credentials["agent"].with_suffix(".crt")
+        )
+        settings["transport"]["private_key_path"] = str(
+            credentials["agent"].with_suffix(".key")
+        )
+    connection_path.write_text(json.dumps(settings))
+    with CoordinatorClient.from_connection_file(connection_path) as client:
+        with pytest.raises(CoordinatorClientError) as caught:
+            client.cancel("original-item")
+    assert caught.value.code == "unauthorized"
+    assert caught.value.boundary == "authentication"
+    assert caught.value.mutation_outcome == "not_applied"
+    assert caught.value.ids["queue_item_id"] == "original-item"
+    assert daemon.admissions().admissions == ()
+
+
+def test_worker_keepalive_remains_usable_after_the_tls_accept_deadline(
+    native_control_endpoint,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    daemon, server, _connection_path, credentials = native_control_endpoint
+    monkeypatch.setattr(agent_session_transport, "_HTTP_TIMEOUT_SECONDS", 1.0)
+    client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+        )
+    )
+    try:
+        assert client.handshake()["coordinator_id"] == daemon._coordinator_id
+        sleep(1.2)
+        assert client.handshake()["coordinator_id"] == daemon._coordinator_id
+    finally:
+        client.close()
+
+
 def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     tmp_path: Path,
 ) -> None:
@@ -4620,8 +6210,8 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1",),
-            ["authenticated-application-v1"],
+            ("authenticated-application-v1", "daemon-control-v1"),
+            ["authenticated-application-v1", "daemon-control-v1"],
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (
@@ -4639,9 +6229,44 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         assert remote_status["waiting_admissions"] == 0
         assert direct_status["active_admissions"] == 0
         assert direct_status["waiting_admissions"] == 0
+        connection_path = tmp_path / "coordinator-client.yaml"
+        connection_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "loom.coordinator-client",
+                    "transport": {
+                        "kind": "https",
+                        "url": f"https://localhost:{server.port}",
+                        "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+                        "certificate_path": str(
+                            credentials["other"].with_suffix(".crt")
+                        ),
+                        "private_key_path": str(
+                            credentials["other"].with_suffix(".key")
+                        ),
+                    },
+                    "expected_coordinator_id": daemon._coordinator_id,
+                }
+            ),
+            encoding="utf-8",
+        )
+        connection_path.chmod(0o600)
+        facade = CoordinatorClient.from_connection_file(connection_path)
+        assert facade.describe_connection().transport == "https"
+        assert facade.status().coordinator_id == daemon._coordinator_id
+        with pytest.raises(CoordinatorClientError, match="conflict"):
+            CoordinatorClient.from_connection_file(
+                connection_path, expected_coordinator_id="different-coordinator"
+            )
         daemon.replace_agent_policy(
             AgentPolicyConfig(revision="policy-2", agents=policy.agents)
         )
+        with pytest.raises(CoordinatorClientError) as revoked:
+            facade.status()
+        assert revoked.value.code == "unauthorized", repr(revoked.value.__cause__)
+        assert revoked.value.boundary == "authentication"
+        assert revoked.value.mutation_outcome is None
         with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
             client.handshake(role="client")
         daemon.replace_agent_policy(
@@ -4657,6 +6282,10 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         )
         operator_handshake = client.handshake(role="operator")
         assert operator_handshake["role"] == "operator"
+        with pytest.raises(CoordinatorClientError) as wrong_role:
+            facade.cancel("never-admitted")
+        assert wrong_role.value.code == "unauthorized"
+        assert wrong_role.value.mutation_outcome == "not_applied"
         remote_operator = client.call_application("operator", "status", {})
         direct_operator = (
             daemon.operator_view(
@@ -4973,11 +6602,15 @@ def test_loopback_query_preserves_a_256_record_phase_one_result(
     assert decode_run_inspection_response(remote) == result
 
 
-def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
-    tmp_path: Path,
-) -> None:
-    credentials = _credentials(tmp_path / "tls")
-    profile = SlurmReadyStageProfile(
+def _slurm_bootstrap_profile(tmp_path: Path) -> SlurmReadyStageProfile:
+    result_root = tmp_path / "shared-results"
+    result_root.mkdir(exist_ok=True)
+    return SlurmReadyStageProfile(
+        result_storage={
+            "agent_root": str(result_root),
+            "compute_root": str(result_root),
+            "retention_bytes": 1024 * 1024 * 1024,
+        },
         profile_id="training",
         partition="gpu",
         max_outstanding=1,
@@ -5003,6 +6636,13 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
             ),
         ),
     )
+
+
+def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    profile = _slurm_bootstrap_profile(tmp_path)
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
@@ -5065,3 +6705,591 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
         client.close()
         server.stop()
         daemon.stop()
+
+
+@pytest.mark.parametrize(
+    ("role", "operation", "certificate"),
+    [("agent", "output_manifest", "agent"), ("slurm_bootstrap", "report", "other")],
+)
+def test_loopback_report_routes_preserve_near_limit_failure_and_strict_envelopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    operation: str,
+    certificate: str,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=_policy(),
+        slurm_profiles=(_slurm_bootstrap_profile(tmp_path),),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    received: list[dict[str, PlainData]] = []
+
+    def declare_outputs(*_args, report: _RemoteExecutionReport, **_kwargs):
+        received.append(report.to_dict())
+        return {"accepted": True}
+
+    def declare_report(_assignment, _incarnation, _fence, report):
+        received.append(_RemoteExecutionReport.from_dict(report).to_dict())
+
+    monkeypatch.setattr(
+        daemon,
+        "agent_view",
+        lambda _principal: SimpleNamespace(declare_outputs=declare_outputs),
+    )
+    monkeypatch.setattr(
+        daemon,
+        "slurm_bootstrap_view",
+        lambda _principal: SimpleNamespace(declare_report=declare_report),
+    )
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential",
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "slurm-credential",
+            },
+        ),
+    )
+    server.start()
+    client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials[certificate].with_suffix(".crt"),
+            credentials[certificate].with_suffix(".key"),
+        )
+    )
+    report = _failure_report(_nested_report_detail(511)).to_dict()
+    envelope: dict[str, PlainData] = {
+        "assignment_id": "assignment-1",
+        "fence": "fence-1",
+        "report": report,
+        **(
+            {
+                "session_id": "session-1",
+                "authorization_id": "authorization-1",
+                "authorization_revision": 1,
+            }
+            if role == "agent"
+            else {"incarnation": "incarnation-1"}
+        ),
+    }
+    try:
+        client._call(operation, envelope, role=role)
+        assert json.dumps(received) == json.dumps([report])
+        assert client._connection is not None
+        overflow_items: list[PlainData] = [0.5] * 257
+        oversized = {
+            **envelope,
+            "report": _failure_report({"items": overflow_items}).to_dict(),
+        }
+        with monkeypatch.context() as outbound:
+
+            def must_not_send(*_args, **_kwargs):
+                pytest.fail("invalid outbound report must fail before HTTP submission")
+
+            outbound.setattr(client._connection, "request", must_not_send)
+            with pytest.raises(QueueServiceError, match="maximum 256 items"):
+                client._call(operation, oversized, role=role)
+
+        # Bypass the client validator to exercise the independently bounded server.
+        for rejected in (oversized, {**envelope, "unexpected": "field"}):
+            client._call(operation, envelope, role=role)
+            connection = client._connection
+            assert connection is not None
+            connection.request(
+                "POST",
+                f"/v1/{role}/{operation}",
+                body=json.dumps(rejected).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            assert response.status == 403
+            assert json.loads(response.read())["error"] == "agent_protocol_rejected"
+            client._close_connection()
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client._call(operation, envelope, role="client")
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client._call("event", envelope, role=role)
+        assert len(received) == 3
+    finally:
+        client.close()
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("remote", (False, True))
+def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote: bool
+) -> None:
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    devices = tuple(
+        GpuDeviceDescriptor(f"gpu-{i}", f"model-{i}", 1024) for i in range(2)
+    )
+    bindings = ("GPU-private-0", "GPU-private-1")
+    busy: set[str] = set()
+    observations: list[tuple[str, ...]] = []
+    failed = False
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        observations.append(observer.selected_uuids)
+        return {
+            uuid: GpuProcessObservation(
+                uuid,
+                not failed,
+                uuid in busy if not failed else False,
+                "query_failed" if failed else "available",
+            )
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    occupancy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "v1", "project-1", "environment-1", "executor-1"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "credential-a",
+                "principal-a",
+                "agent-a",
+                ("default",),
+                capabilities,
+                devices,
+            ),
+        )
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_gpu_environment_run(
+        store,
+        run_name="occupancy-run",
+        preferred_models=("model-0", "model-1"),
+        target="agent-a" if remote else None,
+        capture_requirement=ExecutionRequirement(
+            "project-1", "environment-1", "executor-1"
+        )
+        if remote
+        else None,
+        delay_seconds=1,
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        None if remote else tmp_path / "coordinator-agent",
+        store.root,
+        None if remote else _local_launch_profile(),
+        machine_id="machine-A",
+        cpu_capacity=0 if remote else 1,
+        gpu_devices=()
+        if remote
+        else tuple(
+            ConfiguredGpuDevice(d, b) for d, b in zip(devices, bindings, strict=True)
+        ),
+        gpu_occupancy_policy=None if remote else occupancy,
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+        poll_interval_seconds=0.02,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = None
+    agent = None
+    client_config = None
+    session = None
+    coordinator = daemon.client_view(
+        LocalDaemonPrincipal("test-client", LocalDaemonRole.CLIENT)
+    )
+    try:
+        if remote:
+            credentials = _credentials(tmp_path / "tls")
+            server = LocalDaemonAgentHttpServer(
+                daemon,
+                AgentTlsServerConfig(
+                    "localhost",
+                    0,
+                    credentials["server"].with_suffix(".crt"),
+                    credentials["server"].with_suffix(".key"),
+                    credentials["ca"].with_suffix(".crt"),
+                    {
+                        _fingerprint(
+                            credentials["agent"].with_suffix(".crt")
+                        ): "credential-a"
+                    },
+                ),
+            )
+            server.start()
+            profile = ResidentExecutionProfile(
+                descriptor,
+                Path.cwd(),
+                Path(sys.executable),
+                gpu_devices=tuple(
+                    ResidentGpuDevice(d, b)
+                    for d, b in zip(devices, bindings, strict=True)
+                ),
+            )
+            client_config = AgentTlsClientConfig(
+                f"https://localhost:{server.port}",
+                credentials["ca"].with_suffix(".crt"),
+                credentials["agent"].with_suffix(".crt"),
+                credentials["agent"].with_suffix(".key"),
+                _fresh_remote_agent_root(tmp_path),
+                (profile,),
+                gpu_occupancy_policy=occupancy,
+            )
+            LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+            agent = LocalDaemonAgentHttpClient(client_config)
+            hello = agent.handshake()
+            session = agent.register(
+                AgentRegistration(
+                    "register-occupancy",
+                    str(hello["coordinator_id"]),
+                    str(hello["coordinator_epoch"]),
+                    agent.agent_root_id,
+                    "config-1",
+                    "inventory-1",
+                    "availability-1",
+                    ("default",),
+                    capabilities,
+                )
+            )
+            agent.refresh_resource_offer()
+            agent._resource_maintenance_enabled = True
+
+        def statuses():
+            return (
+                daemon.agent("agent-a").resource_status
+                if remote
+                else daemon.status().local_resource_status
+            )
+
+        def wait_for_reasons(expected: tuple[str, str]) -> None:
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                current = statuses()
+                if tuple(item.reason_code for item in current) == expected:
+                    return
+                sleep(0.02)
+            raise AssertionError(statuses())
+
+        wait_for_reasons(("available", "available"))
+        if agent is not None:
+            # Reserve GPU 0 from the idle offer, then publish changed capacity
+            # before taking the delivery. The original delivery must survive.
+            coordinator.submit(LocalDaemonAdmissionRequest("occupancy-item", run_uri))
+            deadline = monotonic() + 10
+            targeted = 0
+            while monotonic() < deadline:
+                with sqlite3.connect(config.control_database) as conn:
+                    targeted = conn.execute(
+                        "SELECT COUNT(*) FROM agent_deliveries WHERE state = 'TARGETED'"
+                    ).fetchone()[0]
+                if targeted == 1:
+                    break
+                sleep(0.02)
+            assert targeted == 1
+        busy.add(bindings[0])
+        if agent is not None:
+            # Lose the acknowledgement after the coordinator committed the update.
+            original_complete = _RemoteAgentJournal.complete_mutation
+            lost = False
+
+            def lose_response(journal, operation, operation_id, result):
+                nonlocal lost
+                if operation == "offer" and not lost:
+                    lost = True
+                    raise QueueServiceError("simulated lost occupancy response")
+                return original_complete(journal, operation, operation_id, result)
+
+            monkeypatch.setattr(_RemoteAgentJournal, "complete_mutation", lose_response)
+            for member in agent._configured_provider_members or ():
+                if isinstance(member, GpuResourceProvider):
+                    member.refresh_occupancy(force=True)
+            with pytest.raises(QueueServiceError, match="lost occupancy"):
+                agent.refresh_resource_offer()
+            assert session is not None
+            old_session = agent.active_session()
+            assert (
+                old_session is not None
+                and old_session.availability_revision == session.availability_revision
+            )
+            # Reopen the same root and replay the exact pending publication.
+            root_id = agent.agent_root_id
+            agent.close()
+            assert client_config is not None
+            agent = LocalDaemonAgentHttpClient(client_config)
+            assert agent.agent_root_id == root_id
+            agent.refresh_resource_offer()
+            agent._resource_maintenance_enabled = True
+        wait_for_reasons(("external_process_detected", "available"))
+        inspected_count = len(observations)
+        statuses()
+        statuses()
+        if remote:
+            assert len(observations) == inspected_count
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM agent_deliveries WHERE state = 'TARGETED'"
+                    ).fetchone()[0]
+                    == 1
+                )
+        if agent is not None:
+            session = agent.active_session()
+            assert session is not None
+            declined = agent.execute_one(
+                session.session_id,
+                session.availability_revision,
+                sequence=agent.next_poll_sequence(session.session_id),
+                wait_timeout_ms=1000,
+            )
+            assert declined["state"] == "DECLINED"
+            assert declined["reason_code"] == "external_process_detected"
+            declined_session = declined["session"]
+            assert isinstance(declined_session, Mapping)
+            assignment_id = str(declined["assignment_id"])
+            # An exact lost-response replay retains the reason and revision.
+            replayed = agent.decline_assignment(
+                session.session_id,
+                assignment_id,
+                availability_revision=str(declined_session["availability_revision"]),
+                reason_code="external_process_detected",
+            )
+            assert (
+                freeze_plain_data(replayed.value(), path="replayed decline")
+                == declined_session
+            )
+            with pytest.raises(QueueConflictError, match="protocol conflict"):
+                agent.decline_assignment(
+                    session.session_id,
+                    assignment_id,
+                    availability_revision=replayed.availability_revision,
+                    reason_code="observation_unavailable",
+                )
+            admission = coordinator.admission_for_queue_item("occupancy-item")
+            owners = coordinator.admission(admission.admission_id).owners
+            assignment_owner = owners["assignment"]
+            assert isinstance(assignment_owner, Mapping)
+            records = assignment_owner["assignments"]
+            assert isinstance(records, (tuple, list))
+            assert any(
+                isinstance(item, Mapping)
+                and item["assignment_id"] == assignment_id
+                and item["decline_reason_code"] == "external_process_detected"
+                for item in records
+            )
+            agent.refresh_resource_offer()
+            session = agent.active_session()
+            assert session is not None
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                execution = workers.submit(
+                    agent.execute_one,
+                    session.session_id,
+                    session.availability_revision,
+                    sequence=agent.next_poll_sequence(session.session_id),
+                    wait_timeout_ms=5000,
+                )
+                wait_for_reasons(("external_process_detected", "loom_claimed"))
+                busy.clear()
+                # execute_one keeps reporting while the real subprocess runs.
+                wait_for_reasons(("available", "loom_claimed"))
+                assert execution.result(timeout=30)["state"] == "RELEASED"
+            agent.refresh_resource_offer()
+        else:
+            coordinator.submit(LocalDaemonAdmissionRequest("occupancy-item", run_uri))
+            wait_for_reasons(("external_process_detected", "loom_claimed"))
+            busy.clear()
+        assert (
+            coordinator.wait("occupancy-item", timeout_seconds=30).state
+            is LocalDaemonAdmissionState.SUCCEEDED
+        )
+        snapshot = authority.open_run(run_uri)
+        assert snapshot.status is RunStatus.SUCCEEDED
+        output = LocalArtifactStore(store.local_artifact_root(run_uri)).load(
+            snapshot.stages[0].artifact_facts[0].artifact
+        )
+        assert isinstance(output, Mapping)
+        assert output["value"] == bindings[1]
+        wait_for_reasons(("available", "available"))
+        failed = True
+        if agent is not None:
+            for member in agent._configured_provider_members or ():
+                if isinstance(member, GpuResourceProvider):
+                    member.refresh_occupancy(force=True)
+            agent.refresh_resource_offer()
+        wait_for_reasons(("observation_unavailable", "observation_unavailable"))
+        safe_projection = json.dumps([item.to_dict() for item in statuses()])
+        assert not any(binding in safe_projection for binding in bindings)
+    finally:
+        if agent is not None:
+            if agent._supervisor is not None:
+                agent._supervisor.shutdown_for_test()
+            agent.close()
+        if server is not None:
+            server.stop()
+        daemon.stop()
+
+
+def test_agent_policy_reload_rebuilds_the_shared_gpu_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy,
+        GpuProcessObservation,
+        NvidiaSmiGpuProcessObserver,
+    )
+
+    queried: list[GpuOccupancyPolicy] = []
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        queried.append(observer.policy)
+        return {
+            uuid: GpuProcessObservation(uuid, True, False, "available")
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident", "v1", "project", "environment", "executor"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        gpu_devices=(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"
+            ),
+        ),
+    )
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+        gpu_occupancy_policy=GpuOccupancyPolicy(),
+    )
+    changed_policy = GpuOccupancyPolicy(external_process_policy="allow")
+    replacement = replace(base, gpu_occupancy_policy=changed_policy)
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
+    try:
+        journal = client._require_journal()
+        registration = journal.persist_registration_intent(
+            _request(
+                {"coordinator_id": "coordinator", "coordinator_epoch": "epoch"},
+                client.agent_root_id,
+            )
+        )
+        session = AgentSession(
+            "session",
+            "coordinator",
+            "epoch",
+            "agent-a",
+            client.agent_root_id,
+            "policy-1",
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("python",),
+            ("default",),
+            AgentSessionState.ACTIVE,
+        )
+        journal.persist_session(
+            registration.idempotency_key, registration.value(), session
+        )
+        providers = client._provider_composition("agent-a", profile)
+        original = providers["gpu"]
+        assert isinstance(original, GpuResourceProvider)
+        original.refresh_occupancy(force=True)
+        assert queried[-1] == GpuOccupancyPolicy()
+        reload_control = AgentControl(
+            "gpu-policy-reload",
+            AgentControlKind.RELOAD,
+            "agent-a",
+            session.session_id,
+            session.config_revision,
+            None,
+            False,
+            "change monitoring cadence",
+        )
+        journal.prepare_control(reload_control)
+        effect = client._apply_agent_control(reload_control)
+        journal.record_control_effect(reload_control, effect)
+        assert effect.code == "applied"
+        assert journal.availability_drained()
+        active = client.active_session()
+        assert active is not None
+        resume_control = AgentControl(
+            "gpu-policy-resume",
+            AgentControlKind.RESUME,
+            "agent-a",
+            active.session_id,
+            active.config_revision,
+            None,
+            False,
+            "resume after monitoring reload",
+        )
+        journal.prepare_control(resume_control)
+        resumed = client._apply_agent_control(resume_control)
+        journal.record_control_effect(resume_control, resumed)
+        assert resumed.code == "applied"
+        installed = client._provider_composition("agent-a", profile)["gpu"]
+        assert isinstance(installed, GpuResourceProvider)
+        assert installed is not original
+        installed.refresh_occupancy(force=True)
+        assert queried[-1] == changed_policy
+        assert client._provider_composition("agent-a", profile)["gpu"] is installed
+    finally:
+        client.shutdown_clean()
+        client.close()
+
+
+def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
+    from loom.queue.agent_session_transport import _decode
+
+    report = _failure_report(_nested_report_detail(511)).to_dict()
+    request = {
+        "session_id": "session",
+        "coordinator_epoch": "epoch",
+        "cursor": None,
+        "evidence": {"result_operation": "report", "report": report},
+    }
+    _decode(json.dumps(request).encode(), failure_report=True)
+    with pytest.raises(QueueServiceError, match="too deeply nested"):
+        _decode(
+            json.dumps({**request, "unexpected": _nested_report_detail(20)}).encode(),
+            failure_report=True,
+        )
+    items: list[PlainData] = [0] * 257
+    request["evidence"]["report"] = _failure_report({"items": items}).to_dict()
+    with pytest.raises(QueueServiceError, match="maximum 256"):
+        _decode(json.dumps(request).encode(), failure_report=True)

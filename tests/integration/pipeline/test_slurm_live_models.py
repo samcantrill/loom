@@ -11,18 +11,30 @@ from loom.pipeline.executors.slurm import (
     SlurmMode,
     SlurmOptions,
     SlurmSubmittedJob,
-    build_single_job_planned_submission,
+    SlurmPlannedSubmission,
+    SlurmPlannedJob,
+    SlurmCommandArgv,
     live_manifest_from_planned_submission,
     parse_sbatch_parsable_output,
 )
 
 
 def test_fake_sbatch_flow_records_live_manifest_job_identity() -> None:
-    planned = build_single_job_planned_submission(
+    planned = SlurmPlannedSubmission(
         run_uri="file:///runs/run-1",
         planning_id="p1",
         created_at="2026-05-08T00:00:00Z",
         options=SlurmOptions(),
+        mode=SlurmMode.SINGLE_JOB,
+        plan_relative_path="slurm/submissions/p1/plan.json",
+        manifest_relative_path="slurm/submissions/p1/manifest.json",
+        jobs=(
+            SlurmPlannedJob(
+                logical_key="pipeline",
+                mode=SlurmMode.SINGLE_JOB,
+                command=SlurmCommandArgv(launcher_argv=("historical-worker",)),
+            ),
+        ),
     )
     runner = FakeSlurmCommandRunner(starting_job_id=900)
     command_result = runner.sbatch(
@@ -78,11 +90,21 @@ def test_fake_runner_can_model_delayed_empty_status_data() -> None:
 
 
 def test_submitting_live_manifest_counts_as_active() -> None:
-    planned = build_single_job_planned_submission(
+    planned = SlurmPlannedSubmission(
         run_uri="file:///runs/run-1",
         planning_id="p1",
         created_at="2026-05-08T00:00:00Z",
         options=SlurmOptions(),
+        mode=SlurmMode.SINGLE_JOB,
+        plan_relative_path="slurm/submissions/p1/plan.json",
+        manifest_relative_path="slurm/submissions/p1/manifest.json",
+        jobs=(
+            SlurmPlannedJob(
+                logical_key="pipeline",
+                mode=SlurmMode.SINGLE_JOB,
+                command=SlurmCommandArgv(launcher_argv=("historical-worker",)),
+            ),
+        ),
     )
 
     manifest = live_manifest_from_planned_submission(

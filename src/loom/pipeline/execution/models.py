@@ -5,33 +5,27 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
+from urllib.parse import urlsplit, urlunsplit
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Protocol, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, cast
 
 from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
-from loom.pipeline.event_sinks import EventSinkRegistry
+from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.planning import (
-    ExecutionPlan,
-    FingerprintContext,
     PlanAction,
     PlanReason,
-    PlanSelectors,
-    ResumeOptions,
     StageFingerprintRecord,
     StagePlan,
 )
 from loom.pipeline.runtime import (
     ResolvedStageRuntimeOptions,
-    RunOptions,
-    parse_run_options,
 )
-from loom.pipeline.specs import PipelineSpec, StageSpec
-from loom.pipeline.resources import ResourceValidatorRegistry
+from loom.pipeline.specs import StageSpec
 from loom.pipeline.stage import Stage
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import StageStatus
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
@@ -44,10 +38,10 @@ from loom.serialization.errors import SchemaVersionError
 from .errors import RunRequestError
 
 if TYPE_CHECKING:
-    from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
+    pass
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
-STAGE_WORKER_REQUEST_SCHEMA_VERSION = 1
+STAGE_WORKER_REQUEST_SCHEMA_VERSION = 2
 STAGE_WORKER_RESULT_SCHEMA_VERSION = 1
 
 _VALID_FAILURE_TYPES = {
@@ -61,180 +55,6 @@ _VALID_FAILURE_TYPES = {
     "executor_infrastructure",
 }
 _PLUGIN_ACTIVATIONS_METADATA_KEY = "plugin_activations"
-
-
-class _ComposedConfigLike(Protocol):
-    @property
-    def resolved(self) -> Mapping[str, PlainData]: ...
-
-    @property
-    def redacted(self) -> Mapping[str, PlainData]: ...
-
-    @property
-    def manifest(self) -> object: ...
-
-    @property
-    def provenance(self) -> object: ...
-
-    @property
-    def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigSnapshotInputs:
-    raw: str | None = None
-    overlays: str | None = None
-    cli_overrides: str | None = None
-
-    def __post_init__(self) -> None:
-        for name in ("raw", "overlays", "cli_overrides"):
-            value = getattr(self, name)
-            if value is not None and not isinstance(value, str):
-                raise RunRequestError(
-                    f"ConfigSnapshotInputs.{name} must be a string when set"
-                )
-
-
-@dataclass(frozen=True, slots=True)
-class FailurePolicy:
-    stop_on_first_failure: bool = True
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.stop_on_first_failure, bool):
-            raise RunRequestError("FailurePolicy.stop_on_first_failure must be a bool")
-
-
-@dataclass(frozen=True, slots=True)
-class RunRequest:
-    config: _ComposedConfigLike | Mapping[str, PlainData] | None = None
-    pipeline: PipelineSpec | None = None
-    run_uri: str | None = None
-    open_existing: bool = False
-    options: RunOptions | Mapping[str, object] = field(default_factory=RunOptions)
-    selectors: PlanSelectors = field(default_factory=PlanSelectors)
-    resume: ResumeOptions = field(default_factory=ResumeOptions)
-    fingerprint_context: FingerprintContext = field(default_factory=FingerprintContext)
-    config_snapshots: ConfigSnapshotInputs = field(default_factory=ConfigSnapshotInputs)
-    provenance_options: ProvenanceCaptureOptions = field(
-        default_factory=lambda: _default_provenance_options()
-    )
-    command: CommandProvenance | None = None
-    project_root: Path | None = None
-    failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
-    metadata: Mapping[str, PlainData] = field(default_factory=dict)
-    plugin_activation_manifest: Mapping[str, PlainData] | None = None
-    worker_plugin_activation_manifest: Mapping[str, PlainData] | None = None
-    resource_validator_registry: ResourceValidatorRegistry | None = None
-    event_sink_registry: EventSinkRegistry | None = None
-    event_persistence: str = "durable"
-    idempotency_key: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.config is None and self.pipeline is None:
-            raise RunRequestError("RunRequest requires either config or pipeline")
-        if self.config is not None and not (
-            isinstance(self.config, Mapping) or _is_composed_config(self.config)
-        ):
-            raise RunRequestError(
-                "RunRequest.config must be a ComposedConfig or mapping"
-            )
-        if self.pipeline is not None and not isinstance(self.pipeline, PipelineSpec):
-            raise RunRequestError(
-                "RunRequest.pipeline must be a PipelineSpec when supplied"
-            )
-        if not isinstance(self.open_existing, bool):
-            raise RunRequestError("RunRequest.open_existing must be a bool")
-
-        selectors = _coerce_selectors(self.selectors)
-        resume = _coerce_resume(self.resume)
-        if self.run_uri is not None and (
-            not isinstance(self.run_uri, str) or not self.run_uri
-        ):
-            raise RunRequestError("RunRequest.run_uri must be a non-empty string")
-        options = _normalize_run_request_options(
-            self.options,
-            run_uri=self.run_uri,
-            selectors=selectors,
-            resume=resume,
-        )
-        object.__setattr__(self, "options", options)
-        object.__setattr__(self, "run_uri", options.run_uri)
-        object.__setattr__(self, "selectors", options.to_plan_selectors())
-        object.__setattr__(self, "resume", options.to_resume_options())
-        object.__setattr__(
-            self,
-            "fingerprint_context",
-            _coerce_fingerprint_context(self.fingerprint_context),
-        )
-        object.__setattr__(
-            self,
-            "config_snapshots",
-            _coerce_config_snapshots(self.config_snapshots),
-        )
-        object.__setattr__(
-            self,
-            "provenance_options",
-            _coerce_provenance_options(self.provenance_options),
-        )
-        if self.command is not None and not _is_command_provenance(self.command):
-            raise RunRequestError(
-                "RunRequest.command must be CommandProvenance when supplied"
-            )
-        if self.project_root is not None:
-            object.__setattr__(self, "project_root", Path(self.project_root))
-        object.__setattr__(
-            self, "failure_policy", _coerce_failure_policy(self.failure_policy)
-        )
-        metadata = _plain_mapping(self.metadata, "metadata")
-        if _PLUGIN_ACTIVATIONS_METADATA_KEY in metadata:
-            raise RunRequestError(
-                "RunRequest.metadata may not supply reserved plugin_activations"
-            )
-        object.__setattr__(self, "metadata", metadata)
-        if self.plugin_activation_manifest is not None:
-            object.__setattr__(
-                self,
-                "plugin_activation_manifest",
-                _plain_mapping(
-                    self.plugin_activation_manifest, "plugin_activation_manifest"
-                ),
-            )
-        if self.worker_plugin_activation_manifest is not None:
-            object.__setattr__(
-                self,
-                "worker_plugin_activation_manifest",
-                _plain_mapping(
-                    self.worker_plugin_activation_manifest,
-                    "worker_plugin_activation_manifest",
-                ),
-            )
-        if self.resource_validator_registry is not None and not isinstance(
-            self.resource_validator_registry, ResourceValidatorRegistry
-        ):
-            raise RunRequestError(
-                "RunRequest.resource_validator_registry must be a ResourceValidatorRegistry"
-            )
-        object.__setattr__(
-            self,
-            "event_sink_registry",
-            _coerce_event_sink_registry(self.event_sink_registry),
-        )
-        object.__setattr__(
-            self,
-            "event_persistence",
-            _coerce_event_persistence(
-                self.event_persistence,
-                registry=cast(EventSinkRegistry | None, self.event_sink_registry),
-            ),
-        )
-        idempotency_key = self.idempotency_key
-        if idempotency_key is None:
-            idempotency_key = uuid4().hex
-        if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise RunRequestError(
-                "RunRequest.idempotency_key must be a non-empty string"
-            )
-        object.__setattr__(self, "idempotency_key", idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,13 +293,15 @@ class StageWorkerRequest:
             raise RunRequestError(
                 "StageWorkerRequest.resolved_runtime must include executor"
             )
+        metadata = _plain_mapping(self.metadata, "metadata")
+        _validate_worker_resource_selection(runtime, metadata)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(
             self,
             "executor_metadata",
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        object.__setattr__(self, "metadata", metadata)
 
     def to_dict(self) -> dict[str, PlainData]:
         fingerprint = cast(StageFingerprintRecord, self.fingerprint)
@@ -505,6 +327,31 @@ class StageWorkerRequest:
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Describe this request without private paths, payloads or credentials.
+
+        This is an observation view, not an execution handoff or identity input.
+        Logical input names and requested resources remain visible; the existing
+        ``to_dict`` method alone retains the complete private request.
+        """
+        return redact_executor_metadata(
+            {
+                "run_uri": self.run_uri,
+                "stage_name": self.stage_name,
+                "attempt": self.attempt,
+                "prepared_at": self.prepared_at,
+                "executor_name": self.executor_name,
+                "inputs": cast(list[PlainData], sorted(self.inputs)),
+                "resolved_runtime": dict(self.resolved_runtime),
+                "stdout_path": self.stdout_path,
+                "stderr_path": self.stderr_path,
+                "traceback_path": self.traceback_path,
+                "result_path": self.result_path,
+                "executor_metadata": dict(self.executor_metadata),
+            },
+            public=True,
+        )
+
     @classmethod
     def from_dict(cls, data: object) -> "StageWorkerRequest":
         try:
@@ -528,7 +375,10 @@ class StageWorkerRequest:
                 optional={"executor_metadata", "metadata"},
             )
         except SchemaVersionError as exc:
-            raise RunRequestError(f"StageWorkerRequest.from_dict: {exc}") from exc
+            raise RunRequestError(
+                f"StageWorkerRequest.from_dict: {exc}; finish or cancel the saved "
+                "work in its pinned environment and prepare a fresh identity"
+            ) from exc
         return cls(
             schema_version=_int(mapping["schema_version"], "schema_version"),
             run_uri=_str(mapping["run_uri"], "run_uri"),
@@ -560,6 +410,50 @@ class StageWorkerRequest:
                 cast(Mapping[str, PlainData], mapping.get("metadata", {})),
                 "metadata",
             ),
+        )
+
+
+def _validate_worker_resource_selection(
+    runtime: Mapping[str, PlainData], metadata: Mapping[str, PlainData]
+) -> None:
+    """Reject a retained worker whose saved post-demand projection changed."""
+
+    selection = runtime.get("resource_selection")
+    if selection is None:
+        raise RunRequestError(
+            "StageWorkerRequest.resolved_runtime must include resource_selection"
+        )
+    resources = runtime.get("resources")
+    policy = runtime.get("resource_policy")
+    if not isinstance(resources, Mapping) or not isinstance(policy, Mapping):
+        raise RunRequestError(
+            "StageWorkerRequest resource selection requires resolved runtime policy and resources"
+        )
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        raise RunRequestError(
+            "StageWorkerRequest resolved runtime resources are invalid"
+        )
+    from loom.pipeline.runtime.resource_policy import (
+        ResourcePolicy,
+        validate_resource_selection,
+    )
+
+    try:
+        actual = validate_resource_selection(
+            selection,
+            entries,
+            ResourcePolicy.from_dict(policy),
+            path="StageWorkerRequest.resolved_runtime.resource_selection",
+        )
+    except RuntimeResourceError as exc:
+        raise RunRequestError(str(exc)) from exc
+    legacy = metadata.get("resource_selection")
+    if legacy is not None and legacy != {
+        key: list(value) for key, value in actual.items()
+    }:
+        raise RunRequestError(
+            "StageWorkerRequest metadata resource selection conflicts with resolved runtime"
         )
 
 
@@ -703,6 +597,10 @@ class StageWorkerResult:
             ),
         }
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return route/outcome facts without private logs or artifact payloads."""
+        return _execution_result_safe_metadata(self)
+
     @classmethod
     def from_dict(cls, data: object) -> "StageWorkerResult":
         try:
@@ -828,6 +726,35 @@ class StageExecutionRequest:
             _coerce_resolved_runtime(self.resolved_runtime, stage_name=self.stage.name),
         )
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Describe the admitted request before invoking opaque stage code.
+
+        Resource demand and selection are requested/reserved facts, not measured
+        device visibility. Workspace/log locations are opaque in this public
+        view, while input names remain logical graph identities.
+        """
+        runtime = cast(ResolvedStageRuntimeOptions, self.resolved_runtime)
+        return redact_executor_metadata(
+            {
+                "run_uri": self.run_uri,
+                "stage_name": self.stage.name,
+                "attempt": self.attempt,
+                "executor_name": runtime.executor,
+                "resolved_runtime": runtime.to_safe_metadata(),
+                "inputs": cast(list[PlainData], sorted(self.inputs)),
+                "workspace": None
+                if self.context._local_workspace_dir is None
+                else str(self.context._local_workspace_dir),
+                "output_dir": None
+                if self.context._local_output_dir is None
+                else str(self.context._local_output_dir),
+                "stdout_path": str(self.stdout_path),
+                "stderr_path": str(self.stderr_path),
+                "traceback_path": str(self.traceback_path),
+            },
+            public=True,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class StageExecutionResult:
@@ -905,6 +832,10 @@ class StageExecutionResult:
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
 
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return the existing execution outcome and redacted route metadata."""
+        return _execution_result_safe_metadata(self)
+
 
 @dataclass(frozen=True, slots=True)
 class StageRunResult:
@@ -947,97 +878,9 @@ class StageRunResult:
             _plain_mapping(self.executor_metadata, "executor_metadata"),
         )
 
-
-@dataclass(frozen=True, slots=True)
-class RunResult:
-    run_uri: str
-    status: RunStatus
-    started_at: str
-    finished_at: str
-    plan: ExecutionPlan
-    stage_results: Mapping[str, StageRunResult]
-    failed_stage: str | None = None
-    failure: ExecutionFailure | None = None
-    artifact_index: Mapping[str, ArtifactRef] = field(default_factory=dict)
-    metadata: Mapping[str, PlainData] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.run_uri, str) or not self.run_uri:
-            raise RunRequestError("RunResult.run_uri must be a non-empty string")
-        object.__setattr__(self, "status", _run_status(self.status))
-        if not isinstance(self.started_at, str) or not self.started_at:
-            raise RunRequestError("RunResult.started_at must be a non-empty string")
-        if not isinstance(self.finished_at, str) or not self.finished_at:
-            raise RunRequestError("RunResult.finished_at must be a non-empty string")
-        if not isinstance(self.plan, ExecutionPlan):
-            raise RunRequestError("RunResult.plan must be ExecutionPlan")
-        if not isinstance(self.stage_results, Mapping):
-            raise RunRequestError("RunResult.stage_results must be a mapping")
-        normalized_results: dict[str, StageRunResult] = {}
-        for name, result in self.stage_results.items():
-            if not isinstance(name, str) or not isinstance(result, StageRunResult):
-                raise RunRequestError(
-                    "RunResult.stage_results must map strings to StageRunResult"
-                )
-            normalized_results[name] = result
-        if set(normalized_results) != set(self.plan.stage_order):
-            raise RunRequestError(
-                "RunResult.stage_results must contain every planned stage"
-            )
-        if self.failed_stage is not None and not isinstance(self.failed_stage, str):
-            raise RunRequestError("RunResult.failed_stage must be a string when set")
-        if self.failure is not None and not isinstance(self.failure, ExecutionFailure):
-            raise RunRequestError("RunResult.failure must be ExecutionFailure when set")
-        object.__setattr__(self, "stage_results", MappingProxyType(normalized_results))
-        object.__setattr__(
-            self,
-            "artifact_index",
-            _artifact_ref_mapping(self.artifact_index, "artifact_index"),
-        )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
-
-
-def _normalize_run_request_options(
-    value: RunOptions | Mapping[str, object],
-    *,
-    run_uri: str | None,
-    selectors: PlanSelectors,
-    resume: ResumeOptions,
-) -> RunOptions:
-    options = _coerce_run_options(value)
-    data = options.to_dict()
-
-    if run_uri is not None:
-        if options.run_uri is not None and options.run_uri != run_uri:
-            raise RunRequestError(
-                "RunRequest.run_uri conflicts with RunRequest.options.run_uri"
-            )
-        data["run_uri"] = run_uri
-
-    option_selectors = options.to_plan_selectors()
-    if selectors != PlanSelectors():
-        if option_selectors != PlanSelectors() and option_selectors != selectors:
-            raise RunRequestError(
-                "RunRequest.selectors conflicts with RunRequest.options.selectors"
-            )
-        data["selectors"] = selectors.to_dict()
-
-    option_resume = options.to_resume_options()
-    if resume != ResumeOptions():
-        if option_resume != ResumeOptions() and option_resume != resume:
-            raise RunRequestError(
-                "RunRequest.resume conflicts with RunRequest.options.resume"
-            )
-        data["resume"] = resume.to_dict()
-
-    return RunOptions.from_dict(data)
-
-
-def _coerce_run_options(value: RunOptions | Mapping[str, object]) -> RunOptions:
-    try:
-        return parse_run_options(value)
-    except Exception as exc:
-        raise RunRequestError(f"RunRequest.options is invalid: {exc}") from exc
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return the existing execution outcome and redacted route metadata."""
+        return _execution_result_safe_metadata(self)
 
 
 def _coerce_resolved_runtime(
@@ -1062,111 +905,6 @@ def _coerce_resolved_runtime(
             "StageExecutionRequest.resolved_runtime.stage_id must match stage.name"
         )
     return runtime
-
-
-def _coerce_selectors(value: object) -> PlanSelectors:
-    if isinstance(value, PlanSelectors):
-        return value
-    if isinstance(value, Mapping):
-        return PlanSelectors.from_dict(value)
-    raise RunRequestError("selectors must be PlanSelectors or mapping")
-
-
-def _coerce_resume(value: object) -> ResumeOptions:
-    if isinstance(value, ResumeOptions):
-        return value
-    if isinstance(value, Mapping):
-        return ResumeOptions.from_dict(value)
-    raise RunRequestError("resume must be ResumeOptions or mapping")
-
-
-def _coerce_fingerprint_context(value: object) -> FingerprintContext:
-    if isinstance(value, FingerprintContext):
-        return value
-    if isinstance(value, Mapping):
-        return FingerprintContext.from_dict(value)
-    raise RunRequestError("fingerprint_context must be FingerprintContext or mapping")
-
-
-def _coerce_config_snapshots(value: object) -> ConfigSnapshotInputs:
-    if isinstance(value, ConfigSnapshotInputs):
-        return value
-    if isinstance(value, Mapping):
-        return ConfigSnapshotInputs(
-            raw=_optional_str(value.get("raw"), "raw"),
-            overlays=_optional_str(value.get("overlays"), "overlays"),
-            cli_overrides=_optional_str(value.get("cli_overrides"), "cli_overrides"),
-        )
-    raise RunRequestError("config_snapshots must be ConfigSnapshotInputs or mapping")
-
-
-def _coerce_provenance_options(value: object) -> ProvenanceCaptureOptions:
-    from loom.provenance.models import ProvenanceCaptureOptions
-
-    if isinstance(value, ProvenanceCaptureOptions):
-        return value
-    raise RunRequestError("provenance_options must be ProvenanceCaptureOptions")
-
-
-def _default_provenance_options() -> ProvenanceCaptureOptions:
-    from loom.provenance.models import ProvenanceCaptureOptions
-
-    return ProvenanceCaptureOptions()
-
-
-def _is_command_provenance(value: object) -> bool:
-    from loom.provenance.models import CommandProvenance
-
-    return isinstance(value, CommandProvenance)
-
-
-def _coerce_failure_policy(value: object) -> FailurePolicy:
-    if isinstance(value, FailurePolicy):
-        return value
-    if isinstance(value, Mapping):
-        raw_stop_on_first_failure = value.get("stop_on_first_failure", True)
-        return FailurePolicy(
-            stop_on_first_failure=_bool(
-                raw_stop_on_first_failure, "failure_policy.stop_on_first_failure"
-            )
-        )
-    raise RunRequestError("failure_policy must be FailurePolicy or mapping")
-
-
-def _coerce_event_sink_registry(value: object) -> EventSinkRegistry | None:
-    if value is None:
-        return None
-    if isinstance(value, EventSinkRegistry):
-        return value
-    raise RunRequestError("event_sink_registry must be EventSinkRegistry when supplied")
-
-
-def _coerce_event_persistence(
-    value: object,
-    *,
-    registry: EventSinkRegistry | None,
-) -> str:
-    if value not in {"durable", "non_durable"}:
-        raise RunRequestError("event_persistence must be 'durable' or 'non_durable'")
-    mode = cast(str, value)
-    if mode == "non_durable" and (registry is None or len(registry) == 0):
-        raise RunRequestError(
-            "event_persistence='non_durable' requires a non-empty event_sink_registry"
-        )
-    return mode
-
-
-def _is_composed_config(value: object) -> bool:
-    return all(
-        hasattr(value, name)
-        for name in (
-            "resolved",
-            "redacted",
-            "manifest",
-            "provenance",
-            "recipe_manifest",
-        )
-    )
 
 
 def _plain_mapping(
@@ -1242,20 +980,61 @@ _SENSITIVE_KEY_PARTS = (
 
 def redact_executor_metadata(
     metadata: Mapping[str, PlainData] | None,
+    *,
+    public: bool = False,
 ) -> dict[str, PlainData]:
-    """Return executor metadata safe for persisted worker records."""
+    """Redact execution metadata for private storage or public observation.
+
+    The default preserves the existing private worker-record shape. ``public``
+    additionally hides host paths, raw process output, arbitrary exception text,
+    URI credentials and resource-attribute values. Neither view is an execution
+    input or a replacement for a private request. Typed outcome codes, argument
+    switches, mount access modes and requested/observed numeric facts survive.
+    """
 
     return cast(
         dict[str, PlainData],
-        _redact_plain_value(dict(metadata or {}), key_path=()),
+        _redact_plain_value(dict(metadata or {}), key_path=(), public=public),
     )
 
 
-def _redact_plain_value(value: object, *, key_path: tuple[str, ...]) -> PlainData:
+def _redact_plain_value(
+    value: object, *, key_path: tuple[str, ...], public: bool = False
+) -> PlainData:
+    if (
+        public
+        and key_path
+        and key_path[-1].lower()
+        in {
+            "stdout",
+            "stderr",
+            "traceback",
+            "traceback_text",
+            "message",
+            "launch_error",
+            "error",
+            "setup_error",
+            "script_text",
+            "script",
+        }
+    ):
+        return None if value is None else "[redacted]"
+    if (
+        public
+        and key_path
+        and key_path[-1].lower() == "attributes"
+        and isinstance(value, Mapping)
+    ):
+        return "[redacted]"
     if key_path and _is_sensitive_key(key_path[-1]):
         return "[redacted]"
     if isinstance(value, Mapping):
         if key_path and key_path[-1].lower() in {"env", "environment"}:
+            if public and set(value) == {"key_count", "keys"}:
+                return {
+                    "key_count": cast(int, value["key_count"]),
+                    "keys": list(value["keys"]),
+                }
             return {
                 "key_count": len(value),
                 "keys": cast(list[PlainData], sorted(str(key) for key in value)),
@@ -1266,22 +1045,97 @@ def _redact_plain_value(value: object, *, key_path: tuple[str, ...]) -> PlainDat
             output[key_text] = _redact_plain_value(
                 item,
                 key_path=(*key_path, key_text),
+                public=public,
             )
         return output
     if isinstance(value, Sequence) and not isinstance(value, (bytes, str)):
         redacted_items: list[PlainData] = []
+        previous_argument = ""
         for item in value:
-            if isinstance(item, str) and _looks_like_secret_argument(item):
+            if public and (
+                previous_argument == "-c"
+                or (
+                    previous_argument.startswith("--")
+                    and "=" not in previous_argument
+                    and _is_sensitive_key(previous_argument)
+                )
+            ):
+                redacted_items.append("[redacted]")
+            elif (
+                not public
+                and isinstance(item, str)
+                and _looks_like_secret_argument(item)
+            ):
                 redacted_items.append("[redacted]")
             else:
-                redacted_items.append(_redact_plain_value(item, key_path=key_path))
+                redacted_items.append(
+                    _redact_plain_value(item, key_path=key_path, public=public)
+                )
+            previous_argument = item if isinstance(item, str) else ""
         return redacted_items
+    if public and isinstance(value, str):
+        return _public_execution_string(value)
     try:
         return ensure_plain_data(value, path="executor_metadata")
     except PlainDataError as exc:
         raise RunRequestError(
             f"executor_metadata must be plain-data-compatible: {exc}"
         ) from exc
+
+
+def _public_execution_string(value: str) -> str:
+    if value.startswith("file:"):
+        return "[redacted-path]"
+    if "://" in value:
+        try:
+            uri = urlsplit(value)
+            authority = uri.netloc.rsplit("@", 1)[-1]
+            return urlunsplit((uri.scheme, authority, uri.path, "", ""))
+        except ValueError:
+            return "[redacted]"
+    if _looks_like_secret_argument(value):
+        return "[redacted]"
+    if re.search(r"(?:^|[=:\s])/", value):
+        if value.startswith("--") and "=" in value:
+            return value.split("=", 1)[0] + "=[redacted-path]"
+        return "[redacted-path]"
+    return value
+
+
+def _execution_result_safe_metadata(
+    result: StageExecutionResult | StageWorkerResult | StageRunResult,
+) -> dict[str, PlainData]:
+    failure = cast(ExecutionFailure | None, result.failure)
+    metadata: dict[str, PlainData] = {
+        "stage_name": result.stage_name,
+        "attempt": result.attempt,
+        "status": None if result.status is None else result.status.value,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "outputs": cast(list[PlainData], sorted(result.outputs)),
+        "failure": None
+        if failure is None
+        else {
+            "executor": failure.executor,
+            "failure_type": failure.failure_type,
+            "exception_type": failure.exception_type,
+            "exit_code": failure.exit_code,
+            "signal": failure.signal,
+        },
+        "executor_metadata": dict(result.executor_metadata),
+    }
+    for name in (
+        "executor_name",
+        "run_uri",
+        "stdout_path",
+        "stderr_path",
+        "traceback_path",
+        "exit_code",
+        "signal",
+    ):
+        if hasattr(result, name):
+            metadata[name] = getattr(result, name)
+    return redact_executor_metadata(metadata, public=True)
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -1308,13 +1162,6 @@ def _stage_status(value: StageStatus | str) -> StageStatus:
         return value if isinstance(value, StageStatus) else StageStatus(value)
     except ValueError as exc:
         raise RunRequestError(f"invalid stage status: {value!r}") from exc
-
-
-def _run_status(value: RunStatus | str) -> RunStatus:
-    try:
-        return value if isinstance(value, RunStatus) else RunStatus(value)
-    except ValueError as exc:
-        raise RunRequestError(f"invalid run status: {value!r}") from exc
 
 
 def _plan_action(value: PlanAction | str) -> PlanAction:
@@ -1360,11 +1207,7 @@ __all__ = [
     "EXECUTION_FAILURE_SCHEMA_VERSION",
     "STAGE_WORKER_REQUEST_SCHEMA_VERSION",
     "STAGE_WORKER_RESULT_SCHEMA_VERSION",
-    "ConfigSnapshotInputs",
     "ExecutionFailure",
-    "FailurePolicy",
-    "RunRequest",
-    "RunResult",
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageRunResult",

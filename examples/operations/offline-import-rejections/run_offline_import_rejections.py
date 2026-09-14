@@ -4,7 +4,6 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -32,22 +31,16 @@ def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"offline-rejection-{uuid4().hex[:8]}")
-    config_path = HERE / "pipeline.yaml"
 
     authority = start_authority_session(output_root)
     try:
-        offline = run_cli_json(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--offline-first",
-                "--format",
-                "json",
-            ]
-        )
-        manifest_path = Path(offline["result"]["offline_evidence"]["manifest_path"])
+        from examples.historical_evidence import complete_manifest
+        import json
+
+        manifest = complete_manifest(output_root, name=Path(run_uri).name)
+        run_uri = manifest.run_uri
+        manifest_path = output_root / "historical-manifest.json"
+        manifest_path.write_text(json.dumps(manifest.to_dict()))
         incomplete_path = output_root / "incomplete-manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["manifest_status"] = "incomplete"

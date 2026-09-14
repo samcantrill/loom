@@ -27,6 +27,7 @@ from loom.pipeline.runtime.options import (
     StageRuntimeOptions,
     parse_run_options,
 )
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     TimeoutPolicy,
@@ -698,47 +699,15 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
     )
 
 
-def _slurm_descriptor(name: str) -> ExecutorDescriptor:
-    supported = ResourceCapability(
-        support_level=ResourceSupportLevel.SUPPORTED,
-        enforcement=ResourceEnforcementExpectation.ENFORCED,
-        severity=CapabilitySeverity.INFO,
-        details={"reason": "SLURM planning maps this resource to SBATCH directives"},
-    )
-    return ExecutorDescriptor(
-        name=name,
-        resource_capabilities={
-            "cpu": supported,
-            "memory": supported,
-            "gpu": supported,
-        },
-        adapter_namespaces=(
-            "apptainer",
-            "container",
-            "container_build",
-            "singularity",
-            "slurm",
-        ),
-        timeout_support=TimeoutSupportLevel.DELEGATED,
-        details={
-            "built_in": True,
-            "dry_run_only": False,
-            "live_submission": True,
-            "scheduler_commands": True,
-            "container_composition": True,
-        },
-    )
-
-
 def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
-    advisory = ResourceCapability(
-        support_level=ResourceSupportLevel.ADVISORY,
+    mapped = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
         enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
-        severity=CapabilitySeverity.WARNING,
+        severity=CapabilitySeverity.INFO,
         details={
             "reason": (
-                "direct Apptainer execution can expose runtime flags, but scheduler "
-                "allocation and platform enforcement are outside the direct executor"
+                "direct Apptainer execution maps this resource to runtime flags; "
+                "cgroup delegation and platform enforcement remain host-dependent"
             )
         },
     )
@@ -756,8 +725,8 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
     return ExecutorDescriptor(
         name=name,
         resource_capabilities={
-            "cpu": advisory,
-            "memory": advisory,
+            "cpu": mapped,
+            "memory": mapped,
             "gpu": gpu,
         },
         adapter_namespaces=(
@@ -766,12 +735,17 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
             "container_build",
             "singularity",
         ),
-        timeout_support=TimeoutSupportLevel.UNSUPPORTED,
+        timeout_support=TimeoutSupportLevel.ENFORCED,
         details={
             "built_in": True,
             "containerized": True,
             "apptainer_cli": True,
             "singularity_compatible": name == "singularity",
+            "timeout_prerequisites": (
+                "built-in subprocess runner on Linux with pidfds and waitid/WNOWAIT; "
+                "SingularityCE 3.10.4 foreground exec with PID-namespace init; "
+                "execution-host admission is checked at launch, not by this descriptor"
+            ),
             "security_sandbox": False,
             "requires_prepared_worker_request": True,
         },
@@ -927,6 +901,13 @@ def _timeout_capability_message(
     timeout_support: TimeoutSupportLevel,
 ) -> str:
     if timeout_support is TimeoutSupportLevel.ENFORCED:
+        if executor in {"apptainer", "singularity"}:
+            return (
+                f"executor {executor!r} can enforce reliability timeout policy with "
+                "the built-in runner on supported Linux/SingularityCE 3.10.4 "
+                "PID-namespace hosts; execution-host prerequisites are checked at "
+                "launch, not by this static diagnostic"
+            )
         return f"executor {executor!r} can enforce reliability timeout policy"
     if timeout_support is TimeoutSupportLevel.DELEGATED:
         return f"executor {executor!r} delegates reliability timeout policy"
@@ -991,37 +972,108 @@ def _resource_capability_diagnostics(
     options: RunOptions,
     descriptor: ExecutorDescriptor,
 ) -> list[CapabilityDiagnostic]:
+    from loom.pipeline.runtime.metadata import resolve_run_runtime
+
     diagnostics: list[CapabilityDiagnostic] = []
-    for stage_id, stage_options in cast(
-        Mapping[str, StageRuntimeOptions],
-        options.stage_options,
-    ).items():
+    stage_options_by_id: dict[str | None, StageRuntimeOptions] = {
+        stage_id: stage_options
+        for stage_id, stage_options in cast(
+            Mapping[str, StageRuntimeOptions], options.stage_options
+        ).items()
+    }
+    direct_container = descriptor.name in {"apptainer", "singularity", "docker"}
+    scheduler_owned = descriptor.name.startswith("slurm")
+    if direct_container and not stage_options_by_id:
+        stage_options_by_id[None] = StageRuntimeOptions()
+    resolved = resolve_run_runtime(options, stage_ids=options.stage_options)
+    for stage_id, stage_options in stage_options_by_id.items():
         resources = cast(ResourceRequest, stage_options.resources)
-        for kind in resources.entries:
+        entries: Mapping[str, object] = resources.entries
+        policy = (
+            cast(ResourcePolicy, options.resource_policy).resolved()
+            if stage_id is None
+            else cast(ResourcePolicy, resolved[stage_id].resource_policy)
+        )
+        stage_path = f"RunOptions.stage_options[{stage_id!r}]"
+        resource_path = f"{stage_path}.resources"
+        if direct_container and not entries:
+            authored_at_stage = "container" in stage_options.adapter_options
+            container = stage_options.adapter_options.get(
+                "container", options.adapter_options.get("container")
+            )
+            entries = _container_resource_entries(container)
+            source = stage_path if authored_at_stage else "RunOptions"
+            resource_path = f"{source}.adapter_options['container'].resources"
+        selected = set(policy.select(entries)["enforce"])
+        authored = policy.enforce if isinstance(policy.enforce, tuple) else ()
+        for kind in sorted(set(entries) | set(authored)):
             capability = descriptor.capability_for(kind)
+            entry = entries.get(kind)
+            amount = (
+                entry.get("amount")
+                if isinstance(entry, Mapping)
+                else getattr(entry, "amount", None)
+            )
+            absent = entry is None or amount == 0
+            severity = cast(CapabilitySeverity, capability.severity)
+            enforcement = cast(ResourceEnforcementExpectation, capability.enforcement)
+            code = _resource_diagnostic_code(
+                cast(ResourceSupportLevel, capability.support_level)
+            )
+            message = _resource_diagnostic_message(
+                executor=descriptor.name, kind=kind, capability=capability
+            )
+            if absent:
+                severity = CapabilitySeverity.INFO
+                enforcement = ResourceEnforcementExpectation.NOT_APPLICABLE
+                code = "resource.not_applicable"
+                message = (
+                    f"resource {kind!r} has no effective demand; no control is added"
+                )
+            elif not scheduler_owned and kind not in selected:
+                severity = CapabilitySeverity.WARNING
+                enforcement = ResourceEnforcementExpectation.NOT_ENFORCED
+                code = "resource.not_requested"
+                message = f"no additional {kind!r} control is requested; full demand is retained"
+            elif not scheduler_owned and capability.enforcement in {
+                ResourceEnforcementExpectation.NOT_ENFORCED,
+                ResourceEnforcementExpectation.NOT_APPLICABLE,
+            }:
+                severity = CapabilitySeverity.ERROR
+                code = "resource.unsupported"
+                message = (
+                    f"executor {descriptor.name!r} cannot enforce resource {kind!r}; "
+                    "omit it from resource_policy.enforce or use a supporting execution owner"
+                )
             diagnostics.append(
                 CapabilityDiagnostic(
-                    path=f"RunOptions.stage_options[{stage_id!r}].resources.entries[{kind!r}]",
-                    severity=cast(CapabilitySeverity, capability.severity),
-                    code=_resource_diagnostic_code(
-                        cast(ResourceSupportLevel, capability.support_level)
-                    ),
-                    message=_resource_diagnostic_message(
-                        executor=descriptor.name,
-                        kind=kind,
-                        capability=capability,
-                    ),
+                    path=f"{resource_path}.entries[{kind!r}]",
+                    severity=severity,
+                    code=code,
+                    message=message,
                     executor=descriptor.name,
                     stage_id=stage_id,
                     resource_kind=kind,
                     support_level=cast(ResourceSupportLevel, capability.support_level),
-                    enforcement=cast(
-                        ResourceEnforcementExpectation, capability.enforcement
-                    ),
+                    enforcement=enforcement,
                     details=capability.details,
                 )
             )
     return diagnostics
+
+
+def _container_resource_entries(container: object) -> Mapping[str, object]:
+    """Inspect authored fallback kinds; the command mapper owns validity."""
+
+    if not isinstance(container, Mapping):
+        return {}
+    resources = container.get("resources")
+    if not isinstance(resources, Mapping):
+        return {}
+    entries = resources.get("entries")
+    if not isinstance(entries, Mapping):
+        return {}
+    return cast(Mapping[str, object], entries)
 
 
 def _resource_diagnostic_code(support_level: ResourceSupportLevel) -> str:
@@ -1330,8 +1382,6 @@ DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
         "docker": _docker_descriptor(),
         "local": _local_descriptor(),
         "singularity": _apptainer_descriptor("singularity"),
-        "slurm-afterok": _slurm_descriptor("slurm-afterok"),
-        "slurm-single-job": _slurm_descriptor("slurm-single-job"),
         "subprocess": _subprocess_descriptor(),
     }
 )

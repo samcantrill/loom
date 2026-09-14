@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import fcntl
+from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -208,7 +210,33 @@ def plan_sweep_from_file(
     )
 
 
+@contextmanager
+def _sweep_lock(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".sweep.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def write_sweep_plan(
+    plan: SweepPlan,
+    sweep_dir: str | Path,
+    *,
+    authored_spec_payload: Mapping[str, object] | None = None,
+    authored_spec_name: str = AUTHORED_SWEEP_SPEC_FILE_NAME,
+) -> SweepPlanPaths:
+    """Write generated manifests and a copied/normalized authored spec payload."""
+
+    with _sweep_lock(Path(sweep_dir)):
+        return _write_sweep_plan(
+            plan,
+            sweep_dir,
+            authored_spec_payload=authored_spec_payload,
+            authored_spec_name=authored_spec_name,
+        )
+
+
+def _write_sweep_plan(
     plan: SweepPlan,
     sweep_dir: str | Path,
     *,
@@ -227,7 +255,8 @@ def write_sweep_plan(
     trials_manifest_path = root / TRIALS_MANIFEST_FILE_NAME
     authored_spec_path = root / authored_spec_name
 
-    write_sweep_manifest(plan.sweep_manifest, sweep_manifest_path)
+    if compatibility.sweep_manifest is None:
+        write_sweep_manifest(plan.sweep_manifest, sweep_manifest_path)
     write_trials_manifest(plan.trials_manifest, trials_manifest_path)
     payload = (
         authored_spec_payload

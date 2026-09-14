@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from itertools import count
 from pathlib import Path
 
 import pytest
 
+from tests.support.historical_offline_evidence import (
+    complete_manifest as _complete_manifest,
+)
+
 from loom.authority._repository import initialize_authority_repository
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_offline_evidence_run_store
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import path_to_run_uri
 from loom.runs import (
     OFFLINE_EVIDENCE_IMPORT_ADAPTER,
     MigrationReadinessBlockerCode,
@@ -22,7 +21,6 @@ from loom.runs import (
     import_offline_evidence,
 )
 from loom.serialization import thaw_plain_data
-from tests.support.pipeline_execution_configs import local_execution_config
 
 
 pytestmark = pytest.mark.unit
@@ -90,31 +88,6 @@ def test_import_offline_evidence_maps_validation_diagnostics(tmp_path: Path) -> 
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         "offline_import.incomplete_manifest"
     ]
-    assert {
-        blocker.code for blocker in result.readiness.blockers
-    } == {MigrationReadinessBlockerCode.HISTORICAL_ONLY_POLICY}
-
-
-def _complete_manifest(tmp_path: Path, *, name: str = "offline-run") -> OfflineEvidenceManifest:
-    run_store = create_offline_evidence_run_store(
-        tmp_path / "offline-runs",
-        owner_id="offline-test",
-        workspace_id="workspace-a",
-    )
-    run_uri = path_to_run_uri(tmp_path / "offline-runs" / name)
-    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
-        RunRequest(config=local_execution_config(), run_uri=run_uri)
-    )
-    assert result.status is RunStatus.SUCCEEDED
-    manifest = run_store.read_offline_evidence_manifest(run_uri)
-    assert manifest is not None
-    return manifest
-
-
-def _sequence_clock() -> Callable[[], str]:
-    ticks = count(1)
-
-    def clock() -> str:
-        return f"2020-01-01T00:00:{next(ticks):02d}Z"
-
-    return clock
+    assert {blocker.code for blocker in result.readiness.blockers} == {
+        MigrationReadinessBlockerCode.HISTORICAL_ONLY_POLICY
+    }

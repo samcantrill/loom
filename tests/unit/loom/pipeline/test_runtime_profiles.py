@@ -14,6 +14,7 @@ from loom.pipeline import (
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
+    ResourcePolicy,
     RunStoreOptions,
     RuntimeProfile,
     RuntimeProfileCollection,
@@ -28,6 +29,16 @@ from loom.pipeline import (
 )
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 from loom.pipeline.errors import RuntimeResourceError
+
+
+def test_resource_policy_stage_override_replaces_run_policy_independently() -> None:
+    result = merge_run_options(
+        base={"resource_policy": {"account_for": ["cpu"], "enforce": ["cpu"]}},
+        explicit={"stage_options": {"train": {"resource_policy": {"enforce": []}}}},
+    )
+
+    resolved = resolve_run_runtime(result, stage_ids=["train"])["train"]
+    assert resolved.resource_policy == ResourcePolicy(account_for=["cpu"], enforce=[])
 
 
 def test_runtime_profile_serializes_sparse_core_fields_and_adapter_sections() -> None:
@@ -270,6 +281,50 @@ def test_runtime_profile_container_build_shorthand_preserves_namespace_contract(
             },
         },
         "executor": "apptainer",
+    }
+
+
+def test_profile_resource_policy_stage_override_preserves_resources() -> None:
+    options = merge_run_options(
+        base={
+            "profile": "scheduling-only",
+            "adapter_options": {"container": {"image": {"reference": "analysis.sif"}}},
+        },
+        profiles={
+            "scheduling-only": {
+                "executor": "singularity",
+                "resource_policy": {"enforce": []},
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 512,
+                                    "unit": "MiB",
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        explicit={
+            "stage_options": {
+                "train": {"resource_policy": {"enforce": ["cpu", "memory"]}}
+            }
+        },
+        known_stage_ids={"train"},
+    )
+
+    resolved = resolve_run_runtime(options, stage_ids={"train"})["train"]
+    assert resolved.resource_policy == ResourcePolicy(
+        account_for="all", enforce=["cpu", "memory"]
+    )
+    assert cast(ResourceRequest, resolved.resources).entries == {
+        "cpu": ResourceEntry(kind="cpu", amount=2),
+        "memory": ResourceEntry(kind="memory", amount=512, unit="MiB"),
     }
 
 

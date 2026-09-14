@@ -49,7 +49,7 @@ def requested_gpu_count(
         raise ApptainerOptionError("gpu resource entry must be ResourceEntry")
     if entry.unit not in {None, "count"}:
         raise ApptainerOptionError("gpu resource unit must be omitted or 'count'")
-    if entry.attributes:
+    if entry.attributes and entry.attributes != {"allocation_mode": "exclusive"}:
         raise ApptainerOptionError("gpu resource attributes are unsupported")
     amount = entry.amount
     if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:

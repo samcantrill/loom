@@ -4,11 +4,35 @@ from __future__ import annotations
 
 import time
 import os
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.io.uris import uri_to_path
 from loom.pipeline.context import StageContext
+
+
+class ReportedFailureStage:
+    """Report nested public evidence while retaining a private native cause."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        from loom.pipeline.execution import StageReportedFailure
+
+        del inputs
+        try:
+            raise ValueError("private-native-failure-sentinel")
+        except ValueError as cause:
+            cause.add_note("private-native-note-sentinel")
+            raise StageReportedFailure(
+                {"record": {"threshold": 0.5}}
+                if context.stage_config.get("structured_float") is True
+                else {"record": {"items": [1, None, "safe"]}}
+            ) from cause
 
 
 class JsonProducerStage:
@@ -24,6 +48,23 @@ class JsonProducerStage:
             path = Path(counter_path)
             current = int(path.read_text(encoding="utf-8")) if path.exists() else 0
             path.write_text(str(current + 1), encoding="utf-8")
+        if context.stage_config.get("relative_companion") is True:
+            output = context.local_output_path("data", suffix=".json")
+            companion = output.parent / "payload" / "value.txt"
+            companion.parent.mkdir(parents=True, exist_ok=True)
+            companion.write_text("companion-value", encoding="utf-8")
+            output.write_text(
+                json.dumps({"value": value, "companion": "payload/value.txt"}),
+                encoding="utf-8",
+            )
+            return {
+                "data": context.register_local_artifact(
+                    "data",
+                    output,
+                    artifact_type="json",
+                    codec_key="json.v1",
+                )
+            }
         return {
             "data": context.save_artifact(
                 "data",
@@ -32,6 +73,36 @@ class JsonProducerStage:
                 codec_key="json.v1",
             )
         }
+
+
+class TerminalExitProducerStage(JsonProducerStage):
+    """Write normal outputs, then exercise the native root/group terminal join."""
+
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        import atexit
+        import signal
+        import subprocess
+        import sys
+
+        mode = context.stage_config["terminal_mode"]
+        if mode == "nonzero":
+            atexit.register(os._exit, 7)
+        elif mode == "signal":
+            atexit.register(os.kill, os.getpid(), signal.SIGKILL)
+        elif mode == "descendant":
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        if mode == "child_metadata":
+            result_path = context.local_workspace_path().parent / "worker-result.json"
+
+            def child_metadata() -> None:
+                result = json.loads(result_path.read_text())
+                result["executor_metadata"]["managed_successful_exit"] = False
+                result_path.write_text(json.dumps(result))
+
+            atexit.register(child_metadata)
+        return super().run(context, inputs)
 
 
 class EnvironmentProducerStage:
@@ -46,6 +117,9 @@ class EnvironmentProducerStage:
         raw_name = context.stage_config.get("environment_name", "CUDA_VISIBLE_DEVICES")
         if not isinstance(raw_name, str) or not raw_name:
             raise ValueError("environment_name must be a non-empty string")
+        delay = context.stage_config.get("delay_seconds", 0)
+        assert isinstance(delay, (int, float))
+        time.sleep(delay)
         return {
             "data": context.save_artifact(
                 "data",
@@ -92,10 +166,20 @@ class TextConsumerStage:
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
         data = context.load_input("data", expected_type="json")
+        companion_text = ""
+        if isinstance(data, Mapping) and isinstance(data.get("companion"), str):
+            input_path = uri_to_path(context.input_artifact("data").uri)
+            companion = input_path.parent / data["companion"]
+            companion_text = f" companion={companion.read_text(encoding='utf-8')}"
+        text = f"seen {data}{companion_text}"
+        output_size = context.stage_config.get("output_size")
+        if output_size is not None:
+            assert isinstance(output_size, int) and output_size >= 0
+            text = text.ljust(output_size, "x")[:output_size]
         return {
             "text": context.save_artifact(
                 "text",
-                f"seen {data}",
+                text,
                 artifact_type="text",
                 codec_key="text.v1",
             )
@@ -126,6 +210,23 @@ class FailingStage:
         raise RuntimeError("stage failed intentionally")
 
 
+class NestedFailureStage:
+    """Produce a native causal chain inside an actual resident worker."""
+
+    def run(
+        self, context: StageContext, inputs: Mapping[str, ArtifactRef]
+    ) -> Mapping[str, ArtifactRef]:
+        del context, inputs
+        try:
+            try:
+                raise FileNotFoundError("missing /worker/data/product.json")
+            except FileNotFoundError as cause:
+                cause.add_note("Prepare the product on the selected worker.")
+                raise ValueError("candidate product path is unusable") from cause
+        except ValueError as cause:
+            raise RuntimeError("could not prepare the experiment input") from cause
+
+
 class FailOnceThenProduceStage:
     def run(
         self,
@@ -154,6 +255,13 @@ class EarlyStopStage:
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
         _ = inputs
+        marker = context.stage_config.get("wait_for_marker")
+        if isinstance(marker, str):
+            deadline = time.monotonic() + 10
+            while not Path(marker).exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("early-stop stage timed out waiting for sibling")
+                time.sleep(0.01)
         context.stop_early(
             str(context.stage_config.get("message", "stopped early")),
             detail={"stage": context.stage_name, "configured": True},
@@ -180,9 +288,7 @@ class SleepStage:
         _ = inputs
         raw_seconds = context.stage_config.get("seconds", 30)
         seconds = (
-            float(raw_seconds)
-            if isinstance(raw_seconds, int | float | str)
-            else 30.0
+            float(raw_seconds) if isinstance(raw_seconds, int | float | str) else 30.0
         )
         release_marker = context.stage_config.get("release_marker")
         if isinstance(release_marker, str) and Path(release_marker).exists():
@@ -250,9 +356,7 @@ class CoordinatedStage:
         _ = inputs
         marker_dir = Path(str(context.stage_config["marker_dir"]))
         raw_wait_for = context.stage_config.get("wait_for", 1)
-        wait_for = (
-            int(raw_wait_for) if isinstance(raw_wait_for, int | str) else 1
-        )
+        wait_for = int(raw_wait_for) if isinstance(raw_wait_for, int | str) else 1
         raw_timeout_seconds = context.stage_config.get("timeout_seconds", 5)
         timeout_seconds = (
             float(raw_timeout_seconds)
@@ -291,3 +395,20 @@ class BadOutputStage:
 
 class NotAStage:
     pass
+
+
+class TokenizeStage:
+    """Publish whitespace tokens under a name masked in diagnostic snapshots."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        text = context.stage_config["text"]
+        assert isinstance(text, str)
+        return {
+            "tokens": context.save_artifact(
+                "tokens", text.split(), artifact_type="json", codec_key="json.v1"
+            )
+        }

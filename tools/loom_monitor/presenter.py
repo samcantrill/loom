@@ -23,7 +23,7 @@ from .models import (
 )
 
 
-ACTIVE_QUEUE_STATUSES = frozenset({"CLAIMED", "DISPATCHED"})
+ACTIVE_QUEUE_STATUSES = frozenset({"CLAIMED", "DISPATCHED", "ACTIVE", "CANCELLING"})
 TERMINAL_QUEUE_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"})
 FAILED_RUN_STATUSES = frozenset({"FAILED", "INTERRUPTED"})
 TERMINAL_RUN_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED"})
@@ -358,7 +358,7 @@ def all_attention(work: Sequence[WorkRecord]) -> tuple[AttentionRecord, ...]:
     records = [record for item in work for record in item.attention]
     if records:
         oldest_waiting = min(
-            (item for item in work if item.item.status == "QUEUED"),
+            (item for item in work if item.item.status in {"QUEUED", "WAITING"}),
             key=lambda item: (item.item.enqueued_at, item.item.queue_item_id),
             default=None,
         )
@@ -384,7 +384,7 @@ def work_sort_key(work: WorkRecord) -> tuple[object, ...]:
         group = 0
     elif work.item.status in ACTIVE_QUEUE_STATUSES:
         group = 1
-    elif work.item.status == "QUEUED":
+    elif work.item.status in {"QUEUED", "WAITING"}:
         group = 2
     else:
         group = 3
@@ -421,7 +421,10 @@ def filter_work(
             and record.item.status not in ACTIVE_QUEUE_STATUSES
         ):
             continue
-        if view is MonitorView.WAITING and record.item.status != "QUEUED":
+        if view is MonitorView.WAITING and record.item.status not in {
+            "QUEUED",
+            "WAITING",
+        }:
             continue
         if view is MonitorView.ATTENTION and not record.attention:
             continue
@@ -452,7 +455,7 @@ def _search_text(record: WorkRecord) -> str:
 def fifo_positions(items: Sequence[QueueRecord]) -> Mapping[str, tuple[int, int]]:
     by_pool: dict[str, list[QueueRecord]] = {}
     for item in items:
-        if item.status == "QUEUED":
+        if item.status in {"QUEUED", "WAITING"}:
             by_pool.setdefault(item.pool_name, []).append(item)
     positions: dict[str, tuple[int, int]] = {}
     for queued in by_pool.values():

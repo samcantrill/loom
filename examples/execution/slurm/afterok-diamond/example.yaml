@@ -1,6 +1,6 @@
 id: execution.slurm.afterok-diamond
 title: SLURM Afterok Diamond Dry Run
-summary: Generate afterok dry-run artifacts for a diamond DAG with stage-level SLURM options and secret-safe records.
+summary: Inspect the stage dependency graph without scheduler submission or continuation generation.
 capability: execution
 level: advanced
 introduced_in: v6

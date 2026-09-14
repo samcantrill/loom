@@ -1,23 +1,27 @@
-# Implementation Manifest And Phase Plans
+# Implementation Manifest And Phase Cards
 
-Manager-local planning pass after planning.md quality gates are clear.
+Manager authoring guidance within the complete planning draft. Use
+.codex/templates/roadmap-stage-implementation-plan.md and
+.codex/templates/phase-execution-plan.md. The execution artifact layout remains
+manifest-and-phase-plans-v1; new domain planning cards use the planning workflow's
+separate planning layout.
 
-Create or update:
+Keep phase order, shared references, traceability, and final readiness in the
+manifest. Derive Stage descriptor from the accepted roadmap heading; use an
+approved fallback only if that heading does not identify the stage. Phase PR
+identity follows phase-loop-management.md.
 
-- one compact implementation-plan.md using
-  .codex/templates/roadmap-stage-implementation-plan.md;
-- one phase execution plan per accepted phase using
-  .codex/templates/phase-execution-plan.md.
+Each phase owns one independently acceptable result with explicit cohesion,
+source/migration population, dependency inputs/outputs, discriminating acceptance,
+supported merge boundary, and exclusions. There is no preferred count. Split
+independent outcomes; keep one invariant's producer/consumer/docs/tests together.
 
-Use artifact layout manifest-and-phase-plans-v1.
+Reference exact upstream paths, headings, and IDs instead of copying contracts.
+Keep phase scope, implementation slices, selected checks, risks, and executor
+discretion in its card. Use `$loom-targeted-validation` to record coverage and
+expansion triggers, preserving existing approved obligations. Link every accepted
+ID to its phase/shared reference or explicit deferral.
 
-Keep shared constraints and the phase index in the manifest. Put phase-specific
-scope, fixed contracts, ownership, implementation slices, tests, validation,
-risks, discretion, and stop conditions only in the linked phase plan. Reference
-requirement and decision IDs instead of copying planning prose.
-
-Prefer one to three vertical phases. Each phase must deliver or independently
-de-risk an end-to-end outcome. Do not split only by module or layer.
-
-Do not create phases if an agreement or quality gate is blocked. Do not prescribe
-private helpers, local wiring, or intermediate representations.
+Mark unresolved dependent content provisional while independent drafting
+continues. Material ambiguity prevents readiness/approval. Do not prescribe
+private helpers, implement code, or create extra lifecycle artifacts.

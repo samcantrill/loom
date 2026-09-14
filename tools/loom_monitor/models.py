@@ -115,7 +115,7 @@ class QueueRecord:
 class PoolRecord:
     pool_name: str
     mode: str
-    controller_limit: int
+    controller_limit: int | None
     queued: int
     claimed: int
     dispatched: int
@@ -145,7 +145,7 @@ class StageRecord:
     attempt: int | None
     message: str | None
     failure: Mapping[str, PlainData] | None
-    input_count: int
+    input_count: int | None
     output_count: int
     log_paths: Mapping[str, str | None]
     log_available: Mapping[str, bool]

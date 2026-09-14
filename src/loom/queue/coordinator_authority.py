@@ -10,6 +10,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
+
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -19,6 +22,7 @@ from loom.pipeline.reliability import (
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
     CancellationEpochReceipt,
+    CoordinatorAdmissionRequest,
     LocalDaemonAuthority,
     PreparedAttemptExecutionAuthority,
     StatusTransition,
@@ -43,6 +47,28 @@ class CoordinatorAuthorityStore(
     The protocol intentionally excludes discovery, schema management, leases,
     arbitrary repository access, and database construction.
     """
+
+    def append_audit_event(
+        self, run_uri: str, event: PipelineEvent
+    ) -> PipelineEventRecord: ...
+
+    def list_audit_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]: ...
+
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision: ...
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]: ...
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision: ...
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]: ...
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
 
@@ -119,6 +145,21 @@ class CoordinatorAuthorityStore(
 
 
 CoordinatorAuthorityFactory = Callable[[str], CoordinatorAuthorityStore]
+
+
+@runtime_checkable
+class ManagedAdmissionRetryAuthority(Protocol):
+    """Optional atomic continuation capability for the embedded managed owner."""
+
+    def resume_failed_admission(
+        self,
+        run_uri: str,
+        *,
+        admission: CoordinatorAdmissionRequest,
+        operation_id: str,
+        expected_revision: BackendRevision,
+        stage_names: tuple[str, ...],
+    ) -> BackendRevision: ...
 
 
 __all__ = [

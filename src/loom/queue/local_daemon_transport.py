@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-import json
 import os
 from pathlib import Path
 import socket
@@ -14,8 +13,14 @@ from threading import BoundedSemaphore, Event, Thread
 import time
 from typing import cast
 
-from loom.serialization import PlainData, thaw_plain_data
+from loom.serialization import PlainData
 
+from ._coordinator_client import NativeCoordinatorClient
+from ._coordinator_control import (
+    CONTROL_CAPABILITY, CONTROL_OPERATIONS, WAIT_OPERATIONS, CoordinatorClientError,
+    control_error, dispatch_control, encode_wire,
+)
+from ._coordinator_transport import UnixControlTransport, read_unix_message
 from .errors import (
     QueueConflictError,
     QueueError,
@@ -39,7 +44,6 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonOperation,
-    OperationWaitKind,
     OperationWaitResult,
     RecoverUnknownAssignment,
     SessionReplacementRequest,
@@ -138,6 +142,7 @@ class LocalDaemonSocketServer:
                 continue
             try:
                 if not self._worker_slots.acquire(blocking=False):
+                    connection.settimeout(0.5)
                     _write_error(connection, "local_daemon_worker_capacity_exhausted")
                     connection.close()
                     continue
@@ -152,123 +157,35 @@ class LocalDaemonSocketServer:
                 finally:
                     connection.close()
 
-    def _handle(
-        self,
-        connection: socket.socket,
-    ) -> None:
-        long_poll = False
+    def _handle(self, connection: socket.socket) -> None:
         long_poll_acquired = False
+        payload: dict[str, object] = {}
+        operation = "unknown"
+        daemon_control: object = None
         try:
             uid = _peer_uid(connection)
-            payload = _read_message(connection)
-            long_poll = payload.get("operation") in {
-                "wait_admission",
-                "wait_operation",
-            }
-            if long_poll and not self._long_poll_slots.acquire(blocking=False):
-                raise _WaitCapacityError("local daemon wait capacity is exhausted")
-            long_poll_acquired = long_poll
+            payload = dict(read_unix_message(connection, deadline=time.monotonic() + 30.0))
+            operation_value = payload.pop("operation", None)
+            operation = operation_value if isinstance(operation_value, str) else "unknown"
+            daemon_control = payload.pop("daemon_control", None)
             if uid != os.getuid():
-                raise QueueServiceError("local daemon peer is not authorized")
-            operation = payload.get("operation")
-            client = self._daemon.client_view(
-                LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.CLIENT)
-            )
+                raise control_error("unauthorized", operation, payload, boundary="authentication")
+            if daemon_control not in (None, CONTROL_CAPABILITY):
+                raise QueueValidationError("local daemon client protocol is invalid")
+            if operation in WAIT_OPERATIONS:
+                if not self._long_poll_slots.acquire(blocking=False):
+                    raise _WaitCapacityError("local daemon wait capacity is exhausted")
+                long_poll_acquired = True
             operator = self._daemon.operator_view(
                 LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR)
             )
-            if operation == "submit":
-                request = payload.get("request")
-                if not isinstance(request, Mapping):
-                    raise QueueServiceError("submit request must be a mapping")
-                result: PlainData = client.submit(
-                    LocalDaemonAdmissionRequest.from_dict(request)
-                ).to_dict()
-            elif operation == "status":
-                result = client.status().to_dict()
-            elif operation == "admissions":
-                limit = payload.get("limit", 100)
-                cursor = payload.get("cursor")
-                if (
-                    isinstance(limit, bool)
-                    or not isinstance(limit, int)
-                    or (cursor is not None and not isinstance(cursor, str))
-                ):
-                    raise QueueServiceError("admission cursor is invalid")
-                result = client.admissions(limit=limit, cursor=cursor).to_dict()
-            elif operation == "admission":
-                admission_id = payload.get("admission_id")
-                if not isinstance(admission_id, str):
-                    raise QueueServiceError("admission ID is invalid")
-                result = client.admission(admission_id).to_dict()
-            elif operation == "admission_for_queue_item":
-                queue_item_id = payload.get("queue_item_id")
-                if not isinstance(queue_item_id, str):
-                    raise QueueServiceError("queue item ID is invalid")
-                result = client.admission_for_queue_item(queue_item_id).to_dict()
-            elif operation == "agents":
-                limit = payload.get("limit", 100)
-                cursor = payload.get("cursor")
-                if (
-                    isinstance(limit, bool)
-                    or not isinstance(limit, int)
-                    or (cursor is not None and not isinstance(cursor, str))
-                ):
-                    raise QueueServiceError("agent cursor is invalid")
-                result = client.agents(limit=limit, cursor=cursor).to_dict()
-            elif operation == "agent":
-                agent_id = payload.get("agent_id")
-                if not isinstance(agent_id, str):
-                    raise QueueServiceError("agent ID is invalid")
-                result = client.agent(agent_id).to_dict()
-            elif operation == "operation":
-                operation_id = payload.get("operation_id")
-                if not isinstance(operation_id, str):
-                    raise QueueServiceError("operation ID is invalid")
-                result = client.operation(operation_id).to_dict()
-            elif operation == "wait_operation":
-                operation_id = payload.get("operation_id")
-                timeout = payload.get("timeout")
-                if not isinstance(operation_id, str) or (
-                    timeout is not None and not isinstance(timeout, (int, float))
-                ):
-                    raise QueueServiceError("operation wait request is invalid")
-                capped_timeout = _SERVER_WAIT_SECONDS
-                if timeout is not None:
-                    capped_timeout = min(capped_timeout, float(timeout))
-                result = client.wait_operation(
-                    operation_id, timeout=capped_timeout
-                ).to_dict()
-            elif operation == "inspect_run":
-                run_uri = payload.get("run_uri")
-                if not isinstance(run_uri, str) or self._inspect_run is None:
-                    raise QueueServiceError("run inspection is unsupported")
-                result = dict(self._inspect_run(run_uri))
-            elif operation == "wait_admission":
-                admission_id = payload.get("admission_id")
-                expected_revision = payload.get("expected_revision")
-                timeout = payload.get("timeout")
-                if (
-                    not isinstance(admission_id, str)
-                    or isinstance(expected_revision, bool)
-                    or not isinstance(expected_revision, int)
-                ):
-                    raise QueueServiceError("admission wait request is invalid")
-                if timeout is not None and not isinstance(timeout, (int, float)):
-                    raise QueueServiceError("admission wait request is invalid")
-                capped_timeout = _SERVER_WAIT_SECONDS
-                if timeout is not None:
-                    capped_timeout = min(capped_timeout, float(timeout))
-                result = client.wait_admission(
-                    admission_id,
-                    expected_revision=expected_revision,
-                    timeout=capped_timeout,
-                ).to_dict()
-            elif operation == "cancel":
-                queue_item_id = payload.get("queue_item_id")
-                if not isinstance(queue_item_id, str) or not queue_item_id:
-                    raise QueueServiceError("queue_item_id must be a non-empty string")
-                result = client.cancel(queue_item_id).to_dict()
+            result: PlainData
+            if operation in CONTROL_OPERATIONS or daemon_control == CONTROL_CAPABILITY:
+                result = dict(dispatch_control(
+                    self._daemon, LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.CLIENT),
+                    operation, payload, transport="unix", wait_slice=_SERVER_WAIT_SECONDS,
+                    inspect_run=self._inspect_run, legacy=daemon_control is None,
+                ))
             elif operation == "agent_control":
                 control = payload.get("control")
                 if not isinstance(control, Mapping):
@@ -315,14 +232,18 @@ class LocalDaemonSocketServer:
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
-        except Exception as exc:  # Public responses expose only stable safe codes.
+        except Exception as exc:  # Public responses retain stable safe legacy codes.
             diagnostic = _safe_error_code(exc)
-            response = {
-                "ok": False,
-                "error": diagnostic,
-                "message": diagnostic,
-            }
+            response = {"ok": False, "error": diagnostic, "message": diagnostic}
+            if daemon_control == CONTROL_CAPABILITY:
+                if isinstance(exc, CoordinatorClientError):
+                    detail = exc
+                else:
+                    code = "capacity_exhausted" if isinstance(exc, _WaitCapacityError) else "invalid_request"
+                    detail = control_error(code, operation, payload, boundary="coordinator")
+                response["error_detail"] = detail.to_dict()
         try:
+            connection.settimeout(30.0)
             _write_message(connection, cast(Mapping[str, PlainData], response))
         finally:
             connection.close()
@@ -332,191 +253,58 @@ class LocalDaemonSocketServer:
 
 
 class LocalDaemonSocketClient:
-    """Typed client using the same application operations as direct composition."""
+    """Compatibility adapter for established socket signatures and error classes."""
 
-    def __init__(self, endpoint: str | Path) -> None:
+    def __init__(self, endpoint: str | Path, *, expected_coordinator_id: str | None = None) -> None:
         self.endpoint = Path(endpoint)
+        self._client = NativeCoordinatorClient(
+            UnixControlTransport(endpoint), expected_coordinator_id=expected_coordinator_id, legacy=True,
+        )
 
     def submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
-        result = self._call({"operation": "submit", "request": request.to_dict()})
-        return LocalDaemonAdmission.from_dict(result)
+        return self._client.submit(request)
 
     def status(self) -> DaemonStatus:
-        return DaemonStatus.from_dict(self._call({"operation": "status"}))
+        return self._client.status()
 
-    def admissions(
-        self, *, limit: int = 100, cursor: str | None = None
-    ) -> AdmissionPage:
-        result = self._call(
-            {"operation": "admissions", "limit": limit, "cursor": cursor}
-        )
-        records = result.get("admissions")
-        next_cursor = result.get("next_cursor")
-        if (
-            not isinstance(records, list)
-            or not all(isinstance(item, Mapping) for item in records)
-            or (next_cursor is not None and not isinstance(next_cursor, str))
-        ):
-            raise QueueServiceError("admission page response is invalid")
-        return AdmissionPage(
-            tuple(LocalDaemonAdmission.from_dict(item) for item in records), next_cursor
-        )
+    def admissions(self, *, limit: int = 100, cursor: str | None = None) -> AdmissionPage:
+        return self._client.admissions(limit=limit, cursor=cursor)
 
     def admission(self, admission_id: str) -> LocalDaemonAdmissionDetail:
-        return LocalDaemonAdmissionDetail.from_dict(
-            self._call({"operation": "admission", "admission_id": admission_id})
-        )
+        return self._client.admission(admission_id)
+
+    def admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
+        return self._client.admission_for_queue_item(queue_item_id)
 
     def agents(self, *, limit: int = 100, cursor: str | None = None) -> AgentPage:
-        return AgentPage.from_dict(
-            self._call({"operation": "agents", "limit": limit, "cursor": cursor})
-        )
+        return self._client.agents(limit=limit, cursor=cursor)
 
     def agent(self, agent_id: str) -> AgentProjection:
-        return AgentProjection.from_dict(
-            self._call({"operation": "agent", "agent_id": agent_id})
-        )
+        return self._client.agent(agent_id)
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
-        return LocalDaemonOperation.from_dict(
-            self._call({"operation": "operation", "operation_id": operation_id})
-        )
+        return self._client.operation(operation_id)
 
-    def wait_operation(
-        self, operation_id: str, *, timeout_seconds: float | None = None
-    ) -> OperationWaitResult:
-        if timeout_seconds is not None and (
-            isinstance(timeout_seconds, bool)
-            or not isinstance(timeout_seconds, (int, float))
-            or timeout_seconds < 0
-        ):
-            raise QueueServiceError("operation wait timeout is invalid")
-        deadline = (
-            None
-            if timeout_seconds is None
-            else time.monotonic() + float(timeout_seconds)
-        )
-        while True:
-            remaining = (
-                None if deadline is None else max(0.0, deadline - time.monotonic())
-            )
-            try:
-                result = self._call(
-                    {
-                        "operation": "wait_operation",
-                        "operation_id": operation_id,
-                        "timeout": remaining,
-                    }
-                )
-            except QueueServiceError as exc:
-                if str(exc) != "local_daemon_wait_capacity_exhausted":
-                    raise
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.005)
-                continue
-            parsed = OperationWaitResult.from_dict(result)
-            if parsed.kind is not OperationWaitKind.TIMEOUT:
-                return parsed
-            if deadline is not None and time.monotonic() >= deadline:
-                return parsed
+    def wait_operation(self, operation_id: str, *, timeout_seconds: float | None = None) -> OperationWaitResult:
+        return cast(OperationWaitResult, self._client._wait_native(
+            "wait_operation", {"operation_id": operation_id}, timeout_seconds, None, legacy=True,
+        ))
 
-    def wait_admission(
-        self, admission_id: str, *, expected_revision: int, timeout: float | None = None
-    ) -> AdmissionWaitResult:
-        from .local_daemon import AdmissionWaitKind
+    def wait_admission(self, admission_id: str, *, expected_revision: int, timeout: float | None = None) -> AdmissionWaitResult:
+        return cast(AdmissionWaitResult, self._client._wait_native(
+            "wait_admission", {"admission_id": admission_id, "expected_revision": expected_revision},
+            timeout, None, legacy=True,
+        ))
 
-        if timeout is not None and (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or timeout < 0
-        ):
-            raise QueueServiceError("admission wait timeout is invalid")
-        deadline = None if timeout is None else time.monotonic() + float(timeout)
-        while True:
-            remaining = (
-                None if deadline is None else max(0.0, deadline - time.monotonic())
-            )
-            try:
-                result = self._call(
-                    {
-                        "operation": "wait_admission",
-                        "admission_id": admission_id,
-                        "expected_revision": expected_revision,
-                        "timeout": remaining,
-                    }
-                )
-            except QueueServiceError as exc:
-                # Renewing clients can race for the bounded long-poll slots at
-                # one server-slice boundary.  This is admission backpressure,
-                # not a terminal result for the caller's requested wait.
-                if str(exc) != "local_daemon_wait_capacity_exhausted":
-                    raise
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.005)
-                continue
-            kind = result.get("kind")
-            admission = result.get("admission")
-            revision = result.get("revision")
-            if (
-                not isinstance(kind, str)
-                or not isinstance(admission, Mapping)
-                or isinstance(revision, bool)
-                or not isinstance(revision, int)
-            ):
-                raise QueueServiceError("admission wait response is invalid")
-            parsed = AdmissionWaitResult(
-                AdmissionWaitKind(kind),
-                LocalDaemonAdmission.from_dict(admission),
-                revision,
-            )
-            if parsed.kind is not AdmissionWaitKind.TIMEOUT:
-                return parsed
-            if deadline is not None and time.monotonic() >= deadline:
-                return parsed
-
-    def wait(
-        self, queue_item_id: str, *, timeout_seconds: float | None = None
-    ) -> LocalDaemonAdmission:
-        if timeout_seconds is not None and timeout_seconds < 0:
-            raise QueueServiceError("timeout_seconds must be non-negative")
-        deadline = (
-            None if timeout_seconds is None else time.monotonic() + timeout_seconds
-        )
-        admission = LocalDaemonAdmission.from_dict(
-            self._call(
-                {
-                    "operation": "admission_for_queue_item",
-                    "queue_item_id": queue_item_id,
-                }
-            )
-        )
-        revision = admission.revision
-        while True:
-            remaining = (
-                None if deadline is None else max(0.0, deadline - time.monotonic())
-            )
-            result = self.wait_admission(
-                admission.admission_id, expected_revision=revision, timeout=remaining
-            )
-            admission, revision = result.admission, result.revision
-            if result.kind.value == "TERMINAL":
-                return admission
-            if result.kind.value == "TIMEOUT":
-                if deadline is None or time.monotonic() < deadline:
-                    continue
-                raise TimeoutError(
-                    "managed local admission did not reach terminal state"
-                )
+    def wait(self, queue_item_id: str, *, timeout_seconds: float | None = None) -> LocalDaemonAdmission:
+        return self._client.wait(queue_item_id, timeout_seconds=timeout_seconds)
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
-        result = self._call({"operation": "cancel", "queue_item_id": queue_item_id})
-        return LocalDaemonAdmission.from_dict(result)
+        return self._client.cancel(queue_item_id)
 
     def inspect_run(self, run_uri: str) -> Mapping[str, object]:
-        """Call the injected read-only run-inspection operation."""
-        return self._call({"operation": "inspect_run", "run_uri": run_uri})
+        """Retain the established unrestricted injected inspection entrypoint."""
+        return cast(Mapping[str, object], self._client._native_call("inspect_run", {"run_uri": run_uri}))
 
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
         return cast(
@@ -558,31 +346,22 @@ class LocalDaemonSocketClient:
         )
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            connection.connect(str(self.endpoint))
-            _write_message(connection, request)
-            response = _read_message(connection)
-        except OSError as exc:
-            raise QueueServiceError("local daemon endpoint is unavailable") from exc
-        finally:
-            connection.close()
-        if response.get("ok") is not True:
-            diagnostic = response.get("error")
-            if diagnostic == "local_daemon_admission_not_found":
-                raise AdmissionNotFoundError(diagnostic)
-            raise QueueServiceError(
-                diagnostic
-                if isinstance(diagnostic, str)
-                else "local_daemon_request_failed"
-            )
-        result = response.get("result")
-        if not isinstance(result, Mapping):
-            raise QueueServiceError("local daemon returned an invalid result")
-        return result
+        # Operator operations retain their separate owner and legacy wire shape.
+        operation = cast(str, request["operation"])
+        payload = dict(request)
+        payload.pop("operation")
+        if self._client._expected_coordinator_id is not None:
+            payload["expected_coordinator_id"] = self._client._expected_coordinator_id
+        return self._client._exchange(operation, payload, time.monotonic() + 30.0, waiting=False)
 
 
 def _safe_error_code(exc: Exception) -> str:
+    if isinstance(exc, CoordinatorClientError):
+        return {
+            "not_found": "local_daemon_admission_not_found",
+            "conflict": "local_daemon_conflict",
+            "invalid_request": "local_daemon_invalid_request",
+        }.get(exc.code, "local_daemon_request_rejected")
     if isinstance(exc, AdmissionNotFoundError):
         return "local_daemon_admission_not_found"
     if isinstance(exc, QueueConflictError):
@@ -608,39 +387,11 @@ def _peer_uid(connection: socket.socket) -> int:
     return uid
 
 
-def _read_message(connection: socket.socket) -> Mapping[str, object]:
-    chunks: list[bytes] = []
-    length = 0
-    while True:
-        chunk = connection.recv(min(65_536, _MAX_MESSAGE_BYTES + 1 - length))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        length += len(chunk)
-        if length > _MAX_MESSAGE_BYTES:
-            raise QueueServiceError("local daemon request is too large")
-        if b"\n" in chunk:
-            break
-    raw = b"".join(chunks).split(b"\n", 1)[0]
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise QueueServiceError("local daemon request is invalid JSON") from exc
-    if not isinstance(value, Mapping):
-        raise QueueServiceError("local daemon request must be a mapping")
-    return value
-
-
 def _write_message(
     connection: socket.socket,
     value: Mapping[str, PlainData],
 ) -> None:
-    payload = json.dumps(
-        thaw_plain_data(value, path="local daemon socket message"),
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    payload = encode_wire(value)
     if len(payload) > _MAX_MESSAGE_BYTES:
         raise QueueServiceError("local daemon response is too large")
     connection.sendall(payload + b"\n")

@@ -1,11 +1,8 @@
 """Public queue records and repository APIs."""
 
 from __future__ import annotations
-
 from typing import TYPE_CHECKING
-
 from ._sqlite import QUEUE_DB_SCHEMA_VERSION, SQLiteQueueRepository
-from .client import QueueClient
 
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
@@ -54,15 +51,14 @@ if TYPE_CHECKING:
         TimeRecoveryReceipt,
         TimeRecoveryRequest,
     )
-    from .local_daemon_transport import (
-        LocalDaemonSocketClient,
-        LocalDaemonSocketServer,
-    )
+    from .local_daemon_transport import LocalDaemonSocketClient, LocalDaemonSocketServer
     from .local_daemon_runtime import prepare_managed_local_runtime_record
     from .managed_local_preparation import (
         ManagedLocalPreparationReceipt,
+        prepare_managed_run,
         prepare_managed_local_run,
     )
+    from .preparation import PrepareRunRequest, PreparationSource, SharedInputReceipt
     from .agent_sessions import LocalOwnerOperatorPolicy
     from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
@@ -83,23 +79,6 @@ from .assignments import (
     ResourceAssignmentProvider,
     ResourceAssignmentRequest,
     StaticSlotAssignmentProvider,
-)
-from .controller import (
-    FakeQueueDispatchAdapter,
-    QueueCancellableDispatchAdapter,
-    QueueController,
-    QueueCycleResult,
-    QueueControllerStep,
-    QueueDispatchAdapter,
-    QueueDispatchCancellation,
-    QueueDispatchDisposition,
-    QueueDispatchInspection,
-    QueueDispatchNonStartCause,
-    QueueDispatchResult,
-    QueueDrainResult,
-    QueueForegroundDriveResult,
-    QueueInspectableDispatchAdapter,
-    QueuePreStartCleanupStatus,
 )
 from .errors import (
     QueueConfigError,
@@ -130,13 +109,6 @@ from .models import (
     validate_one_queue_per_pool,
 )
 from .repository import QueueItemPage, QueuePoolSnapshot, QueueRepository
-from .service import (
-    QueueEnqueueRequest,
-    QueueItemInspection,
-    QueueService,
-    QueueServiceState,
-    QueueServiceStatus,
-)
 from .selection import (
     QueueSelectionCandidate,
     QueueSelectionContext,
@@ -144,7 +116,6 @@ from .selection import (
     QueueSelectionDisposition,
     QueueSelectionPolicy,
 )
-
 
 _LOCAL_DAEMON_EXPORTS = frozenset(
     {
@@ -181,7 +152,6 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "TimeRecoveryRequest",
     }
 )
-
 _MANAGED_RESOURCE_EXPORTS = frozenset(
     {
         "AgentResourceProvider",
@@ -197,10 +167,7 @@ _MANAGED_RESOURCE_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> object:
-    if name in {
-        "CoordinatorAuthorityFactory",
-        "CoordinatorAuthorityStore",
-    }:
+    if name in {"CoordinatorAuthorityFactory", "CoordinatorAuthorityStore"}:
         from . import coordinator_authority
 
         return getattr(coordinator_authority, name)
@@ -228,10 +195,18 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
-    if name in {"ManagedLocalPreparationReceipt", "prepare_managed_local_run"}:
+    if name in {
+        "ManagedLocalPreparationReceipt",
+        "prepare_managed_run",
+        "prepare_managed_local_run",
+    }:
         from . import managed_local_preparation
 
         return getattr(managed_local_preparation, name)
+    if name in {"PrepareRunRequest", "PreparationSource", "SharedInputReceipt"}:
+        from . import preparation
+
+        return getattr(preparation, name)
     if name == "ExecutionRequirement":
         from loom.pipeline.orchestration import ExecutionRequirement
 
@@ -255,7 +230,6 @@ __all__ = [
     "CpuResourceProvider",
     "DispatchHandle",
     "ExecutionRequirement",
-    "FakeQueueDispatchAdapter",
     "GpuDeviceDescriptor",
     "LaunchContract",
     "LocalDaemon",
@@ -297,6 +271,10 @@ __all__ = [
     "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
     "ManagedLocalPreparationReceipt",
+    "PrepareRunRequest",
+    "PreparationSource",
+    "SharedInputReceipt",
+    "prepare_managed_run",
     "prepare_managed_local_run",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
@@ -306,46 +284,26 @@ __all__ = [
     "ResourceAssignmentProvider",
     "ResourceAssignmentRequest",
     "QueueAuditEvent",
-    "QueueCancellableDispatchAdapter",
     "QueueClaim",
-    "QueueClient",
     "QueueConfigError",
-    "QueueController",
-    "QueueCycleResult",
     "QueueControllerSpec",
-    "QueueControllerStep",
-    "QueueDispatchAdapter",
     "QueueConflictError",
     "QueueDefinition",
-    "QueueDispatchCancellation",
-    "QueueDispatchDisposition",
-    "QueueDispatchInspection",
-    "QueueDispatchNonStartCause",
-    "QueueDispatchResult",
-    "QueueDrainResult",
-    "QueueForegroundDriveResult",
-    "QueueEnqueueRequest",
     "QueueEnqueueDisposition",
     "QueueEnqueueReceipt",
     "QueueError",
-    "QueueItemInspection",
     "QueueItem",
     "QueueItemPage",
     "QueueItemStatus",
     "QueuePool",
     "QueuePoolSnapshot",
     "QueuePoolMode",
-    "QueuePreStartCleanupStatus",
     "QueueRecoveryRecord",
     "QueueRepository",
-    "QueueInspectableDispatchAdapter",
     "QueueSchemaError",
-    "QueueService",
     "QueueServiceError",
     "QueueServiceSpec",
-    "QueueServiceState",
     "QueueServiceStateError",
-    "QueueServiceStatus",
     "QueueSelectionCandidate",
     "QueueSelectionContext",
     "QueueSelectionDecision",

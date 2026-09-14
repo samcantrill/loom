@@ -22,6 +22,9 @@ from loom.pipeline.executors.containers import (
 )
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.runtime.capabilities import ResourceCapability, ResourceSupportLevel
+from loom.pipeline.runtime.resource_policy import ResourcePolicy
+from loom.pipeline.runtime._resource_controls import resource_control_records
+from loom.pipeline.executors._container_resources import container_resource_selection
 from loom.serialization import (
     PlainData,
     freeze_plain_data,
@@ -334,7 +337,9 @@ class DockerCommandResult:
                 mapping["redacted_argv"],
                 path="DockerCommandResult.redacted_argv",
             ),
-            returncode=_int(mapping["returncode"], path="DockerCommandResult.returncode"),
+            returncode=_int(
+                mapping["returncode"], path="DockerCommandResult.returncode"
+            ),
             stdout=cast(str, mapping["stdout"]),
             stderr=cast(str, mapping["stderr"]),
             started_at=cast(str | None, mapping.get("started_at")),
@@ -389,7 +394,9 @@ class SubprocessDockerCommandRunner:
 
     def __init__(self, *, clock: object = utc_timestamp) -> None:
         if not callable(clock):
-            raise DockerOptionError("SubprocessDockerCommandRunner.clock must be callable")
+            raise DockerOptionError(
+                "SubprocessDockerCommandRunner.clock must be callable"
+            )
         self.clock = cast("Clock", clock)
 
     def require(self, command: str) -> None:
@@ -561,12 +568,30 @@ def build_docker_run_command(
     container_options: ContainerOptions | Mapping[str, object],
     worker_command: Sequence[str],
     docker_options: DockerOptions | Mapping[str, object] | None = None,
+    resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
+    resource_selection: Mapping[str, Sequence[str]] | None = None,
 ) -> DockerRunCommand:
-    """Return deterministic ``docker run`` argv for one prepared worker command."""
+    """Build argv from full demand and independently selected CPU/memory controls.
+
+    New standalone calls use the new-job policy defaults. Prepared calls consume
+    the exact saved selection after checking it against the saved policy/demand.
+    A GPU declaration alone adds no control; selected GPU enforcement is unsupported.
+    """
 
     container = _container_options(container_options)
     options = _docker_options(docker_options)
     worker = _argv_tuple(worker_command, path="worker_command")
+    try:
+        policy, entries, selection = container_resource_selection(
+            cast(ContainerResourceIntent | None, container.resources),
+            resource_policy,
+            resource_selection,
+            path="Docker resource policy",
+        )
+    except RuntimeResourceError as exc:
+        raise DockerOptionError(
+            f"container resource request is invalid: {exc}"
+        ) from exc
     argv: list[str] = [options.command, "run"]
     redacted: list[str] = [options.command, "run"]
     if options.remove:
@@ -579,8 +604,13 @@ def build_docker_run_command(
         _append_option(argv, redacted, "--workdir", container.workdir)
     for mount in _sorted_mounts(container):
         _append_option(argv, redacted, "--mount", _mount_argument(mount))
-    _append_environment(argv, redacted, cast(ContainerEnvironment, container.environment))
-    for flag, value in _resource_flags(cast(ContainerResourceIntent | None, container.resources)):
+    _append_environment(
+        argv, redacted, cast(ContainerEnvironment, container.environment)
+    )
+    for flag, value in _resource_flags(
+        cast(ContainerResourceIntent | None, container.resources),
+        selected=set(selection["enforce"]),
+    ):
         _append_option(argv, redacted, flag, value)
     image = cast(ContainerImageReference, container.image).reference
     _append(argv, redacted, image)
@@ -593,6 +623,15 @@ def build_docker_run_command(
         "docker_options": options.to_dict(),
         "container": container.to_redacted_metadata(),
         "worker_command": list(worker),
+        "resource_policy": policy.to_dict(),
+        "resource_selection": {key: list(value) for key, value in selection.items()},
+        "resource_controls": resource_control_records(
+            entries=entries,
+            policy=policy,
+            selection=selection,
+            owner="docker",
+            mechanisms={"cpu": "container_cpu_flag", "memory": "container_memory_flag"},
+        ),
     }
     return DockerRunCommand(argv=argv, redacted_argv=redacted, metadata=metadata)
 
@@ -677,7 +716,11 @@ def command_result_from_exception(
     """Represent a caught Docker command exception as a bounded result."""
 
     argv_tuple = _argv_tuple(argv, path="argv")
-    redacted = argv_tuple if redacted_argv is None else _argv_tuple(redacted_argv, path="redacted_argv")
+    redacted = (
+        argv_tuple
+        if redacted_argv is None
+        else _argv_tuple(redacted_argv, path="redacted_argv")
+    )
     timed_out = _is_timeout_exception(exc)
     stdout = _exception_stream(exc, "stdout")
     stderr = _exception_stream(exc, "stderr")
@@ -730,6 +773,8 @@ def _append_environment(
 
 def _resource_flags(
     resources: ContainerResourceIntent | None,
+    *,
+    selected: set[str],
 ) -> tuple[tuple[str, str], ...]:
     if resources is None:
         return ()
@@ -737,6 +782,8 @@ def _resource_flags(
     entries = cast(Mapping[str, ResourceEntry], resources.entries)
     capabilities = cast(Mapping[str, ResourceCapability], resources.capabilities)
     for kind, entry in sorted(entries.items()):
+        if kind not in selected:
+            continue
         capability = capabilities.get(kind)
         if capability is None:
             raise DockerOptionError(f"Docker resource {kind!r} is missing capability")
@@ -746,15 +793,24 @@ def _resource_flags(
         elif kind == "memory":
             flags.append(("--memory", _docker_memory_amount(entry)))
         elif kind == "gpu":
-            raise DockerOptionError("Docker GPU resource mapping is unsupported")
+            raise DockerOptionError(
+                "Docker GPU resource mapping is unsupported; omit gpu from "
+                "resource_policy.enforce or use a supporting executor"
+            )
         else:
-            raise DockerOptionError(f"Docker resource kind {kind!r} is unsupported")
+            raise DockerOptionError(
+                f"Docker resource kind {kind!r} is unsupported; remove it from "
+                "resource_policy.enforce or use a supporting executor"
+            )
     return tuple(flags)
 
 
 def _require_supported_resource(kind: str, capability: ResourceCapability) -> None:
     if capability.support_level == ResourceSupportLevel.UNSUPPORTED:
-        raise DockerOptionError(f"Docker resource kind {kind!r} is unsupported")
+        raise DockerOptionError(
+            f"Docker resource kind {kind!r} is unsupported; remove it from "
+            "resource_policy.enforce or use a supporting executor"
+        )
 
 
 def _docker_memory_amount(entry: ResourceEntry) -> str:
@@ -803,8 +859,12 @@ def _sorted_mounts(container: ContainerOptions) -> tuple[ContainerMount, ...]:
     )
 
 
-def _container_options(value: ContainerOptions | Mapping[str, object]) -> ContainerOptions:
-    return value if isinstance(value, ContainerOptions) else parse_container_options(value)
+def _container_options(
+    value: ContainerOptions | Mapping[str, object],
+) -> ContainerOptions:
+    return (
+        value if isinstance(value, ContainerOptions) else parse_container_options(value)
+    )
 
 
 def _docker_options(
@@ -820,7 +880,11 @@ def _run_command(value: DockerRunCommand) -> DockerRunCommand:
 
 
 def _image_reference(value: ContainerImageReference | str) -> ContainerImageReference:
-    return value if isinstance(value, ContainerImageReference) else ContainerImageReference(value)
+    return (
+        value
+        if isinstance(value, ContainerImageReference)
+        else ContainerImageReference(value)
+    )
 
 
 def _is_timeout_exception(exc: BaseException) -> bool:
@@ -861,8 +925,7 @@ def _env_name(value: object) -> str:
     name = _text(value, path="environment variable name")
     if _ENV_NAME_RE.fullmatch(name) is None:
         raise DockerOptionError(
-            "environment variable name must be an uppercase/lowercase ASCII "
-            "identifier"
+            "environment variable name must be an uppercase/lowercase ASCII identifier"
         )
     return name
 

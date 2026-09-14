@@ -1,7 +1,6 @@
 """Pipeline package."""
 
 from typing import TYPE_CHECKING
-
 from loom.pipeline.errors import (
     InputBindingError,
     PipelineCycleError,
@@ -12,7 +11,11 @@ from loom.pipeline.errors import (
     StageContractError,
     StatusSerializationError,
 )
-from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.resources import (
+    ResourceEntry,
+    ResourceRequest,
+    parse_resource_request,
+)
 from loom.pipeline.runtime import (
     CONTINUE_INDEPENDENT_FAILURE_POLICY,
     DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY,
@@ -30,6 +33,7 @@ from loom.pipeline.runtime import (
     ParallelExecutionOptions,
     RunEnvironmentRequest,
     RunOptions,
+    ResourcePolicy,
     RunStoreOptions,
     ResolvedStageRuntimeOptions,
     ResourceCapability,
@@ -65,12 +69,7 @@ from loom.pipeline.specs import (
     OutputSpec,
     parse_pipeline_config,
 )
-from loom.pipeline.validation import (
-    PipelineTargetCheckResult,
-    PipelineValidationResult,
-    check_pipeline_stage_targets,
-    validate_pipeline_config,
-)
+from loom.pipeline.validation import PipelineValidationResult, validate_pipeline_config
 from loom.pipeline.stage import Stage
 from loom.pipeline.submitted import (
     SubmittedOperationError,
@@ -93,19 +92,14 @@ from loom.pipeline.transition_policy import (
 )
 
 if TYPE_CHECKING:
-    from loom.pipeline.context import StageContext
-    from loom.pipeline.execution import PipelineRunner, RunRequest, RunResult
+    from loom.pipeline.context import ProcessContainmentOwner, StageContext
 
 
 def __getattr__(name: str) -> object:
-    if name == "StageContext":
-        from loom.pipeline.context import StageContext as _StageContext
+    if name in {"ProcessContainmentOwner", "StageContext"}:
+        from loom.pipeline import context
 
-        return _StageContext
-    if name in {"PipelineRunner", "RunRequest", "RunResult"}:
-        from loom.pipeline import execution
-
-        return getattr(execution, name)
+        return getattr(context, name)
     raise AttributeError(f"module 'loom.pipeline' has no attribute {name!r}")
 
 
@@ -116,11 +110,10 @@ __all__ = [
     "PipelineSpec",
     "parse_pipeline_config",
     "PipelineValidationResult",
-    "PipelineTargetCheckResult",
     "validate_pipeline_config",
-    "check_pipeline_stage_targets",
     "Stage",
     "StageContext",
+    "ProcessContainmentOwner",
     "RunStatus",
     "TransitionIntent",
     "InvalidRunTransition",
@@ -143,9 +136,6 @@ __all__ = [
     "PipelineCycleError",
     "StageContractError",
     "StatusSerializationError",
-    "PipelineRunner",
-    "RunRequest",
-    "RunResult",
     "ResourceRequest",
     "ResourceEntry",
     "parse_resource_request",
@@ -165,6 +155,7 @@ __all__ = [
     "ParallelExecutionOptions",
     "RunEnvironmentRequest",
     "RunOptions",
+    "ResourcePolicy",
     "RunStoreOptions",
     "ResolvedStageRuntimeOptions",
     "ResourceCapability",

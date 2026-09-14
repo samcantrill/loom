@@ -15,6 +15,8 @@ from time import monotonic, sleep
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -63,13 +65,11 @@ pytestmark = pytest.mark.integration
 RUN_URI = "file:///runs/coordinator-api-r1"
 
 
-def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
+def _authority_factory(tmp_path, *, workspace_id: str = "workspace-a"):
     repository = initialize_authority_repository(
         tmp_path / "authority", service_generation="generation-1"
     )
-    services = repository_authority_services(
-        repository, workspace_id="workspace-a"
-    )
+    services = repository_authority_services(repository, workspace_id="workspace-a")
     app_client = TestClient(create_authority_app(services=services))
 
     def transport(
@@ -89,6 +89,11 @@ def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
         workspace_id=workspace_id,
         service_generation="generation-1",
     )
+    return repository, factory
+
+
+def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
+    repository, factory = _authority_factory(tmp_path, workspace_id=workspace_id)
     return repository, factory(RUN_URI)
 
 
@@ -481,3 +486,222 @@ def _wait_for_authority(
             last_error = exc
             sleep(0.05)
     pytest.fail(f"authority process did not become ready: {last_error}")
+
+
+def test_prepared_publication_replays_lost_reply_and_preserves_principal(
+    tmp_path,
+) -> None:
+    from loom.pipeline.status import RunStatus
+
+    repository, authority = _authority(tmp_path)
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    prepared = authority.open_run(RUN_URI)
+    assert prepared.status is RunStatus.PLANNED
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    assert authority.open_run(RUN_URI).revision == prepared.revision
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError):
+        authority.publish_prepared_run(RUN_URI, "different-publication")
+    with pytest.raises(Exception, match="principal conflicts with preparation"):
+        repository.bind_coordinator_admission(
+            RUN_URI,
+            CoordinatorAdmissionRequest("admit-other", "other", RUN_URI, "intent"),
+            service_principal="other",
+        )
+    authority.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", RUN_URI, "intent-1"),
+    )
+    prepared_attempt = authority.ensure_prepared_attempt(
+        RUN_URI, _prepared_request(prepared.revision)
+    )
+    authority.bind_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-1",
+        attempt_id=prepared_attempt.attempt.attempt_id,
+    )
+    fence = authority.grant_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-1",
+        attempt_id=prepared_attempt.attempt.attempt_id,
+    )
+    assert authority.open_run(RUN_URI).status is RunStatus.PLANNED
+    authority.confirm_execution_started(RUN_URI, fence=fence)
+    assert authority.open_run(RUN_URI).status is RunStatus.RUNNING
+    authority.publish_prepared_run(RUN_URI, "checked-publication")
+    assert authority.open_run(RUN_URI).status is RunStatus.RUNNING
+
+
+@pytest.mark.optional_dependency
+@pytest.mark.parametrize("interruption", ("created", "published"))
+def test_selected_authority_publisher_reconciles_unknown_reply(
+    tmp_path, monkeypatch, interruption
+) -> None:
+    from weave import compose_config
+    from loom.pipeline.status import RunStatus
+    from loom.pipeline.orchestration import ExecutionRequirement
+    from loom.pipeline.stores.coordinator_authority import (
+        AuthenticatedCoordinatorAuthority,
+    )
+    from loom.queue.managed_local_preparation import prepare_managed_run
+    from tests.integration.queue.test_preparation_operations import _service
+
+    service = _service(tmp_path)
+    repository, factory = _authority_factory(tmp_path)
+    service = replace(
+        service, daemon=replace(service.daemon, coordinator_authority_factory=factory)
+    )
+    composed = compose_config(tmp_path / "projects" / "pipeline.yaml")
+    profile = service.daemon.resident_worker_launch_profile
+    assert profile is not None
+    requirements = {
+        "produce": ExecutionRequirement(
+            str(profile.descriptor["project_fingerprint"]),
+            str(profile.descriptor["environment_fingerprint"]),
+            str(profile.descriptor["executor_fingerprint"]),
+        )
+    }
+    publish = AuthenticatedCoordinatorAuthority.publish_prepared_run
+    transition = repository.transition_run
+
+    def lose_reply(self, run_uri, digest):
+        publish(self, run_uri, digest)
+        raise OSError("publication reply lost")
+
+    def unavailable_transition(*args, **kwargs):
+        raise OSError("authority publication unavailable after creation")
+
+    if interruption == "published":
+        monkeypatch.setattr(
+            AuthenticatedCoordinatorAuthority, "publish_prepared_run", lose_reply
+        )
+    else:
+        monkeypatch.setattr(repository, "transition_run", unavailable_transition)
+    with pytest.raises((OSError, AuthenticatedCoordinatorAuthorityError)):
+        prepare_managed_run(
+            service, composed, "prepared", execution_requirements=requirements
+        )
+    expected = RunStatus.CREATED if interruption == "created" else RunStatus.PLANNED
+    assert (
+        repository.open_run(
+            (service.daemon.run_store_root / "prepared").resolve().as_uri()
+        ).status
+        is expected
+    )
+    monkeypatch.setattr(
+        AuthenticatedCoordinatorAuthority, "publish_prepared_run", publish
+    )
+    monkeypatch.setattr(repository, "transition_run", transition)
+    receipt = prepare_managed_run(
+        service, composed, "prepared", execution_requirements=requirements
+    )
+    assert repository.open_run(receipt.run_uri).status is RunStatus.PLANNED
+    assert not (
+        service.daemon.run_store_root / "prepared" / ".loom" / "authority.sqlite3"
+    ).exists()
+    assert (
+        prepare_managed_run(
+            service, composed, "prepared", execution_requirements=requirements
+        )
+        == receipt
+    )
+
+
+def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_path):
+    from loom.pipeline.event_sinks import (
+        EventObserverExternalRef,
+        EventObserverLinkRecord,
+        EventSinkFailureRecord,
+    )
+    from loom.pipeline.events import EventScope, PipelineEvent
+
+    repository, authority = _authority(tmp_path)
+    revision = repository.admit_run(RUN_URI)
+    authority.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-observer",
+            coordinator_id="coordinator-1",
+            run_uri=RUN_URI,
+            intent_digest="observer-intent",
+        ),
+    )
+    event = PipelineEvent(
+        scope=EventScope.run(),
+        event_type="run.started",
+        timestamp=revision.created_at,
+        event_id="native-committed-event",
+    )
+    record = authority.append_audit_event(RUN_URI, event)
+    assert authority.append_audit_event(RUN_URI, event) == record
+    assert authority.list_audit_events(RUN_URI) == (record,)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError):
+        authority.append_audit_event(
+            RUN_URI, replace(event, event_type="run.completed")
+        )
+    # Observation revision advancement never changes the exact committed output.
+    prepared = authority.ensure_prepared_attempt(
+        RUN_URI, _prepared_request(authority.open_run(RUN_URI).revision)
+    )
+    authority.bind_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    fence = authority.grant_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    authority.confirm_execution_started(RUN_URI, fence=fence)
+    artifact = ArtifactRef(
+        artifact_id="build/out",
+        uri="file:///artifacts/build/out.json",
+        artifact_type="json",
+    )
+    commit_args: dict[str, Any] = dict(
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+        fencing_token=fence.fencing_token,
+        outputs={"out": artifact},
+    )
+    commit = authority.record_output_commit(RUN_URI, "build", **commit_args)
+    authority.append_audit_event(
+        RUN_URI,
+        replace(
+            event,
+            event_id="native-completed-event",
+            event_type="stage.completed",
+            scope=EventScope.stage("build"),
+        ),
+    )
+    assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
+    assert authority.read_event_sink_failures(RUN_URI) == ()
+    assert authority.read_event_observer_links(RUN_URI) == ()
+    failure = EventSinkFailureRecord.from_exception(
+        sink_name="test.capture", event_reference=record.to_event_reference(),
+        exc=RuntimeError("synthetic callback failure"), failed_at=record.timestamp,
+    )
+    link = EventObserverLinkRecord(
+        sink_name="test.capture", run_uri=RUN_URI,
+        event_reference=record.to_event_reference(), recorded_at=record.timestamp,
+        external_ref=EventObserverExternalRef("test.message", {"message_id": "retained-1"}),
+    )
+    before_facts = authority.open_run(RUN_URI)
+    failure_revision = authority.append_event_sink_failure(RUN_URI, failure)
+    link_revision = authority.append_event_observer_link(RUN_URI, link)
+    assert before_facts.revision.sequence < failure_revision.sequence < link_revision.sequence
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)
+    assert repository.read_event_sink_failures(RUN_URI) == (failure,)
+    assert repository.read_event_observer_links(RUN_URI) == (link,)
+    assert authority.open_run(RUN_URI).status == before_facts.status
+    assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
+    _, wrong_workspace = _authority(tmp_path, workspace_id="another-workspace")
+    revision_before_refusal = authority.open_run(RUN_URI).revision
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_sink_failure(RUN_URI, failure)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_observer_link(RUN_URI, link)
+    assert authority.open_run(RUN_URI).revision == revision_before_refusal
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)

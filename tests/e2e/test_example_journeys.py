@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -20,37 +21,48 @@ REPO_ROOT = next(
 EXAMPLES_ROOT = REPO_ROOT / "examples"
 
 
+def test_e2e_managed_role_templates_keep_machine_inputs_out_of_shared_yaml() -> None:
+    for name in ("managed-local-basic", "managed-remote-operations"):
+        example = EXAMPLES_ROOT / "operations" / name
+        coordinator = (example / "coordinator.yaml.example").read_text(encoding="utf-8")
+        agent = (example / "agent.yaml.example").read_text(encoding="utf-8")
+        assert "${oc.env:" in coordinator
+        assert "${oc.env:" in agent
+        assert (example / "coordinator.env.example").is_file()
+        assert (example / "agent.env.example").is_file()
+        assert "unqualified" not in coordinator
+        assert "unqualified" not in agent
+        manifest = (example / "example.yaml").read_text(encoding="utf-8")
+        assert "introduced_in: v29" in manifest
+
+
 def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
     script = EXAMPLES_ROOT / "execution" / "local" / "run_pipeline.py"
     output_root = tmp_path / "local"
     payload = _parse_summary(_run_example_script(script, output_root))
 
     assert payload["first_status"] == "SUCCEEDED"
-    assert payload["resume_status"] == "SUCCEEDED"
-    assert payload["repair_status"] == "SUCCEEDED"
-    first_stage_actions = payload["first_stage_actions"]
-    resume_stage_actions = payload["resume_stage_actions"]
-    repair_stage_actions = payload["repair_stage_actions"]
-    assert isinstance(first_stage_actions, dict)
-    assert isinstance(resume_stage_actions, dict)
-    assert isinstance(repair_stage_actions, dict)
-    stage_names = {"left_seed", "left_summarize", "right_seed", "right_summarize"}
-    assert set(first_stage_actions) == stage_names
-    assert set(resume_stage_actions) == stage_names
-    assert set(repair_stage_actions) == stage_names
-    assert set(resume_stage_actions.values()) == {"REUSE"}
-    assert repair_stage_actions == {
-        "left_seed": "RUN",
-        "left_summarize": "RUN",
-        "right_seed": "REUSE",
-        "right_summarize": "REUSE",
-    }
+    assert payload["repair_execution"] == "not_requested"
+    assert payload["committed_stage_count"] == 4
+    assert (
+        payload["reuse_plan"]
+        == "left_seed=REUSE,left_summarize=REUSE,right_seed=REUSE,right_summarize=REUSE"
+    )
+    assert (
+        payload["repair_plan"]
+        == "left_seed=RUN,left_summarize=RUN,right_seed=REUSE,right_summarize=REUSE"
+    )
     assert payload["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 
 def test_e2e_example_authority_lifecycle_cli(tmp_path: Path) -> None:
-    script = EXAMPLES_ROOT / "operations" / "authority-lifecycle" / "run_authority_lifecycle.py"
+    script = (
+        EXAMPLES_ROOT
+        / "operations"
+        / "authority-lifecycle"
+        / "run_authority_lifecycle.py"
+    )
     payload = _parse_summary(_run_example_script(script, tmp_path / "authority"))
 
     summary = payload["authority_lifecycle"]
@@ -59,81 +71,81 @@ def test_e2e_example_authority_lifecycle_cli(tmp_path: Path) -> None:
     assert summary["registry_status"] == "valid"
     assert summary["doctor_ok"] is True
     assert summary["restarted_generation_changed"] is True
-    assert summary["stop_state"] in {"stopped", "stopping"}
+    assert summary["stop_state"] == "stopped"
+    assert summary["repeated_stop_state"] == "stopped"
 
 
 def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
     script = (
-        EXAMPLES_ROOT / "execution" / "slurm" / "dry-run-basics" / "run_dry_run_basics.py"
+        EXAMPLES_ROOT
+        / "execution"
+        / "slurm"
+        / "dry-run-basics"
+        / "run_dry_run_basics.py"
     )
     output_root = tmp_path / "slurm"
-    summaries = _parse_slurm_summaries(_run_example_script(script, output_root))
-
-    modes = {summary["mode"] for summary in summaries}
-    assert modes == {"slurm-single-job", "slurm-afterok"}
-    assert len(summaries) == 2
-    for summary in summaries:
-        assert _require_int(summary["jobs"]) >= 1
-        assert _require_int(summary["dependencies"]) >= 0
-        assert summary["scheduler_ids_absent"] is True
-        manifest = Path(_require_str(summary["manifest"]))
-        assert manifest.is_file()
-        for relative in _parse_csv_list(summary["scripts"]):
-            path = _resolve_dry_run_path(relative, manifest)
-            assert path.is_file()
-        for relative in _parse_csv_list(summary["logs"]):
-            path = _resolve_dry_run_path(relative, manifest)
-            assert path.suffix == ".log"
-        assert "executor.slurm.sbatch" in _require_str(summary["warnings"])
+    payload = _parse_summary(_run_example_script(script, output_root))["graph_plan"]
+    assert isinstance(payload, dict)
+    assert payload["stages"] == "seed,summarize"
+    assert str(payload["edges"]) == "1"
+    assert payload["scheduler_submission"] == "not_requested"
+    assert str(payload["generated_commands"]) == "0"
 
 
-def test_e2e_example_service_less_slurm_reopens_without_a_service(
+def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(
     tmp_path: Path,
 ) -> None:
     script = (
-        EXAMPLES_ROOT
-        / "operations"
-        / "service-less-slurm-driving"
-        / "run_service_less_slurm.py"
+        EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_docker_pipeline.py"
     )
-    payload = _parse_summary(_run_example_script(script, tmp_path / "service-less"))
-
-    summary = payload["service_less_slurm"]
-    assert isinstance(summary, dict)
-    assert summary == {
-        "prepared_runs": 2,
-        "modes": "slurm-single-job,slurm-afterok",
-        "first_cycle_dispatched": 1,
-        "reopened_cycle_dispatched": 1,
-        "scheduler_job_count": 3,
-        "completed_queue_items": 2,
-        "no_network_service": True,
-    }
-
-
-def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Path) -> None:
-    script = EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_docker_pipeline.py"
     failure_script = (
-        EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_failure_diagnostics.py"
+        EXAMPLES_ROOT
+        / "execution"
+        / "containers"
+        / "docker"
+        / "run_failure_diagnostics.py"
     )
     output_root = tmp_path / "docker"
     payload = _parse_summary(_run_example_script(script, output_root))
 
     assert payload["run_status"] == "SUCCEEDED"
-    assert payload["seed_executor"] == "docker"
-    assert payload["container_image"] == "python:3.12-slim"
+    assert payload["coordinator_cleanup"] == "stopped"
+    assert payload["runtime_qualification"] == "local daemon fixture"
+    run_path = _run_uri_path(payload["run_uri"])
+    summary = json.loads((run_path / "artifacts/summarize/summary.json").read_text())
+    assert summary == {
+        "count": 3,
+        "total": 30,
+        "mean": 10,
+        "container_mode": "docker-pipeline",
+    }
+    worker = json.loads((run_path / "stages/seed/worker_result.json").read_text())[
+        "worker_result"
+    ]
+    assert worker["executor_metadata"]["executor"] == "docker"
+    assert worker["executor_metadata"]["managed_backend_success"] is True
+    assert "managed_successful_exit" not in worker["executor_metadata"]
     assert _require_int(payload["artifact_count"]) >= 1
     assert _require_int(payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
-    failure_payload = _parse_summary(
-        _run_example_script(failure_script, output_root)
-    )
+    failure_payload = _parse_summary(_run_example_script(failure_script, output_root))
 
     assert failure_payload["run_status"] == "FAILED"
-    assert failure_payload["failure_executor"] == "docker"
-    assert failure_payload["failure_exit_code"] == 1
-    assert failure_payload["stderr_available"] is True
+    assert failure_payload["coordinator_cleanup"] == "stopped"
+    assert failure_payload["artifact_count"] == 0
+    failed = json.loads(
+        (
+            _run_uri_path(failure_payload["run_uri"]) / "stages/fail/worker_result.json"
+        ).read_text()
+    )["worker_result"]
+    assert failed["status"] == "FAILED"
+    assert failed["failure"] is not None
+    assert failed["executor_metadata"]["executor"] == "docker"
+    assert (
+        "docker example is failing intentionally"
+        in Path(failed["stderr_path"]).read_text()
+    )
     assert _require_int(failure_payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
 
@@ -149,11 +161,14 @@ def test_e2e_example_apptainer_executor_runs_with_fake_command(tmp_path: Path) -
     payload = _parse_summary(_run_example_script(script, tmp_path / "apptainer"))
 
     assert payload["run_status"] == "SUCCEEDED"
-    assert payload["executor"] == "apptainer"
-    assert payload["image"] == "analysis-example.sif"
-    assert {"--cleanenv", "--nv"} <= set(str(payload["flags"]).split(","))
-    assert _require_int(payload["artifact_count"]) == 1
-    assert _require_int(payload["fake_call_count"]) >= 1
+    assert payload["coordinator_cleanup"] == "stopped"
+    assert payload["runtime_qualification"] == "fake namespace fixture"
+    summary = json.loads(
+        (
+            _run_uri_path(payload["run_uri"]) / "artifacts/analyze/summary.json"
+        ).read_text()
+    )
+    assert summary == {"count": 2, "total": 13, "container_mode": "apptainer-pipeline"}
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 
@@ -206,7 +221,9 @@ def _parse_summary(output: str) -> dict[str, object]:
         while stack and indent <= stack[-1][0]:
             stack.pop()
         if not stack:
-            raise AssertionError(f"could not parse line without a parent container: {raw_line!r}")
+            raise AssertionError(
+                f"could not parse line without a parent container: {raw_line!r}"
+            )
 
         current = stack[-1][1]
         if not value:

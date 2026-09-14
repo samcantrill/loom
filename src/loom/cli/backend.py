@@ -7,7 +7,10 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
-from loom.cli.authority import add_authority_options, authority_config_from_namespace
+from loom.cli.authority import (
+    add_authority_options,
+    explicit_authority_config_from_namespace,
+)
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope
 from loom.cli.options import OutputFormat, output_format_from_namespace
@@ -87,7 +90,7 @@ def handle_inspect(namespace: argparse.Namespace) -> int:
                 getattr(namespace, "verify_materialization", False)
             ),
             projection_revision=getattr(namespace, "projection_revision", None),
-            authority_config=authority_config_from_namespace(namespace),
+            authority_config=explicit_authority_config_from_namespace(namespace),
         )
     except BackendDiagnosticsError as exc:
         raise _backend_error(exc) from exc
@@ -122,7 +125,7 @@ def handle_capabilities(namespace: argparse.Namespace) -> int:
                 getattr(namespace, "require_shared_filesystem", False)
             ),
             require_remote=bool(getattr(namespace, "require_remote", False)),
-            authority_config=authority_config_from_namespace(namespace),
+            authority_config=explicit_authority_config_from_namespace(namespace),
         )
     except BackendDiagnosticsError as exc:
         raise _backend_error(exc) from exc

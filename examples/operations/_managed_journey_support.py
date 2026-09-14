@@ -90,7 +90,11 @@ class JourneyRecorder:
 
 def example_root(name: str) -> Path:
     configured = os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT")
-    base = Path(configured) if configured else Path(tempfile.gettempdir()) / "loom-examples"
+    base = (
+        Path(configured)
+        if configured
+        else Path(tempfile.gettempdir()) / "loom-examples"
+    )
     base.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix=f"{name}-", dir=base)).resolve()
 
@@ -135,7 +139,9 @@ def stop_cli_service(process: subprocess.Popen[str]) -> tuple[str, str]:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
-        raise RuntimeError("Loom service did not stop through its supported path") from exc
+        raise RuntimeError(
+            "Loom service did not stop through its supported path"
+        ) from exc
     if process.returncode not in {0, 130, -signal.SIGINT}:
         raise RuntimeError(
             f"Loom service stopped unexpectedly ({process.returncode})\n"
@@ -258,6 +264,8 @@ def _process_exists(pid: int) -> bool:
 def _cli_surface(arguments: Sequence[str]) -> str:
     if len(arguments) < 2:
         raise RuntimeError("journey CLI call has no command")
+    if arguments[0] == "inspect-run":
+        return "cli:inspect-run"
     return f"cli:{arguments[0]} {arguments[1]}"
 
 

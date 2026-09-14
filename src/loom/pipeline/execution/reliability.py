@@ -551,7 +551,7 @@ def _timeout_metadata(value: object) -> dict[str, PlainData] | None:
     raw = cast(Mapping[str, object], value).get(_TIMEOUT_METADATA_KEY)
     if raw is None:
         raw = cast(Mapping[str, object], value).get("timeout")
-    if not isinstance(raw, dict):
+    if not isinstance(raw, Mapping):
         return None
     normalized = ensure_plain_data(raw, path=_TIMEOUT_METADATA_KEY)
     if not isinstance(normalized, dict):

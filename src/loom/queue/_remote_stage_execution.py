@@ -1,14 +1,16 @@
-"""Private, path-free data contracts for remote managed-stage execution.
+"""Private remote execution contracts and portable terminal diagnostics.
 
 The coordinator retains authoritative run and source-path identities. A remote
 agent receives only immutable semantic data and derives every local path from
 its protected root and the assigned identity.
+Terminal diagnostics may retain explanatory messages and source paths; they do
+not make worker-local diagnostic files a dependency of coordinator inspection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import base64
 import hashlib
 import json
@@ -17,7 +19,14 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from .preparation import PreparationChildInput
+    from .resident_readiness import (
+        ResidentReadinessRequirements,
+        ResidentReadinessResult,
+    )
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
@@ -26,8 +35,13 @@ from loom.pipeline.execution.models import (
     STAGE_WORKER_REQUEST_SCHEMA_VERSION,
     StageWorkerRequest,
     StageWorkerResult,
+    redact_executor_metadata,
 )
 from loom.pipeline.planning import StageFingerprintRecord
+from loom.pipeline.runtime._resource_controls import (
+    _validated_resource_controls,
+    with_resource_control_disposition,
+)
 from loom.pipeline.status import StageStatus
 from loom.scheduling import (
     CapacityAtom,
@@ -43,11 +57,15 @@ from loom.serialization import (
     thaw_plain_data,
 )
 
-from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+from ._agent_process_supervisor import (
+    ResidentWorkerLaunchProfile,
+    _launch_from_value,
+    _preparation_root_bindings,
+)
 from .errors import QueueConflictError, QueueServiceError
 
 
-RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 3
+RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 4
 REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
@@ -176,10 +194,16 @@ class GpuDeviceDescriptor:
     def __post_init__(self) -> None:
         for value, name in (
             (self.device_id, "device_id"),
-            (self.model, "model"),
             (self.provider, "provider"),
         ):
             _identifier(value, f"GPU {name}")
+        if (
+            not isinstance(self.model, str)
+            or not self.model
+            or len(self.model) > 160
+            or any(ord(character) < 32 for character in self.model)
+        ):
+            raise QueueServiceError("GPU model is invalid")
         if self.allocation_mode not in {
             "exclusive",
             "vram_share",
@@ -347,6 +371,64 @@ class ResidentGpuDevice:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentResourceInventory:
+    """One agent-owned capacity domain shared by resident executable profiles."""
+
+    cpu_capacity: int
+    memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ResidentGpuDevice, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cpu_capacity, bool)
+            or not isinstance(self.cpu_capacity, int)
+            or self.cpu_capacity < 1
+        ):
+            raise QueueServiceError("agent CPU capacity is invalid")
+        if (
+            isinstance(self.memory_capacity_bytes, bool)
+            or not isinstance(self.memory_capacity_bytes, int)
+            or self.memory_capacity_bytes < 0
+        ):
+            raise QueueServiceError("agent memory capacity is invalid")
+        devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ResidentGpuDevice) for item in devices) or len(
+            {item.descriptor.device_id for item in devices}
+        ) != len(devices):
+            raise QueueServiceError("agent GPU inventory is invalid")
+        if len({item.binding_value for item in devices}) != len(devices):
+            raise QueueServiceError("agent GPU inventory bindings are invalid")
+        object.__setattr__(self, "gpu_devices", devices)
+
+    def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
+        _identifier(agent_id, "agent_id")
+        atoms = [
+            CapacityAtom(
+                "cpu",
+                f"{agent_id}:cpu",
+                ExactQuantity(self.cpu_capacity),
+                "count",
+                ExactQuantity(1),
+            )
+        ]
+        if self.memory_capacity_bytes:
+            atoms.append(
+                CapacityAtom(
+                    "memory",
+                    f"{agent_id}:memory",
+                    ExactQuantity(self.memory_capacity_bytes),
+                    "B",
+                    ExactQuantity(1),
+                )
+            )
+        atoms.extend(
+            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
+            for device in self.gpu_devices
+        )
+        return tuple(atoms)
+
+
+@dataclass(frozen=True, slots=True)
 class ResidentExecutionProfile:
     """Protected local profile; its paths never enter protocol values."""
 
@@ -357,8 +439,27 @@ class ResidentExecutionProfile:
     memory_capacity_bytes: int = 0
     gpu_devices: tuple[ResidentGpuDevice, ...] = ()
     environment: Mapping[str, str] = field(default_factory=dict)
+    readiness_requirements: "ResidentReadinessRequirements" = field(
+        default_factory=lambda: _default_readiness_requirements()
+    )
+    readiness_identity: str | None = None
+    readiness_result: "ResidentReadinessResult | None" = None
+    preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
+    container: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
+        from ._container_worker import container_binding
+        object.__setattr__(self, "container", container_binding(self.container))
+        if self.container is not None:
+            options = cast(Mapping[str, PlainData], self.container["options"])
+            if not Path(str(options["command"])).is_file():
+                raise QueueServiceError("resident container runtime is unavailable")
+            if self.container["kind"] == "apptainer":
+                container = cast(Mapping[str, PlainData], self.container["container"])
+                image = cast(Mapping[str, PlainData], container["image"])
+                if not Path(str(image["reference"])).is_file():
+                    raise QueueServiceError("resident container image is unavailable")
+
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
             raise QueueServiceError("resident execution descriptor is invalid")
         project_root = Path(self.project_root).resolve()
@@ -394,43 +495,50 @@ class ResidentExecutionProfile:
         ):
             raise QueueServiceError("resident execution environment is invalid")
         object.__setattr__(self, "environment", environment)
+        object.__setattr__(
+            self,
+            "preparation_shared_roots",
+            _preparation_root_bindings(self.preparation_shared_roots),
+        )
+        from .resident_readiness import ResidentReadinessRequirements
+
+        if not isinstance(self.readiness_requirements, ResidentReadinessRequirements):
+            raise QueueServiceError("resident readiness requirements are invalid")
+        if self.readiness_identity is not None and (
+            not isinstance(self.readiness_identity, str)
+            or len(self.readiness_identity) != 64
+            or any(item not in "0123456789abcdef" for item in self.readiness_identity)
+        ):
+            raise QueueServiceError("resident readiness identity is invalid")
+        if self.readiness_result is not None:
+            from .resident_readiness import ResidentReadinessResult
+
+            if not isinstance(self.readiness_result, ResidentReadinessResult):
+                raise QueueServiceError("resident readiness result is invalid")
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
-        _identifier(agent_id, "agent_id")
-        atoms = [
-            CapacityAtom(
-                "cpu",
-                f"{agent_id}:cpu",
-                ExactQuantity(self.cpu_capacity),
-                "count",
-                ExactQuantity(1),
-            )
-        ]
-        if self.memory_capacity_bytes:
-            atoms.append(
-                CapacityAtom(
-                    "memory",
-                    f"{agent_id}:memory",
-                    ExactQuantity(self.memory_capacity_bytes),
-                    "B",
-                    ExactQuantity(1),
-                )
-            )
-        atoms.extend(
-            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
-            for device in self.gpu_devices
-        )
-        return tuple(atoms)
+        return AgentResourceInventory(
+            self.cpu_capacity, self.memory_capacity_bytes, self.gpu_devices
+        ).capacity_atoms(agent_id)
 
     @property
     def launch_profile(self) -> ResidentWorkerLaunchProfile:
         """The immutable process-launch binding, separate from capacity."""
         return ResidentWorkerLaunchProfile(
+            container=self.container,
             project_root=self.project_root,
             python_executable=self.python_executable,
             descriptor=self.descriptor.to_dict(),
             environment=self.environment,
+            readiness_identity=self.readiness_identity,
+            preparation_shared_roots=self.preparation_shared_roots,
         )
+
+
+def _default_readiness_requirements() -> "ResidentReadinessRequirements":
+    from .resident_readiness import ResidentReadinessRequirements
+
+    return ResidentReadinessRequirements()
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,7 +746,7 @@ def _claim_from_dict(value: object) -> ResourceClaim:
 
 @dataclass(frozen=True, slots=True)
 class _ResidentAssignmentBundle:
-    """Hard-cutover semantic request with no run URI, host path, or URL."""
+    """Shared resident request; remote transports enforce path-free semantics."""
 
     assignment_id: str
     stage_work_id: str
@@ -693,11 +801,6 @@ class _ResidentAssignmentBundle:
             or runtime.get("stage_id") != self.stage_name
         ):
             raise QueueServiceError("resident assignment semantics are invalid")
-        _validate_remote_semantic_data(
-            fingerprint=fingerprint,
-            resolved_runtime=runtime,
-            worker_metadata=metadata,
-        )
         try:
             fingerprint_record = StageFingerprintRecord.from_dict(fingerprint)
         except Exception as exc:
@@ -709,6 +812,14 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
+        preparation = _preparation_input_from_fingerprint(fingerprint)
+        if (
+            preparation is not None
+            and dict(preparation.profile_descriptor) != self.profile.to_dict()
+        ):
+            raise QueueConflictError(
+                "preparation assignment does not use the selected resident profile"
+            )
         inputs = tuple(self.inputs)
         outputs = tuple(
             _identifier(name, "declared output") for name in self.declared_outputs
@@ -726,15 +837,25 @@ class _ResidentAssignmentBundle:
             )
         if len(outputs) > 32 or len(set(outputs)) != len(outputs):
             raise QueueServiceError("resident output names must be unique")
-        if set(item.logical_name for item in inputs) != set(
-            fingerprint_record.payload.declared_inputs
-        ) or set(outputs) != set(fingerprint_record.payload.declared_outputs):
+        expected_inputs = set(fingerprint_record.payload.declared_inputs)
+        archive = _preparation_archive(fingerprint)
+        if archive is not None:
+            if _PREPARATION_ARCHIVE_INPUT in expected_inputs:
+                raise QueueConflictError("preparation archive input name is reserved")
+            expected_inputs.add(_PREPARATION_ARCHIVE_INPUT)
+            transferred = next(
+                (item for item in inputs if item.logical_name == _PREPARATION_ARCHIVE_INPUT),
+                None,
+            )
+            if (transferred is None or transferred.artifact_id != archive.artifact_id
+                or f"sha256:{transferred.digest}" != archive.checksum):
+                raise QueueConflictError("preparation archive conflicts with its retained input")
+        if set(item.logical_name for item in inputs) != expected_inputs or set(outputs) != set(fingerprint_record.payload.declared_outputs):
             raise QueueConflictError(
                 "resident stage interface conflicts with its fingerprint"
             )
         if (
             any(not isinstance(item, ResourceClaim) for item in claims)
-            or not claims
             or len(claims) > 8
             or len({item.resource_kind for item in claims}) != len(claims)
         ):
@@ -764,6 +885,18 @@ class _ResidentAssignmentBundle:
             tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
         )
 
+    def validate_remote_transport(self) -> None:
+        """Reject coordinator-local locations before remote transport or replay."""
+        _validate_remote_semantic_data(
+            fingerprint=self.fingerprint,
+            resolved_runtime=self.resolved_runtime,
+            worker_metadata=self.worker_metadata,
+        )
+
+    @property
+    def preparation_input(self) -> "PreparationChildInput | None":
+        return _preparation_input_from_fingerprint(self.fingerprint)
+
     @classmethod
     def from_worker_request(
         cls,
@@ -788,6 +921,10 @@ class _ResidentAssignmentBundle:
         if "stage_resources" in worker_request.metadata:
             safe_metadata["stage_resources"] = worker_request.metadata[
                 "stage_resources"
+            ]
+        if "resource_selection" in worker_request.metadata:
+            safe_metadata["resource_selection"] = worker_request.metadata[
+                "resource_selection"
             ]
         return cls(
             assignment_id=assignment_id,
@@ -863,6 +1000,11 @@ class _ResidentAssignmentBundle:
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("resident assignment bundle is invalid")
+        if value.get("schema_version") != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+            raise QueueServiceError(
+                "resident assignment bundle schema is unsupported; finish or cancel "
+                "the saved work in its pinned environment and prepare a fresh identity"
+            )
         for field_name in (
             "inputs",
             "declared_outputs",
@@ -897,6 +1039,13 @@ class _ResidentAssignmentBundle:
             ),
             schema_version=cast(int, value["schema_version"]),
         )
+
+    @classmethod
+    def from_remote_dict(cls, value: object) -> "_ResidentAssignmentBundle":
+        """Decode and validate one bundle received through remote transport."""
+        request = cls.from_dict(value)
+        request.validate_remote_transport()
+        return request
 
 
 @dataclass(frozen=True, slots=True)
@@ -999,7 +1148,7 @@ class _RemoteOutputArtifact:
 
 @dataclass(frozen=True, slots=True)
 class _RemoteExecutionReport:
-    """Path-free terminal worker facts; the coordinator restores its run URI."""
+    """Portable terminal worker facts; the coordinator restores its run URI."""
 
     assignment_id: str
     stage_name: str
@@ -1013,10 +1162,14 @@ class _RemoteExecutionReport:
     message: str | None = None
     exception_type: str | None = None
     exit_code: int | None = None
+    failure: ExecutionFailure | None = None
+    resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
+    process_created: bool | None = None
+    executor_metadata: Mapping[str, PlainData] | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1058,7 +1211,8 @@ class _RemoteExecutionReport:
             if value is not None:
                 _identifier(value, name)
         if self.message is not None and (
-            not isinstance(self.message, str) or len(self.message) > 1024
+            not isinstance(self.message, str)
+            or (self.schema_version == 1 and len(self.message) > 1024)
         ):
             raise QueueServiceError("remote failure message is invalid")
         if self.status is StageStatus.SUCCEEDED and any(
@@ -1091,9 +1245,60 @@ class _RemoteExecutionReport:
             isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int)
         ):
             raise QueueServiceError("remote result exit code is invalid")
+        if self.schema_version < 3 and self.executor_metadata is not None:
+            raise QueueServiceError(
+                "retained remote result cannot carry route metadata"
+            )
+        if self.schema_version == 3:
+            if not isinstance(self.executor_metadata, Mapping):
+                raise QueueServiceError("remote result route metadata is invalid")
+            object.__setattr__(
+                self,
+                "executor_metadata",
+                freeze_plain_data(
+                    redact_executor_metadata(self.executor_metadata, public=True),
+                    path="remote route metadata",
+                ),
+            )
+        if self.schema_version == 1:
+            if any(
+                value is not None
+                for value in (
+                    self.failure,
+                    self.resource_controls,
+                    self.process_created,
+                )
+            ):
+                raise QueueServiceError("legacy remote result carries current evidence")
+            return
+        failure = self.failure
+        if failure is not None and not isinstance(failure, ExecutionFailure):
+            raise QueueServiceError("remote result failure is invalid")
+        if self.status is StageStatus.FAILED:
+            if failure is None:
+                raise QueueServiceError("failed remote result lacks full failure data")
+            if (
+                failure.failure_type != self.failure_type
+                or failure.message != self.message
+                or failure.exception_type != self.exception_type
+                or failure.stage_name != self.stage_name
+                or failure.attempt != self.attempt
+            ):
+                raise QueueConflictError("remote result failure summary conflicts")
+        elif failure is not None:
+            raise QueueServiceError("nonfailed remote result carries failure data")
+        if self.process_created is not None and not isinstance(
+            self.process_created, bool
+        ):
+            raise QueueServiceError("remote result process proof is invalid")
+        try:
+            controls = _validated_resource_controls(self.resource_controls)
+        except ValueError as exc:
+            raise QueueServiceError(f"remote {exc}") from exc
+        object.__setattr__(self, "resource_controls", controls)
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        result: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "assignment_id": self.assignment_id,
             "stage_name": self.stage_name,
@@ -1108,10 +1313,27 @@ class _RemoteExecutionReport:
             "exception_type": self.exception_type,
             "exit_code": self.exit_code,
         }
+        if self.schema_version >= 2:
+            result.update(
+                {
+                    "failure": None if self.failure is None else self.failure.to_dict(),
+                    "resource_controls": (
+                        None
+                        if self.resource_controls is None
+                        else [dict(item) for item in self.resource_controls]
+                    ),
+                    "process_created": self.process_created,
+                }
+            )
+        if self.schema_version == 3:
+            result["executor_metadata"] = thaw_plain_data(
+                self.executor_metadata, path="remote route metadata"
+            )
+        return result
 
     @classmethod
     def from_dict(cls, value: object) -> "_RemoteExecutionReport":
-        expected = {
+        legacy = {
             "schema_version",
             "assignment_id",
             "stage_name",
@@ -1126,8 +1348,21 @@ class _RemoteExecutionReport:
             "exception_type",
             "exit_code",
         }
-        if not isinstance(value, Mapping) or set(value) != expected:
+        current = legacy | {"failure", "resource_controls", "process_created"}
+        with_routes = current | {"executor_metadata"}
+        if not isinstance(value, Mapping) or set(value) not in (
+            legacy,
+            current,
+            with_routes,
+        ):
             raise QueueServiceError("remote execution report is invalid")
+        schema_version = value.get("schema_version")
+        if schema_version == 1 and set(value) != legacy:
+            raise QueueServiceError("legacy remote execution report shape is invalid")
+        if schema_version == 2 and set(value) != current:
+            raise QueueServiceError("remote execution report shape is invalid")
+        if schema_version == 3 and set(value) != with_routes:
+            raise QueueServiceError("remote route report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
             raise QueueServiceError("remote execution report is invalid")
@@ -1144,7 +1379,23 @@ class _RemoteExecutionReport:
             message=cast(str | None, value["message"]),
             exception_type=cast(str | None, value["exception_type"]),
             exit_code=cast(int | None, value["exit_code"]),
-            schema_version=cast(int, value["schema_version"]),
+            failure=(
+                None
+                if value.get("failure") is None
+                else ExecutionFailure.from_dict(value["failure"])
+            ),
+            resource_controls=(
+                None
+                if value.get("resource_controls") is None
+                else tuple(
+                    cast(Sequence[Mapping[str, PlainData]], value["resource_controls"])
+                )
+            ),
+            process_created=cast(bool | None, value.get("process_created")),
+            executor_metadata=cast(
+                Mapping[str, PlainData] | None, value.get("executor_metadata")
+            ),
+            schema_version=cast(int, schema_version),
         )
 
 
@@ -1200,6 +1451,16 @@ class _ResidentAssignmentWorkspace:
     def assignment_id(self) -> str:
         return self.root.name
 
+    def input_root(self, logical_name: str) -> Path:
+        """Return the assignment-owned directory for one isolated input payload."""
+
+        return self.root / "inputs" / _identifier(logical_name, "logical_name")
+
+    def input_path(self, logical_name: str) -> Path:
+        """Return the assignment-owned primary path for one input payload."""
+
+        return self.input_root(logical_name) / ".loom-primary.artifact"
+
     def has_request(self) -> bool:
         with self._connect() as conn:
             return (
@@ -1225,6 +1486,10 @@ class _ResidentAssignmentWorkspace:
             raise QueueConflictError(
                 "resident assignment bundle does not match the resident profile"
             )
+        from .preparation import _require_local_binding
+
+        launch_profile = profile.launch_profile if isinstance(profile, ResidentExecutionProfile) else profile
+        _require_local_binding(_assignment_local_scope(request), launch_profile)
         encoded = _canonical_json(request.to_dict())
         with self._connect() as conn:
             row = conn.execute(
@@ -1276,7 +1541,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError(
                     "input transfer is not authorized for this assignment"
                 )
-            target = self.root / "inputs" / str(row["logical_name"])
+            target = self.input_path(str(row["logical_name"]))
             part = self.root / "input-staging" / f"{transfer_id}.part"
             received = int(row["received_bytes"])
             if bool(row["finalized"]):
@@ -1363,6 +1628,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError("resident inputs are not durable")
             if str(row[0]) not in {"DELIVERED", "ACCEPTED"}:
                 raise QueueConflictError("resident assignment cannot be accepted")
+            self._prepare_staged_input()
             conn.execute("UPDATE request SET state = 'ACCEPTED' WHERE singleton = 1")
 
     def grant(self, fence: str) -> None:
@@ -1380,9 +1646,9 @@ class _ResidentAssignmentWorkspace:
                 (fence,),
             )
 
-    def mark_process_started(self, execution_id: str, process_id: int) -> None:
+    def mark_process_started(self, execution_id: str, process_id: int | None) -> None:
         _identifier(execution_id, "process_execution_id")
-        if (
+        if process_id is not None and (
             isinstance(process_id, bool)
             or not isinstance(process_id, int)
             or process_id < 1
@@ -1397,7 +1663,7 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError("remote launch requires a durable grant")
             if row["process_execution_id"] is not None and (
                 str(row["process_execution_id"]) != execution_id
-                or int(row["process_id"]) != process_id
+                or row["process_id"] != process_id
             ):
                 raise QueueConflictError("remote process identity conflicts")
             conn.execute(
@@ -1412,6 +1678,12 @@ class _ResidentAssignmentWorkspace:
             decoded = json.loads(launch_json)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise QueueServiceError("supervisor launch state is invalid") from exc
+        from .preparation import _require_local_binding
+
+        scope = _assignment_local_scope(self.request())
+        if scope is not None:
+            launch = _launch_from_value(decoded)
+            _require_local_binding(scope, launch.profile)
         canonical = _canonical_json(decoded)
         with self._connect() as conn:
             row = conn.execute(
@@ -1440,12 +1712,22 @@ class _ResidentAssignmentWorkspace:
 
     def worker_request(self) -> StageWorkerRequest:
         request = self.request()
+        scope = _assignment_local_scope(request)
+        if scope is not None:
+            from .preparation import _require_local_binding
+
+            retained = self.supervisor_launch_json()
+            # Pre-launch failure evidence also uses this materialization path.
+            if retained is not None:
+                launch = _launch_from_value(json.loads(retained))
+                _require_local_binding(scope, launch.profile)
         fingerprint = StageFingerprintRecord.from_dict(
             thaw_plain_data(request.fingerprint, path="remote fingerprint")
         )
         inputs = {
-            item.logical_name: item.local_ref(self.root / "inputs" / item.logical_name)
+            item.logical_name: item.local_ref(self.input_path(item.logical_name))
             for item in request.inputs
+            if item.logical_name in fingerprint.payload.declared_inputs
         }
         logs = self.root / "logs"
         local_run_uri = f"loom-agent:{request.assignment_id}"
@@ -1466,6 +1748,66 @@ class _ResidentAssignmentWorkspace:
             metadata=request.worker_metadata,
         )
 
+    def preparation_context(self) -> Mapping[str, PlainData] | None:
+        """Bind only the fixed child's selected alias to its retained launch profile."""
+        request = self.request()
+        preparation = request.preparation_input
+        if preparation is None:
+            return None
+        retained = self.supervisor_launch_json()
+        if retained is None:
+            raise QueueConflictError(
+                "preparation input requires a retained supervisor launch"
+            )
+        launch = _launch_from_value(json.loads(retained))
+        if (
+            launch.assignment_id != request.assignment_id
+            or launch.workspace_root != self.root
+            or launch.bundle_digest
+            != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+            or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)
+        ):
+            raise QueueConflictError(
+                "preparation input conflicts with the retained launch"
+            )
+        from .preparation import SharedInputReceipt, _require_local_binding
+
+        _require_local_binding(preparation.local_scope, launch.profile)
+        local_context: dict[str, PlainData] = (
+            {} if preparation.local_scope is None else {"local_scope": dict(preparation.local_scope)}
+        )
+        if preparation.project_preparation is not None:
+            local_context["project_preparation"] = dict(preparation.project_preparation)
+        if not isinstance(preparation.input_receipt, SharedInputReceipt):
+            directory = self._prepare_staged_input()
+            assert directory is not None
+            return {
+                "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+                **local_context,
+                "profile_descriptor": dict(launch.profile.descriptor),
+                "staged_directory": str(directory),
+            }
+        alias = preparation.input_receipt.root
+        path = launch.profile.preparation_shared_roots.get(alias)
+        return {
+            "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+                **local_context,
+            "profile_descriptor": dict(launch.profile.descriptor),
+            "shared_roots": {} if path is None else {alias: str(path)},
+        }
+
+    def _prepare_staged_input(self) -> Path | None:
+        from .preparation import StagedInputReceipt, resolve_staged_input
+
+        preparation = self.request().preparation_input
+        if preparation is None or not isinstance(preparation.input_receipt, StagedInputReceipt):
+            return None
+        return resolve_staged_input(
+            preparation.input_receipt,
+            archive_path=self.input_path(_PREPARATION_ARCHIVE_INPUT),
+            workspace_root=self.root,
+        )
+
     def persist_worker_result(self, result: StageWorkerResult) -> None:
         request = self.request()
         if (
@@ -1474,15 +1816,73 @@ class _ResidentAssignmentWorkspace:
             or result.attempt != request.attempt
         ):
             raise QueueConflictError("resident worker result identity conflicts")
-        encoded = _canonical_json(result.to_dict())
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT state, result_json FROM request WHERE singleton = 1"
+                "SELECT state, result_json, process_execution_id, supervisor_launch_json "
+                "FROM request WHERE singleton = 1"
             ).fetchone()
             if row is None or str(row["state"]) not in {"STARTED", "RESULT"}:
                 raise QueueConflictError(
                     "resident worker result requires a confirmed process start"
                 )
+            if (
+                row["process_execution_id"] is not None
+                and row["supervisor_launch_json"] is not None
+            ):
+                launch = _launch_from_value(
+                    json.loads(str(row["supervisor_launch_json"]))
+                )
+                if launch.resource_controls is not None:
+                    applied = with_resource_control_disposition(
+                        {
+                            "resource_controls": [
+                                dict(item) for item in launch.resource_controls
+                            ]
+                        },
+                        "applied",
+                    )
+                    existing = (
+                        _validated_resource_controls(
+                            result.executor_metadata.get("resource_controls")
+                        )
+                        or ()
+                    )
+                    records = {
+                        (
+                            str(item["resource"]),
+                            str(item["owner"]),
+                            str(item["mechanism"] or ""),
+                        ): dict(item)
+                        for item in (
+                            *existing,
+                            *cast(
+                                Sequence[Mapping[str, PlainData]],
+                                applied["resource_controls"],
+                            ),
+                        )
+                    }
+                    metadata = {
+                        **result.executor_metadata,
+                        "resource_controls": cast(
+                            list[PlainData], [records[key] for key in sorted(records)]
+                        ),
+                    }
+                    result = replace(
+                        result,
+                        executor_metadata=metadata,
+                        failure=None
+                        if result.failure is None
+                        else replace(
+                            cast(ExecutionFailure, result.failure),
+                            executor_metadata={
+                                **cast(
+                                    ExecutionFailure, result.failure
+                                ).executor_metadata,
+                                **metadata,
+                            },
+                        ),
+                    )
+            encoded = _canonical_json(result.to_dict())
             if row["result_json"] is not None and str(row["result_json"]) != encoded:
                 raise QueueConflictError("resident worker result replay conflicts")
             conn.execute(
@@ -1511,6 +1911,43 @@ class _ResidentAssignmentWorkspace:
             if row is None or str(row["state"]) not in {"GRANTED", "RESULT"}:
                 raise QueueConflictError(
                     "resident no-start result requires a durable grant"
+                )
+            if row["process_execution_id"] is not None:
+                raise QueueConflictError("resident no-start proof conflicts with start")
+            if row["result_json"] is not None and str(row["result_json"]) != encoded:
+                raise QueueConflictError("resident no-start result replay conflicts")
+            conn.execute(
+                "UPDATE request SET state = 'RESULT', result_json = ? "
+                "WHERE singleton = 1",
+                (encoded,),
+            )
+
+    def persist_failed_before_start(
+        self, result: StageWorkerResult, *, fence: str
+    ) -> None:
+        """Persist a proved pre-supervisor setup failure for terminal replay."""
+
+        request = self.request()
+        if (
+            result.status is not StageStatus.FAILED
+            or result.run_uri != f"loom-agent:{request.assignment_id}"
+            or result.stage_name != request.stage_name
+            or result.attempt != request.attempt
+        ):
+            raise QueueConflictError("resident no-start result identity conflicts")
+        encoded = _canonical_json(result.to_dict())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state, process_execution_id, result_json, fence, supervisor_launch_json FROM request "
+                "WHERE singleton = 1"
+            ).fetchone()
+            if row is None or str(row["state"]) not in {"GRANTED", "RESULT"}:
+                raise QueueConflictError(
+                    "resident no-start result requires a durable grant"
+                )
+            if row["fence"] != fence or row["supervisor_launch_json"] is not None:
+                raise QueueConflictError(
+                    "resident no-start proof conflicts with grant or supervisor launch"
                 )
             if row["process_execution_id"] is not None:
                 raise QueueConflictError("resident no-start proof conflicts with start")
@@ -1609,6 +2046,41 @@ class _ResidentAssignmentWorkspace:
                         ),
                     )
         failure = cast(ExecutionFailure | None, result.failure)
+        with self._connect() as conn:
+            process_row = conn.execute(
+                "SELECT process_execution_id, supervisor_launch_json FROM request "
+                "WHERE singleton = 1"
+            ).fetchone()
+        if process_row is None:
+            raise QueueConflictError("resident result has no durable request facts")
+        process_created: bool | None
+        if process_row["process_execution_id"] is not None:
+            process_created = True
+        elif process_row["supervisor_launch_json"] is None:
+            process_created = False
+        else:
+            # A retained supervisor request without a process receipt is not a
+            # proof either way; do not manufacture a no-start conclusion.
+            process_created = None
+        route_metadata = dict(result.executor_metadata)
+        if process_row["supervisor_launch_json"] is not None:
+            launch = _launch_from_value(
+                json.loads(str(process_row["supervisor_launch_json"]))
+            )
+            if launch.profile.container is not None:
+                command = launch.container_command
+                route_metadata.update(command.metadata)
+                route_metadata["resource_controls"] = with_resource_control_disposition(
+                    {"resource_controls": command.metadata["resource_controls"]}, "applied"
+                )["resource_controls"]
+            route_metadata.update(
+                {
+                    "execution_kind": "resident_stage_worker",
+                    "command": list(launch.command_argv if launch.profile.container is None
+                                    else cast(Sequence[str], launch.container_command.redacted_argv)),
+                    "cwd": str(launch.profile.project_root),
+                }
+            )
         return _RemoteExecutionReport(
             assignment_id=request.assignment_id,
             stage_name=request.stage_name,
@@ -1619,9 +2091,19 @@ class _ResidentAssignmentWorkspace:
             executor_name=result.executor_name,
             outputs=tuple(outputs),
             failure_type=None if failure is None else failure.failure_type,
-            message=(None if failure is None else "resident stage execution failed"),
+            message=None if failure is None else failure.message,
             exception_type=None if failure is None else failure.exception_type,
             exit_code=result.exit_code,
+            failure=failure,
+            resource_controls=cast(
+                tuple[Mapping[str, PlainData], ...] | None,
+                result.executor_metadata.get("resource_controls")
+                if isinstance(result.executor_metadata, Mapping)
+                else None,
+            ),
+            process_created=process_created,
+            executor_metadata=redact_executor_metadata(route_metadata, public=True),
+            schema_version=3,
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:
@@ -1752,6 +2234,18 @@ class _ResidentAssignmentWorkspace:
         return "EMPTY" if row is None else str(row[0])
 
 
+def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, PlainData] | None:
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
+
+    payload = cast(Mapping[str, PlainData], request.fingerprint["payload"])
+    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    scope = _local_scope(fields.get(LOCAL_PREPARATION_SCOPE))
+    preparation = request.preparation_input
+    if preparation is not None and scope != preparation.local_scope:
+        raise QueueConflictError("preparation assignment local scope conflicts")
+    return scope
+
+
 def _reject_path_bearing_data(value: object, field: str) -> None:
     forbidden_keys = ("path", "root", "uri", "url", "directory", "cwd")
     if isinstance(value, Mapping):
@@ -1778,9 +2272,71 @@ def _validate_remote_semantic_data(
     worker_metadata: Mapping[str, PlainData],
 ) -> None:
     """Reject coordinator-local locations from the semantic wire request."""
+    from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
+
+    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
+    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    preparation = _preparation_input_from_fingerprint(fingerprint)
+    if (_local_scope(fields.get(LOCAL_PREPARATION_SCOPE)) is not None
+        or (preparation is not None and preparation.local_scope is not None)):
+        raise QueueServiceError("remote transport cannot export unresolved local preparation bindings")
+    if preparation is not None:
+        # The fixed stage's only location-bearing data is a validated finite
+        # preparation reference. Every other semantic field keeps the same guard.
+        from loom.fingerprints import hash_mapping
+
+        payload = cast(Mapping[str, PlainData], fingerprint["payload"])
+        fingerprint = {
+            **fingerprint,
+            "payload": {
+                **payload,
+                "stage_config": {
+                    "preparation_input_digest": hash_mapping(preparation.to_dict())
+                },
+            },
+        }
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")
+
+
+_PREPARATION_ARCHIVE_INPUT = "preparation_archive"
+
+
+def _preparation_archive(fingerprint: Mapping[str, PlainData]) -> ArtifactRef | None:
+    from .preparation import StagedInputReceipt
+
+    preparation = _preparation_input_from_fingerprint(fingerprint)
+    if preparation is not None and isinstance(preparation.input_receipt, StagedInputReceipt):
+        return preparation.input_receipt.reference
+    return None
+
+
+def _resident_input_refs(
+    inputs: Mapping[str, ArtifactRef], fingerprint: Mapping[str, PlainData]
+) -> dict[str, ArtifactRef]:
+    """Join the fixed child's archive to native transfer without a pipeline input."""
+    result = dict(inputs)
+    archive = _preparation_archive(fingerprint)
+    if archive is not None:
+        if _PREPARATION_ARCHIVE_INPUT in result:
+            raise QueueConflictError("preparation archive input name is reserved")
+        result[_PREPARATION_ARCHIVE_INPUT] = archive
+    return result
+
+
+def _preparation_input_from_fingerprint(
+    fingerprint: Mapping[str, PlainData],
+) -> "PreparationChildInput | None":
+    from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
+
+    payload = fingerprint.get("payload")
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("factory_target") != PREPARATION_STAGE_TARGET
+    ):
+        return None
+    return PreparationChildInput.from_dict(payload.get("stage_config"))
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:

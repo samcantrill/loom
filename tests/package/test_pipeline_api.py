@@ -19,11 +19,10 @@ def test_pipeline_public_exports() -> None:
         "PipelineSpec",
         "parse_pipeline_config",
         "PipelineValidationResult",
-        "PipelineTargetCheckResult",
         "validate_pipeline_config",
-        "check_pipeline_stage_targets",
         "Stage",
         "StageContext",
+        "ProcessContainmentOwner",
         "RunStatus",
         "TransitionIntent",
         "InvalidRunTransition",
@@ -39,6 +38,7 @@ def test_pipeline_public_exports() -> None:
         "is_active_submitted_operation",
         "is_terminal_submitted_operation",
         "ResourceEntry",
+        "ResourcePolicy",
         "ResourceRequest",
         "parse_resource_request",
         "CONTINUE_INDEPENDENT_FAILURE_POLICY",
@@ -92,9 +92,6 @@ def test_pipeline_public_exports() -> None:
         "PipelineCycleError",
         "StageContractError",
         "StatusSerializationError",
-        "PipelineRunner",
-        "RunRequest",
-        "RunResult",
     }
 
     assert set(graph.__all__) == {
@@ -121,22 +118,6 @@ def test_sweep_package_exports_are_stable() -> None:
     import loom.pipeline.sweep as sweep
 
     assert set(sweep.__all__) == {
-        "SWEEP_DISPATCH_SCHEMA_VERSION",
-        "DirectSweepRunResult",
-        "DirectSweepTrialResult",
-        "QueueSweepDispatchResult",
-        "QueueSweepTrialResult",
-        "SweepDispatchRequest",
-        "SweepDispatchResult",
-        "SweepDispatchStatus",
-        "SweepQueueDispatchStatus",
-        "SweepRunStatus",
-        "build_dispatch_requests",
-        "build_queue_enqueue_request",
-        "build_queue_item_id",
-        "build_trial_run_request",
-        "enqueue_sweep_trials",
-        "run_sweep_direct",
         "SweepCoordinationIdentityResult",
         "SweepCoordinationProjection",
         "SweepTrialCoordinationResult",
@@ -144,7 +125,6 @@ def test_sweep_package_exports_are_stable() -> None:
         "external_trial_revision",
         "project_sweep_coordination",
         "record_sweep_trial_coordination",
-        "trial_state_from_queue_status",
         "trial_state_from_run_status",
         "SWEEP_COLLECTION_SCHEMA_VERSION",
         "SweepCollectedArtifact",
@@ -215,6 +195,10 @@ def test_sweep_package_exports_are_stable() -> None:
         "provider_is_finite",
         "provider_trial_count",
         "SweepTrialRecord",
+        "run_sweep",
+        "observe_sweep",
+        "cancel_sweep_trial",
+        "retry_sweep_trial",
         "SweepError",
         "SweepExtractionError",
         "SweepManifestError",
@@ -230,3 +214,9 @@ def test_pipeline_imports_are_explicit() -> None:
     assert "pipeline" not in loom_package.__all__
     assert pipeline
     assert graph
+
+
+def test_pipeline_lazily_exports_process_containment_owner() -> None:
+    from loom.pipeline import ProcessContainmentOwner
+
+    assert ProcessContainmentOwner.STAGE.value == "stage"

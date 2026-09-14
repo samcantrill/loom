@@ -27,6 +27,8 @@ from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.pipeline.specs import PipelineSpec, StageSpec
 from loom.scheduling import (
+    HardConstraintEvaluator,
+    HardConstraintSpec,
     PreferenceScorer,
     PreferenceSpec,
     SchedulingComponentDescriptor,
@@ -46,7 +48,7 @@ from .local_daemon import (
 )
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _RECORD_NAME = "managed_local_runtime.json"
 
 
@@ -187,8 +189,12 @@ def _runtime_payload(
                 resources,
                 profiles,
                 preference_scorers=preference_scorers,
+                hard_evaluators={
+                    item.descriptor.kind: item for item in composition.hard_evaluators
+                },
             ),
             planners=planners,
+            resource_policy=exact.resource_policy,
         ).to_dict()
     return {
         "schema_version": _SCHEMA_VERSION,
@@ -215,6 +221,7 @@ def _stage_placement_policy(
     slurm_profiles: Mapping[str, SlurmReadyStageProfile],
     *,
     preference_scorers: Mapping[str, PreferenceScorer],
+    hard_evaluators: Mapping[str, HardConstraintEvaluator],
 ) -> StagePlacementPolicy:
     raw = dict(stage.placement)
     unknown = set(raw) - {"pool", "target", "preferences", "execution_route"}
@@ -235,6 +242,7 @@ def _stage_placement_policy(
         default_resources=ResourceRequest(
             entries={"cpu": ResourceEntry("cpu", 1, "count")}
         ),
+        hard_constraints=_preparation_constraints(stage, hard_evaluators),
         preferences=_resolved_preferences(
             stage,
             resources,
@@ -242,6 +250,47 @@ def _stage_placement_policy(
             preference_scorers=preference_scorers,
         ),
         route=_execution_route(raw.get("execution_route"), slurm_profiles),
+    )
+
+
+def _preparation_constraints(
+    stage: StageSpec, evaluators: Mapping[str, HardConstraintEvaluator]
+) -> tuple[HardConstraintSpec, ...]:
+    from .preparation import (
+        PREPARATION_INPUT_CAPABILITY,
+        PREPARATION_STAGED_INPUT_CAPABILITY,
+        PREPARATION_STAGE_TARGET,
+        PreparationChildInput,
+        StagedInputReceipt,
+    )
+    from ._remote_stage_execution import ResidentProfileDescriptor
+
+    if stage.factory.target_path != PREPARATION_STAGE_TARGET:
+        return ()
+    binding = PreparationChildInput.from_dict(stage.stage_config)
+    profile = ResidentProfileDescriptor.from_dict(binding.profile_descriptor)
+    evaluator = evaluators.get("attribute")
+    if evaluator is None:
+        raise QueueServiceError(
+            "preparation requires the attribute constraint evaluator"
+        )
+    return (
+        HardConstraintSpec(
+            "preparation-input",
+            "attribute",
+            {
+                "attributes": {
+                    "resident_profile_fingerprint": profile.fingerprint,
+                    "preparation_input_capability": PREPARATION_INPUT_CAPABILITY,
+                    **(
+                        {"preparation_staged_capability": PREPARATION_STAGED_INPUT_CAPABILITY}
+                        if isinstance(binding.input_receipt, StagedInputReceipt)
+                        else {}
+                    ),
+                }
+            },
+            evaluator.descriptor,
+        ),
     )
 
 
@@ -455,7 +504,10 @@ def load_managed_local_runtime_record(
         not isinstance(payload, dict)
         or payload.get("schema_version") != _SCHEMA_VERSION
     ):
-        raise QueueServiceError("managed-local runtime record schema is unsupported")
+        raise QueueServiceError(
+            "managed-local runtime record schema is unsupported; finish or cancel "
+            "the saved work in its pinned environment and prepare a fresh identity"
+        )
     if payload.get("run_uri") != run_uri:
         raise QueueServiceError("managed-local runtime record belongs to another run")
     digest = payload.pop("digest", None)

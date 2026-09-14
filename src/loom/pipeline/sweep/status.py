@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loom.pipeline.early_stopping import EARLY_STOP_REASON_CODE
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -51,7 +51,7 @@ class SweepTrialStatus:
     run_uri: str | None = None
     run_status: str | None = None
     queue_item_id: str | None = None
-    queue_status: str | None = None
+    admission_state: str | None = None
     coordination_state: str | None = None
     early_stopped: bool = False
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
@@ -72,7 +72,9 @@ class SweepTrialStatus:
             _optional_text(self.queue_item_id, "queue_item_id"),
         )
         object.__setattr__(
-            self, "queue_status", _optional_text(self.queue_status, "queue_status")
+            self,
+            "admission_state",
+            _optional_text(self.admission_state, "admission_state"),
         )
         object.__setattr__(
             self,
@@ -92,7 +94,7 @@ class SweepTrialStatus:
             "run_uri": self.run_uri,
             "run_status": self.run_status,
             "queue_item_id": self.queue_item_id,
-            "queue_status": self.queue_status,
+            "admission_state": self.admission_state,
             "coordination_state": self.coordination_state,
             "early_stopped": self.early_stopped,
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
@@ -151,23 +153,12 @@ def build_sweep_status(
     *,
     run_statuses: Mapping[str, object] | None = None,
     run_status_reader: Callable[[str], object | None] | None = None,
-    queue_items: Sequence[object] = (),
     coordination_trials: Sequence[object] = (),
 ) -> SweepStatusSummary:
     """Build a read-only status summary from supplied state snapshots."""
 
     if run_statuses is not None and run_status_reader is not None:
         raise SweepProtocolError("provide run_statuses or run_status_reader, not both")
-    queue_by_run_uri = {
-        run_uri: item
-        for item in queue_items
-        if (run_uri := _optional_attr_text(item, "run_uri")) is not None
-    }
-    queue_by_trial_id = {
-        trial_id: item
-        for item in queue_items
-        if (trial_id := _metadata_text(item, "trial_id")) is not None
-    }
     coordination_by_trial_id = {
         trial_id: trial
         for trial in coordination_trials
@@ -180,15 +171,15 @@ def build_sweep_status(
             run_statuses=run_statuses,
             run_status_reader=run_status_reader,
         )
-        queue_item = queue_by_run_uri.get(trial.run_uri or "") or queue_by_trial_id.get(
-            trial.trial_id
-        )
+        native = cast(
+            Mapping[str, Any], plan.sweep_manifest.metadata.get("native_runs", {})
+        ).get(trial.trial_id)
         coordination = coordination_by_trial_id.get(trial.trial_id)
         trial_statuses.append(
             _trial_status(
                 trial,
                 run_record=run_record,
-                queue_item=queue_item,
+                native=native,
                 coordination=coordination,
             )
         )
@@ -203,19 +194,48 @@ def _trial_status(
     trial: "SweepTrialRecord",
     *,
     run_record: object | None,
-    queue_item: object | None,
+    native: Mapping[str, Any] | None,
     coordination: object | None,
 ) -> SweepTrialStatus:
     run_status = _status_attr_value(run_record)
-    queue_status = _status_attr_value(queue_item)
+    observation = {} if native is None else native.get("observation", {})
+    admission = observation.get("admission") or {}
+    operation = observation.get("operation") or {}
+    admission_state = admission.get("state")
+    if native is not None:
+        # Native references outrank stale local projections during an explicit retry.
+        run_status = (
+            admission_state
+            if admission_state in {"SUCCEEDED", "FAILED", "CANCELLED"}
+            else None
+        )
+
     coordination_state = _status_attr_value(getattr(coordination, "state", None))
-    early_stopped = run_status == "CANCELLED" and _early_stop_reason(run_record)
+    inspection = observation.get("inspection") or {}
+    early_stopped = run_status == "CANCELLED" and (
+        _early_stop_reason(run_record)
+        or any(
+            stage.get("code") == EARLY_STOP_REASON_CODE
+            for stage in inspection.get("stages", ())
+        )
+    )
     outcome = _outcome(
         run_status=run_status,
-        queue_status=queue_status,
+        admission_state=admission_state,
         coordination_state=coordination_state,
         early_stopped=early_stopped,
     )
+    if native is not None and not admission:
+        state = operation.get("state")
+        outcome = (
+            SweepTrialOutcome.FAILED
+            if state in {"failed", "conflict"} or native.get("dispatch_failed")
+            else SweepTrialOutcome.CANCELLED
+            if state == "cancelled"
+            else SweepTrialOutcome.UNKNOWN
+            if native.get("error")
+            else SweepTrialOutcome.QUEUED
+        )
     return SweepTrialStatus(
         sweep_id=trial.sweep_id,
         trial_id=trial.trial_id,
@@ -223,11 +243,16 @@ def _trial_status(
         run_uri=trial.run_uri,
         outcome=outcome,
         run_status=run_status,
-        queue_item_id=_optional_attr_text(queue_item, "queue_item_id"),
-        queue_status=queue_status,
+        queue_item_id=admission.get("queue_item_id"),
+        admission_state=admission_state,
         coordination_state=coordination_state,
         early_stopped=early_stopped,
         metadata={
+            "operation_id": None
+            if native is None
+            else native["request"]["preparation"]["operation_id"],
+            "admission_id": admission.get("admission_id"),
+            "dispatch_error": None if native is None else native.get("error"),
             "provider_trial_id": trial.provider_trial_id,
             "proposal_overrides": dict(trial.proposal_overrides),
         },
@@ -237,7 +262,7 @@ def _trial_status(
 def _outcome(
     *,
     run_status: str | None,
-    queue_status: str | None,
+    admission_state: str | None,
     coordination_state: str | None,
     early_stopped: bool,
 ) -> SweepTrialOutcome:
@@ -245,8 +270,8 @@ def _outcome(
         return SweepTrialOutcome.EARLY_STOPPED
     if run_status is not None:
         return _outcome_from_run_status(run_status)
-    if queue_status is not None:
-        return _outcome_from_queue_status(queue_status)
+    if admission_state is not None:
+        return _outcome_from_admission_state(admission_state)
     if coordination_state is not None:
         return _outcome_from_coordination_state(coordination_state)
     return SweepTrialOutcome.PENDING
@@ -266,10 +291,16 @@ def _outcome_from_run_status(status: str) -> SweepTrialOutcome:
     return mapping.get(status, SweepTrialOutcome.UNKNOWN)
 
 
-def _outcome_from_queue_status(status: str) -> SweepTrialOutcome:
+def _outcome_from_admission_state(status: str) -> SweepTrialOutcome:
     mapping = {
         "QUEUED": SweepTrialOutcome.QUEUED,
-        "CLAIMED": SweepTrialOutcome.QUEUED,
+        "PENDING_AUTHORITY": SweepTrialOutcome.QUEUED,
+        "ACTIVE": SweepTrialOutcome.RUNNING,
+        "WAITING": SweepTrialOutcome.QUEUED,
+        "BLOCKED": SweepTrialOutcome.UNKNOWN,
+        "RUNNING": SweepTrialOutcome.RUNNING,
+        "CANCELLING": SweepTrialOutcome.RUNNING,
+        "CANCELLATION_REQUESTED": SweepTrialOutcome.RUNNING,
         "DISPATCHED": SweepTrialOutcome.RUNNING,
         "SUCCEEDED": SweepTrialOutcome.SUCCEEDED,
         "FAILED": SweepTrialOutcome.FAILED,

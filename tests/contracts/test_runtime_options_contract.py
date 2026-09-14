@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from loom.pipeline.execution.models import RunRequest, StageExecutionRequest
+from loom.coordinator import RunRequest
+from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
 from loom.pipeline.runtime import RunOptions
 from loom.serialization import stable_json_dumps
@@ -34,6 +35,22 @@ def test_run_options_plain_data_serialization_contract() -> None:
     assert RunOptions.from_dict(document).to_dict() == document
 
 
+def test_sparse_resource_policy_axes_survive_run_and_stage_round_trip() -> None:
+    options = RunOptions(
+        resource_policy={"account_for": ["gpu"]},
+        stage_options={"train": {"resource_policy": {"enforce": []}}},
+    )
+
+    document = options.to_dict()
+    assert document["resource_policy"] == {"account_for": ["gpu"]}
+    stages = document["stage_options"]
+    assert isinstance(stages, dict)
+    train = stages["train"]
+    assert isinstance(train, dict)
+    assert train["resource_policy"] == {"enforce": []}
+    assert RunOptions.from_dict(document).to_dict() == document
+
+
 def test_run_options_adapt_to_planning_owned_models() -> None:
     options = RunOptions(
         selectors={
@@ -54,8 +71,10 @@ def test_run_options_adapt_to_planning_owned_models() -> None:
     assert options.to_resume_options() == ResumeOptions(enabled=False)
 
 
-def test_execution_envelope_exposes_runtime_options_without_environment_values() -> None:
-    assert "options" in RunRequest.__dataclass_fields__
+def test_execution_envelope_exposes_runtime_options_without_environment_values() -> (
+    None
+):
+    assert "preparation" in RunRequest.__dataclass_fields__
     assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__
     assert "environment" not in StageExecutionRequest.__dataclass_fields__

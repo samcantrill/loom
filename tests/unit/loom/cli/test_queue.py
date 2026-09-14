@@ -16,114 +16,56 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonSocketServer,
     ResidentWorkerLaunchProfile,
-    QueueEnqueueRequest,
-    QueueService,
-    load_queue_spec,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.resources import EffectiveAgentCapacity
+import loom.queue.resources as queue_resources
 
 
 pytestmark = pytest.mark.unit
 
 
-def test_queue_status_json_reports_item_and_ownership(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
-    config_path = _queue_config(tmp_path)
-    _enqueue(config_path, "item-1")
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    exit_code = main(
-        [
-            "queue",
-            "status",
-            str(config_path),
-            "--item",
-            "item-1",
-            "--format",
-            "json",
-        ],
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert exit_code == 0
-    assert stderr.getvalue() == ""
-    payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.queue.status.v1"
-    assert payload["ok"] is True
-    assert payload["result"]["item"]["item"]["queue_item_id"] == "item-1"
-    assert "authority remains" in payload["result"]["ownership"]["authority_state"]
-
-
-def test_queue_preflight_skips_authority_when_no_authority_flags_are_supplied(
-    tmp_path: Path,
+@pytest.mark.parametrize("command", ["agent-check", "daemon-check"])
+def test_role_check_reports_unavailable_effective_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
 ) -> None:
-    pytest.importorskip("yaml")
-    config_path = _queue_config(tmp_path)
+    config_path = (
+        _outbound_agent_service_config(tmp_path)
+        if command == "agent-check"
+        else _coordinator_service_config(tmp_path)
+    )
+    agent_path = (
+        config_path if command == "agent-check" else tmp_path / "local-agent.yaml"
+    )
+    payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    agent_path.write_text(json.dumps(payload), encoding="utf-8")
+    agent_path.chmod(0o600)
+    monkeypatch.setattr(
+        queue_resources,
+        "observe_effective_agent_capacity",
+        lambda: EffectiveAgentCapacity(cpu_capacity=None, memory_capacity_bytes=None),
+    )
     stdout = io.StringIO()
     stderr = io.StringIO()
 
     exit_code = main(
-        ["queue", "preflight", str(config_path)],
+        ["queue", command, str(config_path), "--format", "json"],
         stdout=stdout,
         stderr=stderr,
     )
 
     assert exit_code == 0
     assert stderr.getvalue() == ""
-    assert "SKIP queue.authority.connection" in stdout.getvalue()
-
-
-def test_queue_cancel_records_queue_local_cancellation(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
-    config_path = _queue_config(tmp_path)
-    _enqueue(config_path, "item-1")
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    exit_code = main(
-        [
-            "queue",
-            "cancel",
-            str(config_path),
-            "item-1",
-            "--reason",
-            "operator-requested",
-        ],
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert exit_code == 0
-    assert stderr.getvalue() == ""
-    assert "queue cancel item-1: CANCELLED" in stdout.getvalue()
-    assert "operator-requested" in stdout.getvalue()
-
-
-def test_queue_drain_foreground_dispatches_fake_item(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
-    config_path = _queue_config(tmp_path)
-    _enqueue(config_path, "item-1")
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    exit_code = main(
-        [
-            "queue",
-            "drain-foreground",
-            str(config_path),
-            "--max-items",
-            "1",
-        ],
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-    assert exit_code == 0
-    assert stderr.getvalue() == ""
-    assert "queue drain foreground: 1 step(s)" in stdout.getvalue()
-    assert "dispatched: item-1 SUCCEEDED" in stdout.getvalue()
+    assert json.loads(stdout.getvalue())["result"]["effective_capacity"] == {
+        "cpu_capacity": None,
+        "memory_capacity_bytes": None,
+    }
+    assert not (tmp_path / "deployment").exists()
 
 
 def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
@@ -148,6 +90,49 @@ def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
     assert (deployment / "coordinator" / "control.sqlite").is_file()
     assert (deployment / "agent" / "control.sqlite").is_file()
     assert (deployment / "deployment-binding.json").is_file()
+
+
+@pytest.mark.optional_dependency
+def test_queue_role_check_uses_only_its_explicit_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _coordinator_service_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    agent_path = tmp_path / "local-agent.yaml"
+    agent_payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    profile = agent_payload["resident_profiles"][0]
+    assert isinstance(profile, dict)
+    profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    local_agent = payload["local_agent"]
+    assert isinstance(local_agent, dict)
+    local_agent["env_file"] = "coordinator.env"
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    config.chmod(0o600)
+    agent_path.write_text(json.dumps(agent_payload), encoding="utf-8")
+    agent_path.chmod(0o600)
+    environment = tmp_path / "coordinator.env"
+    environment.write_text("LOOM_ROLE_CPU=1\n", encoding="utf-8")
+    environment.chmod(0o600)
+    monkeypatch.setenv("LOOM_ROLE_CPU", "9")
+    stdout = io.StringIO()
+
+    result = main(
+        [
+            "queue",
+            "daemon-check",
+            str(config),
+            "--env-file",
+            str(environment),
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert result == 0
+    assert json.loads(stdout.getvalue())["result"]["operation"] == "check"
+    assert not (tmp_path / "deployment").exists()
 
 
 def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> None:
@@ -230,6 +215,235 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
     assert exit_code == 0
     assert payload["schema_version"] == "loom.cli.queue.local-daemon.v5"
     assert payload["result"]["service_health"] == "healthy"
+
+
+def test_daemon_client_connection_options_are_mutually_exclusive(
+    tmp_path: Path,
+) -> None:
+    stderr = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-status",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--connection",
+            str(tmp_path / "client.yaml"),
+        ],
+        stdout=io.StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "not allowed with argument" in stderr.getvalue()
+
+
+def test_daemon_operation_wait_renews_native_windows_for_legacy_cli_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from loom.coordinator import CoordinatorClient
+    import loom.cli.queue as queue_cli
+    from loom.queue.local_daemon import (
+        LocalDaemonOperation,
+        OperationWaitKind,
+        OperationWaitResult,
+    )
+
+    now = [0.0]
+    windows: list[float] = []
+    monkeypatch.setattr(queue_cli, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def observe(
+        _client: CoordinatorClient, operation_id: str, *, timeout_seconds: float
+    ) -> OperationWaitResult:
+        windows.append(timeout_seconds)
+        now[0] += timeout_seconds
+        return OperationWaitResult(
+            OperationWaitKind.TIMEOUT,
+            LocalDaemonOperation(
+                operation_id,
+                "agent_control",
+                "pending",
+                None,
+                None,
+            ),
+        )
+
+    monkeypatch.setattr(CoordinatorClient, "wait_operation", observe)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        [
+            "queue",
+            "daemon-operation-wait",
+            "--endpoint",
+            str(tmp_path / "lazy.sock"),
+            "operation-a",
+            "--timeout",
+            "60",
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 0 and stderr.getvalue() == ""
+    assert windows == [25.0, 25.0, 10.0]
+    result = json.loads(stdout.getvalue())["result"]
+    assert result["kind"] == "TIMEOUT"
+    assert result["operation"]["operation_id"] == "operation-a"
+
+
+def test_queue_daemon_admission_renders_private_diagnostic_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.coordinator import CoordinatorClient
+
+    payload = {
+        "admission": {"admission_id": "admission"},
+        "authority": {},
+        "owners": {
+            "run_result": {
+                "availability": "unavailable",
+                "diagnostic_failure": {
+                    "schema": "loom.diagnostic.v1",
+                    "type": "builtins.RuntimeError",
+                    "message": "cannot read /private/run",
+                    "links": [
+                        {
+                            "relation": "cause",
+                            "record": {
+                                "type": "builtins.OSError",
+                                "message": "permission denied",
+                                "links": [],
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    class Result:
+        def to_dict(self) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr(
+        CoordinatorClient, "admission", lambda _self, _admission_id: Result()
+    )
+    text_stdout = io.StringIO()
+
+    assert (
+        main(
+            [
+                "queue",
+                "daemon-admission",
+                "--endpoint",
+                str(tmp_path / "daemon.sock"),
+                "admission",
+            ],
+            stdout=text_stdout,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
+    assert "run-result diagnostic failure:" in text_stdout.getvalue()
+    assert "builtins.RuntimeError: cannot read /private/run" in text_stdout.getvalue()
+    assert "cause:" in text_stdout.getvalue()
+
+    json_stdout = io.StringIO()
+    assert (
+        main(
+            [
+                "queue",
+                "daemon-admission",
+                "--endpoint",
+                str(tmp_path / "daemon.sock"),
+                "admission",
+                "--format",
+                "json",
+            ],
+            stdout=json_stdout,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
+    assert json.loads(json_stdout.getvalue())["result"] == payload
+
+
+def test_admission_text_and_json_preserve_portable_worker_failure_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.diagnostics.diagnostic_failure import _capture_exception_details
+    from loom.pipeline.execution.models import ExecutionFailure
+    from loom.coordinator import CoordinatorClient
+
+    cause = FileNotFoundError("missing /worker/data/product.json")
+    cause.add_note("Prepare the product on the worker first.")
+    try:
+        raise RuntimeError("training input preparation failed") from cause
+    except RuntimeError as error:
+        details = _capture_exception_details(error)
+    inner = ExecutionFailure(
+        schema_version=1,
+        run_uri="loom-agent:assignment-1",
+        stage_name="fit",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="stage_exception",
+        message="training input preparation failed",
+        details=details,
+        traceback_path="/worker/unavailable/traceback.log",
+    )
+    outer = ExecutionFailure(
+        schema_version=1,
+        run_uri="coordinator-run",
+        stage_name="fit",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="subprocess",
+        failure_type="stage_exception",
+        message="worker stage failed",
+        details={"worker_failure": inner.to_dict()},
+    )
+    payload: dict[str, object] = {
+        "owners": {
+            "run_result": {
+                "availability": "available",
+                "failures": [outer.to_dict()],
+            }
+        }
+    }
+
+    class Result:
+        def to_dict(self) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr(CoordinatorClient, "admission", lambda *_args: Result())
+    command = [
+        "queue",
+        "daemon-admission",
+        "--endpoint",
+        str(tmp_path / "absent.sock"),
+        "admission",
+    ]
+    text_output, json_output = io.StringIO(), io.StringIO()
+    assert main(command, stdout=text_output, stderr=io.StringIO()) == 0
+    rendered = text_output.getvalue()
+    assert "stage 'fit' failure: worker stage failed" in rendered
+    assert "builtins.FileNotFoundError: missing /worker/data/product.json" in rendered
+    assert "Prepare the product on the worker first." in rendered
+    assert "cause:" in rendered
+    assert (
+        main([*command, "--format", "json"], stdout=json_output, stderr=io.StringIO())
+        == 0
+    )
+    assert json.loads(json_output.getvalue())["result"] == payload
 
 
 def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
@@ -349,9 +563,7 @@ def test_queue_scheduling_reload_rejection_exits_nonzero(
             "scheduling_epoch": request.expected_scheduling_epoch,
         }
 
-    monkeypatch.setattr(
-        LocalDaemonSocketClient, "reload_scheduling", reload_scheduling
-    )
+    monkeypatch.setattr(LocalDaemonSocketClient, "reload_scheduling", reload_scheduling)
     stdout = io.StringIO()
 
     exit_code = main(
@@ -440,32 +652,47 @@ def _queue_config(tmp_path: Path) -> Path:
 
 
 def _coordinator_service_config(tmp_path: Path) -> Path:
+    agent_path = tmp_path / "local-agent.yaml"
+    agent_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "kind": "loom.local-agent-service",
+                "agent_root": "deployment/agent",
+                "resident_profiles": [
+                    {
+                        "descriptor": {
+                            "profile_id": "test-local",
+                            "revision": "v1",
+                            "project_fingerprint": "test-project",
+                            "environment_fingerprint": "test-environment",
+                            "executor_fingerprint": "test-executor",
+                        },
+                        "project_root": str(Path.cwd()),
+                        "python_executable": sys.executable,
+                        "cpu_capacity": 1,
+                        "memory_capacity_bytes": 0,
+                        "gpu_devices": [],
+                        "environment": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent_path.chmod(0o600)
     config_path = tmp_path / "coordinator.yaml"
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "loom.coordinator-service",
                 "deployment_root": "deployment",
                 "run_store_root": "runs",
                 "machine_id": "test-local",
                 "poll_interval_seconds": 0.01,
                 "max_accepted_time_step_seconds": 60,
-                "embedded_profile": {
-                    "descriptor": {
-                        "profile_id": "test-local",
-                        "revision": "v1",
-                        "project_fingerprint": "test-project",
-                        "environment_fingerprint": "test-environment",
-                        "executor_fingerprint": "test-executor",
-                    },
-                    "project_root": str(Path.cwd()),
-                    "python_executable": sys.executable,
-                    "cpu_capacity": 1,
-                    "memory_capacity_bytes": 0,
-                    "gpu_devices": [],
-                    "environment": {},
-                },
+                "local_agent": {"config": "local-agent.yaml", "env_file": None},
                 "remote_profiles": [],
                 "agent_policy": {
                     "revision": "policy-1",
@@ -487,7 +714,7 @@ def _outbound_agent_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "loom.outbound-agent-service",
                 "agent_root": "remote-agent",
                 "url": "https://localhost:8443",
@@ -527,32 +754,175 @@ def _outbound_agent_service_config(tmp_path: Path) -> Path:
     return config_path
 
 
-def _enqueue(config_path: Path, queue_item_id: str) -> None:
-    service = QueueService.from_spec(
-        load_queue_spec(config_path),
-        clock=_clock(
-            "2020-01-01T00:00:00Z",
-            "2020-01-01T00:00:01Z",
-            "2020-01-01T00:00:02Z",
-            "2020-01-01T00:00:03Z",
+def test_role_check_aggregates_findings_before_creating_deployment(
+    tmp_path: Path,
+) -> None:
+    path = _coordinator_service_config(tmp_path)
+    agent_path = tmp_path / "local-agent.yaml"
+    payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    payload["resident_profiles"][0]["readiness"] = {
+        "imports": ["does_not_exist"],
+        "required_environment": ["LOOM_TEST_UNSET"],
+    }
+    agent_path.write_text(json.dumps(payload), encoding="utf-8")
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", "daemon-check", str(path), "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    report = json.loads(stdout.getvalue())
+    assert code == 3 and report["ok"] is False
+    assert stderr.getvalue() == ""
+    checks = report["result"]["checks"]
+    assert {check["check_id"] for check in checks if check["status"] == "FAIL"} == {
+        "packages.required_imports",
+        "environment.worker",
+    }
+    assert (
+        next(check for check in checks if check["check_id"] == "filesystem.role_roots")[
+            "status"
+        ]
+        == "PASS"
+    )
+    assert set(report["result"]["groups"]) == {
+        "config",
+        "service",
+        "python",
+        "packages",
+        "environment",
+        "resources",
+        "filesystem",
+        "pipeline",
+        "identity",
+    }
+    assert all(
+        {"owner", "consequence", "repair", "applicability", "evidence"}
+        <= check["details"].keys()
+        for check in checks
+    )
+    assert not (tmp_path / "deployment").exists()
+    assert str(tmp_path) not in stdout.getvalue()
+
+
+def test_explicit_role_io_probe_preserves_existing_files(tmp_path: Path) -> None:
+    path = _coordinator_service_config(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["local_agent"] = None
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    roots = (tmp_path / "deployment", tmp_path / "runs")
+    for root in roots:
+        root.mkdir()
+        (root / "keep").write_text("existing", encoding="utf-8")
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", "daemon-check", str(path), "--probe-io", "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 0 and stderr.getvalue() == ""
+    checks = json.loads(stdout.getvalue())["result"]["checks"]
+    io_checks = [check for check in checks if check["check_id"] == "filesystem.io"]
+    assert len(io_checks) == 2 and all(check["status"] == "PASS" for check in io_checks)
+    for root in roots:
+        assert [item.name for item in root.iterdir()] == ["keep"]
+        assert (root / "keep").read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.parametrize("command", ("agent-check", "daemon-check"))
+def test_role_gpu_probe_cli_reports_cpu_inapplicability(
+    tmp_path: Path, command: str
+) -> None:
+    path = (
+        _outbound_agent_service_config(tmp_path)
+        if command == "agent-check"
+        else _coordinator_service_config(tmp_path)
+    )
+    if command == "daemon-check":
+        payload = json.loads(path.read_text())
+        payload["local_agent"] = None
+        path.write_text(json.dumps(payload))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(
+        ["queue", command, str(path), "--probe-gpu", "--format", "json"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 0 and stderr.getvalue() == ""
+    checks = json.loads(stdout.getvalue())["result"]["checks"]
+    check = next(item for item in checks if item["check_id"] == "resources.gpu_compute")
+    assert check["status"] == "SKIP"
+    assert check["details"]["applicability"] == "inapplicable"
+
+
+def test_native_run_cli_keeps_request_ids_and_returns_cancel_control(
+    tmp_path, monkeypatch
+):
+    from loom.coordinator import CoordinatorClient, RunRequest
+    from loom.queue.preparation import PrepareRunRequest, PreparationSource
+    from loom.queue import LocalDaemonOperation
+
+    request = RunRequest(
+        PrepareRunRequest(
+            "run-original",
+            "target",
+            PreparationSource("shared", "root", ".", ("pipeline.yaml",)),
+            "pipeline.yaml",
+            "profile",
         ),
+        "queue-original",
     )
-    service.start()
-    service.enqueue(
-        QueueEnqueueRequest(
-            queue_item_id=queue_item_id,
-            queue_name="gpu",
-            run_uri=f"file:///runs/{queue_item_id}",
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request.to_dict()))
+    calls = []
+
+    def start(client, accepted):
+        calls.append(accepted)
+        return LocalDaemonOperation(
+            "run-original",
+            "run",
+            "pending",
+            None,
+            {
+                "coordinator_id": "owner",
+                "queue_item_id": "queue-original",
+                "admission": None,
+            },
         )
-    )
 
+    def cancel(client, target):
+        calls.append(target)
+        return LocalDaemonOperation(
+            "cancel-original",
+            "cancel_run",
+            "pending",
+            None,
+            {"target_operation_id": target},
+        )
 
-def _clock(*values: str):
-    remaining = list(values)
-
-    def next_value() -> str:
-        if len(remaining) == 1:
-            return remaining[0]
-        return remaining.pop(0)
-
-    return next_value
+    monkeypatch.setattr(CoordinatorClient, "start_run", start)
+    monkeypatch.setattr(CoordinatorClient, "cancel_run_operation", cancel)
+    for command, arguments, expected in [
+        ("daemon-start-run", ["--request", str(path)], "run-original"),
+        ("daemon-cancel-run", ["run-original"], "cancel-original"),
+    ]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        assert (
+            main(
+                [
+                    "queue",
+                    command,
+                    "--endpoint",
+                    str(tmp_path / "absent.sock"),
+                    *arguments,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+        assert json.loads(stdout.getvalue())["result"]["operation_id"] == expected
+        assert stderr.getvalue() == ""
+    assert calls == [request, "run-original"]

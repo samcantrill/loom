@@ -15,12 +15,11 @@ from loom.cli.backend import (
 )
 from loom.cli.errors import ExitCode
 from loom.cli.main import build_parser, main
-from loom.pipeline import PipelineRunner, RunRequest
+from tests.support.authority_read_fixture import seed_completed_authority_run
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import AuthorityConfig, authority_config_to_cli_args
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.service_authority import LocalAuthorityService
-from tests.unit.loom.pipeline.execution.test_authority_adapter import _pipeline
 
 
 pytestmark = pytest.mark.unit
@@ -183,7 +182,5 @@ def _authority_run(tmp_path: Path, *, authority_config: AuthorityConfig) -> str:
         authority_config=authority_config,
     )
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
-    PipelineRunner(run_store=run_store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(run_store, run_uri)
     return run_uri

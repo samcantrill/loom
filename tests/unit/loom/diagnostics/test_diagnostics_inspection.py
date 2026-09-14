@@ -46,9 +46,8 @@ from loom.pipeline.stores.sqlite_authority import (
     SQLitePerRunAuthorityStore,
     _authority_database_path,
 )
-from loom.pipeline import PipelineRunner, RunRequest
+from tests.support.authority_read_fixture import seed_completed_authority_run
 from tests.unit.loom.pipeline.execution.test_authority_adapter import (
-    _pipeline,
     _store,
 )
 
@@ -339,9 +338,7 @@ def test_inspect_run_status_uses_authoritative_facts_over_corrupt_legacy_files(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     store = _store(tmp_path, authority)
     run_uri = _run_uri(tmp_path)
-    PipelineRunner(run_store=store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(store, run_uri)
     run_path = run_uri_to_path(run_uri)
     (run_path / "status.json").write_text("not json", encoding="utf-8")
     (run_path / "artifacts.json").write_text("not json", encoding="utf-8")
@@ -369,9 +366,7 @@ def test_default_status_read_rejects_missing_authority_backend(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     store = _store(tmp_path, authority)
     run_uri = _run_uri(tmp_path)
-    PipelineRunner(run_store=store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(store, run_uri)
     _authority_database_path(run_uri).unlink()
 
     with pytest.raises(DiagnosticsInspectionError, match="authoritative backend"):

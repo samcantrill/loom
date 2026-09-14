@@ -7,9 +7,16 @@ This example demonstrates the v10 public authority lifecycle:
 3. `loom authority doctor`
 4. `loom authority restart`
 5. `loom authority stop`
+6. Repeat `loom authority stop` and confirm `stopped` again.
 
 It uses an explicit state directory and workspace registry so the output shows
-the supported authority operator workflow directly.
+the supported authority operator workflow directly. One live authority owns a
+state directory and workspace at a time. Stop checks the recorded process
+identity before signalling it, so a reused process ID cannot target an unrelated
+process. A successful stop confirms exit; the runner requires `stopped` for both
+CLI calls. The second call goes directly through the CLI because the session
+helper skips repeated stops. An unverifiable live process identity produces an
+explicit failure instead of an unsafe signal.
 
 ## Workflow
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import base64
 import hashlib
@@ -10,9 +11,11 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 from typing import Mapping, cast
 from uuid import uuid4
 
+from loom.pipeline.context import ProcessContainmentOwner
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import SchedulingComponentDescriptor
@@ -22,7 +25,9 @@ from ._remote_stage_execution import _decode_chunk
 from .agent_session_transport import (
     AgentTlsClientConfig,
     LocalDaemonAgentHttpClient,
+    _IndeterminateAgentProtocolError,
 )
+from ._slurm_result_transport import SharedSlurmResult
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
 
@@ -49,8 +54,17 @@ class SlurmBootstrapClientConfig:
     executor_fingerprint: str
     executor_name: str
     capability_file_path: Path
+    bootstrap_deadline_seconds: float = 300.0
+    reconnect_seconds: float = 1.0
 
     def __post_init__(self) -> None:
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in (self.reconnect_seconds, self.bootstrap_deadline_seconds)
+        ) or not (
+            0 < self.reconnect_seconds <= self.bootstrap_deadline_seconds <= 86400
+        ):
+            raise QueueServiceError("SLURM bootstrap deadline policy is invalid")
         for name in (
             "profile_id",
             "profile_configuration_fingerprint",
@@ -65,7 +79,10 @@ class SlurmBootstrapClientConfig:
                 raise QueueServiceError(f"SLURM bootstrap {name} is invalid")
         if self.executor_name != "local":
             raise QueueServiceError("SLURM bootstrap executor is unsupported")
-        if not isinstance(self.capability_file_path, Path) or not self.capability_file_path.is_absolute():
+        if (
+            not isinstance(self.capability_file_path, Path)
+            or not self.capability_file_path.is_absolute()
+        ):
             raise QueueServiceError("SLURM bootstrap capability_file_path is invalid")
         workspace = Path(self.workspace_root).resolve()
         project = Path(self.project_root).resolve()
@@ -114,7 +131,8 @@ class SlurmBootstrapClientConfig:
         }
         if (
             not isinstance(value, Mapping)
-            or set(value) != expected
+            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds"}
+            != expected
             or any(
                 not isinstance(value[key], str) or not value[key] for key in expected
             )
@@ -137,6 +155,10 @@ class SlurmBootstrapClientConfig:
             executor_fingerprint=cast(str, value["executor_fingerprint"]),
             executor_name=cast(str, value["executor_name"]),
             capability_file_path=Path(cast(str, value["capability_file_path"])),
+            bootstrap_deadline_seconds=cast(
+                float, value.get("bootstrap_deadline_seconds", 300.0)
+            ),
+            reconnect_seconds=cast(float, value.get("reconnect_seconds", 1.0)),
         )
 
 
@@ -147,13 +169,44 @@ def load_slurm_bootstrap_config() -> SlurmBootstrapClientConfig:
     return SlurmBootstrapClientConfig.from_file(value)
 
 
+def _before_start_retry(
+    operation: Callable[[], Mapping[str, PlainData]],
+    *,
+    deadline: float,
+    delay: float,
+    diagnostic: Path,
+) -> Mapping[str, PlainData]:
+    while True:
+        if time.time() >= deadline:
+            atomic_write_bytes(
+                diagnostic,
+                b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+            )
+            raise QueueServiceError(
+                "SLURM bootstrap deadline expired; no offline grant"
+            )
+        try:
+            return operation()
+        except _IndeterminateAgentProtocolError:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                atomic_write_bytes(
+                    diagnostic,
+                    b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+                )
+                raise QueueServiceError(
+                    "SLURM bootstrap deadline expired; no offline grant"
+                ) from None
+            time.sleep(min(delay, remaining))
+
+
 def run_slurm_bootstrap(
     *,
     operation_id: str,
     request_digest: str,
     config: SlurmBootstrapClientConfig | None = None,
 ) -> None:
-    """Drive one exact bootstrap from registration through verified result commit."""
+    """Execute one granted attempt and publish its durable result before exit."""
 
     selected = config or load_slurm_bootstrap_config()
     # The protected path is bootstrap-only capability material. Authored stage
@@ -165,8 +218,44 @@ def run_slurm_bootstrap(
     cluster = os.environ.get("SLURM_CLUSTER_NAME")
     incarnation = _operation_incarnation(selected.workspace_root, operation_id)
     client = LocalDaemonAgentHttpClient(selected.tls)
+    deadline_path = selected.workspace_root / (
+        "bootstrap-deadline-" + _sha256(operation_id) + ".json"
+    )
+    if not deadline_path.exists():
+        atomic_write_bytes(
+            deadline_path,
+            json.dumps(
+                {
+                    "operation_id": operation_id,
+                    "deadline": time.time() + selected.bootstrap_deadline_seconds,
+                }
+            ).encode(),
+        )
+    deadline_value = json.loads(deadline_path.read_text())
+    if deadline_value.get("operation_id") != operation_id:
+        raise QueueConflictError("SLURM bootstrap deadline identity conflicts")
+    deadline = float(deadline_value["deadline"])
+    diagnostic = selected.workspace_root / (
+        "bootstrap-failure-" + _sha256(operation_id) + ".json"
+    )
+
+    def prestart(
+        operation: str, value: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData]:
+        return _before_start_retry(
+            lambda: client.call_application(_ROLE, operation, value),
+            deadline=deadline,
+            delay=selected.reconnect_seconds,
+            diagnostic=diagnostic,
+        )
+
     try:
-        handshake = client.handshake(role=_ROLE)
+        handshake = _before_start_retry(
+            lambda: client.handshake(role=_ROLE),
+            deadline=deadline,
+            delay=selected.reconnect_seconds,
+            diagnostic=diagnostic,
+        )
         capabilities = handshake.get("capabilities")
         descriptor = SchedulingComponentDescriptor.from_dict(
             thaw_plain_data(
@@ -185,8 +274,7 @@ def run_slurm_bootstrap(
             raise QueueConflictError("SLURM bootstrap profile handshake conflicts")
         capability_path = selected.capability_file_path
         capability = _read_job_private_capability(capability_path)
-        registration = client.call_application(
-            _ROLE,
+        registration = prestart(
             "register",
             {
                 "operation_id": operation_id,
@@ -210,6 +298,8 @@ def run_slurm_bootstrap(
             or delivery.executor_name != selected.executor_name
         ):
             raise QueueConflictError("SLURM resident profile identity conflicts")
+        storage = cast(Mapping[str, object], registration.get("result_storage"))
+        transport = SharedSlurmResult(storage, assignment_id, compute=True)
         workspace = SlurmBootstrapWorkspace(selected.workspace_root, assignment_id)
         workspace.persist_registration(registration)
         _unlink_job_private_capability(capability_path)
@@ -217,8 +307,7 @@ def run_slurm_bootstrap(
         for item in delivery.inputs:
             offset = 0
             while True:
-                response = client.call_application(
-                    _ROLE,
+                response = prestart(
                     "input",
                     {
                         "assignment_id": assignment_id,
@@ -237,19 +326,23 @@ def run_slurm_bootstrap(
                 if final:
                     break
         workspace.accept_inputs()
-        client.call_application(
-            _ROLE,
-            "inputs_ready",
-            {"assignment_id": assignment_id, "incarnation": incarnation},
-        )
-        grant = client.call_application(
-            _ROLE,
+        while True:
+            readiness = prestart(
+                "inputs_ready",
+                {"assignment_id": assignment_id, "incarnation": incarnation},
+            )
+            if readiness.get("state") == "input_ready":
+                break
+            if readiness.get("state") != "awaiting_submission_ack":
+                raise QueueServiceError("SLURM input-readiness response is invalid")
+            # A fast job can register before sbatch returns to its owning agent.
+            time.sleep(min(selected.reconnect_seconds, max(0, deadline - time.time())))
+        grant = prestart(
             "grant",
             {"assignment_id": assignment_id, "incarnation": incarnation},
         )
         fence = _string(grant, "fence")
-        permit = client.call_application(
-            _ROLE,
+        permit = prestart(
             "start",
             {
                 "assignment_id": assignment_id,
@@ -264,76 +357,45 @@ def run_slurm_bootstrap(
             process_execution_id = "slurm-root-" + _sha256(
                 assignment_id + "\0" + incarnation
             )
-            client.call_application(
-                _ROLE,
-                "started",
-                {
-                    "assignment_id": assignment_id,
-                    "incarnation": incarnation,
-                    "fence": fence,
-                    "process_execution_id": process_execution_id,
-                },
-            )
+            try:
+                client.call_application(
+                    _ROLE,
+                    "started",
+                    {
+                        "assignment_id": assignment_id,
+                        "incarnation": incarnation,
+                        "fence": fence,
+                        "process_execution_id": process_execution_id,
+                    },
+                )
+            except _IndeterminateAgentProtocolError:
+                # The current start permit was consumed before observer loss.
+                # Result relay remains separately replayable from this workspace.
+                pass
             os.chdir(selected.project_root)
             if str(selected.project_root) not in sys.path:
                 sys.path.insert(0, str(selected.project_root))
             result = execute_resident_stage_worker_request(
                 worker_request=workspace.worker_request(),
                 workspace_root=workspace.root,
+                process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
             )
-            report = workspace.retain_result(result)
+            try:
+                report = workspace.retain_result(result)
+            except (QueueServiceError, QueueConflictError, OSError) as exc:
+                transport.failure(str(exc))
+                raise
         else:
             report = workspace.retained_report()
             if report is None:
                 raise QueueConflictError(
                     "SLURM authored-root permit is consumed without a retained result"
                 )
-        client.call_application(
-            _ROLE,
-            "report",
-            {
-                "assignment_id": assignment_id,
-                "incarnation": incarnation,
-                "fence": fence,
-                "report": report.to_dict(),
-            },
-        )
-        for output in report.outputs:
-            offset = 0
-            while True:
-                data, final = workspace.output_chunk(output.transfer_id, offset)
-                response = client.call_application(
-                    _ROLE,
-                    "output",
-                    {
-                        "assignment_id": assignment_id,
-                        "incarnation": incarnation,
-                        "transfer_id": output.transfer_id,
-                        "offset": offset,
-                        "data": _encode(data),
-                        "final": final,
-                    },
-                )
-                received = response.get("received")
-                if isinstance(received, bool) or not isinstance(received, int):
-                    raise QueueServiceError("SLURM output response is invalid")
-                offset = received
-                if final:
-                    break
-        client.call_application(
-            _ROLE,
-            "result",
-            {
-                "assignment_id": assignment_id,
-                "incarnation": incarnation,
-                "fence": fence,
-            },
-        )
-        client.call_application(
-            _ROLE,
-            "release",
-            {"assignment_id": assignment_id, "incarnation": incarnation},
-        )
+        identity = dict(cast(Mapping[str, PlainData], registration["result_identity"]))
+        identity["fence"] = fence
+        transport.publish(identity, report, workspace.output_chunk)
+        # Publication is sufficient for compute exit. The original submit agent
+        # authenticates delivery after reconnect; no callback can delete bytes.
     finally:
         client.close()
 

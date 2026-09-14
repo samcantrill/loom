@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import sys
 
@@ -14,13 +15,28 @@ from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisorService,
 )
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+from loom.queue._remote_stage_execution import GpuDeviceDescriptor
 from loom.queue.deployment import (
     _open_outbound_agent,
+    CoordinatorServiceConfig,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
     load_run_inspection_client_config,
 )
-from loom.queue.errors import QueueConfigError, QueueError, QueueServiceError
+from loom.queue.errors import (
+    QueueConfigError,
+    QueueConflictError,
+    QueueError,
+    QueueServiceError,
+)
+from loom.queue.gpu.local import LocalGpuDevice, LocalGpuInventory
+from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
+from loom.queue.gpu.occupancy import (
+    GpuOccupancyPolicy,
+    GpuProcessObservation,
+    NvidiaSmiGpuProcessObserver,
+)
+from loom.queue.preflight import run_role_preflight
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from tests.support.stage29_composition import (
@@ -53,6 +69,515 @@ def test_coordinator_config_is_protected_exact_and_path_bound(tmp_path: Path) ->
         load_coordinator_service_config(source)
 
 
+def test_reload_reuses_unchanged_scheduling_without_skipping_changed_declarations(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    current = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    payload["poll_interval_seconds"] = 0.125
+    _write_protected(source, payload)
+    replacement = load_coordinator_service_config(source, current=current)
+    assert replacement.daemon.poll_interval_seconds == 0.125
+    assert (
+        replacement.daemon.scheduling_components is current.daemon.scheduling_components
+    )
+    assert (
+        replacement.daemon.admission_priority_resolver
+        is current.daemon.admission_priority_resolver
+    )
+    payload["scheduling"] = {"unsupported": "changed declaration"}
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="scheduling"):
+        load_coordinator_service_config(source, current=replacement)
+
+
+def test_resident_profile_requires_observed_imports_before_role_use(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["readiness"] = {"imports": ["missing_resident_package"]}
+    _write_local_agent(source, payload)
+
+    with pytest.raises(QueueConfigError, match="packages.required_imports"):
+        load_coordinator_service_config(source)
+
+
+def test_protected_readiness_timeout_accepts_bounded_cold_import_window(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["readiness"] = {"timeout_seconds": 120}
+    _write_local_agent(source, payload)
+    load_coordinator_service_config(source)
+
+    profile["readiness"]["timeout_seconds"] = 121
+    _write_local_agent(source, payload)
+    with pytest.raises(
+        QueueConfigError, match="resident readiness requirements are invalid"
+    ):
+        load_coordinator_service_config(source)
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_observed_source_drift_rejects_startup_without_rebinding_initialized_root(
+    tmp_path: Path, role: str
+) -> None:
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    agent_source = tmp_path / "agent.yaml"
+    payload = json.loads(agent_source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {"source_roots": ["source"]}
+    _write_protected(agent_source, payload)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    module = selected / "module.py"
+    module.write_text("value = 1\n")
+    if role == "coordinator":
+        original = load_coordinator_service_config(source)
+        LocalDaemon.initialize_deployment(original.daemon)
+        root = original.daemon.deployment_root
+    else:
+        original = load_outbound_agent_service_config(source)
+        LocalDaemonAgentHttpClient.initialize_agent_root(original.client)
+        root = original.client.agent_root
+    assert root is not None
+
+    def snapshot() -> dict[str, str]:
+        return {
+            str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    retained = snapshot()
+    module.write_text("value = 2\n")
+    report = run_role_preflight(source, role=role)
+    assert (
+        next(
+            check
+            for check in report.checks
+            if check.check_id == "execution.retained_binding"
+        ).status
+        == "FAIL"
+    )
+    if role == "coordinator":
+        changed = load_coordinator_service_config(source)
+        assert changed.immutable_fingerprint != original.immutable_fingerprint
+        with pytest.raises(QueueError, match="deployment binding is invalid"):
+            LocalDaemon(changed.daemon).start()
+    else:
+        changed = load_outbound_agent_service_config(source)
+        assert changed.immutable_fingerprint != original.immutable_fingerprint
+        with pytest.raises(QueueError, match="agent binding is invalid"):
+            LocalDaemonAgentHttpClient(changed.client)
+    assert snapshot() == retained
+
+
+def test_local_readiness_reload_withholds_ready_work_until_compatible_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from shutil import copyfile
+    from loom.queue import (
+        CoordinatorSchedulingReload,
+        LocalDaemonAdmissionRequest,
+        LocalDaemonPrincipal,
+        LocalDaemonRole,
+        prepare_managed_local_run,
+    )
+
+    example = (
+        Path(__file__).resolve().parents[4] / "examples/operations/managed-local-basic"
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    for name in ("stages.py", "pipeline.yaml"):
+        copyfile(example / name, project / name)
+    source = _coordinator_config(tmp_path)
+    coordinator_payload = json.loads(source.read_text())
+    coordinator_payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload"],
+        "agent_ids": [],
+        "pools": [],
+    }
+    _write_protected(source, coordinator_payload)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    profile["project_root"] = str(project)
+    profile["readiness"] = {"source_roots": ["."], "imports": ["loom", "stages"]}
+    _write_local_agent(source, payload)
+    service = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(service.daemon)
+    prepared = prepare_managed_local_run(
+        source, project / "pipeline.yaml", "readiness-run"
+    )
+    daemon = LocalDaemon(
+        service.daemon,
+        trusted_scheduling_loader=lambda: (
+            load_coordinator_service_config(source).daemon
+        ),
+    )
+    monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+    started = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal(f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR)
+    )
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        admission = client.submit(
+            LocalDaemonAdmissionRequest("readiness-run", prepared.run_uri)
+        )
+        code = project / "stages.py"
+        original = code.read_text()
+        code.write_text(original + "\n# changed declared worker source\n")
+        rejected = operator.reload_scheduling(
+            CoordinatorSchedulingReload(
+                "readiness-reload",
+                started.scheduling_epoch,
+                "check changed installation",
+            )
+        )
+        assert rejected["code"] == "reload_rejected"
+        daemon.reconcile_once()
+        assert daemon.status().running_assignments == 0
+        assert daemon.status().service_diagnostic == "resident_profile_unready"
+        execution = daemon._execution
+        assert execution is not None and execution.journal is not None
+        assert execution.stage_work_store.ready_window()
+        assert (
+            execution.coordinator.retained_assignments(
+                agent_id=service.daemon.machine_id
+            )
+            == ()
+        )
+        assert (
+            daemon.config.resident_worker_launch_profile
+            == service.daemon.resident_worker_launch_profile
+        )
+        code.write_text(original)
+        daemon.stop()
+        daemon = LocalDaemon(load_coordinator_service_config(source).daemon)
+        monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+        restarted = daemon.start()
+        assert restarted.coordinator_id == started.coordinator_id
+        daemon.reconcile_once()
+        execution = daemon._execution
+        assert execution is not None
+        assert execution.coordinator.retained_assignments(
+            agent_id=service.daemon.machine_id
+        )
+        assert admission.run_uri == prepared.run_uri
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("failure", ("source", "import"))
+def test_outbound_readiness_failure_preserves_claim_and_blocks_resume(
+    tmp_path: Path, failure: str
+) -> None:
+    from loom.queue._managed_local import (
+        AssignmentState,
+        ClaimCommand,
+        ManagedAssignment,
+        ObserveRequest,
+    )
+    from loom.queue.agent_sessions import (
+        AgentControl,
+        AgentControlKind,
+        AgentRegistration,
+        AgentSession,
+        AgentSessionState,
+    )
+    from loom.scheduling import ResourceClaim
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {"source_roots": ["source"]}
+    _write_protected(source, payload)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    code = selected / "module.py"
+    code.write_text("value = 1\n")
+    service = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    client = _open_outbound_agent(
+        service.client,
+        trusted_config_loader=lambda: load_outbound_agent_service_config(source).client,
+    )
+    control_journal = client._require_journal()
+    registration = AgentRegistration(
+        "readiness-registration",
+        "coordinator",
+        "epoch",
+        client.agent_root_id,
+        "config",
+        "inventory",
+        "available",
+        ("default",),
+    )
+    intent = control_journal.persist_registration_intent(registration)
+    session = AgentSession(
+        "session",
+        "coordinator",
+        "epoch",
+        "agent",
+        client.agent_root_id,
+        "policy",
+        "config",
+        "inventory",
+        "available",
+        ("python",),
+        ("default",),
+        AgentSessionState.ACTIVE,
+    )
+    control_journal.persist_session(intent.idempotency_key, intent.value(), session)
+    providers, journal = client._runtime_owners(session)
+    assignment = ManagedAssignment(
+        "readiness-retained",
+        "retained-run",
+        "work",
+        "stage",
+        1,
+        "attempt",
+        "agent",
+        "session",
+        "offer",
+        "claim",
+    )
+    cpu = providers["cpu"]
+    atom = cpu.observe(ObserveRequest("agent", "session", "before")).atoms[0]
+    command = ClaimCommand(
+        assignment,
+        "prepare-retained",
+        ResourceClaim("cpu", cpu.claim_contracts[0], (atom,), 1),
+        cpu.descriptor,
+    )
+    journal.persist_request(
+        assignment,
+        {"profile": service.client.resident_profiles[0].descriptor.to_dict()},
+    )
+    assert (
+        journal.prepare_composite(assignment, (command,), providers)
+        is AssignmentState.PREPARED
+    )
+    retained = journal.retained_claim_commands()
+    original_profiles = dict(client._profiles)
+
+    def apply(kind: AgentControlKind, operation: str):
+        current = client.active_session()
+        assert current is not None
+        control = AgentControl(
+            operation,
+            kind,
+            "agent",
+            current.session_id,
+            current.config_revision,
+            None,
+            False,
+            "recheck installation",
+        )
+        assert control_journal.prepare_control(control) is None
+        effect = client._apply_agent_control(control)
+        control_journal.record_control_effect(control, effect)
+        return effect
+
+    released = False
+    try:
+        if failure == "source":
+            code.write_text("value = 2\n")
+        else:
+            changed = json.loads(source.read_text())
+            changed["resident_profiles"][0]["readiness"]["imports"] = [
+                "missing_readiness_package"
+            ]
+            _write_protected(source, changed)
+        assert (
+            apply(AgentControlKind.RELOAD, "readiness-reload").code == "reload_rejected"
+        )
+        assert journal.retained_claim_commands() == retained
+        assert client._profiles == original_profiles
+        assert client._config == service.client
+        assert not cpu.observe(ObserveRequest("agent", "session", "after")).atoms
+        assert control_journal.availability_drained()
+        assert (
+            apply(AgentControlKind.RESUME, "readiness-live-resume").code
+            == "retained_work"
+        )
+        journal.abort_pregrant(assignment.assignment_id, (command,), providers)
+        journal.release_declined(assignment.assignment_id, "test-settled")
+        released = True
+        assert (
+            apply(AgentControlKind.RESUME, "readiness-idle-resume").code
+            == "reload_rejected"
+        )
+        assert control_journal.availability_drained()
+        code.write_text("value = 1\n")
+        _write_protected(source, payload)
+        assert apply(AgentControlKind.RESUME, "readiness-restored").code == "applied"
+        assert not control_journal.availability_drained()
+    finally:
+        if not released:
+            journal.abort_pregrant(assignment.assignment_id, (command,), providers)
+            journal.release_declined(assignment.assignment_id, "test-cleanup")
+        client.shutdown_clean()
+        client.close()
+
+
+@pytest.mark.optional_dependency
+def test_explicit_environment_is_authoritative_and_binds_effective_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    agent_payload = _local_agent_payload(source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["project_root"] = "${oc.env:LOOM_ROLE_PROJECT}"
+    profile["cpu_capacity"] = "${oc.env:LOOM_ROLE_CPU}"
+    payload["agent_server"] = {
+        "host": "localhost",
+        "port": "${oc.env:LOOM_ROLE_PORT}",
+        "certificate_path": "server.crt",
+        "private_key_path": "server.key",
+        "client_ca_path": "ca.crt",
+        "credential_fingerprints": {"a" * 64: "test-credential"},
+    }
+    local_reference = payload["local_agent"]
+    assert isinstance(local_reference, dict)
+    local_reference["env_file"] = "coordinator.env"
+    _write_protected(source, payload)
+    _write_local_agent(source, agent_payload)
+    environment = _write_protected_text(
+        tmp_path / "coordinator.env",
+        "# machine bindings\n"
+        f"LOOM_ROLE_PROJECT={tmp_path}\n"
+        "LOOM_ROLE_CPU=1\n"
+        "LOOM_ROLE_PORT=8443\n"
+        "UNUSED_ROLE_VALUE=first\n",
+    )
+    monkeypatch.setenv("LOOM_ROLE_PROJECT", "/ambient-project")
+    monkeypatch.setenv("LOOM_ROLE_CPU", "9")
+
+    first = load_coordinator_service_config(source, env_file=environment)
+    assert first.environment_path == environment.resolve()
+    assert first.daemon.resident_worker_launch_profile is not None
+    assert first.daemon.resident_worker_launch_profile.project_root == tmp_path
+    assert first.daemon.cpu_capacity == 1
+    assert first.agent_server is not None
+    assert first.agent_server.port == 8443
+
+    _write_protected_text(
+        environment,
+        "# unrelated comment\n"
+        f"LOOM_ROLE_PROJECT={tmp_path}\n"
+        "LOOM_ROLE_CPU=1\n"
+        "LOOM_ROLE_PORT=08443\n"
+        "UNUSED_ROLE_VALUE=second\n",
+    )
+    unchanged = load_coordinator_service_config(source, env_file=environment)
+    assert unchanged.immutable_fingerprint == first.immutable_fingerprint
+    assert unchanged.active_fingerprint == first.active_fingerprint
+
+    alternate_project = tmp_path / "alternate-project"
+    alternate_project.mkdir()
+    _write_protected_text(
+        environment,
+        f"LOOM_ROLE_PROJECT={alternate_project}\nLOOM_ROLE_CPU=1\nLOOM_ROLE_PORT=8443\n",
+    )
+    changed_project = load_coordinator_service_config(source, env_file=environment)
+    assert changed_project.immutable_fingerprint == first.immutable_fingerprint
+    assert changed_project.active_fingerprint == first.active_fingerprint
+    assert changed_project.daemon.resident_worker_launch_profile is not None
+    assert first.daemon.resident_worker_launch_profile is not None
+    assert (
+        changed_project.daemon.resident_worker_launch_profile.fingerprint
+        != first.daemon.resident_worker_launch_profile.fingerprint
+    )
+
+    _write_protected_text(
+        environment,
+        f"LOOM_ROLE_PROJECT={tmp_path}\nLOOM_ROLE_CPU=2\nLOOM_ROLE_PORT=8443\n",
+    )
+    changed = load_coordinator_service_config(source, env_file=environment)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    assert changed.daemon.cpu_capacity == 2
+
+
+@pytest.mark.optional_dependency
+def test_environment_and_composed_source_fail_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["provider_factory"] = {"_target_": "builtins.dict"}
+    _write_protected(source, payload)
+    environment = _write_protected_text(
+        tmp_path / "agent.env", "SECRET_TOKEN=top-secret\nSECRET_TOKEN=other-secret\n"
+    )
+    constructed = False
+
+    def mark_construction(*_args: object, **_kwargs: object) -> object:
+        nonlocal constructed
+        constructed = True
+        return object()
+
+    monkeypatch.setattr("loom.queue.deployment._trusted_target", mark_construction)
+    with pytest.raises(
+        QueueConfigError, match="deployment environment is invalid"
+    ) as exc:
+        load_outbound_agent_service_config(source, env_file=environment)
+
+    assert not constructed
+    assert "top-secret" not in str(exc.value)
+    assert "other-secret" not in str(exc.value)
+
+
+def test_composed_source_closure_accepts_shared_readable_templates(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    agent_payload = _local_agent_payload(source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    included = tmp_path / "local-agent.yaml"
+    included.write_text(
+        json.dumps({"config": "agent.yaml", "env_file": None}), encoding="utf-8"
+    )
+    included.chmod(0o644)
+    payload["local_agent"] = {"_include_": "local-agent.yaml"}
+    _write_protected(source, payload)
+    _write_local_agent(source, agent_payload)
+
+    assert load_coordinator_service_config(source).daemon.cpu_capacity == 1
+
+    included.chmod(0o664)
+    with pytest.raises(
+        QueueConfigError, match="deployment config source must be owner-protected"
+    ):
+        load_coordinator_service_config(source)
+
+
 def test_coordinator_publication_removes_failed_staging_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -80,6 +605,7 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
     daemon = LocalDaemon(service.daemon)
     daemon.start()
     assert daemon._execution is not None  # noqa: SLF001
+    assert daemon._execution.supervisor is not None
     daemon._execution.supervisor.shutdown_for_test()  # noqa: SLF001
     daemon.stop()
     restarted = LocalDaemon(service.daemon)
@@ -94,6 +620,141 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
     binding.chmod(0o600)
     with pytest.raises(QueueServiceError, match="binding is invalid"):
         LocalDaemon(service.daemon).start()
+
+
+def test_pure_coordinator_initializes_and_waits_without_local_agent(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["local_agent"] = None
+    _write_protected(source, payload)
+
+    service = load_coordinator_service_config(source)
+    assert service.daemon.agent_root is None
+    assert service.daemon.resident_worker_launch_profile is None
+    LocalDaemon.initialize_deployment(service.daemon)
+    assert service.daemon.deployment_root is not None
+    assert not (service.daemon.deployment_root / "agent").exists()
+
+    daemon = LocalDaemon(service.daemon)
+    status = daemon.start()
+    try:
+        assert status.service_health == "healthy"
+        assert status.running_assignments == 0
+    finally:
+        daemon.stop()
+
+
+def test_local_agent_rejects_old_schema_before_provider_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["schema_version"] = 2
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    constructed = False
+
+    def construct(*_args: object, **_kwargs: object) -> object:
+        nonlocal constructed
+        constructed = True
+        return object()
+
+    monkeypatch.setattr("loom.queue.deployment._trusted_target", construct)
+    with pytest.raises(QueueConfigError, match="schema version"):
+        load_coordinator_service_config(source)
+    assert not constructed
+    assert not (tmp_path / "deployment").exists()
+
+
+def test_local_provider_configuration_participates_in_reload_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    provider = {
+        "_target_": "tests.support.stage29_composition.ConfiguredCpuProvider",
+        "capacity": 1,
+        "capacity_key": "local-machine:cpu",
+    }
+    payload["providers"] = {"providers": [provider]}
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    provider["capacity"] = 2
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    agent_source = source.parent / "agent.yaml"
+    agent_source.write_text(json.dumps(payload, indent=4, sort_keys=True))
+    equivalent = load_coordinator_service_config(source)
+    assert equivalent.active_fingerprint == changed.active_fingerprint
+
+
+def test_local_gpu_binding_change_requires_explicit_reload(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    profiles = payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    device = {
+        "descriptor": GpuDeviceDescriptor("gpu-a", "synthetic", 1024).to_dict(),
+        "binding_value": "0",
+    }
+    profile["gpu_devices"] = [device]
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(first.daemon)
+    assert first.daemon.deployment_root is not None
+    binding = first.daemon.deployment_root / "deployment-binding.json"
+    retained_binding = binding.read_bytes()
+
+    device["binding_value"] = "1"
+    _write_local_agent(source, payload)
+    changed = load_coordinator_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+    with pytest.raises(QueueConflictError, match="changed without reload"):
+        LocalDaemon(changed.daemon).start()
+    assert binding.read_bytes() == retained_binding
+
+    daemon = LocalDaemon(first.daemon)
+    try:
+        assert daemon.start().service_health == "healthy"
+    finally:
+        if daemon._execution is not None and daemon._execution.supervisor is not None:
+            daemon._execution.supervisor.shutdown_for_test()
+        daemon.stop()
+
+
+def test_local_agent_rejects_incompatible_provider(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    payload["providers"] = {"providers": [{"_target_": "builtins.object"}]}
+    _write_local_agent(source, payload)
+    with pytest.raises(QueueServiceError, match="providers are invalid"):
+        load_coordinator_service_config(source)
+
+
+def test_equivalent_local_agent_references_keep_effective_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    first = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    for reference in ("./agent.yaml", str(tmp_path / "agent.yaml")):
+        payload["local_agent"]["config"] = reference
+        _write_protected(source, payload)
+        equivalent = load_coordinator_service_config(source)
+        assert equivalent.daemon.agent_root == first.daemon.agent_root
+        assert (
+            equivalent.daemon.resident_worker_launch_profile
+            == first.daemon.resident_worker_launch_profile
+        )
+        assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+        assert equivalent.active_fingerprint == first.active_fingerprint
 
 
 def test_outbound_agent_publication_is_atomic_and_config_bound(
@@ -148,6 +809,107 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         restarted.close()
 
 
+def test_cpu_only_agent_resources_skip_nvidia_discovery(tmp_path: Path) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["resources"] = {
+        "cpu_capacity": 4,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    source = _write_protected(source, payload)
+
+    service = load_outbound_agent_service_config(source)
+
+    assert service.client.resource_inventory is not None
+    assert service.client.capacity_profile.cpu_capacity == 4
+    assert service.client.capacity_profile.memory_capacity_bytes == 0
+    assert service.client.capacity_profile.gpu_devices == ()
+
+
+def test_outbound_resource_identity_uses_effective_capacity_values(
+    tmp_path: Path,
+) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+
+    payload["resources"]["cpu_capacity"] = "01"
+    payload["resources"]["memory_capacity_bytes"] = "00"
+    _write_protected(source, payload)
+    equivalent = load_outbound_agent_service_config(source)
+    assert equivalent.client.resource_inventory == first.client.resource_inventory
+    assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+    assert equivalent.active_fingerprint == first.active_fingerprint
+
+    payload["resources"]["memory_capacity_bytes"] = "1"
+    _write_protected(source, payload)
+    changed = load_outbound_agent_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    assert changed.active_fingerprint != first.active_fingerprint
+
+
+@pytest.mark.parametrize("selection,requires_reload", (("0", True), ("GPU-a", False)))
+def test_selected_gpu_restart_distinguishes_index_from_uuid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: str,
+    requires_reload: bool,
+) -> None:
+    observed = LocalGpuInventory(
+        (
+            LocalGpuDevice("GPU-a", "GPU-a", host_index=0, model="a", vram_bytes=1024),
+            LocalGpuDevice("GPU-b", "GPU-b", host_index=1, model="b", vram_bytes=1024),
+        )
+    )
+    monkeypatch.setattr(
+        NvidiaSmiGpuInventoryProvider, "discover", lambda _self: observed
+    )
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": selection},
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(first.client)
+    client = _open_outbound_agent(first.client)
+    try:
+        root_id = client.agent_root_id
+        client.shutdown_clean()
+    finally:
+        client.close()
+
+    observed = LocalGpuInventory(
+        (
+            LocalGpuDevice("GPU-b", "GPU-b", host_index=0, model="b", vram_bytes=1024),
+            LocalGpuDevice("GPU-a", "GPU-a", host_index=1, model="a", vram_bytes=1024),
+        )
+    )
+    changed = load_outbound_agent_service_config(source)
+    assert changed.immutable_fingerprint == first.immutable_fingerprint
+    if requires_reload:
+        assert changed.active_fingerprint != first.active_fingerprint
+        with pytest.raises(QueueServiceError, match="changed without reload"):
+            _open_outbound_agent(changed.client)
+    else:
+        assert changed.active_fingerprint == first.active_fingerprint
+        restarted = _open_outbound_agent(changed.client)
+        try:
+            assert restarted.agent_root_id == root_id
+            restarted.shutdown_clean()
+        finally:
+            restarted.close()
+
+
 def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     tmp_path: Path,
 ) -> None:
@@ -160,17 +922,33 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     payload = json.loads(first_source.read_text(encoding="utf-8"))
     payload["deployment_root"] = "different-deployment"
     payload["run_store_root"] = "different-runs"
-    alternate_python = second_root / "python"
-    alternate_python.symlink_to(sys.executable)
-    payload["embedded_profile"]["project_root"] = str(second_root)
-    payload["embedded_profile"]["python_executable"] = str(alternate_python)
+    (second_root / "environment").symlink_to(
+        Path(sys.executable).parent.parent, target_is_directory=True
+    )
+    alternate_python = second_root / "environment" / "bin" / Path(sys.executable).name
+    agent_payload = _local_agent_payload(first_source)
+    profiles = agent_payload["resident_profiles"]
+    assert isinstance(profiles, list)
+    profile = profiles[0]
+    assert isinstance(profile, dict)
+    profile["project_root"] = str(second_root)
+    profile["python_executable"] = str(alternate_python)
+    agent_payload["agent_root"] = "different-deployment/agent"
+    _write_local_agent(first_source, agent_payload)
     second_source = _write_protected(second_root / "coordinator.yaml", payload)
+    _write_local_agent(second_source, agent_payload)
     second = load_coordinator_service_config(second_source)
 
+    assert second.daemon.resident_worker_launch_profile is not None
+    assert (
+        second.daemon.resident_worker_launch_profile.python_executable
+        == alternate_python.absolute()
+    )
     assert second.immutable_fingerprint == first.immutable_fingerprint
     assert second.active_fingerprint == first.active_fingerprint
 
-    payload["embedded_profile"]["cpu_capacity"] = 2
+    profile["cpu_capacity"] = 2
+    _write_local_agent(second_source, agent_payload)
     capacity_source = _write_protected(
         second_root / "coordinator-capacity.yaml", payload
     )
@@ -178,12 +956,43 @@ def test_role_fingerprints_use_path_free_immutable_and_causal_active_values(
     assert capacity.immutable_fingerprint == first.immutable_fingerprint
     assert capacity.active_fingerprint != first.active_fingerprint
 
-    payload["embedded_profile"]["descriptor"]["revision"] = "v2"
+    descriptor = profile["descriptor"]
+    assert isinstance(descriptor, dict)
+    descriptor["revision"] = "v2"
+    _write_local_agent(second_source, agent_payload)
     identity_source = _write_protected(
         second_root / "coordinator-identity.yaml", payload
     )
     identity = load_coordinator_service_config(identity_source)
     assert identity.immutable_fingerprint != first.immutable_fingerprint
+
+
+def test_outbound_qualification_spelling_does_not_change_observed_binding(
+    tmp_path: Path,
+) -> None:
+    source = _agent_config(tmp_path)
+    selected = tmp_path / "source"
+    selected.mkdir()
+    (selected / "module.py").write_text("value = 1\n")
+    payload = json.loads(source.read_text())
+    payload["resident_profiles"][0]["readiness"] = {
+        "source_roots": ["source"],
+        "timeout_seconds": 5,
+    }
+    _write_protected(source, payload)
+    first = load_outbound_agent_service_config(source)
+    payload["resident_profiles"][0]["readiness"] = {
+        "source_roots": [str(selected)],
+        "timeout_seconds": "5",
+    }
+    _write_protected(source, payload)
+    equivalent = load_outbound_agent_service_config(source)
+    assert equivalent.immutable_fingerprint == first.immutable_fingerprint
+    assert equivalent.active_fingerprint == first.active_fingerprint
+    assert (
+        equivalent.client.resident_profiles[0].launch_profile
+        == first.client.resident_profiles[0].launch_profile
+    )
 
 
 def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
@@ -202,12 +1011,17 @@ def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     )
     alternate_project = tmp_path / "alternate-project"
     alternate_project.mkdir()
-    alternate_python = tmp_path / "alternate-python"
-    alternate_python.symlink_to(sys.executable)
+    (tmp_path / "environment").symlink_to(
+        Path(sys.executable).parent.parent, target_is_directory=True
+    )
+    alternate_python = tmp_path / "environment" / "bin" / Path(sys.executable).name
     payload["resident_profiles"][0]["project_root"] = str(alternate_project)
     payload["resident_profiles"][0]["python_executable"] = str(alternate_python)
     moved = load_outbound_agent_service_config(
         _write_protected(tmp_path / "agent-moved.yaml", payload)
+    )
+    assert moved.client.resident_profiles[0].python_executable == (
+        alternate_python.absolute()
     )
     assert moved.immutable_fingerprint == first.immutable_fingerprint
     assert moved.active_fingerprint == first.active_fingerprint
@@ -270,9 +1084,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "priority": 7,
         },
         "components": {
-            "planners": [
-                {"_target_": "loom.pipeline.runtime.CpuResourcePlanner"}
-            ],
+            "planners": [{"_target_": "loom.pipeline.runtime.CpuResourcePlanner"}],
             "hard_evaluators": [
                 {"_target_": "loom.scheduling.TargetConstraintEvaluator"}
             ],
@@ -287,12 +1099,11 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "policy": {"_target_": "loom.scheduling.FifoSchedulingPolicy"},
         },
     }
-    payload["embedded_agent"] = {
+    agent_payload = _local_agent_payload(source)
+    agent_payload["providers"] = {
         "providers": [
             {
-                "_target_": (
-                    "tests.support.stage29_composition.ConfiguredCpuProvider"
-                ),
+                "_target_": ("tests.support.stage29_composition.ConfiguredCpuProvider"),
                 "capacity": 1,
                 "capacity_key": "local-machine:cpu",
             }
@@ -304,9 +1115,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
             "partition": "cpu",
             "max_outstanding": 2,
             "runner": {
-                "_target_": (
-                    "loom.pipeline.executors.slurm.FakeSlurmCommandRunner"
-                ),
+                "_target_": ("loom.pipeline.executors.slurm.FakeSlurmCommandRunner"),
                 "unavailable_commands": [],
             },
             "command_adapter_fingerprint": "fake-slurm-v1",
@@ -325,9 +1134,23 @@ def test_coordinator_config_constructs_complete_protected_composition(
                 "descriptor": "test-prolog-v1",
                 "helper_argv": ["/bin/true"],
             },
+            "container_options": {
+                "image": {"reference": "analysis.sif"},
+                "mounts": [
+                    {
+                        "source": "/run/loom/capability",
+                        "target": "/run/loom/capability",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "required_host_variables": ["LOOM_SLURM_BOOTSTRAP_CONFIG"]
+                },
+            },
         }
     ]
 
+    _write_local_agent(source, agent_payload)
     service = load_coordinator_service_config(
         _write_protected(tmp_path / "coordinator-complete.yaml", payload)
     )
@@ -343,6 +1166,8 @@ def test_coordinator_config_constructs_complete_protected_composition(
     assert isinstance(profile.runner, FakeSlurmCommandRunner)
     assert isinstance(profile.job_private_file_provider, SlurmJobPrivateFileProvider)
     assert profile.bootstrap_argv == ("loom", "slurm-bootstrap")
+    assert profile.container_options is not None
+    assert profile.apptainer_options is not None
 
 
 def test_https_authority_schema_resolves_tls_and_service_scope(
@@ -367,9 +1192,7 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
         (tls_root / name).write_text("test", encoding="utf-8")
     captured: dict[str, object] = {}
 
-    def fake_factory(
-        url: str, *, service_id: str, workspace_id: str, tls: object
-    ):  # type: ignore[no-untyped-def]
+    def fake_factory(url: str, *, service_id: str, workspace_id: str, tls: object):  # type: ignore[no-untyped-def]
         captured.update(
             {
                 "url": url,
@@ -395,9 +1218,9 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
     assert captured["workspace_id"] == "workspace-1"
     tls = captured["tls"]
     assert getattr(tls, "ca_path") == (tmp_path / "tls/ca.crt").resolve()
-    assert getattr(tls, "certificate_path") == (
-        tmp_path / "tls/coordinator.crt"
-    ).resolve()
+    assert (
+        getattr(tls, "certificate_path") == (tmp_path / "tls/coordinator.crt").resolve()
+    )
     assert service.daemon.coordinator_authority_factory is not None
 
 
@@ -428,11 +1251,6 @@ def test_https_authority_schema_resolves_tls_and_service_scope(
                 },
             },
             "scheduling composition is invalid",
-        ),
-        (
-            "embedded_agent",
-            {"providers": [{"_target_": "builtins.object"}]},
-            "providers are invalid",
         ),
     ],
 )
@@ -471,18 +1289,696 @@ def test_run_inspection_client_config_is_protected_exact_and_path_bound(
         load_run_inspection_client_config(source)
 
 
+_CONTROLLED_TORCH = """
+import os
+from pathlib import Path
+__version__ = "0.0.0"
+class Value:
+    def __init__(self, value): self.value = value
+    def __mul__(self, value): return Value(self.value * value)
+    def sum(self): return self
+    def item(self): return self.value if os.environ.get("PROBE_FAIL") != "1" else -1
+def ones(shape, *, device):
+    if device != "cuda" or os.environ.get("CUDA_VISIBLE_DEVICES") not in {"GPU-a", "GPU-b"}:
+        raise RuntimeError("missing exact provider binding")
+    with Path(os.environ["PROBE_MARKER"]).open("a") as stream:
+        stream.write(os.environ["CUDA_VISIBLE_DEVICES"] + "\\n")
+    return Value(shape[0])
+class cuda:
+    @staticmethod
+    def device_count(): return 1 if os.environ.get("CUDA_VISIBLE_DEVICES") else 0
+    @staticmethod
+    def synchronize(): pass
+"""
+
+
+def _free_probe_gpu_observation(observer):
+    return {
+        uuid: GpuProcessObservation(uuid, True, False, "available")
+        for uuid in observer.selected_uuids
+    }
+
+
+def _gpu_probe_configuration(
+    tmp_path,
+    monkeypatch,
+    role,
+    *,
+    initialize=True,
+    failed_compute=False,
+    declared_torch=True,
+    occupancy_observer=None,
+    external_process_policy=None,
+):
+    """Real role setup with a controlled CUDA interface; no physical GPU claim."""
+    observed = LocalGpuInventory(
+        tuple(
+            LocalGpuDevice(
+                f"GPU-{name}",
+                f"GPU-{name}",
+                host_index=index,
+                model="fixture",
+                vram_bytes=1024,
+            )
+            for index, name in enumerate(("a", "b"))
+        )
+    )
+    monkeypatch.setattr(
+        NvidiaSmiGpuInventoryProvider, "discover", lambda _self: observed
+    )
+    monkeypatch.setattr(
+        NvidiaSmiGpuProcessObserver,
+        "observe",
+        occupancy_observer or _free_probe_gpu_observation,
+    )
+    (tmp_path / "torch.py").write_text(_CONTROLLED_TORCH)
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    agent_path = tmp_path / "agent.yaml"
+    payload = json.loads(agent_path.read_text())
+    payload["resources"] = {
+        "cpu_capacity": 1,
+        "memory_capacity_bytes": 0,
+        "gpu": {
+            "provider": "nvidia",
+            "devices": "0-1",
+            "occupancy": {
+                "poll_interval_seconds": 1,
+                "max_observation_age_seconds": 4,
+                "query_timeout_seconds": 1,
+            },
+        },
+    }
+    profile = payload["resident_profiles"][0]
+    profile["readiness"] = {
+        "imports": ["loom", "torch"],
+        "import_roots": {"torch": "."},
+        "source_roots": ["torch.py"],
+    }
+    if not declared_torch:
+        profile["readiness"] = {"imports": ["loom"]}
+    profile["environment"] = {
+        "PROBE_MARKER": str(tmp_path / "gpu-calls"),
+        "PROBE_FAIL": "1" if failed_compute else "0",
+    }
+    if external_process_policy is not None:
+        payload["resources"]["gpu"]["occupancy"]["external_process_policy"] = (
+            external_process_policy
+        )
+    _write_protected(agent_path, payload)
+    if role == "coordinator":
+        config = load_coordinator_service_config(source)
+        if initialize:
+            LocalDaemon.initialize_deployment(config.daemon)
+        root = config.daemon.agent_root
+    else:
+        config = load_outbound_agent_service_config(source)
+        if initialize:
+            LocalDaemonAgentHttpClient.initialize_agent_root(config.client)
+        root = config.client.agent_root
+    assert root is not None
+    return source, root, config
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.parametrize("failed_compute", (False, True))
+def test_gpu_probe_runs_fixed_script_with_owned_binding_and_releases(
+    tmp_path, monkeypatch, role, failed_compute
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    policies = []
+
+    def observe(observer):
+        policies.append(observer.policy)
+        return _free_probe_gpu_observation(observer)
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path,
+        monkeypatch,
+        role,
+        failed_compute=failed_compute,
+        occupancy_observer=observe,
+    )
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    plain = run_role_preflight(source, role=role)
+    assert (
+        next(
+            check for check in plain.checks if check.check_id == "resources.gpu_compute"
+        ).status
+        == "SKIP"
+    )
+    assert not (tmp_path / "gpu-calls").exists()
+    assert policies == []
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 2, report.to_dict()
+    assert all(
+        check.status == ("FAIL" if failed_compute else "PASS") for check in checks
+    ), report.to_dict()
+    assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-a", "GPU-b"]
+    assert len(policies) >= 4
+    assert all(policy == GpuOccupancyPolicy(1, 4, 1) for policy in policies)
+    assert journal.retained_claim_commands() == ()
+    with sqlite3.connect(journal.path) as connection:
+        assert connection.execute("SELECT count(*) FROM assignments").fetchone()[0] == 0
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",),
+            ("released",),
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_allows_external_processes_only_when_configured(
+    tmp_path, monkeypatch, role
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    def observe(observer):
+        return {
+            uuid: GpuProcessObservation(uuid, True, True, "external_process_detected")
+            for uuid in observer.selected_uuids
+        }
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path,
+        monkeypatch,
+        role,
+        occupancy_observer=observe,
+        external_process_policy="allow",
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 2 and all(check.status == "PASS" for check in checks), (
+        report.to_dict()
+    )
+    assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-a", "GPU-b"]
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+    with sqlite3.connect(root / "journal.sqlite") as connection:
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",),
+            ("released",),
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_requires_initialized_root_without_creating_it(
+    tmp_path, monkeypatch, role
+):
+    queries = []
+
+    def observe(observer):
+        queries.append(observer.selected_uuids)
+        return _free_probe_gpu_observation(observer)
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, initialize=False, occupancy_observer=observe
+    )
+    before = {
+        str(path.relative_to(tmp_path)): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert check.status == "FAIL", report.to_dict()
+    assert not root.exists()
+    assert queries == []
+    assert not (tmp_path / "gpu-calls").exists()
+    assert {
+        str(path.relative_to(tmp_path)): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_defers_while_existing_role_lock_is_held(tmp_path, monkeypatch, role):
+    from loom.queue.local_daemon import _acquire_lock
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    queries = []
+
+    def observe(observer):
+        queries.append(observer.selected_uuids)
+        return _free_probe_gpu_observation(observer)
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, occupancy_observer=observe
+    )
+    with _acquire_lock(root):
+        report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        check.status == "SKIP" and check.details["applicability"] == "busy/deferred"
+    ), report.to_dict()
+    assert not (tmp_path / "gpu-calls").exists()
+    assert queries == []
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_retains_uncertain_cleanup_and_defers_recheck(
+    tmp_path, monkeypatch, role
+):
+    import loom.queue._gpu_probe as gpu_probe
+    from loom.queue._managed_local import ObserveRequest, SQLiteAgentJournal
+    from loom.queue._resident_probe import ResidentProbeResult
+
+    queries = []
+
+    def observe(observer):
+        queries.append(observer.selected_uuids)
+        return _free_probe_gpu_observation(observer)
+
+    source, root, config = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, occupancy_observer=observe
+    )
+    calls = []
+
+    def uncertain(*args, **kwargs):
+        calls.append(kwargs["device_environment"])
+        return ResidentProbeResult(None, "resident probe cleanup failed", False)
+
+    monkeypatch.setattr(gpu_probe, "run_resident_probe", uncertain)
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 1 and checks[0].status == "FAIL", report.to_dict()
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    retained = journal.retained_claim_commands()
+    assert len(retained) == 1 and len(calls) == 1
+    if isinstance(config, CoordinatorServiceConfig):
+        providers = config.daemon.agent_resource_providers
+        assert providers is not None
+    else:
+        from loom.queue.agent_session_transport import (
+            _configured_remote_provider_members,
+        )
+
+        providers = _configured_remote_provider_members(
+            config.client,
+            retained[0].assignment.agent_id,
+            config.client.capacity_profile,
+        )
+    provider = next(item for item in providers if item.descriptor.kind == "gpu")
+    provider.restore_capacity_holding(retained[0])
+    observed = provider.observe(
+        ObserveRequest(retained[0].assignment.agent_id, "maintenance", "restart")
+    )
+    assert {atom.local_capacity_key for atom in observed.atoms}.isdisjoint(
+        {atom.local_capacity_key for atom in retained[0].claim.atoms}
+    )
+    queries.clear()
+    again = run_role_preflight(source, role=role, probe_gpu=True)
+    deferred = next(
+        check for check in again.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        deferred.status == "SKIP"
+        and deferred.details["applicability"] == "busy/deferred"
+    ), again.to_dict()
+    assert len(calls) == 1 and journal.retained_claim_commands() == retained
+    assert queries == []
+
+    if isinstance(config, CoordinatorServiceConfig):
+        from loom.queue._agent_process_supervisor import (
+            AgentProcessSupervisorClient,
+            SupervisorLaunchConfiguration,
+        )
+        from loom.queue.local_daemon import _open_root
+
+        try:
+            with pytest.raises(QueueServiceError, match="retained daemon owner state"):
+                LocalDaemon(config.daemon).start()
+            assert journal.retained_claim_commands() == retained
+            assert len(calls) == 1 and not (tmp_path / "gpu-calls").exists()
+        finally:
+            assert config.daemon.resident_worker_launch_profile is not None
+            supervisor = AgentProcessSupervisorClient(
+                root,
+                SupervisorLaunchConfiguration(
+                    _open_root(root, role="local-agent"),
+                    (config.daemon.resident_worker_launch_profile,),
+                ),
+            )
+            supervisor.shutdown_for_test()
+    else:
+        from loom.queue.agent_sessions import AgentOffer, AgentProviderDescriptor
+
+        client = _open_outbound_agent(config.client)
+        try:
+            assert client.resume_retained_work() == ()
+            offer = AgentOffer(
+                "maintenance-session",
+                "epoch",
+                "config",
+                "inventory",
+                "availability",
+                1,
+                0,
+                60,
+                tuple(
+                    AgentProviderDescriptor(item.descriptor, item.claim_contracts)
+                    for item in providers
+                ),
+            )
+            with pytest.raises(
+                QueueConflictError, match="retained remote work cannot advertise"
+            ):
+                client.publish_offer(offer, idempotency_key="probe-restart-offer")
+            with pytest.raises(QueueConflictError, match="retained work"):
+                client.shutdown_clean()
+            assert journal.retained_claim_commands() == retained
+            assert len(calls) == 1 and not (tmp_path / "gpu-calls").exists()
+        finally:
+            # The controlled runner created no process; the test owns that fact.
+            journal.mark_probe_contained(retained[0].assignment.assignment_id)
+            assert journal.release_probe(
+                retained[0].assignment.assignment_id, {"gpu": provider}
+            )
+            client.shutdown_clean()
+            client.close()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_requested_gpu_probe_requires_declared_runtime(tmp_path, monkeypatch, role):
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, declared_torch=False
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert check.status == "FAIL" and "declared Torch" in check.message, (
+        report.to_dict()
+    )
+    assert not (tmp_path / "gpu-calls").exists()
+    assert (
+        SQLiteAgentJournal(
+            root / "journal.sqlite", _allow_initialize=False
+        ).retained_claim_commands()
+        == ()
+    )
+
+
+@pytest.mark.parametrize("outcome", ("DECLINED", "INDETERMINATE"))
+def test_gpu_probe_provider_activation_outcome_prevents_launch(
+    tmp_path, monkeypatch, outcome
+):
+    from loom.queue._managed_local import (
+        ClaimOutcome,
+        ClaimResult,
+        GpuResourceProvider,
+        SQLiteAgentJournal,
+    )
+
+    source, root, _ = _gpu_probe_configuration(tmp_path, monkeypatch, "agent")
+    monkeypatch.setattr(
+        GpuResourceProvider,
+        "activate",
+        lambda _self, command: ClaimResult(
+            ClaimOutcome[outcome], command.operation_id, command.claim.fingerprint
+        ),
+    )
+    report = run_role_preflight(source, role="agent", probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert not (tmp_path / "gpu-calls").exists()
+    retained = SQLiteAgentJournal(
+        root / "journal.sqlite", _allow_initialize=False
+    ).retained_claim_commands()
+    if outcome == "DECLINED":
+        assert all(
+            check.status == "SKIP" and check.details["applicability"] == "busy/deferred"
+            for check in checks
+        )
+        assert retained == ()
+    else:
+        assert len(checks) == 1 and checks[0].status == "FAIL"
+        assert len(retained) == 1
+        evidence = checks[0].details["evidence"]
+        assert isinstance(evidence, dict)
+        assert evidence["probe_id"] == retained[0].assignment.assignment_id
+
+
+def test_gpu_probe_launch_exception_preserves_diagnostic_identity(
+    tmp_path, monkeypatch
+):
+    import loom.queue._gpu_probe as gpu_probe
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    source, root, _ = _gpu_probe_configuration(tmp_path, monkeypatch, "agent")
+
+    def failed_launch(*args, **kwargs):
+        raise OSError("private launch boundary failed")
+
+    monkeypatch.setattr(gpu_probe, "run_resident_probe", failed_launch)
+    report = run_role_preflight(source, role="agent", probe_gpu=True)
+    checks = [
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 1 and checks[0].status == "FAIL"
+    retained = SQLiteAgentJournal(
+        root / "journal.sqlite", _allow_initialize=False
+    ).retained_claim_commands()
+    assert len(retained) == 1
+    evidence = checks[0].details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["probe_id"] == retained[0].assignment.assignment_id
+    assert "private launch" not in json.dumps(report.to_dict())
+    assert not (tmp_path / "gpu-calls").exists()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_cpu_role_gpu_probe_is_inapplicable_without_nvidia_or_torch(
+    tmp_path, monkeypatch, role
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("CPU role must not discover GPUs")
+
+    monkeypatch.setattr(NvidiaSmiGpuInventoryProvider, "discover", forbidden)
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", forbidden)
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    check = next(
+        check for check in report.checks if check.check_id == "resources.gpu_compute"
+    )
+    assert (
+        check.status == "SKIP" and check.details["applicability"] == "inapplicable"
+    ), report.to_dict()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.parametrize(
+    "reason", ("external_process_detected", "observation_unavailable", "device_missing")
+)
+def test_gpu_probe_reports_unavailable_device_without_blocking_free_sibling(
+    tmp_path, monkeypatch, role, reason
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    def observe(observer):
+        result = _free_probe_gpu_observation(observer)
+        if reason == "device_missing":
+            result.pop("GPU-a")
+        else:
+            busy = reason == "external_process_detected"
+            result["GPU-a"] = GpuProcessObservation("GPU-a", busy, busy, reason)
+        return result
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, occupancy_observer=observe
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = {}
+    for item in report.checks:
+        if item.check_id == "resources.gpu_compute":
+            evidence = item.details["evidence"]
+            assert isinstance(evidence, dict)
+            device_id = evidence["device_id"]
+            assert isinstance(device_id, str)
+            checks[device_id] = item
+    assert set(checks) == {"GPU-a", "GPU-b"}, report.to_dict()
+    unavailable = checks["GPU-a"]
+    assert unavailable.status == (
+        "SKIP" if reason == "external_process_detected" else "FAIL"
+    )
+    evidence = unavailable.details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["reason_code"] == reason
+    assert "probe_id" not in evidence
+    assert checks["GPU-b"].status == "PASS"
+    assert (tmp_path / "gpu-calls").read_text().splitlines() == ["GPU-b"]
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    assert journal.retained_claim_commands() == ()
+    with sqlite3.connect(journal.path) as connection:
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",)
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.parametrize(
+    "reason", ("external_process_detected", "observation_unavailable")
+)
+def test_gpu_probe_classifies_fresh_admission_refusal_after_releasing_reservation(
+    tmp_path, monkeypatch, role, reason
+):
+    import sqlite3
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    queries = []
+
+    def observe(observer):
+        queries.append(observer.selected_uuids)
+        if len(queries) == 1:
+            return _free_probe_gpu_observation(observer)
+        busy = reason == "external_process_detected"
+        return {
+            uuid: GpuProcessObservation(uuid, busy, busy, reason)
+            for uuid in observer.selected_uuids
+        }
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, occupancy_observer=observe
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        item for item in report.checks if item.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 2 and len(queries) >= 2, report.to_dict()
+    for item in checks:
+        assert item.status == (
+            "SKIP" if reason == "external_process_detected" else "FAIL"
+        )
+        evidence = item.details["evidence"]
+        assert isinstance(evidence, dict)
+        assert evidence["reason_code"] == reason
+    first_evidence = checks[0].details["evidence"]
+    second_evidence = checks[1].details["evidence"]
+    assert isinstance(first_evidence, dict) and isinstance(second_evidence, dict)
+    assert first_evidence["claim_retained"] is False
+    assert "probe_id" not in second_evidence
+    assert not (tmp_path / "gpu-calls").exists()
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    assert journal.retained_claim_commands() == ()
+    with sqlite3.connect(journal.path) as connection:
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",)
+        ]
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_retains_refused_reservation_when_release_is_uncertain(
+    tmp_path, monkeypatch, role
+):
+    from loom.queue._managed_local import (
+        ClaimOutcome,
+        ClaimResult,
+        GpuResourceProvider,
+        SQLiteAgentJournal,
+    )
+
+    queries = []
+
+    def observe(observer):
+        queries.append(observer.selected_uuids)
+        if len(queries) == 1:
+            return _free_probe_gpu_observation(observer)
+        return {
+            uuid: GpuProcessObservation(uuid, True, True, "external_process_detected")
+            for uuid in observer.selected_uuids
+        }
+
+    source, root, _ = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, occupancy_observer=observe
+    )
+    monkeypatch.setattr(
+        GpuResourceProvider,
+        "release",
+        lambda _self, command: ClaimResult(
+            ClaimOutcome.INDETERMINATE, command.operation_id, command.claim.fingerprint
+        ),
+    )
+    report = run_role_preflight(source, role=role, probe_gpu=True)
+    checks = [
+        item for item in report.checks if item.check_id == "resources.gpu_compute"
+    ]
+    assert len(checks) == 1 and checks[0].status == "FAIL", report.to_dict()
+    evidence = checks[0].details["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["claim_retained"] is True
+    assert not (tmp_path / "gpu-calls").exists()
+    journal = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+    retained = journal.retained_claim_commands()
+    assert len(retained) == 1
+    assert evidence["probe_id"] == retained[0].assignment.assignment_id
+
+    queries.clear()
+    again = run_role_preflight(source, role=role, probe_gpu=True)
+    deferred = next(
+        item for item in again.checks if item.check_id == "resources.gpu_compute"
+    )
+    assert deferred.status == "SKIP"
+    assert deferred.details["applicability"] == "busy/deferred"
+    assert queries == [] and journal.retained_claim_commands() == retained
+    assert not (tmp_path / "gpu-calls").exists()
+
+
 def _coordinator_config(tmp_path: Path) -> Path:
+    _write_protected(
+        tmp_path / "agent.yaml",
+        {
+            "schema_version": 3,
+            "kind": "loom.local-agent-service",
+            "agent_root": "deployment/agent",
+            "resident_profiles": [_resident_profile(tmp_path, "local-profile")],
+        },
+    )
     return _write_protected(
         tmp_path / "coordinator.yaml",
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "loom.coordinator-service",
             "deployment_root": "deployment",
             "run_store_root": "runs",
             "machine_id": "local-machine",
             "poll_interval_seconds": 0.01,
             "max_accepted_time_step_seconds": 60,
-            "embedded_profile": _resident_profile(tmp_path, "local-profile"),
+            "local_agent": {"config": "agent.yaml", "env_file": None},
             "remote_profiles": [],
             "agent_policy": {
                 "revision": "policy-1",
@@ -499,7 +1995,7 @@ def _agent_config(tmp_path: Path) -> Path:
     return _write_protected(
         tmp_path / "agent.yaml",
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "loom.outbound-agent-service",
             "agent_root": "remote-agent",
             "url": "https://localhost:8443",
@@ -537,7 +2033,369 @@ def _resident_profile(tmp_path: Path, profile_id: str) -> dict[str, object]:
     }
 
 
+def _local_agent_payload(source: Path) -> dict[str, object]:
+    payload = json.loads((source.parent / "agent.yaml").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _write_local_agent(source: Path, payload: object) -> Path:
+    return _write_protected(source.parent / "agent.yaml", payload)
+
+
 def _write_protected(path: Path, payload: object) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     path.chmod(0o600)
     return path
+
+
+def _write_protected_text(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+@pytest.mark.parametrize("embedded", (False, True))
+def test_nvidia_occupancy_defaults_normalize_and_custom_composition_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, embedded: bool
+) -> None:
+    from loom.queue.gpu.occupancy import GpuOccupancyPolicy
+
+    monkeypatch.setattr(
+        NvidiaSmiGpuInventoryProvider,
+        "discover",
+        lambda _self: LocalGpuInventory(
+            (
+                LocalGpuDevice(
+                    "GPU-a", "GPU-a", host_index=0, model="a", vram_bytes=1024
+                ),
+            )
+        ),
+    )
+    source = _coordinator_config(tmp_path) if embedded else _agent_config(tmp_path)
+    payload = (
+        _local_agent_payload(source) if embedded else json.loads(source.read_text())
+    )
+    gpu: dict[str, object] = {"provider": "nvidia", "devices": "0"}
+    payload["resources"] = {"cpu_capacity": 1, "memory_capacity_bytes": 0, "gpu": gpu}
+
+    def load():
+        if embedded:
+            _write_local_agent(source, payload)
+            return load_coordinator_service_config(source).daemon
+        _write_protected(source, payload)
+        return load_outbound_agent_service_config(source).client
+
+    first = load()
+    assert first.gpu_occupancy_policy == GpuOccupancyPolicy()
+    gpu["occupancy"] = GpuOccupancyPolicy().to_dict()
+    explicit = load()
+    assert (
+        explicit.active_configuration_fingerprint
+        == first.active_configuration_fingerprint
+    )
+    gpu["occupancy"] = {"external_process_policy": "block"}
+    assert (
+        load().active_configuration_fingerprint
+        == first.active_configuration_fingerprint
+    )
+    gpu["occupancy"] = {"external_process_policy": "allow"}
+    allowed = load()
+    assert allowed.gpu_occupancy_policy == GpuOccupancyPolicy(
+        external_process_policy="allow"
+    )
+    assert (
+        allowed.active_configuration_fingerprint
+        != first.active_configuration_fingerprint
+    )
+    gpu["occupancy"] = {"poll_interval_seconds": 3}
+    assert (
+        load().active_configuration_fingerprint
+        != first.active_configuration_fingerprint
+    )
+    gpu["occupancy"] = {"query_timeout_seconds": 20}
+    with pytest.raises(QueueConfigError, match="occupancy"):
+        load()
+    gpu["occupancy"] = {"external_process_policy": "share"}
+    with pytest.raises(QueueConfigError, match="occupancy") as invalid:
+        load()
+    assert isinstance(invalid.value.__cause__, ValueError)
+    assert "external_process_policy" in str(invalid.value.__cause__)
+    gpu.pop("occupancy")
+    payload["providers" if embedded else "provider_factory"] = (
+        [] if embedded else {"_target_": "builtins.dict"}
+    )
+    with pytest.raises(QueueConfigError, match="cannot be bypassed"):
+        load()
+
+
+def _preparation_policy_payload(
+    *, modes: tuple[str, ...] = ("shared", "staged")
+) -> dict[str, object]:
+    return {
+        "source_roots": {
+            "projects": {"path": "projects", "shared_snapshot_root": "snapshots"}
+        },
+        "profiles": {
+            "example-cpu": {
+                "resident_profile_id": "local-profile",
+                "allowed_source_roots": ["projects"],
+                "source_modes": list(modes),
+                "runtime_options": {"executor": "local"},
+            }
+        },
+    }
+
+
+def test_absent_and_empty_preparation_preserve_the_published_active_identity(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    service = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    # This is the published pre-preparation active projection, whose shape is a
+    # retained deployment contract. Neither an absent nor an empty opt-in adds a key.
+    published = {
+        "coordinator": {
+            "poll_interval_seconds": 0.01,
+            "max_accepted_time_step_seconds": 60.0,
+            "agent_policy": payload["agent_policy"],
+            "agent_server_credentials": None,
+            "remote_profiles": [],
+            "scheduling": None,
+            "slurm_profiles": None,
+        },
+        "local_agent": {
+            "cpu_capacity": 1,
+            "memory_capacity_bytes": 0,
+            "gpu_devices": [],
+            "providers": None,
+        },
+    }
+    assert (
+        service.active_fingerprint
+        == hashlib.sha256(
+            json.dumps(
+                published, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+    )
+    assert not service.daemon.preparation_enabled
+    payload["preparation"] = {}
+    _write_protected(source, payload)
+    empty = load_coordinator_service_config(source)
+    assert empty.active_fingerprint == service.active_fingerprint
+    assert empty.immutable_fingerprint == service.immutable_fingerprint
+    assert empty.daemon.preparation_policy is None
+
+
+def test_preparation_policy_selects_existing_descriptor_and_changes_only_active_identity(
+    tmp_path: Path,
+) -> None:
+    from loom.queue.preparation import PrepareRunRequest, PreparationSource
+
+    source = _coordinator_config(tmp_path)
+    original = load_coordinator_service_config(source)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    _write_protected(source, payload)
+    configured = load_coordinator_service_config(source)
+    assert configured.immutable_fingerprint == original.immutable_fingerprint
+    assert configured.active_fingerprint != original.active_fingerprint
+    assert configured.daemon.preparation_enabled
+    policy = configured.daemon.preparation_policy
+    assert policy is not None
+    assert policy.effective_modes == ("shared", "staged")
+    assert policy.effective_profiles == ("example-cpu",)
+    assert policy.effective_roots == ("projects",)
+    assert configured.local_agent is not None
+    assert (
+        policy.profiles["example-cpu"].descriptor
+        == configured.local_agent.profile.descriptor
+    )
+    request = PrepareRunRequest(
+        "prepare-1",
+        "run-1",
+        PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
+        "pipeline.yaml",
+        "example-cpu",
+    )
+    selected = policy.select(request)
+    assert selected["source_root"] == {
+        "path": str(tmp_path / "projects"),
+        "shared_snapshot_root": str(tmp_path / "snapshots"),
+    }
+    assert str(tmp_path) not in json.dumps(policy.safe_identity())
+    payload["preparation"]["source_roots"]["projects"]["path"] = "other-projects"
+    _write_protected(source, payload)
+    reloaded = load_coordinator_service_config(source)
+    assert reloaded.immutable_fingerprint == configured.immutable_fingerprint
+    assert reloaded.active_fingerprint != configured.active_fingerprint
+    assert reloaded.daemon.preparation_policy is not None
+    assert reloaded.daemon.preparation_policy.select(request) != selected
+    # Selection was copied from the original protected configuration. The durable
+    # operation owner must persist this value instead of resolving it on retry.
+    assert policy.select(request) == selected
+
+
+def test_staged_permission_enables_only_the_allowed_mode(
+    tmp_path: Path,
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload(modes=("staged",))
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    assert service.daemon.preparation_enabled
+    assert service.daemon.preparation_policy is not None
+    assert service.daemon.preparation_policy.effective_profiles == ("example-cpu",)
+    assert service.daemon.preparation_policy.effective_roots == ("projects",)
+    assert service.daemon.preparation_policy.effective_modes == ("staged",)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        "missing-profile",
+        "missing-root",
+        "missing-snapshot",
+        "wrong-executor",
+        "unknown-mode",
+        "missing-environment-selection",
+    ),
+)
+def test_preparation_policy_refuses_invalid_protected_selection(
+    tmp_path: Path, invalid: str
+) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    selected = payload["preparation"]["profiles"]["example-cpu"]
+    if invalid == "missing-profile":
+        selected["resident_profile_id"] = "unconfigured"
+    elif invalid == "missing-root":
+        selected["allowed_source_roots"] = ["unconfigured"]
+    elif invalid == "missing-snapshot":
+        del payload["preparation"]["source_roots"]["projects"]["shared_snapshot_root"]
+    elif invalid == "wrong-executor":
+        selected["runtime_options"]["executor"] = "slurm"
+    elif invalid == "unknown-mode":
+        selected["source_modes"] = ["arbitrary-upload"]
+    else:
+        del selected["resident_profile_id"]
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="preparation"):
+        load_coordinator_service_config(source)
+    assert not (tmp_path / "deployment").exists()
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.optional_dependency
+def test_preparation_worker_mapping_preserves_software_identity_and_binds_private_launch(
+    tmp_path: Path, role: str
+) -> None:
+    pytest.importorskip("weave")
+    source = (
+        _coordinator_config(tmp_path)
+        if role == "coordinator"
+        else _agent_config(tmp_path)
+    )
+    load = (
+        load_coordinator_service_config
+        if role == "coordinator"
+        else load_outbound_agent_service_config
+    )
+    original = load(source)
+    agent_source = source.parent / "agent.yaml"
+    agent = json.loads(agent_source.read_text())
+    profile = agent["resident_profiles"][0]
+    profile["preparation_shared_roots"] = {}
+    _write_protected(agent_source, agent)
+    empty = load(source)
+    assert empty.immutable_fingerprint == original.immutable_fingerprint
+    assert empty.active_fingerprint == original.active_fingerprint
+    profile["preparation_shared_roots"] = {"environment": "worker-mount"}
+    _write_protected(agent_source, agent)
+    configured = load(source)
+    assert configured.immutable_fingerprint == original.immutable_fingerprint
+    assert configured.active_fingerprint != original.active_fingerprint
+    if role == "coordinator":
+        assert isinstance(configured, CoordinatorServiceConfig)
+        assert isinstance(original, CoordinatorServiceConfig)
+        assert configured.local_agent is not None and original.local_agent is not None
+        current_profile = configured.local_agent.profile
+        old_profile = original.local_agent.profile
+    else:
+        from loom.queue.deployment import OutboundAgentServiceConfig
+
+        assert isinstance(configured, OutboundAgentServiceConfig)
+        assert isinstance(original, OutboundAgentServiceConfig)
+        current_profile = configured.client.resident_profiles[0]
+        old_profile = original.client.resident_profiles[0]
+    assert current_profile.descriptor == old_profile.descriptor
+    assert current_profile.readiness_result is not None
+    assert current_profile.readiness_result.preparation_ready
+    assert (
+        current_profile.launch_profile.fingerprint
+        != old_profile.launch_profile.fingerprint
+    )
+    assert current_profile.launch_profile.preparation_shared_roots == {
+        "environment": tmp_path / "worker-mount"
+    }
+    profile["preparation_shared_roots"]["environment"] = str(tmp_path / "worker-mount")
+    _write_protected(agent_source, agent)
+    assert load(source).active_fingerprint == configured.active_fingerprint
+    profile["preparation_shared_roots"]["environment"] = "different-worker-mount"
+    _write_protected(agent_source, agent)
+    assert load(source).active_fingerprint != configured.active_fingerprint
+
+
+def test_preparation_aliases_are_data_in_active_policy_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    policy = _preparation_policy_payload()
+    payload["preparation"] = policy
+    policy["source_roots"] = {
+        "private_key": {"path": "projects", "shared_snapshot_root": "snapshots"}
+    }
+    policy["profiles"] = {
+        "environment": {
+            "resident_profile_id": "local-profile",
+            "allowed_source_roots": ["private_key"],
+            "source_modes": ["shared"],
+            "runtime_options": {"executor": "local"},
+        }
+    }
+    _write_protected(source, payload)
+    first = load_coordinator_service_config(source)
+    payload["preparation"]["source_roots"]["private_key"]["path"] = "other-projects"
+    _write_protected(source, payload)
+    assert (
+        load_coordinator_service_config(source).active_fingerprint
+        != first.active_fingerprint
+    )
+
+
+def test_installed_processor_is_protected_local_policy_and_identity(tmp_path: Path) -> None:
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["preparation"] = _preparation_policy_payload()
+    profile = payload["preparation"]["profiles"]["example-cpu"]
+    profile["project_processor"] = {
+        "schema_version": 1, "callable": "uninstalled_project:inspect",
+        "evidence_namespace": "example", "recovery_stage": "fit",
+    }
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="protected local"):
+        load_coordinator_service_config(source)
+    profile["configuration_policy"] = "local"
+    _write_protected(source, payload)
+    first = load_coordinator_service_config(source)
+    assert "uninstalled_project" not in sys.modules
+    profile["project_processor"]["recovery_stage"] = "other-fit"
+    _write_protected(source, payload)
+    assert load_coordinator_service_config(source).active_fingerprint != first.active_fingerprint
+    profile["project_processor"]["schema_version"] = 99
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="unsupported.*capability"):
+        load_coordinator_service_config(source)

@@ -15,6 +15,68 @@ Loom provides Docker and Apptainer/Singularity executor paths with inspectable
 command and provenance records. Their external runtimes remain optional and are
 validated before live execution.
 
+## Managed agent workers
+
+Public `loom.run(request, deployment=...)` selects an installed resident profile.
+An optional `container` field on that protected profile selects Docker or
+Apptainer; omission retains native Python. The container executes exactly one
+assignment through `loom.queue._resident_stage_worker`. Preparation and target
+execution use the selected installed interpreter and imports. Neither worker
+owns run lifecycle or output publication.
+
+A Docker binding has this shape (replace the example image digest and paths):
+
+```json
+{
+  "kind": "docker",
+  "container": {"image": {"reference": "sha256:<installed-image-id>"}},
+  "options": {"command": "/usr/bin/docker", "network": "none"},
+  "python_executable": "python3",
+  "daemon_endpoint": "unix:///var/run/docker.sock"
+}
+```
+
+The resident profile's host `python_executable` remains the native installation
+field; `container.python_executable` selects Python inside the image. Docker
+requires an immutable installed image reference and explicit daemon endpoint.
+There is no image pull/build step. Apptainer uses `kind: apptainer`, a qualified
+absolute runtime command and installed absolute SIF reference, and a null
+`daemon_endpoint`. Its foreground PID-namespace init is observed through the
+existing namespace owner; missing namespace evidence cannot release capacity.
+
+The worker workspace is mounted read/write at the identical absolute path;
+installed project and configured shared preparation roots are read-only mounts.
+Conflicting mounts are rejected. Existing container command builders own resource
+projection: Docker supports selected CPU/memory controls; Apptainer additionally
+supports the existing selected NVIDIA visibility binding. Unsupported selected
+controls fail before worker effects. Accounting remains with authorized agent
+claims, independently of runtime enforcement.
+
+Docker ownership is retained by the supervisor before daemon effects. It binds
+the assignment, authorization, installed profile, endpoint and unique labelled
+container identity, then retains the immutable container ID. Lost create/start
+responses reconcile that same object; uncertainty never authorizes a new one.
+After supervisor loss, daemon-owned launches retain their existing epoch for
+reconciliation. Uncontained native or Apptainer launches still prohibit such a
+restart; native PID adoption and successful-exit rules remain unchanged.
+Cancellation is durable before daemon calls. Only verified stopped workload with
+restart disabled establishes containment. Successful execution also requires a
+zero terminal daemon outcome and the ordinary successful fenced worker result.
+Local helper status cannot supply these facts or the native
+`managed_successful_exit` qualification. Terminal evidence is saved before
+removal, so removal/result-reply loss cannot erase the completion proof.
+
+Readiness probes use the selected environment. Uncertain probe containment keeps
+its evidence and blocks qualification. Public reports retain safe executor,
+resource and container metadata through the existing report-v3 redaction owner;
+raw environment values and host paths are not a public execution interface.
+
+The Docker and Apptainer examples exercise complete public runs using explicit
+stateful daemon/namespace fixtures. Those fixtures do not qualify physical
+runtimes. Existing opt-in acceptance hooks remain required for claims about a
+particular installed runtime/site; container execution inside Slurm allocations
+is not qualified by these local journeys.
+
 ## Quick Start
 
 Run the hermetic fake-Apptainer walkthrough:
@@ -37,6 +99,79 @@ allocation, then forwards the scheduler value through both
 `APPTAINERENV_CUDA_VISIBLE_DEVICES` and `SINGULARITYENV_CUDA_VISIBLE_DEVICES`.
 Loom does not choose physical devices or persist their tokens. A zero or absent
 GPU request leaves container options and visibility untouched.
+
+## Direct CPU And Memory Limits
+
+For direct `apptainer` and `singularity` stage execution, a canonical `cpu`
+request maps to `--cpus` and a canonical `memory` request maps to `--memory` in
+exact bytes before the image reference. CPU requests are positive integer counts;
+memory uses `B`, `KiB`, `MiB`, `GiB`, or `TiB` and must convert to an exact
+positive byte count. Loom rejects invalid or runtime-unrepresentable values
+rather than rounding or launching without the requested limit.
+
+The direct compatible runtime path parses memory flags through a `float64`
+before producing its signed byte limit, so Loom also rejects byte counts that
+would be rounded by that parser. This follows
+[go-units `RAMInBytes`](https://github.com/docker/go-units/blob/v0.5.0/size.go#L101-L112)
+as called by [SingularityCE 3.10.4 memory-limit handling](https://github.com/sylabs/singularity/blob/v3.10.4/cmd/internal/cli/cgroups.go#L203-L214).
+
+The flags express a supported mapping, while enforcement remains best effort:
+the runtime needs compatible cgroups and delegated host/session configuration.
+When a resource-limited command exits before publishing its worker result, Loom
+preserves redacted command/runtime diagnostics and directs the operator to check
+them for unsupported flags and to use a compatible runtime/cgroup setup. That
+diagnostic does not attribute every container startup failure to resource limits.
+
+Set `resource_policy.enforce: []` when a site must retain CPU/memory requests
+for planning and provenance but cannot apply direct cgroup flags. This preserves
+the full canonical intent in metadata but omits `--cpus` and `--memory`; it
+reports CPU/RAM as not enforced. Select CPU/RAM explicitly in `enforce` to
+request those flags; a failed limited launch is never retried without them.
+
+Direct `apptainer` execution reads the `apptainer` namespace even when both
+namespaces are present. Direct `singularity` prefers `singularity`, falling back
+to `apptainer` only when the former is absent; preflight uses the same choice.
+Nonempty stage resource requests replace authored `container.resources` intent.
+When that authored fallback applies, capability/preflight warnings also identify
+its CPU/RAM as not enforced when policy excludes those controls, including
+pipeline stages without an explicit `stage_options` entry. Mapping errors remain
+failures when a control is selected. These warnings are advisory by default;
+explicitly running preflight with `--strict` still treats warnings as a failed
+preflight.
+Observing this intent does not create a managed resource reservation.
+
+Loom does not invent CPU/RAM limits for absent requests or for requests left
+unmapped by `resource_policy.enforce`. This does not remove inherited host/container
+controls or change managed admission, GPU behavior, or SLURM-owned allocations.
+Invalid resource declarations still fail validation.
+
+A project can make the choice composable without embedding a site image or
+host path in the profile. The existing `container` options still supply those
+project-local details and resource requests remain ordinary stage runtime
+options:
+
+```yaml
+runtime_profiles:
+  unconstrained-container:
+    executor: singularity
+    resource_policy:
+      enforce: []
+```
+
+Select the profile at launch with `loom run pipeline.yaml --profile
+unconstrained-container`. An exact stage policy override can select CPU/RAM for
+that stage; it does not remove demand from resolved runtime metadata.
+
+SLURM remains the CPU and memory enforcement owner for its container route, so
+its wrapped Apptainer command does not add direct `--cpus` or `--memory` flags.
+The opt-in real-runtime check requires an approved local image and suitable
+session; set `LOOM_RUN_APPTAINER_RESOURCE_ACCEPTANCE=1` and
+`LOOM_APPTAINER_RESOURCE_IMAGE=/path/to/image.sif` to run it. A separate
+production-command scheduling-only smoke uses the same image with
+`LOOM_RUN_APPTAINER_SCHEDULING_ONLY_ACCEPTANCE=1`; it verifies a bounded shell
+payload, retained intent, and absent direct limit flags, but does not prove
+runtime enforcement. Neither check is part of the default suite and neither
+pulls or builds images.
 
 ## Deferred
 
@@ -160,7 +295,7 @@ same inputs that a non-container executor would use.
 Conceptual command:
 
 ```bash
-loom stage run --run-dir /workspace/runs/RUN_ID --stage train
+installed native resident worker (coordinator-issued fenced request)
 ```
 
 The exact command may differ, but it should satisfy:
@@ -459,60 +594,10 @@ by the outer scheduler when SLURM is selected.
 
 ## SLURM Integration
 
-SLURM and containers can be composed in two ways:
-
-```text
-SLURM submits a wrapper that runs Apptainer inside the allocation
-controller runs locally and submits containerized stage jobs
-```
-
-The second form should reuse existing SLURM submission design:
-
-```text
-stage attempt metadata is created by the controller
-submission script invokes container runtime
-container command runs the stage wrapper
-SLURM records job ID and scheduler status
-container executor records image and exit code
-```
-
-Avoid creating a separate containerized SLURM path that bypasses normal executor
-state records.
-
-Stage 18 composes existing `slurm-single-job` and `slurm-afterok` modes with
-Apptainer by wrapping generated `loom prepared-run continue` or
-`loom stage-job run` commands in deterministic Apptainer exec argv. Build
-target resolution runs on the submit/controller side before dry-run artifacts
-are rendered or `sbatch` is called. Generated batch scripts contain Apptainer
-execution commands and never hide Docker or Apptainer build commands.
-
-Example SLURM plus Apptainer profile:
-
-```yaml
-runtime_profiles:
-  slurm-apptainer:
-    executor: slurm-afterok
-    dry_run: true
-    adapter_options:
-      container:
-        target: analysis-env
-      container_build:
-        targets:
-          analysis-env:
-            name: analysis-env
-            runtime: apptainer
-            source:
-              kind: definition_file
-              path: containers/analysis.def
-            output:
-              kind: apptainer_sif
-              path: .loom/containers/analysis-env.sif
-      apptainer:
-        cleanenv: true
-        no_home: true
-      slurm:
-        launcher_argv: ["loom"]
-```
+Use an explicitly configured native ready-stage SLURM profile and its protected
+bootstrap/container policy. Whole-run container continuation generation is
+removed. See [SLURM](slurm.md) for ownership, cancellation, result retention and
+site qualification. Allocation-native agents remain deferred.
 
 ## Artifacts
 

@@ -5,7 +5,7 @@ dev-help:
 	@printf '\n'
 	@printf 'Checks and formatting:\n'
 	@printf '  make lint          Run Ruff checks\n'
-	@printf '  make typecheck     Run Pyright with config extras\n'
+	@printf '  make typecheck     Run Pyright with config and MCP extras\n'
 	@printf '  make format        Format Python sources with Ruff\n'
 	@printf '  make check         Run lint, typecheck, and default tests\n'
 	@printf '\n'
@@ -17,14 +17,14 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run --extra config pyright
+	uv run --extra config --extra mcp pyright
 
 format:
 	uv run ruff format .
 
 check: lint typecheck test
 
-validate-pr: lint typecheck test-no-extra test-config-extra build
+validate-pr: lint typecheck test-no-extra test-config-extra test-mcp-extra build
 
 build:
 	uv build

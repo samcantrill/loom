@@ -4,6 +4,9 @@ pipeline:
     - name: produce
       factory:
         _target_: stages.ProduceStage
+      resources:
+        entries:
+          cpu: {kind: cpu, amount: 1, unit: count}
       outputs:
         data:
           artifact_type: json
@@ -11,6 +14,9 @@ pipeline:
     - name: consume
       factory:
         _target_: stages.ConsumeStage
+      resources:
+        entries:
+          cpu: {kind: cpu, amount: 1, unit: count}
       depends_on: [produce]
       inputs:
         data: produce.data

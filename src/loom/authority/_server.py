@@ -18,11 +18,13 @@ from loom.pipeline.stores.coordinator_authority import (
 )
 
 from ._repository import AuthorityRepository
+from ._service_locks import AuthorityServiceLockError, AuthorityServiceLocks
 from .app import create_authority_app
 from .services import (
     AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY,
     repository_authority_services,
 )
+from .supervisor import _publish_supervisor_bootstrap
 
 
 class _PeerCertificateH11Protocol(H11Protocol):
@@ -33,14 +35,12 @@ class _PeerCertificateH11Protocol(H11Protocol):
         state = dict(self.app_state)
         ssl_object = transport.get_extra_info("ssl_object")
         certificate = (
-            None
-            if ssl_object is None
-            else ssl_object.getpeercert(binary_form=True)
+            None if ssl_object is None else ssl_object.getpeercert(binary_form=True)
         )
         if isinstance(certificate, bytes) and certificate:
-            state[AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY] = (
-                hashlib.sha256(certificate).hexdigest()
-            )
+            state[AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY] = hashlib.sha256(
+                certificate
+            ).hexdigest()
         self.app_state = state
 
 
@@ -48,10 +48,26 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the private authority server argument parser."""
 
     parser = argparse.ArgumentParser(prog="python -m loom.authority._server")
-    parser.add_argument("--state-dir", required=True, help="authority service state directory")
+    parser.add_argument(
+        "--state-dir", required=True, help="authority service state directory"
+    )
+    parser.add_argument(
+        "--workspace-root",
+        help="workspace whose authority ownership this service retains (defaults to state dir)",
+    )
     parser.add_argument("--workspace-id", required=True, help="workspace identifier")
     parser.add_argument("--host", default="127.0.0.1", help="host interface")
     parser.add_argument("--port", type=int, required=True, help="port to bind")
+    parser.add_argument(
+        "--state-lock-fd",
+        type=int,
+        help="inherited state-root ownership lock from the lifecycle launcher",
+    )
+    parser.add_argument(
+        "--workspace-lock-fd",
+        type=int,
+        help="inherited workspace ownership lock from the lifecycle launcher",
+    )
     parser.add_argument("--log-level", default="warning", help="uvicorn log level")
     parser.add_argument("--tls-certificate", help="HTTPS server certificate")
     parser.add_argument("--tls-private-key", help="HTTPS server private key")
@@ -70,6 +86,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the local authority FastAPI service."""
 
     namespace = build_parser().parse_args(argv)
+    workspace_root = Path(
+        namespace.state_dir
+        if namespace.workspace_root is None
+        else namespace.workspace_root
+    )
+    inherited_lock_fds = (namespace.state_lock_fd, namespace.workspace_lock_fd)
+    if any(value is not None for value in inherited_lock_fds) and not all(
+        value is not None for value in inherited_lock_fds
+    ):
+        raise SystemExit(
+            "--state-lock-fd and --workspace-lock-fd must be supplied together"
+        )
     tls_values = (
         namespace.tls_certificate,
         namespace.tls_private_key,
@@ -87,35 +115,62 @@ def main(argv: Sequence[str] | None = None) -> int:
             "mutual TLS coordinator authority requires --coordinator-credential"
         )
 
-    repository = AuthorityRepository(Path(namespace.state_dir))
-    services = repository_authority_services(
-        repository,
-        workspace_id=str(namespace.workspace_id),
-        coordinator_credentials=credentials,
-    )
-    app = create_authority_app(services=services)
-    if credentials:
-        _install_coordinator_only_surface(app)
-
-    import uvicorn
-
-    options: dict[str, object] = {
-        "host": str(namespace.host),
-        "port": int(namespace.port),
-        "log_level": str(namespace.log_level),
-        "access_log": False,
-    }
-    if all(tls_values):
-        options.update(
-            {
-                "ssl_certfile": str(namespace.tls_certificate),
-                "ssl_keyfile": str(namespace.tls_private_key),
-                "ssl_ca_certs": str(namespace.client_ca),
-                "ssl_cert_reqs": ssl.CERT_REQUIRED,
-                "http": _PeerCertificateH11Protocol,
-            }
+    try:
+        locks = (
+            AuthorityServiceLocks.acquire(
+                state_dir=Path(namespace.state_dir),
+                workspace_root=workspace_root,
+            )
+            if namespace.state_lock_fd is None
+            else AuthorityServiceLocks.adopt(
+                state_lock_fd=int(namespace.state_lock_fd),
+                workspace_lock_fd=int(namespace.workspace_lock_fd),
+            )
         )
-    uvicorn.run(app, **options)  # type: ignore[arg-type]
+    except AuthorityServiceLockError as exc:
+        raise SystemExit(str(exc)) from exc
+    try:
+        repository = AuthorityRepository(Path(namespace.state_dir))
+        services = repository_authority_services(
+            repository,
+            workspace_id=str(namespace.workspace_id),
+            coordinator_credentials=credentials,
+        )
+        _publish_supervisor_bootstrap(
+            state_dir=Path(namespace.state_dir),
+            workspace_root=workspace_root,
+            workspace_id=str(namespace.workspace_id),
+            host=str(namespace.host),
+            port=int(namespace.port),
+            identity=repository.read_identity(),
+            readiness=services.readiness_report,
+            tls=all(tls_values),
+        )
+        app = create_authority_app(services=services)
+        if credentials:
+            _install_coordinator_only_surface(app)
+
+        import uvicorn
+
+        options: dict[str, object] = {
+            "host": str(namespace.host),
+            "port": int(namespace.port),
+            "log_level": str(namespace.log_level),
+            "access_log": False,
+        }
+        if all(tls_values):
+            options.update(
+                {
+                    "ssl_certfile": str(namespace.tls_certificate),
+                    "ssl_keyfile": str(namespace.tls_private_key),
+                    "ssl_ca_certs": str(namespace.client_ca),
+                    "ssl_cert_reqs": ssl.CERT_REQUIRED,
+                    "http": _PeerCertificateH11Protocol,
+                }
+            )
+        uvicorn.run(app, **options)  # type: ignore[arg-type]
+    finally:
+        locks.close()
     return 0
 
 
@@ -128,8 +183,10 @@ def _install_coordinator_only_surface(app: FastAPI) -> None:
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         path = request.url.path
-        if path != "/ready" and path != COORDINATOR_AUTHORITY_ROUTE_PREFIX and not (
-            path.startswith(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/")
+        if (
+            path != "/ready"
+            and path != COORDINATOR_AUTHORITY_ROUTE_PREFIX
+            and not (path.startswith(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/"))
         ):
             return JSONResponse(status_code=404, content={"detail": "not found"})
         return await call_next(request)
@@ -148,7 +205,9 @@ def _coordinator_credentials(values: Sequence[str]) -> dict[str, str]:
             or service_id in credentials
             or fingerprint in fingerprints
         ):
-            raise SystemExit("--coordinator-credential must be unique SERVICE_ID=SHA256")
+            raise SystemExit(
+                "--coordinator-credential must be unique SERVICE_ID=SHA256"
+            )
         credentials[service_id] = fingerprint
         fingerprints.add(fingerprint)
     return credentials

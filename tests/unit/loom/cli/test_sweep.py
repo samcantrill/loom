@@ -108,65 +108,34 @@ def test_sweep_status_and_collect_commands_read_existing_plan(
     collect_payload = json.loads(collect_stdout.getvalue())
     assert collect_payload["schema_version"] == "loom.cli.sweep.collect.v1"
     assert collect_payload["result"]["artifact_count"] == 1
-    assert collect_payload["result"]["trials"][0]["extraction_result"]["status"] == "unsupported"
-
-
-def test_sweep_run_queue_command_enqueues_without_draining(
-    tmp_path: Path,
-) -> None:
-    spec = _write_spec(tmp_path)
-    config = _write_pipeline_config(tmp_path)
-    queue_config = _write_queue_config(tmp_path)
-    sweep_dir = tmp_path / "sweep"
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    exit_code = main(
-        [
-            "sweep",
-            "run",
-            str(spec),
-            "--config",
-            str(config),
-            "--sweep-dir",
-            str(sweep_dir),
-            "--queue-config",
-            str(queue_config),
-            "--queue-name",
-            "local",
-            "--format",
-            "json",
-        ],
-        stdout=stdout,
-        stderr=stderr,
+    assert (
+        collect_payload["result"]["trials"][0]["extraction_result"]["status"]
+        == "unsupported"
     )
 
-    assert exit_code == 0
-    assert stderr.getvalue() == ""
-    payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.sweep.run.v1"
-    assert payload["result"]["mode"] == "queue"
-    assert payload["result"]["result"]["submitted_count"] == 2
 
-    status_stdout = io.StringIO()
+def test_removed_queue_selector_is_rejected(tmp_path: Path) -> None:
+    stderr = io.StringIO()
     assert (
         main(
             [
                 "sweep",
-                "status",
-                str(sweep_dir),
+                "run",
+                str(_write_spec(tmp_path)),
+                "--config",
+                "pipeline.yaml",
+                "--sweep-dir",
+                str(tmp_path / "state"),
+                "--deployment",
+                "deployment.json",
                 "--queue-config",
-                str(queue_config),
-                "--format",
-                "json",
+                "queue.json",
             ],
-            stdout=status_stdout,
-            stderr=io.StringIO(),
+            stderr=stderr,
         )
-        == 0
+        != 0
     )
-    status_payload = json.loads(status_stdout.getvalue())
-    assert status_payload["result"]["counts"]["queued"] == 2
+    assert "unrecognized arguments" in stderr.getvalue()
 
 
 def _write_spec(tmp_path: Path) -> Path:
@@ -206,17 +175,6 @@ def _write_pipeline_config(tmp_path: Path) -> Path:
                 }
             ],
         }
-    }
-    config.write_text(json.dumps(payload), encoding="utf-8")
-    return config
-
-
-def _write_queue_config(tmp_path: Path) -> Path:
-    config = tmp_path / "queue.json"
-    payload = {
-        "service": {"db_path": str(tmp_path / "queue.sqlite")},
-        "pools": [{"pool_name": "local-pool", "mode": "managed"}],
-        "queues": [{"queue_name": "local", "pool_name": "local-pool"}],
     }
     config.write_text(json.dumps(payload), encoding="utf-8")
     return config

@@ -78,9 +78,38 @@ the supported behavior; the authoritative contracts and phase ownership remain i
 - `SUBMITTED` means granted. Only a confirmed exact-current-fence process fact
   advances to `RUNNING`. A lost or ambiguous launcher outcome is
   `START_UNKNOWN`, remains bound, and never licenses relaunch or retry.
+- Once the resident supervisor observes its worker root exit and positively
+  contains the complete process group, a missing durable worker result becomes
+  an `executor_infrastructure` failure with the observed exit code or signal.
+  No outputs are retained or published. This is not guarded-recovery work:
+  launch or containment uncertainty still remains unknown and fails closed.
+- A managed-local admission becomes publicly terminal only after every ordinary
+  local assignment for that run has released its provider claims and
+  coordinator capacity. The internal `logical_released` state is still
+  settling, while an assignment explicitly retained by guarded recovery
+  remains the documented exception.
+- Stage-originated cancellation, including `context.stop_early()` and guarded
+  cancellation recovery, installs the same durable run-cancellation operation as
+  client cancellation. It closes remaining work before finalizing the authority
+  run. A late cancellation preserves an already terminal authority outcome and
+  still waits for ordinary local, remote, and SLURM provider settlement before
+  completing admission.
+- Remote cancellation before launch records `cancelled_before_start` in the
+  coordinator's event stream. The terminal result opens the remaining event
+  stream, which is acknowledged before provider release and application stop.
+- On coordinator restart, cancelled admissions from older versions without a
+  cancellation operation are checked against authority in bounded reconciliation
+  batches. Only a cancelled stage in a nonterminal run reopens cancellation
+  processing; terminal authority outcomes remain unchanged. Unavailable evidence
+  keeps the repair queued; its failure does not abort reconciliation of other
+  admissions.
 - Disconnect, timeout, missing PID, expired offer, or credential change does not
   prove failure or containment. Accepted unknown work is not automatically
   reassigned and does not consume retry budget.
+- Resident remote agents apply the same missing-result infrastructure-failure
+  rule during normal completion and restart replay. The result is made durable,
+  matched to a positive continuous-supervisor containment receipt, committed
+  through the current execution fence, and acknowledged before provider release.
 - A SLURM submission operation commits `SUBMITTING` before one automatic
   `sbatch` invocation. Accepted returns an exact job handle; positive non-
   acceptance may be definitely rejected; every timeout, crash, interruption,
@@ -174,6 +203,16 @@ so rejection does not freeze ordinary work.
 Copy the complete immutable assignment, attempt, fence, state-version, and
 target identity from current joined status; do not reconstruct missing values.
 The request deliberately contains no containment claim:
+
+For same-host managed work, targeted admission detail exposes those values on
+their separate owner-labelled axes. Read `stage_work_id`, `stage_name`,
+`attempt`, `agent_id`, and `session_id` from the matching
+`owners["assignment"]["assignments"]` entry; read `process_execution_id` and
+`execution_fence` from the matching `owners["execution"]["journal"]` entry; and
+read the attempt revision `sequence` from the matching
+`authority["attempts"]` entry. These are a non-atomic joined observation, so the
+recovery operation still revalidates the complete identity before persisting
+intent.
 
 ```python
 from loom.queue import ManagedRecoveryTarget, RecoverUnknownAssignment
@@ -491,12 +530,42 @@ timeout intent can be delegated to scheduler submission where possible
 controller may observe scheduler timeout facts after the attempt
 ```
 
-Containers:
+Apptainer/Singularity:
 
-```text
-timeout may wrap the container runtime command in a future adapter
-container runtime-specific stop behavior should be recorded
-```
+An enabled policy uses the built-in subprocess runner's foreground PID namespace
+(`--pid --no-init=false`). The currently verified path is Linux with pidfds and
+non-reaping child waits, running SingularityCE 3.10.4 (including the `-focal`
+build). Other runtimes, injected runners, and instance/join modes are not admitted
+for enabled timeouts. Static capability diagnostics describe this supported
+path; they do not probe a remote execution host. Unsupported selections fail with
+an actionable message and an `unsupported` attempt outcome.
+
+The deadline includes runtime admission and launch. Expiry remains the primary
+failure, followed by at most two seconds of TERM grace and two seconds of KILL
+and settlement observation. The runner observes a creation-linked namespace-init
+pidfd: launcher exit alone is insufficient. Cleanup uncertainty is additional
+failure context, never success. Timeout or uncertain cleanup rejects the worker
+result **before reading it**, even if the worker already wrote a success result.
+
+Managed local execution retains its enclosing process group. Both built-in queue
+owners retain the unreaped root as the identity anchor through their final group
+signal, then reap once and only observe group absence. Capacity remains held
+while settlement is uncertain. On the verified namespace path, init remains in
+that group through descendant teardown, including separate-session payloads.
+An exited root alone cannot release capacity; a reused numeric group can delay
+release but can never authorize a new signal. This is not protection against the
+death of the actual outer process owner or a hostile container payload.
+
+Managed cleanup has one shared deadline: at most two seconds of TERM grace and
+two additional seconds of settlement observation. Forced KILL may shorten this
+budget, never extend it. Delayed or repeated containment calls consume only the
+remaining time. After expiry they check settlement without waiting again;
+uncertain group presence still retains capacity until absence is observed.
+
+Without an enabled timeout, container invocation keeps its existing behavior:
+no forced namespace, runtime-version restriction, or added CPU/RAM limits.
+Timeouts are independent of an empty `resource_policy.enforce`; they do
+not require cgroup delegation or host service changes.
 
 Stage 17 records Docker process timeout fields when supplied by the command
 runner, but it does not add a user-facing timeout policy.
@@ -647,46 +716,39 @@ These are policy hints. They do not replace artifact store ownership checks.
 
 ## Event Hooks
 
-Event records expose structured lifecycle facts for inspection and future
-external tools. The strict event model and local `events.jsonl` persistence use
-append-only audit records, not current-state records. The local runner emits
-lifecycle events for run planning/start/completion/failure and stage
-planned/started/completed, failed, skipped, reused, and blocked outcomes.
-Explicit event sink registries can observe committed runtime events, and
-plugin-discovered event sinks can be loaded only through `loom.plugins` into a
-supplied registry.
+The coordinator publishes committed run/stage lifecycle events through its selected
+embedded or authenticated authority. Preparation publication owns `run.created`
+and `run.planned`; native stage start and finalization own started/completed/failed
+facts. Admission or a scheduler exit does not mean execution completed. A wholly
+reused/skipped run has no fabricated `run.started`. `run.opened` describes an
+explicit reopen, never a query or same-ID replay. Native reuse observes the saved
+admission and its existing output commit; it does not execute the stage again.
 
-Events:
+The protected coordinator service configuration optionally selects ordered,
+uniquely named installed factories:
 
-```text
-run.created
-run.opened
-run.planned
-run.started
-run.completed
-run.failed
-run.cancelled
-run.interrupted
-run.preparation_failed
-stage.planned
-stage.started
-stage.completed
-stage.failed
-stage.cancelled
-stage.skipped
-stage.reused
-stage.stale
-stage.blocked
+```json
+{"event_sinks": [{"name": "project.notifications", "factory": {
+  "_target_": "project_notifications.make_registration"
+}}]}
 ```
 
-Core `loom` emits or references generic event records before dispatching
-registered callbacks. Event sinks are observe-only callbacks. They receive
-committed runtime facts and must not mutate plans, configs, artifacts, stage
-outputs, status transitions, retry decisions, or store records.
+Each factory returns `EventSinkRegistration`, including its existing subscription
+filter. Parsing is inert. Factories construct once during actual coordinator
+startup after root/identity guards and before readiness. Invalid selection or
+construction refuses startup. A live service retains its loaded callbacks;
+same-root restart loads the current protected selection for future events.
+Clients, workers, preparation, queries and MCP discovery do not construct sinks.
 
-Plugin-discovered event sinks are owned by `loom.plugins`; this document owns
-event names, event payloads, persistence policy, and callback failure behavior.
-Core `loom` should not ship service-specific notification backends initially.
+Selection is coordinator-wide and authorizes installed code with that service's
+privileges. Secrets belong in its protected environment, never run requests,
+prepared artifacts or worker configuration. The request contains no live registry
+or per-run observer override. Plugin discovery and installation are not performed.
+
+Callbacks observe facts and cannot decide lifecycle, retries, artifacts or resource
+accounting. Native event identity and occurrence time derive from the committed
+fact. Existing event IDs remain stable, and changed content under an existing ID
+is rejected. Read-only history does not generate events or resend notifications.
 
 ## Event Record Shape
 
@@ -721,54 +783,34 @@ the triggering event identity and remain read-only observer evidence.
 
 ## Notification Boundary
 
-Core should not include direct Slack, email, Teams, PagerDuty, or webhook
-delivery in v0.
+Service-specific networking belongs in installed downstream callbacks. Dispatch is
+synchronous and best effort: callback latency can delay the coordinator, so sinks
+must bound their own IO. Callback exceptions are isolated and their failure/link
+facts are written through the selected authority. A failed observer-record write
+is logged visibly; unavailable evidence is never reported as retained and cannot
+fail the scientific run.
 
-Instead, it should support:
-
-```text
-event records in run metadata
-append-only local events.jsonl
-programmatic callbacks
-optional plugin hooks
-CLI commands that stream or inspect event records
-```
-
-Service-specific delivery belongs in plugins or external wrappers.
-
-Programmatic callback registration should be available before entry point
-discovery. Plugin discovery uses the `loom.event_sinks` entry point group for
-observe-only sinks and remains an explicit setup action.
+The state commit, event append and callback are separate steps. A coordinator
+crash between them can omit an event or delivery. There is no outbox, automatic
+webhook retry, historical backfill, crash catch-up or exactly-once guarantee.
+Restart, status queries and same-ID replay do not resend retained events.
+Callbacks are not retained work and do not prevent otherwise permitted retirement.
 
 ## Run Store Integration
 
-The run store should persist:
+The selected authority owns lifecycle, output commits and native event/observer
+facts. Existing local JSONL projections remain inspectable where supported.
+Event writes advance authority revisions without replacing output commit identity,
+admitted predecessors or retry authorization. Unsupported observer capability is
+refused before admission/execution mutation; the authenticated authority repository
+requires its current schema, with no implicit upgrade or root reset.
 
-```text
-attempt records
-failure records
-retry decisions
-timeout outcomes
-cleanup records
-retention metadata
-event records when event persistence is enabled
-```
-
-Local event persistence is available as a run-store capability. When event sinks
-are configured, event persistence is enabled by default unless the caller
-explicitly disables it. Disabled persistence dispatches non-durable event
-references with warning metadata rather than fabricating durable event
-sequences.
-
-State transitions must remain atomic enough that a controller crash leaves a
-recoverable record.
-
-Failed local runs also persist status-only blocked records for downstream
-planned descendants. These records live at `stages/<stage>/status.json` with
-`StageStatus.BLOCKED`; they do not create inputs, outputs, fingerprints,
-failure metadata, provenance, or logs for stages that never executed. Automatic
-retry, timeout enforcement, cleanup, retention, and service-specific event sink
-delivery remain deferred.
+Authored `execution.settings.failure_policy` remains exact saved runtime intent.
+The default `stop_on_first_failure` stops new independent work after a known
+failure and settles accepted attempts. `continue_independent` runs unaffected
+branches and their descendants before failing the run. Descendants of a failed
+stage receive no unauthorized attempt or fabricated artifact. Neither policy
+implicitly retries a failed attempt or permits work after authority loss.
 
 ## Executor Integration
 

@@ -14,7 +14,7 @@ from loom.pipeline.sweep import (
     build_sweep_status,
     plan_sweep,
 )
-from loom.queue import QueueItemStatus
+from dataclasses import replace
 
 
 def test_build_sweep_status_prefers_run_lifecycle_and_derives_early_stop() -> None:
@@ -40,13 +40,32 @@ def test_build_sweep_status_prefers_run_lifecycle_and_derives_early_stop() -> No
     ]
 
 
-def test_build_sweep_status_uses_queue_and_coordination_when_run_status_missing() -> None:
+def test_build_sweep_status_uses_native_admission_and_coordination_when_run_status_missing() -> (
+    None
+):
     plan = _plan()
-    queue_item = SimpleNamespace(
-        queue_item_id="queue-item-1",
-        run_uri="file:///tmp/status/trial-0001",
-        status=QueueItemStatus.QUEUED,
-        metadata={"trial_id": "trial-0001"},
+    plan = replace(
+        plan,
+        sweep_manifest=replace(
+            plan.sweep_manifest,
+            metadata={
+                **plan.sweep_manifest.metadata,
+                "native_runs": {
+                    "trial-0001": {
+                        "request": {
+                            "preparation": {"operation_id": "native-operation"}
+                        },
+                        "observation": {
+                            "operation": {"state": "applied"},
+                            "admission": {
+                                "queue_item_id": "queue-item-1",
+                                "state": "PENDING_AUTHORITY",
+                            },
+                        },
+                    }
+                },
+            },
+        ),
     )
     coordination = TrialReference(
         trial_id="trial-0002",
@@ -58,7 +77,6 @@ def test_build_sweep_status_uses_queue_and_coordination_when_run_status_missing(
 
     summary = build_sweep_status(
         plan,
-        queue_items=(queue_item,),
         coordination_trials=(coordination,),
     )
 

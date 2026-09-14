@@ -14,7 +14,6 @@ from loom.cli.options import (
     PreflightCliOptions,
     RunCliOptions,
     SelectorCliOptions,
-    ValidateCliOptions,
     output_format_from_namespace,
 )
 
@@ -42,7 +41,6 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
         only_stage=["train"],
         force_stage=["score"],
         skip_stage=["publish"],
-        check_targets=True,
         run_uri="file://./runs/example",
         resume=True,
         explain_stage="train",
@@ -68,7 +66,6 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
         force_stages=frozenset({"score"}),
         skip_stages=frozenset({"publish"}),
     )
-    assert ValidateCliOptions.from_namespace(namespace) == ValidateCliOptions(check_targets=True)
     assert PlanCliOptions.from_namespace(namespace) == PlanCliOptions(
         run_uri="file://./runs/example",
         resume=True,

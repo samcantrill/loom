@@ -8,7 +8,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from loom.cli.authority import add_authority_options, authority_config_from_namespace
+from loom.cli.authority import (
+    add_authority_options,
+    explicit_authority_config_from_namespace,
+)
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_plan_text
 from loom.cli.options import (
@@ -178,7 +181,7 @@ def handle(namespace: argparse.Namespace) -> int:
         config_options=config_options,
         plan_options=plan_options,
         selector_options=selector_options,
-        authority_config=authority_config_from_namespace(namespace),
+        authority_config=explicit_authority_config_from_namespace(namespace),
         validator_registry=validator_registry,
         descriptor_registry=descriptor_registry,
     )
@@ -238,10 +241,13 @@ def build_plan_result(
     run_store_root = (
         "runs" if run_store is None or run_store.root is None else run_store.root
     )
+    if plan_options.resume and runtime_options.run_uri is None:
+        _resolve_run_uri_for_plan(None, None, open_existing=True)
     if plan_options.resume:
         store = _create_default_run_store(
             root=run_store_root,
             authority_config=authority_config,
+            run_uri=runtime_options.run_uri,
         )
     elif runtime_options.run_uri is not None:
         store = _create_read_only_plan_run_store(root=run_store_root)
@@ -352,9 +358,20 @@ def _create_default_run_store(
     *,
     root: str = "runs",
     authority_config: "AuthorityConfig | None" = None,
+    run_uri: str | None = None,
 ) -> Any:
     from loom.pipeline.execution import create_authority_backed_serial_run_store
 
+    if run_uri is not None and (
+        authority_config is None or authority_config.endpoint is None
+    ):
+        from loom.diagnostics.backend import _default_authority_store
+
+        return create_authority_backed_serial_run_store(
+            root,
+            authority_store=_default_authority_store(authority_config, run_uri=run_uri),
+            owner_id="plan",
+        )
     return create_authority_backed_serial_run_store(
         root,
         authority_config=authority_config,
@@ -437,8 +454,14 @@ def _plan_pipeline(
     selectors: "PlanSelectors",
     resume_enabled: bool,
 ) -> "ExecutionPlan":
-    from loom.pipeline.planning import ResumeOptions, plan_pipeline
+    from loom.pipeline.planning import ExecutionPlan, ResumeOptions, plan_pipeline
 
+    saved_plan = run_store.read_plan(run_uri) if resume_enabled else None
+    context = (
+        None
+        if saved_plan is None
+        else ExecutionPlan.from_dict(saved_plan).fingerprint_context
+    )
     return plan_pipeline(
         spec,
         run_uri=run_uri,
@@ -446,6 +469,7 @@ def _plan_pipeline(
         artifact_store=artifact_store,
         selectors=selectors,
         resume=ResumeOptions(enabled=resume_enabled),
+        fingerprint_context=context,
         persist=False,
     )
 

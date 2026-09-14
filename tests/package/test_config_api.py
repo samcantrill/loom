@@ -71,46 +71,55 @@ def test_config_exports_and_signature() -> None:
 
     signature = inspect.signature(compose_config)
     params = list(signature.parameters.values())
-    assert len(params) == 5
+    assert len(params) == 6
     assert params[0].name == "config_path"
     assert params[1].name == "overlays"
     assert params[2].name == "overrides"
     assert params[3].name == "recipe_catalog"
     assert params[4].name == "include_raw_source_snapshots"
+    assert params[5].name == "environment"
     assert params[1].default == ()
     assert params[2].default == ()
     assert params[3].default is None
     assert params[4].default is False
     assert params[4].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params[5].default is None
+    assert params[5].kind is inspect.Parameter.KEYWORD_ONLY
 
     catalog_signature = inspect.signature(compose_config_with_catalog)
     catalog_params = list(catalog_signature.parameters.values())
-    assert len(catalog_params) == 5
+    assert len(catalog_params) == 6
     assert catalog_params[0].name == "config_path"
     assert catalog_params[1].name == "recipe_catalog"
     assert catalog_params[1].default is inspect.Signature.empty
     assert catalog_params[2].name == "overlays"
     assert catalog_params[3].name == "overrides"
     assert catalog_params[4].name == "include_raw_source_snapshots"
+    assert catalog_params[5].name == "environment"
     assert catalog_params[1].kind is inspect.Parameter.KEYWORD_ONLY
     assert catalog_params[2].default == ()
     assert catalog_params[3].default == ()
     assert catalog_params[4].default is False
     assert catalog_params[4].kind is inspect.Parameter.KEYWORD_ONLY
+    assert catalog_params[5].default is None
+    assert catalog_params[5].kind is inspect.Parameter.KEYWORD_ONLY
 
     inspect_signature = inspect.signature(inspect_config_composition)
     inspect_params = list(inspect_signature.parameters.values())
-    assert len(inspect_params) == 5
+    assert len(inspect_params) == 6
     assert inspect_params[0].name == "config_path"
     assert inspect_params[1].name == "overlays"
     assert inspect_params[2].name == "overrides"
     assert inspect_params[3].name == "recipe_catalog"
     assert inspect_params[4].name == "include_raw_source_snapshots"
+    assert inspect_params[5].name == "environment"
     assert inspect_params[1].default == ()
     assert inspect_params[2].default == ()
     assert inspect_params[3].default is None
     assert inspect_params[4].default is False
     assert inspect_params[4].kind is inspect.Parameter.KEYWORD_ONLY
+    assert inspect_params[5].default is None
+    assert inspect_params[5].kind is inspect.Parameter.KEYWORD_ONLY
 
     register_signature = inspect.signature(register_recipe)
     register_params = list(register_signature.parameters.values())

@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
 
 import pytest
 from unittest.mock import patch
 
+import loom.authority.supervisor as supervisor
 from loom.authority._repository import initialize_authority_repository
+from loom.authority._service_locks import AuthorityServiceLocks
 from loom.authority.supervisor import (
     AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR,
     AuthoritySupervisorError,
@@ -92,7 +99,9 @@ def test_state_dir_conflicts_with_workspace_default(tmp_path: Path) -> None:
         )
 
 
-def test_start_writes_supervisor_state_and_registry(tmp_path: Path, monkeypatch) -> None:
+def test_start_writes_supervisor_state_and_registry(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(
         "loom.authority.supervisor.subprocess.Popen",
         lambda *args, **kwargs: _FakeProcess(),
@@ -134,6 +143,10 @@ def test_start_rejects_second_live_authority_for_workspace(
     )
     monkeypatch.setattr("loom.authority.supervisor._process_running", lambda pid: True)
     monkeypatch.setattr(
+        "loom.authority.supervisor._state_process_state",
+        lambda state: AuthoritySupervisorProcessState.RUNNING,
+    )
+    monkeypatch.setattr(
         "loom.authority.supervisor._readiness_for_state",
         lambda state, *, process_state: AuthoritySupervisorReadiness.READY,
     )
@@ -158,7 +171,9 @@ def test_start_rejects_second_live_authority_for_workspace(
     assert exc_info.value.code == "authority_supervisor.workspace_authority_exists"
 
 
-def test_start_fails_if_process_exits_during_startup(tmp_path: Path, monkeypatch) -> None:
+def test_start_fails_if_process_exits_during_startup(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(
         "loom.authority.supervisor.subprocess.Popen",
         lambda *args, **kwargs: _ExitedFakeProcess(),
@@ -198,7 +213,9 @@ def test_stop_marks_registry_unavailable(tmp_path: Path, monkeypatch) -> None:
     result = stop_authority_supervisor(workspace_root=tmp_path / "workspace")
 
     assert result.process_state is AuthoritySupervisorProcessState.STOPPED
-    assert result.registry_status is AuthorityRegistryValidationStatus.UNAVAILABLE_SERVICE
+    assert (
+        result.registry_status is AuthorityRegistryValidationStatus.UNAVAILABLE_SERVICE
+    )
     record = read_authority_registry_record(tmp_path / "workspace")
     assert record.service_health_state is AuthorityServiceHealthState.UNAVAILABLE
 
@@ -214,6 +231,31 @@ def test_rotate_generation_updates_existing_repository(tmp_path: Path) -> None:
     assert identity.service_generation == "new"
 
 
+@pytest.mark.parametrize("explicit_state", [False, True])
+def test_bootstrapping_owner_prevents_false_stop_and_generation_rotation(
+    tmp_path: Path, explicit_state: bool
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    repository = initialize_authority_repository(state_dir, service_generation="old")
+    with AuthorityServiceLocks.acquire(state_dir=state_dir, workspace_root=workspace):
+        stopped = stop_authority_supervisor(
+            state_dir=state_dir if explicit_state else None,
+            workspace_root=workspace,
+        )
+        assert not stopped.ok
+        assert stopped.process_state is AuthoritySupervisorProcessState.UNKNOWN
+        assert (
+            stopped.diagnostics[0]["code"] == "authority_supervisor.bootstrap_pending"
+        )
+        with pytest.raises(AuthoritySupervisorError) as error:
+            restart_authority_supervisor(state_dir=state_dir, workspace_root=workspace)
+        assert error.value.code == "authority_supervisor.restart_stop_unverified"
+        assert repository.read_identity().service_generation == "old"
+
+    assert stop_authority_supervisor(state_dir=state_dir, workspace_root=workspace).ok
+
+
 def test_restart_rotates_service_generation_and_restarts_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -224,7 +266,9 @@ def test_restart_rotates_service_generation_and_restarts_process(
     ):
         monkeypatch.setattr(
             "loom.authority.supervisor._wait_until_ready",
-            lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
+            lambda endpoint, *, timeout_seconds, process=None: (
+                AuthorityProtocolReadiness()
+            ),
         )
         monkeypatch.setattr(
             "loom.authority.supervisor._terminate_process",
@@ -261,7 +305,9 @@ def test_stale_state_reports_unavailable_and_unready(
     ):
         monkeypatch.setattr(
             "loom.authority.supervisor._wait_until_ready",
-            lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
+            lambda endpoint, *, timeout_seconds, process=None: (
+                AuthorityProtocolReadiness()
+            ),
         )
 
         start_authority_supervisor(
@@ -307,3 +353,200 @@ def test_inspect_reports_missing_registry_fail_closed(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.readiness is AuthoritySupervisorReadiness.UNKNOWN
     assert result.registry_status is AuthorityRegistryValidationStatus.MISSING
+
+
+def test_legacy_live_pid_never_authorizes_destructive_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    state = AuthoritySupervisorState(
+        pid=43210,
+        endpoint="http://127.0.0.1:8765",
+        state_dir=state_dir,
+        workspace_root=workspace,
+        workspace_id="workspace-a",
+        service_generation="generation-1",
+        host="127.0.0.1",
+        port=8765,
+        started_at="2026-05-11T10:00:00Z",
+        updated_at="2026-05-11T10:00:00Z",
+    )
+    state_dir.mkdir()
+    supervisor_state_path(state_dir).write_text(
+        json.dumps(state.to_dict()), encoding="utf-8"
+    )
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        supervisor.os,
+        "kill",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+
+    result = stop_authority_supervisor(
+        state_dir=state_dir,
+        workspace_root=workspace,
+        timeout_seconds=0,
+    )
+
+    assert result.ok is False
+    assert result.process_state is AuthoritySupervisorProcessState.UNKNOWN
+    assert not [item for item in signals if item[1] in {signal.SIGTERM, signal.SIGKILL}]
+
+
+def test_reused_pid_with_changed_start_identity_never_authorizes_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    state = AuthoritySupervisorState(
+        pid=43210,
+        endpoint="http://127.0.0.1:8765",
+        state_dir=state_dir,
+        workspace_root=workspace,
+        workspace_id="workspace-a",
+        service_generation="generation-1",
+        host="127.0.0.1",
+        port=8765,
+        started_at="2026-05-11T10:00:00Z",
+        updated_at="2026-05-11T10:00:00Z",
+        process_start_ticks="old-process",
+        process_boot_id="old-boot",
+    )
+    state_dir.mkdir()
+    supervisor_state_path(state_dir).write_text(
+        json.dumps(state.to_dict()), encoding="utf-8"
+    )
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor, "_process_start_ticks", lambda pid: "new-process")
+    monkeypatch.setattr(supervisor, "_process_boot_id", lambda: "old-boot")
+    monkeypatch.setattr(
+        supervisor.os,
+        "kill",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+
+    result = stop_authority_supervisor(
+        state_dir=state_dir,
+        workspace_root=workspace,
+        timeout_seconds=0,
+    )
+
+    assert result.ok is True
+    assert result.process_state is AuthoritySupervisorProcessState.STOPPED
+    assert not [item for item in signals if item[1] in {signal.SIGTERM, signal.SIGKILL}]
+
+
+def test_changed_boot_identity_never_authorizes_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    state = AuthoritySupervisorState(
+        pid=43210,
+        endpoint="http://127.0.0.1:8765",
+        state_dir=state_dir,
+        workspace_root=workspace,
+        workspace_id="workspace-a",
+        service_generation="generation-1",
+        host="127.0.0.1",
+        port=8765,
+        started_at="2026-05-11T10:00:00Z",
+        updated_at="2026-05-11T10:00:00Z",
+        process_start_ticks="same-start",
+        process_boot_id="old-boot",
+    )
+    state_dir.mkdir()
+    supervisor_state_path(state_dir).write_text(
+        json.dumps(state.to_dict()), encoding="utf-8"
+    )
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor, "_process_start_ticks", lambda pid: "same-start")
+    monkeypatch.setattr(supervisor, "_process_boot_id", lambda: "new-boot")
+    monkeypatch.setattr(
+        supervisor.os,
+        "kill",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+
+    result = stop_authority_supervisor(
+        state_dir=state_dir,
+        workspace_root=workspace,
+        timeout_seconds=0,
+    )
+
+    assert result.ok is True
+    assert result.process_state is AuthoritySupervisorProcessState.STOPPED
+    assert not [item for item in signals if item[1] in {signal.SIGTERM, signal.SIGKILL}]
+
+
+def test_unreadable_process_identity_does_not_claim_exit_or_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    state = AuthoritySupervisorState(
+        pid=43210,
+        endpoint="http://127.0.0.1:8765",
+        state_dir=state_dir,
+        workspace_root=workspace,
+        workspace_id="workspace-a",
+        service_generation="generation-1",
+        host="127.0.0.1",
+        port=8765,
+        started_at="2026-05-11T10:00:00Z",
+        updated_at="2026-05-11T10:00:00Z",
+        process_start_ticks="same-start",
+        process_boot_id="boot-a",
+    )
+    state_dir.mkdir()
+    supervisor_state_path(state_dir).write_text(
+        json.dumps(state.to_dict()), encoding="utf-8"
+    )
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor, "_process_start_ticks", lambda pid: None)
+    monkeypatch.setattr(supervisor, "_process_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(
+        supervisor.os,
+        "kill",
+        lambda pid, signum: signals.append((pid, signum)),
+    )
+
+    result = stop_authority_supervisor(
+        state_dir=state_dir,
+        workspace_root=workspace,
+        timeout_seconds=0,
+    )
+
+    assert result.ok is False
+    assert result.process_state is AuthoritySupervisorProcessState.UNKNOWN
+    assert not [item for item in signals if item[1] in {signal.SIGTERM, signal.SIGKILL}]
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"),
+    reason="pidfd exit observation is Linux-specific",
+)
+def test_already_exited_owned_child_is_confirmed_stopped(tmp_path: Path) -> None:
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.05)"])
+    state = AuthoritySupervisorState(
+        pid=process.pid,
+        endpoint="http://127.0.0.1:8765",
+        state_dir=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        workspace_id="workspace-a",
+        service_generation="generation-1",
+        host="127.0.0.1",
+        port=8765,
+        started_at="2026-05-11T10:00:00Z",
+        updated_at="2026-05-11T10:00:00Z",
+        process_start_ticks=supervisor._process_start_ticks(process.pid),
+        process_boot_id=supervisor._process_boot_id(),
+    )
+    time.sleep(0.15)
+
+    assert supervisor._terminate_process(state, timeout_seconds=0) is True

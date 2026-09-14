@@ -1,33 +1,23 @@
 """Unit tests for execution models."""
 
-from collections.abc import Mapping, Sequence
 from dataclasses import replace
+import inspect
+import json
 from typing import Any, cast
-
 import pytest
-
 from loom.pipeline import PipelineSpec
-from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
-from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution import (
-    ConfigSnapshotInputs,
     ExecutionFailure,
-    FailurePolicy,
-    RunRequest,
     RunRequestError,
+    StageReportedFailure,
     StageWorkerRequest,
     StageWorkerResult,
     redact_executor_metadata,
 )
-from loom.pipeline.planning import (
-    FingerprintContext,
-    PlanSelectors,
-    ResumeOptions,
-    build_stage_fingerprint,
-)
-from loom.pipeline.runtime import RunOptions
+from loom.pipeline.execution.models import STAGE_WORKER_REQUEST_SCHEMA_VERSION
+from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
-from loom.serialization import PlainData
 from loom.artifacts import ArtifactRef
 
 
@@ -59,7 +49,7 @@ def _artifact_ref() -> ArtifactRef:
 def _worker_request() -> StageWorkerRequest:
     stage = _minimal_pipeline_spec().get_stage("build")
     return StageWorkerRequest(
-        schema_version=1,
+        schema_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
         run_uri="file:///tmp/run",
         stage_name="build",
         attempt=1,
@@ -67,238 +57,17 @@ def _worker_request() -> StageWorkerRequest:
         executor_name="local",
         inputs={},
         fingerprint=build_stage_fingerprint(
-            stage,
-            bound_inputs={},
-            fingerprint_context=FingerprintContext(),
+            stage, bound_inputs={}, fingerprint_context=FingerprintContext()
         ),
         stdout_path="/tmp/run/stages/build/logs/stdout.log",
         stderr_path="/tmp/run/stages/build/logs/stderr.log",
         traceback_path="/tmp/run/stages/build/logs/traceback.txt",
         result_path="/tmp/run/stages/build/worker_result.json",
-        resolved_runtime={"stage_id": "build", "executor": "local"},
+        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="build")
+        .for_execution()
+        ._to_worker_metadata(),
         executor_metadata={"command": ["python", "-m", "loom"]},
     )
-
-
-def test_run_request_requires_config_or_pipeline() -> None:
-    with pytest.raises(RunRequestError):
-        RunRequest()
-
-
-def test_run_request_accepts_direct_pipeline_spec() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(pipeline=spec, run_uri="run1")
-
-    assert request.pipeline is spec
-    assert request.config is None
-
-
-def test_run_request_accepts_plain_mapping_config() -> None:
-    config = cast(
-        Mapping[str, PlainData],
-        {
-            "pipeline": {
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                        },
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    },
-                ]
-            }
-        },
-    )
-
-    request = RunRequest(config=config, run_uri="run1")
-
-    assert request.config == config
-
-
-def test_run_request_accepts_explicit_event_sink_registry() -> None:
-    spec = _minimal_pipeline_spec()
-    registry = EventSinkRegistry()
-
-    def sink(
-        event: PipelineEventRecord | EventReference,
-        context: EventSinkContext,
-    ) -> None:
-        _ = event, context
-
-    registry.register("audit.capture", sink)
-
-    request = RunRequest(
-        pipeline=spec,
-        run_uri="file:///runs/demo",
-        event_sink_registry=registry,
-        event_persistence="non_durable",
-    )
-
-    assert request.event_sink_registry is registry
-    assert request.event_persistence == "non_durable"
-
-
-def test_run_request_rejects_non_durable_without_sinks() -> None:
-    spec = _minimal_pipeline_spec()
-
-    with pytest.raises(RunRequestError, match="non-empty event_sink_registry"):
-        RunRequest(
-            pipeline=spec,
-            run_uri="file:///runs/demo",
-            event_persistence="non_durable",
-        )
-
-
-def test_run_request_options_are_canonical_invocation_policy() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(
-        pipeline=spec,
-        options={
-            "run_uri": "file:///runs/demo",
-            "selectors": {"only_stages": ["build"]},
-            "resume": {"enabled": False},
-        },
-    )
-
-    options = cast(RunOptions, request.options)
-    assert options.run_uri == "file:///runs/demo"
-    assert request.run_uri == "file:///runs/demo"
-    assert request.selectors == PlanSelectors(only_stages=("build",))
-    assert request.resume == ResumeOptions(enabled=False)
-
-
-def test_run_request_legacy_fields_normalize_into_options() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(
-        pipeline=spec,
-        run_uri="file:///runs/demo",
-        selectors=PlanSelectors(only_stages=("build",)),
-        resume=ResumeOptions(enabled=False),
-    )
-
-    options = cast(RunOptions, request.options)
-    assert options.run_uri == "file:///runs/demo"
-    assert options.to_plan_selectors() == PlanSelectors(only_stages=("build",))
-    assert options.to_resume_options() == ResumeOptions(enabled=False)
-
-
-def test_run_request_rejects_conflicting_legacy_options() -> None:
-    spec = _minimal_pipeline_spec()
-
-    with pytest.raises(RunRequestError, match="run_uri conflicts"):
-        RunRequest(
-            pipeline=spec,
-            run_uri="file:///runs/legacy",
-            options={"run_uri": "file:///runs/options"},
-        )
-
-
-def test_run_request_accepts_duck_typed_composed_config() -> None:
-    class FakeComposedConfig:
-        @property
-        def resolved(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def redacted(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def manifest(self) -> Mapping[str, PlainData]:
-            return {"source_artifacts": []}
-
-        @property
-        def provenance(self) -> object:
-            return object()
-
-        @property
-        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
-            return ()
-
-    config = FakeComposedConfig()
-
-    request = RunRequest(config=config, run_uri="run1")
-
-    assert request.config is config
-
-
-def test_run_request_requires_manifest_for_composed_config_duck_type() -> None:
-    class AlmostComposedConfig:
-        @property
-        def resolved(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def redacted(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def provenance(self) -> object:
-            return object()
-
-        @property
-        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
-            return ()
-
-    with pytest.raises(RunRequestError, match="ComposedConfig or mapping"):
-        RunRequest(config=cast(Any, AlmostComposedConfig()), run_uri="run1")
-
-
-def test_config_snapshot_inputs_remain_explicit_user_provided_fields() -> None:
-    snapshots = ConfigSnapshotInputs(
-        raw="raw", overlays="overlays", cli_overrides="cli"
-    )
-
-    assert snapshots.raw == "raw"
-    assert snapshots.overlays == "overlays"
-    assert snapshots.cli_overrides == "cli"
-    assert not hasattr(snapshots, "resolved")
-    assert not hasattr(snapshots, "resolved_redacted")
-
-
-def test_run_request_accepts_continue_independent_failure_policy() -> None:
-    request = RunRequest(
-        pipeline=PipelineSpec.from_config(
-            {
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                        },
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    }
-                ]
-            }
-        ),
-        failure_policy=FailurePolicy(stop_on_first_failure=False),
-    )
-
-    assert request.failure_policy.stop_on_first_failure is False
-
-
-def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:
-    with pytest.raises(RunRequestError, match="stop_on_first_failure"):
-        RunRequest(
-            pipeline=PipelineSpec.from_config(
-                {
-                    "stages": [
-                        {
-                            "name": "build",
-                            "factory": {
-                                "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                            },
-                            "outputs": {"data": {"artifact_type": "json"}},
-                        }
-                    ]
-                }
-            ),
-            failure_policy={"stop_on_first_failure": "false"},  # type: ignore[arg-type]
-        )
 
 
 def test_execution_failure_round_trips_plain_data() -> None:
@@ -313,8 +82,37 @@ def test_execution_failure_round_trips_plain_data() -> None:
         message="boom",
         details={"path": "x"},
     )
-
     assert ExecutionFailure.from_dict(failure.to_dict()) == failure
+
+
+def test_stage_reported_failure_normalizes_a_detached_plain_payload() -> None:
+    payload: Any = {"record": {"items": [1]}}
+    failure = StageReportedFailure(payload)
+    payload["record"]["items"].append(2)
+    assert failure.domain_failure == {"record": {"items": [1]}}
+    assert str(failure) == "stage reported a domain failure"
+    assert StageReportedFailure(None).domain_failure is None
+    with pytest.raises(Exception, match="Invalid plain data"):
+        StageReportedFailure(float("nan"))
+
+
+def test_stage_reported_failure_has_one_required_payload_and_never_converts_objects() -> (
+    None
+):
+    from loom.serialization.errors import PlainDataError
+
+    parameters = inspect.signature(StageReportedFailure).parameters
+    assert tuple(parameters) == ("domain_failure",)
+    assert parameters["domain_failure"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["domain_failure"].default is inspect.Parameter.empty
+    assert StageReportedFailure(domain_failure=None).domain_failure is None
+
+    class DomainObject:
+        def to_dict(self) -> dict[str, object]:
+            pytest.fail("Loom must not call a domain conversion method")
+
+    with pytest.raises(PlainDataError, match="Invalid plain data"):
+        StageReportedFailure(cast(Any, DomainObject()))
 
 
 def test_execution_failure_plain_data_is_frozen_and_serialization_is_independent() -> (
@@ -332,7 +130,6 @@ def test_execution_failure_plain_data_is_frozen_and_serialization_is_independent
         message="boom",
         details=details,
     )
-
     details["nested"]["items"].append("changed")
     assert failure.details == {"nested": {"items": ("original",)}}
     payload = cast(Any, failure.to_dict())
@@ -353,7 +150,6 @@ def test_execution_failure_preserves_signal_separately_from_exit_code() -> None:
         message="terminated",
         signal=15,
     )
-
     assert ExecutionFailure.from_dict(failure.to_dict()).signal == 15
     with pytest.raises(RunRequestError, match="exit_code and signal"):
         ExecutionFailure(
@@ -405,14 +201,12 @@ def test_execution_failure_from_dict_rejects_unknown_fields() -> None:
 
 def test_stage_worker_request_round_trips_plain_data() -> None:
     request = _worker_request()
-
     assert StageWorkerRequest.from_dict(request.to_dict()) == request
 
 
 def test_stage_worker_request_validates_runtime_identity() -> None:
     data = _worker_request().to_dict()
     data["resolved_runtime"] = {"stage_id": "other", "executor": "local"}
-
     with pytest.raises(RunRequestError, match="stage_id"):
         StageWorkerRequest.from_dict(data)
 
@@ -430,7 +224,6 @@ def test_stage_worker_result_round_trips_success() -> None:
         outputs={"data": _artifact_ref()},
         exit_code=0,
     )
-
     assert StageWorkerResult.from_dict(result.to_dict()) == result
 
 
@@ -501,7 +294,6 @@ def test_executor_metadata_redaction_removes_secrets_and_environment_values() ->
             "nested": {"password": "secret"},
         }
     )
-
     assert redacted == {
         "command": ["python", "[redacted]"],
         "environment": {"key_count": 2, "keys": ["PATH", "TOKEN"]},
@@ -509,6 +301,102 @@ def test_executor_metadata_redaction_removes_secrets_and_environment_values() ->
     }
 
 
-def test_config_snapshot_inputs_validate_strings() -> None:
-    with pytest.raises(RunRequestError):
-        ConfigSnapshotInputs(raw=object())  # type: ignore[arg-type]
+def test_public_worker_request_hides_execution_paths_without_changing_private_handoff() -> (
+    None
+):
+    request = _worker_request()
+    private = request.to_dict()
+    public = cast(dict[str, Any], request.to_safe_metadata())
+    assert "/tmp/run" in json.dumps(private)
+    assert "/tmp/run" not in json.dumps(public)
+    assert public["executor_name"] == "local"
+    assert public["stage_name"] == "build"
+    assert public["executor_metadata"]["command"] == ["python", "-m", "loom"]
+    assert request.to_dict() == private
+    assert StageWorkerRequest.from_dict(private).to_dict() == private
+
+
+def test_public_executor_view_preserves_route_facts_but_not_raw_process_channels() -> (
+    None
+):
+    metadata = {
+        "command": [
+            "singularity",
+            "exec",
+            "--cleanenv",
+            "--bind=/private/data:/private/data:ro",
+            "image.sif",
+            "--token",
+            "plain-value",
+        ],
+        "container": {
+            "image": {
+                "reference": "oras://user:password@registry.example/image?key=value"
+            },
+            "mounts": [
+                {"source": "/private/data", "target": "/private/data", "mode": "ro"}
+            ],
+            "environment": {"variables": {"CUSTOM_VALUE": "private-value"}},
+        },
+        "gpu_visibility": {"requested_gpu_count": 2, "visible_gpu_count": None},
+        "scheduler": {"mode": "afterok", "job_id": "42", "dependencies": ["41"]},
+        "stdout": "unstructured private output",
+        "stderr": "a private credential without a recognizable key",
+    }
+    safe = cast(dict[str, Any], redact_executor_metadata(metadata, public=True))
+    encoded = json.dumps(safe)
+    for private in (
+        "/private/data",
+        "plain-value",
+        "private-value",
+        "user:password",
+        "key=value",
+        "unstructured private output",
+        "private credential",
+    ):
+        assert private not in encoded
+    assert safe["command"][:3] == ["singularity", "exec", "--cleanenv"]
+    assert safe["command"][3] == "--bind=[redacted-path]"
+    assert safe["container"]["mounts"][0]["mode"] == "ro"
+    assert safe["container"]["image"]["reference"] == "oras://registry.example/image"
+    assert safe["scheduler"] == metadata["scheduler"]
+    assert safe["gpu_visibility"] == {
+        "requested_gpu_count": 2,
+        "visible_gpu_count": None,
+    }
+    assert metadata["command"][-1] == "plain-value"
+
+
+def test_public_worker_failure_keeps_typed_outcome_without_exception_text() -> None:
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri="file:///private/run",
+        stage_name="build",
+        attempt=1,
+        status=StageStatus.FAILED,
+        started_at="start",
+        finished_at="finish",
+        executor_name="local",
+        failure=ExecutionFailure(
+            schema_version=1,
+            run_uri="file:///private/run",
+            stage_name="build",
+            attempt=1,
+            failed_at="finish",
+            executor="local",
+            failure_type="stage_exception",
+            message="private value printed by user stage",
+            exception_type="builtins.ValueError",
+            exit_code=7,
+        ),
+        exit_code=7,
+    )
+    safe = cast(dict[str, Any], result.to_safe_metadata())
+    assert safe["status"] == StageStatus.FAILED.value
+    assert safe["failure"]["failure_type"] == "stage_exception"
+    assert safe["failure"]["exception_type"] == "builtins.ValueError"
+    assert safe["exit_code"] == 7
+    assert "private" not in json.dumps(safe)
+    assert (
+        "private value" in cast(dict[str, Any], result.to_dict()["failure"])["message"]
+    )

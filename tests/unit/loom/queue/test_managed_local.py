@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import json
+import sqlite3
 from threading import Barrier
 
 import pytest
@@ -15,10 +17,12 @@ from loom.queue._managed_local import (
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
+    ResourceAvailabilityStatus,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     ObserveRequest,
     _compose_agent_resource_providers,
+    _publish_regular_file_tree,
 )
 from loom.pipeline.orchestration import (
     ExecutionRequirement,
@@ -205,6 +209,61 @@ def test_same_kind_provider_group_splits_and_releases_aggregate_claim() -> None:
     assert released.live_claim_ids == ()
 
 
+def test_same_kind_provider_group_preserves_withdrawn_resource_statuses() -> None:
+    contract = ResourceClaimContractDescriptor("gpu", 1, "configured")
+    atoms = (
+        CapacityAtom("gpu", "gpu-a", ExactQuantity(1), "count", ExactQuantity(1)),
+        CapacityAtom("gpu", "gpu-b", ExactQuantity(1), "count", ExactQuantity(1)),
+    )
+    members = tuple(
+        _StatusAtomProvider(
+            SchedulingComponentDescriptor("gpu", 1, "1", "implementation", key),
+            (contract,),
+            (atom,),
+            ResourceAvailabilityStatus(
+                "gpu",
+                atom.local_capacity_key,
+                index == 1,
+                "available" if index == 1 else "external_process_detected",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        for index, (key, atom) in enumerate(zip(("a", "b"), atoms, strict=True))
+    )
+
+    observed = _compose_agent_resource_providers(members)["gpu"].observe(
+        ObserveRequest("agent", "session", "observe")
+    )
+
+    assert observed.atoms == (atoms[1],)
+    assert [
+        (item.local_capacity_key, item.reason_code) for item in observed.resource_status
+    ] == [
+        ("gpu-a", "external_process_detected"),
+        ("gpu-b", "available"),
+    ]
+
+
+class _StatusAtomProvider(AtomResourceProvider):
+    def __init__(
+        self,
+        descriptor: SchedulingComponentDescriptor,
+        claim_contracts: tuple[ResourceClaimContractDescriptor, ...],
+        atoms: tuple[CapacityAtom, ...],
+        status: ResourceAvailabilityStatus,
+    ) -> None:
+        super().__init__(descriptor, claim_contracts, atoms)
+        self._status = status
+
+    def observe(self, request: ObserveRequest):
+        result = super().observe(request)
+        return replace(
+            result,
+            atoms=result.atoms if self._status.available else (),
+            resource_status=(self._status,),
+        )
+
+
 class _RaisingAtomProvider(AtomResourceProvider):
     def prepare(self, command: ClaimCommand) -> ClaimResult:
         _ = command
@@ -288,10 +347,22 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
         return "process-1"
 
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", launch) == "process-1"
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            launch,
+            start_failure=lambda _error: pytest.fail("successful launch must not fail"),
+        )
+        == "process-1"
     )
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", launch) == "process-1"
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            launch,
+            start_failure=lambda _error: pytest.fail("replay must not fail"),
+        )
+        == "process-1"
     )
     assert calls == 1
     assert (
@@ -365,8 +436,31 @@ def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     assert journal.acknowledge(assignment.assignment_id, 1) == 1
 
 
+def test_regular_file_tree_replay_rejects_extra_companion(tmp_path) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    (source / "primary.json").write_text("{}", encoding="utf-8")
+    _publish_regular_file_tree(
+        source_root=source,
+        target_root=target,
+        aliases={},
+        field="test artifact directory",
+    )
+    (target / "stale.txt").write_text("stale", encoding="utf-8")
+
+    with pytest.raises(ManagedLocalError, match="replay conflicts"):
+        _publish_regular_file_tree(
+            source_root=source,
+            target_root=target,
+            aliases={},
+            field="test artifact directory",
+        )
+
+
 def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) -> None:
     provider, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     del provider
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
@@ -482,6 +576,7 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
 
 def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = replace(command.claim.atoms[0], amount=ExactQuantity(4))
     path = tmp_path / "coordinator.sqlite"
     assignments = (
@@ -525,6 +620,7 @@ def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> 
 
 def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim_atom = replace(capacity, amount=ExactQuantity(1))
     claim = replace(command.claim, atoms=(claim_atom,))
@@ -605,10 +701,120 @@ def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> Non
     )
 
 
+def test_empty_claims_reuse_current_offer_without_consuming_capacity(tmp_path) -> None:
+    _provider_value, command = _provider()
+    first = command.assignment
+    assert isinstance(first, ManagedAssignment)
+    second = replace(
+        first,
+        assignment_id="assignment-empty-2",
+        stage_work_id=stage_work_identity(
+            "admission-1", "evaluate", "evaluate-1", "ready-1"
+        ),
+        stage_name="evaluate",
+        attempt_id="evaluate-1",
+        offer_id="offer-empty-proposed",
+        claim_id="claim-empty-2",
+    )
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, first)
+    _seed_stage_work(path, second)
+    coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    original = _offer(first, command.claim.atoms)
+    assert coordinator.publish_offer(original) == first.offer_id
+    reused = replace(
+        _offer(second, command.claim.atoms),
+        availability_revision=original.availability_revision,
+    )
+    assert coordinator.publish_offer(reused) == first.offer_id
+    with sqlite3.connect(path) as conn:
+        retained = conn.execute(
+            "SELECT snapshot_json FROM coordinator_offers WHERE offer_revision = ?",
+            (first.offer_id,),
+        ).fetchone()
+    assert retained is not None
+    assert json.loads(str(retained[0])) == original.to_dict()
+    with pytest.raises(ManagedLocalError, match="matching availability"):
+        coordinator.publish_offer(
+            replace(
+                reused,
+                offer_revision="offer-empty-conflict",
+                atoms=(replace(command.claim.atoms[0], amount=ExactQuantity(1)),),
+            )
+        )
+    second = replace(second, offer_id=first.offer_id)
+    receipt = _decision_receipt(second, command.claim)
+    receipt["component_descriptors"] = []
+    receipt["provider_descriptors"] = []
+    receipt["claim_contract_descriptors"] = []
+    assert (
+        coordinator.reserve(second, (), max_parallel_stages=3, decision_receipt=receipt)
+        == "reserved"
+    )
+    assert (
+        coordinator.reserve(second, (), max_parallel_stages=3, decision_receipt=receipt)
+        == "reserved"
+    )
+    third = replace(
+        second,
+        assignment_id="assignment-empty-3",
+        stage_work_id=stage_work_identity("admission-1", "score", "score-1", "ready-1"),
+        stage_name="score",
+        attempt_id="score-1",
+        claim_id="claim-empty-3",
+    )
+    _seed_stage_work(path, third)
+    third_receipt = dict(receipt)
+    third_receipt["stage_work_id"] = third.stage_work_id
+    with pytest.raises(ManagedLocalError, match="limit"):
+        coordinator.reserve(
+            third, (), max_parallel_stages=1, decision_receipt=third_receipt
+        )
+    consuming = replace(
+        second,
+        assignment_id="assignment-consuming",
+        stage_work_id=stage_work_identity(
+            "admission-1", "consume", "consume-1", "ready-1"
+        ),
+        stage_name="consume",
+        attempt_id="consume-1",
+        claim_id="claim-consuming",
+    )
+    _seed_stage_work(path, consuming)
+    assert (
+        coordinator.reserve(
+            consuming,
+            (command.claim,),
+            max_parallel_stages=3,
+            decision_receipt=_decision_receipt(consuming, command.claim),
+        )
+        == "reserved"
+    )
+    consuming_loser = replace(
+        consuming,
+        assignment_id="assignment-consuming-loser",
+        stage_work_id=stage_work_identity(
+            "admission-1", "consume-loser", "consume-loser-1", "ready-1"
+        ),
+        stage_name="consume-loser",
+        attempt_id="consume-loser-1",
+        claim_id="claim-consuming-loser",
+    )
+    _seed_stage_work(path, consuming_loser)
+    with pytest.raises(ManagedLocalError, match="availability revision"):
+        coordinator.reserve(
+            consuming_loser,
+            (command.claim,),
+            max_parallel_stages=4,
+            decision_receipt=_decision_receipt(consuming_loser, command.claim),
+        )
+
+
 def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
     tmp_path,
 ) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim = replace(
         command.claim,
@@ -679,6 +885,7 @@ def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
 
 def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
     claim = replace(
         command.claim,
@@ -735,6 +942,7 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     assignment = _assignment()
     provider, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     journal.persist_request(assignment, {"request": "durable"})
     journal.prepare_composite(assignment, (command,), {"cpu": provider})
     journal.accept(assignment.assignment_id)
@@ -748,16 +956,31 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
         raise TimeoutError("spawn response was lost")
 
     with pytest.raises(TimeoutError):
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
     assert journal.read_state(assignment.assignment_id) is AssignmentState.START_UNKNOWN
     with pytest.raises(ManagedLocalError, match="cannot be invoked again"):
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
     assert (
         journal.confirm_supervised_start(assignment.assignment_id, "process-1")
         is AssignmentState.PROCESS_STARTED
     )
     assert (
-        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("confirmed replay must not fail"),
+        )
         == "process-1"
     )
     assert calls == 1
@@ -765,6 +988,7 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
 
 def test_decision_receipt_is_bounded_and_rejects_secret_material(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
@@ -790,6 +1014,7 @@ def test_decision_receipt_is_bounded_and_rejects_secret_material(tmp_path) -> No
 
 def test_coordinator_rejects_stale_stage_work_and_wrong_candidate(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     store = SQLiteStageWorkStore(path)
@@ -818,6 +1043,7 @@ def test_coordinator_rejects_stale_stage_work_and_wrong_candidate(tmp_path) -> N
 
 def test_event_replay_after_commit_can_be_acknowledged_exactly_once(tmp_path) -> None:
     _provider_value, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)

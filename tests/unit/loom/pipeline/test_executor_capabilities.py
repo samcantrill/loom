@@ -24,6 +24,7 @@ from loom.pipeline import (
     validate_executor_capabilities,
 )
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.runtime import ResourcePolicy
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     RetryPolicy,
@@ -133,8 +134,6 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
         "docker",
         "local",
         "singularity",
-        "slurm-afterok",
-        "slurm-single-job",
         "subprocess",
     )
     assert descriptor.name == "local"
@@ -186,32 +185,25 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert apptainer_descriptor.details["containerized"] is True
     assert apptainer_descriptor.details["apptainer_cli"] is True
     assert apptainer_descriptor.details["singularity_compatible"] is False
-    singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
-    assert singularity_descriptor.details["singularity_compatible"] is True
-    slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
-    assert slurm_descriptor.adapter_namespaces == (
-        "apptainer",
-        "container",
-        "container_build",
-        "singularity",
-        "slurm",
-    )
-    assert slurm_descriptor.timeout_support is TimeoutSupportLevel.DELEGATED
-    assert slurm_descriptor.details["dry_run_only"] is False
-    assert slurm_descriptor.details["live_submission"] is True
-    assert slurm_descriptor.details["scheduler_commands"] is True
-    assert slurm_descriptor.details["container_composition"] is True
-    afterok_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
-    assert afterok_descriptor.details["dry_run_only"] is False
-    assert afterok_descriptor.details["live_submission"] is True
-    assert afterok_descriptor.details["scheduler_commands"] is True
+    assert apptainer_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
+    prerequisites = apptainer_descriptor.details["timeout_prerequisites"]
+    assert isinstance(prerequisites, str)
+    assert "execution-host admission" in prerequisites
     assert {
         kind: capability.to_dict()["support_level"]
         for kind, capability in cast(
-            dict[str, ResourceCapability],
-            slurm_descriptor.resource_capabilities,
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
         ).items()
     } == {"cpu": "supported", "memory": "supported", "gpu": "supported"}
+    assert {
+        kind: capability.to_dict()["enforcement"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability], apptainer_descriptor.resource_capabilities
+        ).items()
+    } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "best_effort"}
+    singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
+    assert singularity_descriptor.details["singularity_compatible"] is True
+    assert singularity_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
 
 
 def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() -> None:
@@ -240,40 +232,18 @@ def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() 
         result.raise_for_errors()
 
 
-def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
-    result = validate_executor_capabilities(
-        RunOptions(
-            executor="slurm-afterok",
-            adapter_options={"slurm": {"launcher_argv": ["loom"]}},
-            stage_options={
-                "train": StageRuntimeOptions(
-                    resources=ResourceRequest(
-                        entries={
-                            "cpu": ResourceEntry(kind="cpu", amount=2),
-                            "memory": ResourceEntry(
-                                kind="memory", amount=4, unit="GiB"
-                            ),
-                            "gpu": ResourceEntry(kind="gpu", amount=1),
-                        }
-                    )
-                )
-            },
-        )
-    )
-
-    assert result.ok
-    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["code"], item["resource_kind"]) for item in diagnostics] == [
-        ("resource.supported", "cpu"),
-        ("resource.supported", "gpu"),
-        ("resource.supported", "memory"),
-    ]
+@pytest.mark.parametrize("name", ["slurm-afterok", "slurm-single-job"])
+def test_removed_whole_run_modes_are_not_execution_capabilities(name):
+    result = validate_executor_capabilities(RunOptions(executor=name))
+    assert not result.ok
+    assert "unknown" in repr(result.to_dict())
 
 
 def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None:
     result = validate_executor_capabilities(
         RunOptions(
             executor="docker",
+            resource_policy=ResourcePolicy(enforce="all"),
             adapter_options={
                 "container": {"image": {"reference": "python:3.12"}},
                 "container_build": {
@@ -326,6 +296,102 @@ def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None
     assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
 
 
+def test_empty_enforcement_apptainer_resources_report_not_enforced() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="apptainer",
+            adapter_options={
+                "container": {"image": {"reference": "analysis.sif"}},
+            },
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(
+                                kind="memory", amount=512, unit="MiB"
+                            ),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [
+        (item["resource_kind"], item["severity"], item["enforcement"])
+        for item in diagnostics
+    ] == [
+        ("cpu", "warning", "not_enforced"),
+        ("memory", "warning", "not_enforced"),
+    ]
+
+
+@pytest.mark.parametrize("scope", ("global", "inherited", "stage"))
+def test_empty_enforcement_capabilities_include_authored_container_fallback(
+    scope: str,
+) -> None:
+    container = {
+        "image": {"reference": "analysis.sif"},
+        "resources": {
+            "entries": {"memory": {"kind": "memory", "amount": 512, "unit": "MiB"}},
+            "capabilities": {"memory": {"support_level": "supported"}},
+        },
+    }
+    adapters: dict[str, Any] = {"container": container}
+    stages: dict[str, Any] = {} if scope == "global" else {"train": {}}
+    if scope == "stage":
+        adapters.pop("container")
+        stages["train"] = {"adapter_options": {"container": container}}
+    result = validate_executor_capabilities(
+        {"executor": "apptainer", "adapter_options": adapters, "stage_options": stages}
+    )
+    assert len(result.diagnostics) == 1
+    diagnostic = cast(CapabilityDiagnostic, result.diagnostics[0])
+    assert diagnostic.resource_kind == "memory"
+    assert diagnostic.enforcement is ResourceEnforcementExpectation.NOT_ENFORCED
+    assert diagnostic.severity is CapabilitySeverity.WARNING
+    assert diagnostic.stage_id == (None if scope == "global" else "train")
+    source = "RunOptions.stage_options['train']" if scope == "stage" else "RunOptions"
+    assert (
+        diagnostic.path
+        == f"{source}.adapter_options['container'].resources.entries['memory']"
+    )
+
+
+def test_nonempty_runtime_resources_replace_container_fallback_in_capabilities() -> (
+    None
+):
+    result = validate_executor_capabilities(
+        {
+            "executor": "apptainer",
+            "adapter_options": {
+                "container": {
+                    "image": {"reference": "analysis.sif"},
+                    "resources": {
+                        "entries": {
+                            "memory": {"kind": "memory", "amount": 512, "unit": "MiB"}
+                        },
+                        "capabilities": {"memory": {"support_level": "supported"}},
+                    },
+                },
+            },
+            "stage_options": {
+                "train": {
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
+                }
+            },
+        }
+    )
+    diagnostics = cast(tuple[CapabilityDiagnostic, ...], result.diagnostics)
+    assert [item.resource_kind for item in diagnostics] == ["cpu"]
+    assert (
+        diagnostics[0].path
+        == "RunOptions.stage_options['train'].resources.entries['cpu']"
+    )
+
+
 def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
     apptainer_result = validate_executor_capabilities(
         RunOptions(
@@ -351,22 +417,8 @@ def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
             },
         )
     )
-    slurm_result = validate_executor_capabilities(
-        RunOptions(
-            executor="slurm-afterok",
-            adapter_options={
-                "slurm": {"partition": "debug"},
-                "container": {"target": "analysis-env"},
-                "container_build": {},
-                "apptainer": {"cleanenv": True},
-            },
-        )
-    )
-
     assert apptainer_result.ok
-    assert slurm_result.ok
     assert "adapter_namespace.unclaimed" not in repr(apptainer_result.to_dict())
-    assert "adapter_namespace.unclaimed" not in repr(slurm_result.to_dict())
 
 
 def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:
@@ -412,9 +464,9 @@ def test_local_resource_requests_warn_without_failing_validation() -> None:
     result.raise_for_errors()
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
     assert [diagnostic["code"] for diagnostic in diagnostics] == [
-        "resource.ignored",
-        "resource.ignored",
-        "resource.ignored",
+        "resource.not_requested",
+        "resource.not_requested",
+        "resource.not_requested",
     ]
     assert [diagnostic["resource_kind"] for diagnostic in diagnostics] == [
         "cpu",
@@ -514,6 +566,7 @@ def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:
     )
     options = RunOptions(
         executor="batch",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -561,6 +614,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
     )
     options = RunOptions(
         executor="fake",
+        resource_policy=ResourcePolicy(enforce="all"),
         stage_options={
             "train": StageRuntimeOptions(
                 resources=ResourceRequest(
@@ -588,7 +642,7 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
         (item["resource_kind"], item["code"], item["severity"]) for item in diagnostics
     ] == [
         ("cpu", "resource.supported", "info"),
-        ("gpu", "resource.ignored", "warning"),
+        ("gpu", "resource.unsupported", "error"),
         ("memory", "resource.advisory", "warning"),
         ("test.scratch", "resource.unsupported", "error"),
     ]

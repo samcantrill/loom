@@ -1,0 +1,12 @@
+{
+  "operation_id": "prepare-remote-agent-001",
+  "run_name": "remote-agent-prepared",
+  "source": {
+    "mode": "shared",
+    "root": "projects",
+    "path": ".",
+    "include": ["pipeline.yaml"]
+  },
+  "config_path": "pipeline.yaml",
+  "preparation_profile": "example-cpu"
+}
