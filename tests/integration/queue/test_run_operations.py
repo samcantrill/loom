@@ -455,9 +455,17 @@ def test_run_identity_ownership_and_projection_refusal_before_effects(tmp_path):
 
 
 def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from tests.support.lifecycle_observers import captured_events, selected_capture
+
     service = _two_stage_service(tmp_path, failing=True)
+    observed = tmp_path / "observer.jsonl"
+    service = replace(service, event_observers=selected_capture(observed))
     LocalDaemon.initialize_deployment(service.daemon)
-    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon = LocalDaemon(
+        service.daemon, preparation=CoordinatorPreparation(service),
+        event_observers=service.event_observers,
+    )
     daemon.start()
     request = RunRequest(_request(), "target-admission")
     try:
@@ -466,6 +474,10 @@ def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
         assert original.state == "applied", original
         failed = daemon._wait("target-admission", timeout_seconds=25)
         assert failed.state.value == "FAILED"
+        authority = SQLitePerRunAuthorityStore(failed.run_uri)
+        failed_events = authority.list_audit_events(failed.run_uri)
+        assert sum(event.event_type == "run.failed" for event in failed_events) == 1
+        observed_before_replay = observed.read_bytes()
 
         def forbidden(*args, **kwargs):
             pytest.fail("same-ID replay called publisher or submit/retry")
@@ -474,6 +486,8 @@ def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
         for _ in range(3):
             assert daemon.start_run(request, principal_id="caller") == original
         assert daemon.admission_for_queue_item("target-admission") == failed
+        assert authority.list_audit_events(failed.run_uri) == failed_events
+        assert observed.read_bytes() == observed_before_replay
         monkeypatch.undo()
         retried = daemon._submit(
             LocalDaemonAdmissionRequest(
@@ -487,6 +501,16 @@ def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
         assert (
             daemon._wait("target-admission", timeout_seconds=25).state.value == "FAILED"
         )
+        retried_events = authority.list_audit_events(failed.run_uri)
+        assert retried_events[:len(failed_events)] == failed_events
+        kinds = [event.event_type for event in retried_events]
+        assert kinds.count("run.failed") == 2
+        assert kinds.count("run.opened") == 1
+        assert kinds.count("stage.failed") == 2
+        assert "run.completed" not in kinds
+        ids = [event.event_id for event in retried_events]
+        assert len(ids) == len(set(ids))
+        assert ids == [event["event_id"] for event in captured_events(observed, failed.run_uri)]
     finally:
         daemon.stop()
 

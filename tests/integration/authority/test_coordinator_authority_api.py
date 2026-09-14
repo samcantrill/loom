@@ -607,6 +607,11 @@ def test_selected_authority_publisher_reconciles_unknown_reply(
 
 
 def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_path):
+    from loom.pipeline.event_sinks import (
+        EventObserverExternalRef,
+        EventObserverLinkRecord,
+        EventSinkFailureRecord,
+    )
     from loom.pipeline.events import EventScope, PipelineEvent
 
     repository, authority = _authority(tmp_path)
@@ -672,3 +677,31 @@ def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_pat
     assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
     assert authority.read_event_sink_failures(RUN_URI) == ()
     assert authority.read_event_observer_links(RUN_URI) == ()
+    failure = EventSinkFailureRecord.from_exception(
+        sink_name="test.capture", event_reference=record.to_event_reference(),
+        exc=RuntimeError("synthetic callback failure"), failed_at=record.timestamp,
+    )
+    link = EventObserverLinkRecord(
+        sink_name="test.capture", run_uri=RUN_URI,
+        event_reference=record.to_event_reference(), recorded_at=record.timestamp,
+        external_ref=EventObserverExternalRef("test.message", {"message_id": "retained-1"}),
+    )
+    before_facts = authority.open_run(RUN_URI)
+    failure_revision = authority.append_event_sink_failure(RUN_URI, failure)
+    link_revision = authority.append_event_observer_link(RUN_URI, link)
+    assert before_facts.revision.sequence < failure_revision.sequence < link_revision.sequence
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)
+    assert repository.read_event_sink_failures(RUN_URI) == (failure,)
+    assert repository.read_event_observer_links(RUN_URI) == (link,)
+    assert authority.open_run(RUN_URI).status == before_facts.status
+    assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
+    _, wrong_workspace = _authority(tmp_path, workspace_id="another-workspace")
+    revision_before_refusal = authority.open_run(RUN_URI).revision
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_sink_failure(RUN_URI, failure)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_observer_link(RUN_URI, link)
+    assert authority.open_run(RUN_URI).revision == revision_before_refusal
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)

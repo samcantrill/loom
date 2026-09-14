@@ -2029,10 +2029,16 @@ def test_skip_only_prepared_target_terminalizes_without_executing(
     tmp_path: Path,
 ) -> None:
     from loom.pipeline.status import RunStatus, StageStatus
+    from tests.support.lifecycle_observers import captured_events, selected_capture
 
     service = _service(tmp_path)
+    observed = tmp_path / "observer.jsonl"
+    service = replace(service, event_observers=selected_capture(observed))
     LocalDaemon.initialize_deployment(service.daemon)
-    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon = LocalDaemon(
+        service.daemon, preparation=CoordinatorPreparation(service),
+        event_observers=service.event_observers,
+    )
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     daemon.start()
     server.start()
@@ -2062,6 +2068,13 @@ def test_skip_only_prepared_target_terminalizes_without_executing(
             assert snapshot.status is RunStatus.SUCCEEDED
             assert snapshot.stages[0].status is StageStatus.SKIPPED
             assert not snapshot.stages[0].attempts
+            events = authority.list_audit_events(receipt["run_uri"])
+            kinds = [event.event_type for event in events]
+            assert "stage.skipped" in kinds and "run.completed" in kinds
+            assert "stage.started" not in kinds and "run.started" not in kinds
+            assert [event.event_id for event in events] == [
+                event["event_id"] for event in captured_events(observed, receipt["run_uri"])
+            ]
             assert (
                 LocalRunStore(service.daemon.run_store_root).read_stage_worker_result(
                     receipt["run_uri"], "produce", attempt=1
@@ -2089,8 +2102,11 @@ def test_reuse_only_plan_completes_from_planned_without_new_attempt(
     from loom.pipeline.stores.coordinator_authority import publish_prepared_run
     from loom.queue.local_daemon_runtime import prepare_managed_local_runtime_record
     from loom.queue.managed_local_preparation import _persist_composed_config
+    from tests.support.lifecycle_observers import captured_events, selected_capture
 
     service = _service(tmp_path)
+    observed = tmp_path / "observer.jsonl"
+    service = replace(service, event_observers=selected_capture(observed))
     store = LocalRunStore(service.daemon.run_store_root)
     run_uri = path_to_run_uri(service.daemon.run_store_root / "reusable")
     store.create_run(run_uri)
@@ -2163,8 +2179,9 @@ def test_reuse_only_plan_completes_from_planned_without_new_attempt(
         outputs={"data": output},
     )
     previous = authority.open_run(run_uri).stages[0].attempts
+    previous_events = authority.list_audit_events(run_uri)
     LocalDaemon.initialize_deployment(service.daemon)
-    daemon = LocalDaemon(service.daemon)
+    daemon = LocalDaemon(service.daemon, event_observers=service.event_observers)
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     daemon.start()
     server.start()
@@ -2179,6 +2196,14 @@ def test_reuse_only_plan_completes_from_planned_without_new_attempt(
             assert snapshot.status is RunStatus.SUCCEEDED
             assert snapshot.stages[0].attempts == previous
             assert artifacts.load(output) == {"value": 41}
+            events = authority.list_audit_events(run_uri)
+            kinds = [event.event_type for event in events]
+            assert kinds.count("run.completed") == 1
+            assert "run.started" not in kinds and "stage.started" not in kinds
+            assert events[:len(previous_events)] == previous_events
+            assert [event.event_id for event in events[len(previous_events):]] == [
+                event["event_id"] for event in captured_events(observed, run_uri)
+            ]
     finally:
         server.stop()
         daemon.stop()
