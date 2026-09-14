@@ -197,7 +197,9 @@ class ResidentWorkerLaunch:
                 str(self.workspace_root),
             ),
             environment=self.environment,
-            runtime=workspace.worker_request().resolved_runtime,
+            # Worker materialization validates this retained launch; reading only
+            # the assignment runtime avoids recursively decoding it here.
+            runtime=workspace.request().resolved_runtime,
         )
 
     @property

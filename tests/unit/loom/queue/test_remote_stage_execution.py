@@ -1157,3 +1157,65 @@ def test_local_assignment_rejects_changed_binding_and_remote_export(tmp_path: Pa
         request.validate_remote_transport()
     with pytest.raises(QueueServiceError, match="unresolved local"):
         _ResidentAssignmentBundle.from_remote_dict(request.to_dict())
+
+
+@pytest.mark.parametrize("backend", ["apptainer", "docker"])
+def test_local_container_launch_reopens_without_recursive_worker_materialization(
+    tmp_path: Path, backend: str,
+) -> None:
+    from loom.queue._agent_process_supervisor import _launch_from_value
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    image = tmp_path / "installed.sif"
+    image.write_bytes(b"command construction fixture")
+    binding = {
+        "kind": backend,
+        "container": {"image": {"reference": (
+            str(image) if backend == "apptainer" else "sha256:" + "a" * 64
+        )}},
+        "options": {"command": sys.executable},
+        "python_executable": "/opt/installed/bin/python",
+        "daemon_endpoint": None if backend == "apptainer" else "unix:///var/run/docker.sock",
+    }
+    profile = replace(_profile(tmp_path), container=binding)
+    request = _request(profile)
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    scoped = StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm,
+        payload=replace(fingerprint.payload, fingerprint_fields={LOCAL_PREPARATION_SCOPE: {
+            "agent_id": "agent-1", "binding_fingerprint": profile.launch_profile.fingerprint,
+        }}),
+        inputs_summary=fingerprint.inputs_summary,
+    )
+    request = replace(request, fingerprint=scoped.to_dict(), resolved_runtime={
+        **request.resolved_runtime, "resources": {"schema_version": 2, "entries": {}},
+    })
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    launch = ResidentWorkerLaunch(
+        supervisor_id="supervisor-1", continuity_epoch="epoch-1", agent_id="agent-1",
+        session_id="session-1", assignment_id=request.assignment_id,
+        process_execution_id="execution-1", execution_fence="fence-1",
+        launch_operation_id="launch-1", bundle_digest="a" * 64,
+        workspace_root=workspace.root, profile=profile.launch_profile, environment={},
+    )
+    argv, digest, controls = launch.command_argv, launch.spec_digest, launch.resource_controls
+    workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
+
+    reopened = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    retained = reopened.supervisor_launch_json()
+    assert retained is not None
+    decoded = _launch_from_value(json.loads(retained))
+    assert decoded.command_argv == argv
+    assert decoded.spec_digest == digest and decoded.resource_controls == controls
+    worker = reopened.worker_request()
+    assert worker.resolved_runtime == request.resolved_runtime
+    assert worker.fingerprint == scoped
+    assert worker.inputs["source"].uri == reopened.input_path("source").as_uri()
+    # A reachable profile reload cannot replace the retained local binding.
+    changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
+    with pytest.raises(QueueConflictError, match="binding identity"):
+        reopened.persist_request(request, changed)
