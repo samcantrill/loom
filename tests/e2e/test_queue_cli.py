@@ -15,21 +15,13 @@ from typing import Any
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
-from loom.pipeline.executors.slurm.planning import plan_single_job_slurm_dry_run
 from loom.queue import (
-    LaunchContract,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonSocketServer,
     ResidentWorkerLaunchProfile,
-    QueueEnqueueRequest,
-    QueueItemStatus,
-    QueueService,
-    SQLiteQueueRepository,
-    load_queue_spec,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
@@ -38,8 +30,6 @@ from loom.queue.agent_sessions import (
     AgentRegistration,
     TransportPrincipalPolicy,
 )
-from loom.queue.slurm import prepared_slurm_launch
-from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_store
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -231,229 +221,6 @@ def test_managed_ready_stage_slurm_manifest_claims_match_journey() -> None:
         assert (root / "coordinator" / "control.sqlite").is_file()
         assert not (root / "job-private-capability").exists()
         assert not (root / "coordinator" / "daemon.sock").exists()
-
-
-def test_queue_enqueue_many_example_uses_public_admission_path(tmp_path: Path) -> None:
-    output_root = tmp_path / "example-output"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(
-                REPO_ROOT
-                / "examples"
-                / "operations"
-                / "durable-many-run-admission"
-                / "run_many.py"
-            ),
-        ],
-        cwd=REPO_ROOT,
-        env={**os.environ, "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [
-        "enqueued: example-0000",
-        "enqueued: example-0001",
-    ]
-    assert [
-        item.queue_item_id
-        for item in SQLiteQueueRepository(output_root / "queue.sqlite")
-        .list_items(limit=10)
-        .items
-    ] == ["example-0000", "example-0001"]
-
-
-def test_queue_cli_preflight_and_start_smoke(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
-    config_path = tmp_path / "queue.yaml"
-    config_path.write_text(
-        f"""
-        queue:
-          service:
-            db_path: {tmp_path / "queue.sqlite"}
-          pools:
-            - pool_name: gpu-pool
-              mode: managed
-              resources:
-                gpu: 1
-          queues:
-            - queue_name: gpu
-              pool_name: gpu-pool
-        """,
-        encoding="utf-8",
-    )
-    preflight_out = io.StringIO()
-    preflight_err = io.StringIO()
-    start_out = io.StringIO()
-    start_err = io.StringIO()
-
-    assert (
-        main(
-            ["queue", "preflight", str(config_path)],
-            stdout=preflight_out,
-            stderr=preflight_err,
-        )
-        == 0
-    )
-    assert (
-        main(
-            ["queue", "start", str(config_path)],
-            stdout=start_out,
-            stderr=start_err,
-        )
-        == 0
-    )
-
-    assert preflight_err.getvalue() == ""
-    assert "queue preflight" in preflight_out.getvalue()
-    assert start_err.getvalue() == ""
-    assert "queue service: running" in start_out.getvalue()
-    assert "scope: in_process_command" in start_out.getvalue()
-
-
-def test_queue_cli_pool_status_uses_existing_v1_envelope(tmp_path: Path) -> None:
-    pytest.importorskip("yaml")
-    config_path = tmp_path / "queue.yaml"
-    config_path.write_text(
-        f"""
-        queue:
-          service:
-            db_path: {tmp_path / "queue.sqlite"}
-          pools:
-            - pool_name: local-pool
-              mode: managed
-          queues:
-            - queue_name: local
-              pool_name: local-pool
-        """,
-        encoding="utf-8",
-    )
-    output = io.StringIO()
-
-    assert (
-        main(
-            [
-                "queue",
-                "status",
-                str(config_path),
-                "--pool",
-                "local-pool",
-                "--format",
-                "json",
-            ],
-            stdout=output,
-            stderr=io.StringIO(),
-        )
-        == 0
-    )
-
-    envelope = json.loads(output.getvalue())
-    assert envelope["schema_version"] == "loom.cli.queue.status.v1"
-    assert set(envelope) == {"schema_version", "ok", "warnings", "result"}
-    assert set(envelope["result"]["pool"]) == {
-        "pool_name",
-        "controller_max_active_items",
-        "counts",
-        "active_attempts",
-    }
-
-
-def test_queue_cli_service_less_slurm_drive_emits_stable_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pytest.importorskip("yaml")
-    store, run_uri = _prepared_store(
-        tmp_path / "prepared",
-        {"only": ()},
-        authority_backed=True,
-    )
-    planning = plan_single_job_slurm_dry_run(
-        run_store=store,
-        run_uri=run_uri,
-        planning_id="cli-service-less",
-        created_at="2026-08-30T00:00:00Z",
-    )
-    queue_path = tmp_path / "queue.sqlite"
-    config_path = tmp_path / "queue.yaml"
-    config_path.write_text(
-        f"""
-        queue:
-          service:
-            db_path: {queue_path}
-          pools:
-            - pool_name: slurm-pool
-              mode: delegated
-              metadata:
-                workspace_assumptions_acknowledged: true
-          queues:
-            - queue_name: slurm
-              pool_name: slurm-pool
-        """,
-        encoding="utf-8",
-    )
-    service = QueueService.from_spec(load_queue_spec(config_path))
-    service.start()
-    launch = prepared_slurm_launch(planning)
-    service.enqueue(
-        QueueEnqueueRequest(
-            queue_item_id="cli-prepared",
-            queue_name="slurm",
-            run_uri=run_uri,
-            launch_contract=LaunchContract(
-                adapter="slurm",
-                entrypoint="prepared-run",
-                snapshot=launch.to_snapshot(),
-                delegated_verification={"shared_workspace": True},
-            ),
-        )
-    )
-    service.stop()
-    runner = FakeSlurmCommandRunner(starting_job_id=1700)
-    monkeypatch.setattr(
-        "loom.pipeline.execution.create_authority_backed_serial_run_store",
-        lambda *_args, **_kwargs: store,
-    )
-    monkeypatch.setattr(
-        "loom.queue.slurm.SubprocessSlurmCommandRunner",
-        lambda: runner,
-    )
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            [
-                "queue",
-                "drive-slurm-foreground",
-                str(config_path),
-                "--pool",
-                "slurm-pool",
-                "--run-root",
-                str(tmp_path / "prepared" / "runs"),
-                "--once",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        == 0
-    )
-
-    assert stderr.getvalue() == ""
-    envelope = json.loads(stdout.getvalue())
-    assert set(envelope) == {"schema_version", "ok", "warnings", "result"}
-    assert envelope["schema_version"] == "loom.cli.queue.slurm-drive.v1"
-    assert envelope["result"]["cycle_count"] == 1
-    assert envelope["result"]["dispatched_count"] == 1
-    assert envelope["result"]["quiescent"] is False
-    assert [call[0] for call in runner.calls].count("sbatch") == 1
-    item = SQLiteQueueRepository(queue_path).read_item("cli-prepared")
-    assert item is not None and item.status is QueueItemStatus.DISPATCHED
 
 
 def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(

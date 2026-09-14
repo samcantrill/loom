@@ -15,6 +15,8 @@ from time import monotonic, sleep
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -651,7 +653,7 @@ def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_pat
         uri="file:///artifacts/build/out.json",
         artifact_type="json",
     )
-    commit_args = dict(
+    commit_args: dict[str, Any] = dict(
         assignment_id="assignment-observer",
         attempt_id=prepared.attempt.attempt_id,
         fencing_token=fence.fencing_token,

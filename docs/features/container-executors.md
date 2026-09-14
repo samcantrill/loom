@@ -295,7 +295,7 @@ same inputs that a non-container executor would use.
 Conceptual command:
 
 ```bash
-loom stage run --run-dir /workspace/runs/RUN_ID --stage train
+installed native resident worker (coordinator-issued fenced request)
 ```
 
 The exact command may differ, but it should satisfy:
@@ -594,60 +594,10 @@ by the outer scheduler when SLURM is selected.
 
 ## SLURM Integration
 
-SLURM and containers can be composed in two ways:
-
-```text
-SLURM submits a wrapper that runs Apptainer inside the allocation
-controller runs locally and submits containerized stage jobs
-```
-
-The second form should reuse existing SLURM submission design:
-
-```text
-stage attempt metadata is created by the controller
-submission script invokes container runtime
-container command runs the stage wrapper
-SLURM records job ID and scheduler status
-container executor records image and exit code
-```
-
-Avoid creating a separate containerized SLURM path that bypasses normal executor
-state records.
-
-Stage 18 composes existing `slurm-single-job` and `slurm-afterok` modes with
-Apptainer by wrapping generated `loom prepared-run continue` or
-`loom stage-job run` commands in deterministic Apptainer exec argv. Build
-target resolution runs on the submit/controller side before dry-run artifacts
-are rendered or `sbatch` is called. Generated batch scripts contain Apptainer
-execution commands and never hide Docker or Apptainer build commands.
-
-Example SLURM plus Apptainer profile:
-
-```yaml
-runtime_profiles:
-  slurm-apptainer:
-    executor: slurm-afterok
-    dry_run: true
-    adapter_options:
-      container:
-        target: analysis-env
-      container_build:
-        targets:
-          analysis-env:
-            name: analysis-env
-            runtime: apptainer
-            source:
-              kind: definition_file
-              path: containers/analysis.def
-            output:
-              kind: apptainer_sif
-              path: .loom/containers/analysis-env.sif
-      apptainer:
-        cleanenv: true
-        no_home: true
-      slurm:
-        launcher_argv: ["loom"]
-```
+Use an explicitly configured native ready-stage SLURM profile and its protected
+bootstrap/container policy. Whole-run container continuation generation is
+removed. See [SLURM](slurm.md) for ownership, cancellation, result retention and
+site qualification. Allocation-native agents remain deferred.
 
 ## Artifacts
 

@@ -98,20 +98,16 @@ def build_parser() -> argparse.ArgumentParser:
     from loom.cli import artifacts as artifacts_command
     from loom.cli import authority as authority_command
     from loom.cli import backend as backend_command
-    from loom.cli import cancel as cancel_command
     from loom.cli import clean as clean_command
     from loom.cli import gc as gc_command
     from loom.cli import inspect_run as inspect_run_command
     from loom.cli import logs as logs_command
     from loom.cli import plan as plan_command
     from loom.cli import preflight as preflight_command
-    from loom.cli import prepared_run as prepared_run_command
     from loom.cli import plugins as plugins_command
     from loom.cli import queue as queue_command
     from loom.cli import run as run_command
     from loom.cli import runs as runs_command
-    from loom.cli import stage as stage_command
-    from loom.cli import stage_job as stage_job_command
     from loom.cli import slurm_bootstrap as slurm_bootstrap_command
     from loom.cli import status as status_command
     from loom.cli import sweep as sweep_command
@@ -121,13 +117,9 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_command.register_subparser(subparsers)
     plan_command.register_subparser(subparsers)
     run_command.register_subparser(subparsers)
-    prepared_run_command.register_subparser(subparsers)
     plugins_command.register_subparser(subparsers)
-    stage_command.register_subparser(subparsers)
-    stage_job_command.register_subparser(subparsers)
     slurm_bootstrap_command.register_subparser(subparsers)
     status_command.register_subparser(subparsers)
-    cancel_command.register_subparser(subparsers)
     logs_command.register_subparser(subparsers)
     artifacts_command.register_subparser(subparsers)
     clean_command.register_subparser(subparsers)

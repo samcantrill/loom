@@ -12,7 +12,13 @@ import pytest
 from loom.cli.main import main
 from loom.cli.options import ConfigCliOptions, PlanCliOptions, SelectorCliOptions
 import loom.cli.plan as plan_command
-from loom.pipeline.planning import FingerprintStatus, PlanAction, PlanReason, PlanReasonCode, PlanSelectors
+from loom.pipeline.planning import (
+    FingerprintStatus,
+    PlanAction,
+    PlanReason,
+    PlanReasonCode,
+    PlanSelectors,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -42,7 +48,9 @@ class FakeStagePlan:
     base_action: PlanAction = PlanAction.RUN
     fingerprint_status: FingerprintStatus = FingerprintStatus.COMPUTED
     reasons: tuple[PlanReason, ...] = (
-        PlanReason(PlanReasonCode.RESUME_DISABLED, "resume is disabled", stage_name="build"),
+        PlanReason(
+            PlanReasonCode.RESUME_DISABLED, "resume is disabled", stage_name="build"
+        ),
     )
     pending_inputs: tuple[object, ...] = ()
     reusable_outputs: dict[str, object] | None = None
@@ -91,11 +99,15 @@ class FakeRunStore:
         raise AssertionError("plan must not allocate a default run URI")
 
 
-def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None) -> dict[str, object]:
+def _patch_common(
+    monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None
+) -> dict[str, object]:
     calls: dict[str, object] = {}
     fake_store = store or FakeRunStore()
 
-    def compose(config_path: object, *, overlays: tuple[Path, ...], overrides: tuple[str, ...]) -> FakeComposedConfig:
+    def compose(
+        config_path: object, *, overlays: tuple[Path, ...], overrides: tuple[str, ...]
+    ) -> FakeComposedConfig:
         calls["config_path"] = config_path
         calls["overlays"] = overlays
         calls["overrides"] = overrides
@@ -129,9 +141,15 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         )
 
     monkeypatch.setattr(plan_command, "_compose_config", compose)
-    monkeypatch.setattr(plan_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
+    monkeypatch.setattr(
+        plan_command, "_validate_pipeline_config", lambda _config: FakePipelineResult()
+    )
+
     def create_default_run_store(
-        *, root: str = "runs", authority_config: object = None
+        *,
+        root: str = "runs",
+        authority_config: object = None,
+        run_uri: str | None = None,
     ) -> FakeRunStore:
         calls["run_store_root"] = root
         return fake_store
@@ -144,13 +162,17 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         plan_command, "_create_default_run_store", create_default_run_store
     )
     monkeypatch.setattr(
-        plan_command, "_create_read_only_plan_run_store", create_read_only_plan_run_store
+        plan_command,
+        "_create_read_only_plan_run_store",
+        create_read_only_plan_run_store,
     )
     monkeypatch.setattr(plan_command, "_plan_pipeline", plan_pipeline)
     return calls
 
 
-def test_plan_fresh_text_is_read_only_and_hides_internal_run_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_fresh_text_is_read_only_and_hides_internal_run_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -171,8 +193,7 @@ def test_plan_fresh_text_is_read_only_and_hides_internal_run_uri(monkeypatch: py
     assert exit_code == 0
     assert stderr.getvalue() == ""
     assert stdout.getvalue() == (
-        "OK plan base.yaml: 1 stage action\n"
-        "build: RUN [RESUME_DISABLED]\n"
+        "OK plan base.yaml: 1 stage action\nbuild: RUN [RESUME_DISABLED]\n"
     )
     assert calls["config_path"] == Path("base.yaml")
     assert calls["overlays"] == (Path("team.yaml"),)
@@ -181,7 +202,9 @@ def test_plan_fresh_text_is_read_only_and_hides_internal_run_uri(monkeypatch: py
     assert calls["resume_enabled"] is False
 
 
-def test_plan_explicit_run_uri_json_uses_resolved_uri_and_selector_options(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_explicit_run_uri_json_uses_resolved_uri_and_selector_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -221,7 +244,9 @@ def test_plan_explicit_run_uri_json_uses_resolved_uri_and_selector_options(monke
     assert payload["result"]["stage_actions"][0]["reason_codes"] == ["RESUME_DISABLED"]
 
 
-def test_plan_resume_requires_run_uri_after_config_composition(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_resume_requires_run_uri_after_config_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -232,14 +257,23 @@ def test_plan_resume_requires_run_uri_after_config_composition(monkeypatch: pyte
     assert calls["config_path"] == Path("base.yaml")
 
 
-def test_plan_existing_non_resume_run_uri_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_existing_non_resume_run_uri_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_common(monkeypatch, store=FakeRunStore(exists=True))
     stdout = io.StringIO()
     stderr = io.StringIO()
 
     assert (
         main(
-            ["plan", "base.yaml", "--run-uri", "file://./runs/demo", "--format", "json"],
+            [
+                "plan",
+                "base.yaml",
+                "--run-uri",
+                "file://./runs/demo",
+                "--format",
+                "json",
+            ],
             stdout=stdout,
             stderr=stderr,
         )
@@ -288,14 +322,13 @@ def test_plan_uses_configured_run_store_root_for_explicit_run(
         ),
     )
 
-    assert (
-        main(["plan", "base.yaml"], stdout=io.StringIO(), stderr=io.StringIO())
-        == 0
-    )
+    assert main(["plan", "base.yaml"], stdout=io.StringIO(), stderr=io.StringIO()) == 0
     assert calls["run_store_root"] == root
 
 
-def test_plan_build_result_supports_explanation_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_build_result_supports_explanation_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_common(monkeypatch)
     monkeypatch.setattr(
         plan_command,

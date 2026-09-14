@@ -8,33 +8,24 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit, urlunsplit
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Protocol, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, cast
 
 from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.planning import (
-    ExecutionPlan,
-    FingerprintContext,
     PlanAction,
     PlanReason,
-    PlanSelectors,
-    ResumeOptions,
     StageFingerprintRecord,
     StagePlan,
 )
 from loom.pipeline.runtime import (
     ResolvedStageRuntimeOptions,
-    RunOptions,
-    parse_run_options,
 )
-from loom.pipeline.specs import PipelineSpec, StageSpec
-from loom.pipeline.resources import ResourceValidatorRegistry
+from loom.pipeline.specs import StageSpec
 from loom.pipeline.stage import Stage
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import StageStatus
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
@@ -47,7 +38,7 @@ from loom.serialization.errors import SchemaVersionError
 from .errors import RunRequestError
 
 if TYPE_CHECKING:
-    from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
+    pass
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
 STAGE_WORKER_REQUEST_SCHEMA_VERSION = 2
@@ -64,180 +55,6 @@ _VALID_FAILURE_TYPES = {
     "executor_infrastructure",
 }
 _PLUGIN_ACTIVATIONS_METADATA_KEY = "plugin_activations"
-
-
-class _ComposedConfigLike(Protocol):
-    @property
-    def resolved(self) -> Mapping[str, PlainData]: ...
-
-    @property
-    def redacted(self) -> Mapping[str, PlainData]: ...
-
-    @property
-    def manifest(self) -> object: ...
-
-    @property
-    def provenance(self) -> object: ...
-
-    @property
-    def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigSnapshotInputs:
-    raw: str | None = None
-    overlays: str | None = None
-    cli_overrides: str | None = None
-
-    def __post_init__(self) -> None:
-        for name in ("raw", "overlays", "cli_overrides"):
-            value = getattr(self, name)
-            if value is not None and not isinstance(value, str):
-                raise RunRequestError(
-                    f"ConfigSnapshotInputs.{name} must be a string when set"
-                )
-
-
-@dataclass(frozen=True, slots=True)
-class FailurePolicy:
-    stop_on_first_failure: bool = True
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.stop_on_first_failure, bool):
-            raise RunRequestError("FailurePolicy.stop_on_first_failure must be a bool")
-
-
-@dataclass(frozen=True, slots=True)
-class RunRequest:
-    config: _ComposedConfigLike | Mapping[str, PlainData] | None = None
-    pipeline: PipelineSpec | None = None
-    run_uri: str | None = None
-    open_existing: bool = False
-    options: RunOptions | Mapping[str, object] = field(default_factory=RunOptions)
-    selectors: PlanSelectors = field(default_factory=PlanSelectors)
-    resume: ResumeOptions = field(default_factory=ResumeOptions)
-    fingerprint_context: FingerprintContext = field(default_factory=FingerprintContext)
-    config_snapshots: ConfigSnapshotInputs = field(default_factory=ConfigSnapshotInputs)
-    provenance_options: ProvenanceCaptureOptions = field(
-        default_factory=lambda: _default_provenance_options()
-    )
-    command: CommandProvenance | None = None
-    project_root: Path | None = None
-    failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
-    metadata: Mapping[str, PlainData] = field(default_factory=dict)
-    plugin_activation_manifest: Mapping[str, PlainData] | None = None
-    worker_plugin_activation_manifest: Mapping[str, PlainData] | None = None
-    resource_validator_registry: ResourceValidatorRegistry | None = None
-    event_sink_registry: EventSinkRegistry | None = None
-    event_persistence: str = "durable"
-    idempotency_key: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.config is None and self.pipeline is None:
-            raise RunRequestError("RunRequest requires either config or pipeline")
-        if self.config is not None and not (
-            isinstance(self.config, Mapping) or _is_composed_config(self.config)
-        ):
-            raise RunRequestError(
-                "RunRequest.config must be a ComposedConfig or mapping"
-            )
-        if self.pipeline is not None and not isinstance(self.pipeline, PipelineSpec):
-            raise RunRequestError(
-                "RunRequest.pipeline must be a PipelineSpec when supplied"
-            )
-        if not isinstance(self.open_existing, bool):
-            raise RunRequestError("RunRequest.open_existing must be a bool")
-
-        selectors = _coerce_selectors(self.selectors)
-        resume = _coerce_resume(self.resume)
-        if self.run_uri is not None and (
-            not isinstance(self.run_uri, str) or not self.run_uri
-        ):
-            raise RunRequestError("RunRequest.run_uri must be a non-empty string")
-        options = _normalize_run_request_options(
-            self.options,
-            run_uri=self.run_uri,
-            selectors=selectors,
-            resume=resume,
-        )
-        object.__setattr__(self, "options", options)
-        object.__setattr__(self, "run_uri", options.run_uri)
-        object.__setattr__(self, "selectors", options.to_plan_selectors())
-        object.__setattr__(self, "resume", options.to_resume_options())
-        object.__setattr__(
-            self,
-            "fingerprint_context",
-            _coerce_fingerprint_context(self.fingerprint_context),
-        )
-        object.__setattr__(
-            self,
-            "config_snapshots",
-            _coerce_config_snapshots(self.config_snapshots),
-        )
-        object.__setattr__(
-            self,
-            "provenance_options",
-            _coerce_provenance_options(self.provenance_options),
-        )
-        if self.command is not None and not _is_command_provenance(self.command):
-            raise RunRequestError(
-                "RunRequest.command must be CommandProvenance when supplied"
-            )
-        if self.project_root is not None:
-            object.__setattr__(self, "project_root", Path(self.project_root))
-        object.__setattr__(
-            self, "failure_policy", _coerce_failure_policy(self.failure_policy)
-        )
-        metadata = _plain_mapping(self.metadata, "metadata")
-        if _PLUGIN_ACTIVATIONS_METADATA_KEY in metadata:
-            raise RunRequestError(
-                "RunRequest.metadata may not supply reserved plugin_activations"
-            )
-        object.__setattr__(self, "metadata", metadata)
-        if self.plugin_activation_manifest is not None:
-            object.__setattr__(
-                self,
-                "plugin_activation_manifest",
-                _plain_mapping(
-                    self.plugin_activation_manifest, "plugin_activation_manifest"
-                ),
-            )
-        if self.worker_plugin_activation_manifest is not None:
-            object.__setattr__(
-                self,
-                "worker_plugin_activation_manifest",
-                _plain_mapping(
-                    self.worker_plugin_activation_manifest,
-                    "worker_plugin_activation_manifest",
-                ),
-            )
-        if self.resource_validator_registry is not None and not isinstance(
-            self.resource_validator_registry, ResourceValidatorRegistry
-        ):
-            raise RunRequestError(
-                "RunRequest.resource_validator_registry must be a ResourceValidatorRegistry"
-            )
-        object.__setattr__(
-            self,
-            "event_sink_registry",
-            _coerce_event_sink_registry(self.event_sink_registry),
-        )
-        object.__setattr__(
-            self,
-            "event_persistence",
-            _coerce_event_persistence(
-                self.event_persistence,
-                registry=cast(EventSinkRegistry | None, self.event_sink_registry),
-            ),
-        )
-        idempotency_key = self.idempotency_key
-        if idempotency_key is None:
-            idempotency_key = uuid4().hex
-        if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise RunRequestError(
-                "RunRequest.idempotency_key must be a non-empty string"
-            )
-        object.__setattr__(self, "idempotency_key", idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1066,98 +883,6 @@ class StageRunResult:
         return _execution_result_safe_metadata(self)
 
 
-@dataclass(frozen=True, slots=True)
-class RunResult:
-    run_uri: str
-    status: RunStatus
-    started_at: str
-    finished_at: str
-    plan: ExecutionPlan
-    stage_results: Mapping[str, StageRunResult]
-    failed_stage: str | None = None
-    failure: ExecutionFailure | None = None
-    artifact_index: Mapping[str, ArtifactRef] = field(default_factory=dict)
-    metadata: Mapping[str, PlainData] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.run_uri, str) or not self.run_uri:
-            raise RunRequestError("RunResult.run_uri must be a non-empty string")
-        object.__setattr__(self, "status", _run_status(self.status))
-        if not isinstance(self.started_at, str) or not self.started_at:
-            raise RunRequestError("RunResult.started_at must be a non-empty string")
-        if not isinstance(self.finished_at, str) or not self.finished_at:
-            raise RunRequestError("RunResult.finished_at must be a non-empty string")
-        if not isinstance(self.plan, ExecutionPlan):
-            raise RunRequestError("RunResult.plan must be ExecutionPlan")
-        if not isinstance(self.stage_results, Mapping):
-            raise RunRequestError("RunResult.stage_results must be a mapping")
-        normalized_results: dict[str, StageRunResult] = {}
-        for name, result in self.stage_results.items():
-            if not isinstance(name, str) or not isinstance(result, StageRunResult):
-                raise RunRequestError(
-                    "RunResult.stage_results must map strings to StageRunResult"
-                )
-            normalized_results[name] = result
-        if set(normalized_results) != set(self.plan.stage_order):
-            raise RunRequestError(
-                "RunResult.stage_results must contain every planned stage"
-            )
-        if self.failed_stage is not None and not isinstance(self.failed_stage, str):
-            raise RunRequestError("RunResult.failed_stage must be a string when set")
-        if self.failure is not None and not isinstance(self.failure, ExecutionFailure):
-            raise RunRequestError("RunResult.failure must be ExecutionFailure when set")
-        object.__setattr__(self, "stage_results", MappingProxyType(normalized_results))
-        object.__setattr__(
-            self,
-            "artifact_index",
-            _artifact_ref_mapping(self.artifact_index, "artifact_index"),
-        )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
-
-
-def _normalize_run_request_options(
-    value: RunOptions | Mapping[str, object],
-    *,
-    run_uri: str | None,
-    selectors: PlanSelectors,
-    resume: ResumeOptions,
-) -> RunOptions:
-    options = _coerce_run_options(value)
-    data = options.to_dict()
-
-    if run_uri is not None:
-        if options.run_uri is not None and options.run_uri != run_uri:
-            raise RunRequestError(
-                "RunRequest.run_uri conflicts with RunRequest.options.run_uri"
-            )
-        data["run_uri"] = run_uri
-
-    option_selectors = options.to_plan_selectors()
-    if selectors != PlanSelectors():
-        if option_selectors != PlanSelectors() and option_selectors != selectors:
-            raise RunRequestError(
-                "RunRequest.selectors conflicts with RunRequest.options.selectors"
-            )
-        data["selectors"] = selectors.to_dict()
-
-    option_resume = options.to_resume_options()
-    if resume != ResumeOptions():
-        if option_resume != ResumeOptions() and option_resume != resume:
-            raise RunRequestError(
-                "RunRequest.resume conflicts with RunRequest.options.resume"
-            )
-        data["resume"] = resume.to_dict()
-
-    return RunOptions.from_dict(data)
-
-
-def _coerce_run_options(value: RunOptions | Mapping[str, object]) -> RunOptions:
-    try:
-        return parse_run_options(value)
-    except Exception as exc:
-        raise RunRequestError(f"RunRequest.options is invalid: {exc}") from exc
-
-
 def _coerce_resolved_runtime(
     value: ResolvedStageRuntimeOptions | Mapping[str, object] | None,
     *,
@@ -1180,111 +905,6 @@ def _coerce_resolved_runtime(
             "StageExecutionRequest.resolved_runtime.stage_id must match stage.name"
         )
     return runtime
-
-
-def _coerce_selectors(value: object) -> PlanSelectors:
-    if isinstance(value, PlanSelectors):
-        return value
-    if isinstance(value, Mapping):
-        return PlanSelectors.from_dict(value)
-    raise RunRequestError("selectors must be PlanSelectors or mapping")
-
-
-def _coerce_resume(value: object) -> ResumeOptions:
-    if isinstance(value, ResumeOptions):
-        return value
-    if isinstance(value, Mapping):
-        return ResumeOptions.from_dict(value)
-    raise RunRequestError("resume must be ResumeOptions or mapping")
-
-
-def _coerce_fingerprint_context(value: object) -> FingerprintContext:
-    if isinstance(value, FingerprintContext):
-        return value
-    if isinstance(value, Mapping):
-        return FingerprintContext.from_dict(value)
-    raise RunRequestError("fingerprint_context must be FingerprintContext or mapping")
-
-
-def _coerce_config_snapshots(value: object) -> ConfigSnapshotInputs:
-    if isinstance(value, ConfigSnapshotInputs):
-        return value
-    if isinstance(value, Mapping):
-        return ConfigSnapshotInputs(
-            raw=_optional_str(value.get("raw"), "raw"),
-            overlays=_optional_str(value.get("overlays"), "overlays"),
-            cli_overrides=_optional_str(value.get("cli_overrides"), "cli_overrides"),
-        )
-    raise RunRequestError("config_snapshots must be ConfigSnapshotInputs or mapping")
-
-
-def _coerce_provenance_options(value: object) -> ProvenanceCaptureOptions:
-    from loom.provenance.models import ProvenanceCaptureOptions
-
-    if isinstance(value, ProvenanceCaptureOptions):
-        return value
-    raise RunRequestError("provenance_options must be ProvenanceCaptureOptions")
-
-
-def _default_provenance_options() -> ProvenanceCaptureOptions:
-    from loom.provenance.models import ProvenanceCaptureOptions
-
-    return ProvenanceCaptureOptions()
-
-
-def _is_command_provenance(value: object) -> bool:
-    from loom.provenance.models import CommandProvenance
-
-    return isinstance(value, CommandProvenance)
-
-
-def _coerce_failure_policy(value: object) -> FailurePolicy:
-    if isinstance(value, FailurePolicy):
-        return value
-    if isinstance(value, Mapping):
-        raw_stop_on_first_failure = value.get("stop_on_first_failure", True)
-        return FailurePolicy(
-            stop_on_first_failure=_bool(
-                raw_stop_on_first_failure, "failure_policy.stop_on_first_failure"
-            )
-        )
-    raise RunRequestError("failure_policy must be FailurePolicy or mapping")
-
-
-def _coerce_event_sink_registry(value: object) -> EventSinkRegistry | None:
-    if value is None:
-        return None
-    if isinstance(value, EventSinkRegistry):
-        return value
-    raise RunRequestError("event_sink_registry must be EventSinkRegistry when supplied")
-
-
-def _coerce_event_persistence(
-    value: object,
-    *,
-    registry: EventSinkRegistry | None,
-) -> str:
-    if value not in {"durable", "non_durable"}:
-        raise RunRequestError("event_persistence must be 'durable' or 'non_durable'")
-    mode = cast(str, value)
-    if mode == "non_durable" and (registry is None or len(registry) == 0):
-        raise RunRequestError(
-            "event_persistence='non_durable' requires a non-empty event_sink_registry"
-        )
-    return mode
-
-
-def _is_composed_config(value: object) -> bool:
-    return all(
-        hasattr(value, name)
-        for name in (
-            "resolved",
-            "redacted",
-            "manifest",
-            "provenance",
-            "recipe_manifest",
-        )
-    )
 
 
 def _plain_mapping(
@@ -1544,13 +1164,6 @@ def _stage_status(value: StageStatus | str) -> StageStatus:
         raise RunRequestError(f"invalid stage status: {value!r}") from exc
 
 
-def _run_status(value: RunStatus | str) -> RunStatus:
-    try:
-        return value if isinstance(value, RunStatus) else RunStatus(value)
-    except ValueError as exc:
-        raise RunRequestError(f"invalid run status: {value!r}") from exc
-
-
 def _plan_action(value: PlanAction | str) -> PlanAction:
     try:
         return value if isinstance(value, PlanAction) else PlanAction(value)
@@ -1594,11 +1207,7 @@ __all__ = [
     "EXECUTION_FAILURE_SCHEMA_VERSION",
     "STAGE_WORKER_REQUEST_SCHEMA_VERSION",
     "STAGE_WORKER_RESULT_SCHEMA_VERSION",
-    "ConfigSnapshotInputs",
     "ExecutionFailure",
-    "FailurePolicy",
-    "RunRequest",
-    "RunResult",
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageRunResult",

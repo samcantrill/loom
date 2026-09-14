@@ -1,9 +1,6 @@
 # Captured Logs Diagnostics
 
-This example uses the Python runner with
-`LocalExecutor(capture_stdout_stderr=True)` under an explicit local authority
-supervisor to persist stage stdout and stderr, then inspects those logs through
-the v3 `loom logs` CLI. The stage also writes one file through
+This example uses a run-owned native coordinator and installed agent worker, then reads captured stdout/stderr through `loom logs`. The stage also writes one file through
 `local_output_path()` and explicitly registers it as `report`, while its
 workspace note remains a project-owned intermediate file rather than an output.
 
@@ -14,8 +11,8 @@ the complete artifact and log-ownership distinctions.
 
 ## Public Python Surface
 
-This example teaches `loom.pipeline.PipelineRunner`, `loom.pipeline.RunRequest`,
-and `loom.pipeline.executors.LocalExecutor`.
+This example teaches native run-owned coordinator sessions, retained worker log references,
+and bounded local content/path inspection.
 
 Run from the repository root:
 

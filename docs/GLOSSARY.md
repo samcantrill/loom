@@ -68,7 +68,7 @@ users can also use it as a quick map to stable repository terms.
 | planner action | A planned decision such as `RUN`, `REUSE`, `SKIP`, or `BLOCKED`. | Distinguish from persisted lifecycle status. |
 | status | A persisted run or stage lifecycle state such as `CREATED`, `PLANNED`, `RUNNING`, `SUBMITTED`, `SUCCEEDED`, `FAILED`, `BLOCKED`, `SKIPPED`, `STALE`, `CANCELLED`, or `INTERRUPTED`. | Do not use status names to mean planner actions. |
 | run | One execution or planned execution instance of a pipeline, identified by `run_uri`. | Distinguish from a run collection and from the run catalog. |
-| executor | The component that runs one stage through a backend such as local Python, subprocess, or a future scheduler adapter. | Distinguish from `PipelineRunner`, which coordinates the whole run. |
+| executor | The component that runs one stage through a backend such as local Python, subprocess, or a future scheduler adapter. | The native coordinator owns run orchestration. |
 | backend | A concrete execution or authority implementation detail behind a public contract. | Use when discussing capability or deployment shape. Avoid using it as a synonym for the whole public API surface. |
 | `RunStore` | The current public authority-backed run lifecycle surface exported from `loom.pipeline.stores`. | Prefer when referring to the public run lifecycle contract. Do not use it for the older path-shaped local aggregate by default. |
 | `StageStore` | The run-scoped stage lifecycle surface obtained from `RunStore.stage_store(...)`. | Distinguish from run-level APIs and from artifact materialization helpers. |

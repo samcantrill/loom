@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from hashlib import sha256
 import logging
 from threading import RLock
-from typing import Any
+from typing import Any, cast
 
 from loom.pipeline.event_sinks import (
     EventObserverLinkRecord,
@@ -92,7 +92,9 @@ class LifecycleObservers:
                     "event sink factory must return EventSinkRegistration"
                 )
             registry.register(
-                spec["name"], registration.sink, subscription=registration.subscription
+                cast(str, spec["name"]),
+                registration.sink,
+                subscription=registration.subscription,
             )  # type: ignore[arg-type]
         self._registry = registry
         self._started = True

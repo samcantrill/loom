@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from loom.pipeline.execution.models import RunRequest, StageExecutionRequest
+from loom.coordinator import RunRequest
+from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
 from loom.pipeline.runtime import RunOptions
 from loom.serialization import stable_json_dumps
@@ -73,7 +74,7 @@ def test_run_options_adapt_to_planning_owned_models() -> None:
 def test_execution_envelope_exposes_runtime_options_without_environment_values() -> (
     None
 ):
-    assert "options" in RunRequest.__dataclass_fields__
+    assert "preparation" in RunRequest.__dataclass_fields__
     assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__
     assert "environment" not in StageExecutionRequest.__dataclass_fields__

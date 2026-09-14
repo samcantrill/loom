@@ -8,7 +8,6 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 REPO_ROOT = next(
     parent
@@ -19,13 +18,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from examples.support import run_cli_json
-from examples.support import started_authority_session
-from weave import compose_config
 from loom.artifacts import ArtifactRef
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.executors import LocalExecutor
-from loom.pipeline.stores import path_to_run_uri
+from examples.execution.agent_workers import run_example, worker_records
 
 
 HERE = Path(__file__).resolve().parent
@@ -35,19 +29,8 @@ def main() -> None:
     sys.path.insert(0, str(HERE))
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    run_uri = path_to_run_uri(run_root / f"captured-logs-{uuid4().hex[:8]}")
-
-    with started_authority_session(output_root) as authority:
-        runner = PipelineRunner(
-            run_store=create_authority_backed_serial_run_store(
-                run_root,
-                authority_config=authority.authority_config,
-            ),
-            executor=LocalExecutor(capture_stdout_stderr=True),
-        )
-        result = runner.run(
-            RunRequest(config=compose_config(HERE / "pipeline.yaml"), run_uri=run_uri)
-        )
+    result = run_example(HERE / "pipeline.yaml", output_root, run_root=run_root)
+    run_uri = result.observation.admission.run_uri
 
     stdout_logs = _run_cli(
         [
@@ -67,8 +50,8 @@ def main() -> None:
     )
 
     print(f"run_uri: {run_uri}")
-    print(f"run_status: {result.status.name}")
-    outputs = result.stage_results["noisy"].outputs
+    print(f"run_status: {result.observation.admission.state.name}")
+    outputs = worker_records(result)["noisy"].outputs
     print(f"output_names: {','.join(sorted(outputs))}")
     print(
         "outputs_are_refs: "

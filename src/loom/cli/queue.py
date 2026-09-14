@@ -1,7 +1,6 @@
 """Implementation for ``loom queue`` operational commands."""
 
 from __future__ import annotations
-
 import argparse
 from collections.abc import Mapping
 import json
@@ -11,38 +10,15 @@ import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
-from loom.cli.formatting import (
-    format_json_envelope,
-    format_queue_cancel_text,
-    format_queue_drain_text,
-    format_queue_preflight_text,
-    format_queue_status_text,
-)
+from loom.cli.formatting import format_json_envelope
 from loom.cli.options import OutputFormat, output_format_from_namespace
 from loom.queue.errors import QueueConfigError, QueueError, QueueServiceError
-from loom.queue.status import (
-    QueueCancellationStatus,
-    build_queue_operational_status,
-)
 from loom.serialization import PlainData
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
     from loom.coordinator import CoordinatorClient
-    from loom.pipeline.stores import AuthorityConfig
-    from loom.queue import QueueDrainResult, QueueForegroundDriveResult, QueueService
-    from loom.queue.controller import (
-        QueueDispatchAdapter,
-        QueueInspectableDispatchAdapter,
-    )
-    from loom.queue.preflight import QueuePreflightResult
-    from loom.queue.status import QueueOperationalStatus
-
-
 QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
@@ -57,128 +33,12 @@ def register_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
     """Register the queue command group."""
-
-    parser = subparsers.add_parser(
-        "queue",
-        help="operate a configured queue service",
-    )
+    parser = subparsers.add_parser("queue", help="operate a configured queue service")
     queue_subparsers = parser.add_subparsers(
-        dest="queue_command",
-        metavar="QUEUE_COMMAND",
+        dest="queue_command", metavar="QUEUE_COMMAND"
     )
-
-    preflight = queue_subparsers.add_parser(
-        "preflight",
-        help="run queue service preflight checks",
-    )
-    _add_config_argument(preflight)
-    _add_output_options(preflight)
-    add_authority_options(preflight)
-    preflight.set_defaults(handler=handle_preflight)
-
-    start = queue_subparsers.add_parser(
-        "start",
-        help="validate and start the in-process queue service for this command",
-    )
-    _add_config_argument(start)
-    _add_output_options(start)
-    start.set_defaults(handler=handle_start)
-
-    status = queue_subparsers.add_parser(
-        "status",
-        help="inspect queue service or item status",
-    )
-    _add_config_argument(status)
-    status.add_argument(
-        "--item",
-        dest="queue_item_id",
-        metavar="QUEUE_ITEM_ID",
-        help="queue item id to inspect",
-    )
-    status.add_argument(
-        "--pool",
-        dest="pool_name",
-        metavar="POOL",
-        help="selected pool summary with redacted active-attempt facts",
-    )
-    status.add_argument(
-        "--refresh-adapters",
-        action="store_true",
-        help="ask known delegated adapters for active status evidence",
-    )
-    _add_output_options(status)
-    status.set_defaults(handler=handle_status)
-
-    cancel = queue_subparsers.add_parser(
-        "cancel",
-        help="cancel a queue item",
-    )
-    _add_config_argument(cancel)
-    cancel.add_argument("queue_item_id", metavar="QUEUE_ITEM_ID")
-    cancel.add_argument(
-        "--requested-by",
-        default="queue-cli",
-        help="operator identity recorded in the cancellation record",
-    )
-    cancel.add_argument(
-        "--reason",
-        default="cli-requested",
-        help="operator reason recorded in the cancellation record",
-    )
-    cancel.add_argument(
-        "--adapter-cancel",
-        action="store_true",
-        help="call known active adapters before recording queue cancellation",
-    )
-    _add_output_options(cancel)
-    cancel.set_defaults(handler=handle_cancel)
-
-    drain = queue_subparsers.add_parser(
-        "drain-foreground",
-        help="run a foreground queue controller loop",
-    )
-    _add_config_argument(drain)
-    drain.add_argument("--pool", dest="pool_name", metavar="POOL")
-    drain.add_argument("--max-items", type=int, default=None, metavar="N")
-    drain.add_argument(
-        "--poll-interval",
-        type=float,
-        default=0.1,
-        metavar="SECONDS",
-        help="sleep interval while foreground work remains active",
-    )
-    drain.add_argument(
-        "--slurm",
-        action="store_true",
-        help="enable the built-in SLURM delegated adapter",
-    )
-    _add_output_options(drain)
-    drain.set_defaults(handler=handle_drain_foreground)
-
-    slurm_drive = queue_subparsers.add_parser(
-        "drive-slurm-foreground",
-        help="submit and reconcile prepared SLURM runs without a persistent service",
-    )
-    _add_config_argument(slurm_drive)
-    slurm_drive.add_argument("--pool", dest="pool_name", metavar="POOL")
-    slurm_drive.add_argument(
-        "--once",
-        action="store_true",
-        help="run one bounded controller cycle instead of driving to local quiescence",
-    )
-    slurm_drive.add_argument(
-        "--run-root",
-        default="runs",
-        metavar="PATH",
-        help="shared local root containing prepared run state and SLURM artifacts",
-    )
-    add_authority_options(slurm_drive)
-    _add_output_options(slurm_drive)
-    slurm_drive.set_defaults(handler=handle_drive_slurm_foreground)
-
     daemon_check = queue_subparsers.add_parser(
-        "daemon-check",
-        help="validate one protected coordinator role configuration",
+        "daemon-check", help="validate one protected coordinator role configuration"
     )
     _add_role_config_arguments(daemon_check)
     daemon_check.add_argument(
@@ -193,33 +53,26 @@ def register_subparser(
     )
     _add_output_options(daemon_check)
     daemon_check.set_defaults(handler=handle_daemon_check)
-
     daemon_init = queue_subparsers.add_parser(
-        "daemon-init",
-        help="initialize one protected coordinator deployment bundle",
+        "daemon-init", help="initialize one protected coordinator deployment bundle"
     )
     _add_role_config_arguments(daemon_init)
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
-
     daemon_upgrade = queue_subparsers.add_parser(
         "daemon-upgrade", help="offline upgrade a stopped coordinator root"
     )
     _add_role_config_arguments(daemon_upgrade)
     _add_output_options(daemon_upgrade)
     daemon_upgrade.set_defaults(handler=handle_daemon_upgrade)
-
     daemon_serve = queue_subparsers.add_parser(
-        "daemon-serve",
-        help="serve one initialized coordinator deployment bundle",
+        "daemon-serve", help="serve one initialized coordinator deployment bundle"
     )
     _add_role_config_arguments(daemon_serve)
     _add_output_options(daemon_serve)
     daemon_serve.set_defaults(handler=handle_daemon_serve)
-
     agent_check = queue_subparsers.add_parser(
-        "agent-check",
-        help="validate one protected outbound-agent role configuration",
+        "agent-check", help="validate one protected outbound-agent role configuration"
     )
     _add_role_config_arguments(agent_check)
     agent_check.add_argument(
@@ -234,23 +87,18 @@ def register_subparser(
     )
     _add_output_options(agent_check)
     agent_check.set_defaults(handler=handle_agent_check)
-
     agent_init = queue_subparsers.add_parser(
-        "agent-init",
-        help="initialize one protected outbound-agent root",
+        "agent-init", help="initialize one protected outbound-agent root"
     )
     _add_role_config_arguments(agent_init)
     _add_output_options(agent_init)
     agent_init.set_defaults(handler=handle_agent_init)
-
     agent_serve = queue_subparsers.add_parser(
-        "agent-serve",
-        help="serve one initialized outbound-agent root",
+        "agent-serve", help="serve one initialized outbound-agent root"
     )
     _add_role_config_arguments(agent_serve)
     _add_output_options(agent_serve)
     agent_serve.set_defaults(handler=handle_agent_serve)
-
     for command, help_text, handler in (
         ("daemon-submit", "submit one persisted run", handle_daemon_submit),
         ("daemon-status", "inspect daemon status", handle_daemon_status),
@@ -267,7 +115,6 @@ def register_subparser(
             daemon_client.add_argument("--timeout", type=float, default=None)
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
-
     prepare = queue_subparsers.add_parser(
         "daemon-prepare", help="durably accept one shared preparation request"
     )
@@ -275,7 +122,6 @@ def register_subparser(
     prepare.add_argument("--request", type=Path, required=True, metavar="PATH")
     _add_output_options(prepare)
     prepare.set_defaults(handler=handle_daemon_prepare)
-
     cancel_preparation = queue_subparsers.add_parser(
         "daemon-cancel-preparation", help="request cancellation of one preparation"
     )
@@ -283,7 +129,6 @@ def register_subparser(
     cancel_preparation.add_argument("operation_id", metavar="OPERATION_ID")
     _add_output_options(cancel_preparation)
     cancel_preparation.set_defaults(handler=handle_daemon_cancel_preparation)
-
     start_run = queue_subparsers.add_parser(
         "daemon-start-run", help="durably accept preparation and exact target admission"
     )
@@ -291,7 +136,6 @@ def register_subparser(
     start_run.add_argument("--request", type=Path, required=True, metavar="PATH")
     _add_output_options(start_run)
     start_run.set_defaults(handler=handle_daemon_start_run)
-
     cancel_run = queue_subparsers.add_parser(
         "daemon-cancel-run", help="explicitly cancel a durable run operation"
     )
@@ -299,7 +143,6 @@ def register_subparser(
     cancel_run.add_argument("operation_id", metavar="OPERATION_ID")
     _add_output_options(cancel_run)
     cancel_run.set_defaults(handler=handle_daemon_cancel_run)
-
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
     )
@@ -308,7 +151,6 @@ def register_subparser(
     admissions.add_argument("--cursor")
     admissions.set_defaults(handler=handle_daemon_admissions)
     _add_output_options(admissions)
-
     admission = queue_subparsers.add_parser(
         "daemon-admission", help="inspect one managed admission"
     )
@@ -316,14 +158,12 @@ def register_subparser(
     admission.add_argument("admission_id")
     admission.set_defaults(handler=handle_daemon_admission)
     _add_output_options(admission)
-
     agents = queue_subparsers.add_parser("daemon-agents", help="list bounded agents")
     _add_client_connection_arguments(agents)
     agents.add_argument("--limit", type=int, default=100)
     agents.add_argument("--cursor")
     agents.set_defaults(handler=handle_daemon_agents)
     _add_output_options(agents)
-
     agent = queue_subparsers.add_parser(
         "daemon-agent", help="inspect one managed agent"
     )
@@ -331,7 +171,6 @@ def register_subparser(
     agent.add_argument("agent_id")
     agent.set_defaults(handler=handle_daemon_agent)
     _add_output_options(agent)
-
     operation = queue_subparsers.add_parser(
         "daemon-operation", help="inspect one durable operation"
     )
@@ -339,7 +178,6 @@ def register_subparser(
     operation.add_argument("operation_id")
     operation.set_defaults(handler=handle_daemon_operation)
     _add_output_options(operation)
-
     operation_wait = queue_subparsers.add_parser(
         "daemon-operation-wait", help="wait for one durable operation"
     )
@@ -348,7 +186,6 @@ def register_subparser(
     operation_wait.add_argument("--timeout", type=float, default=None)
     operation_wait.set_defaults(handler=handle_daemon_operation_wait)
     _add_output_options(operation_wait)
-
     for kind in ("drain", "resume", "reload"):
         control = queue_subparsers.add_parser(
             f"daemon-agent-{kind}", help=f"{kind} one managed agent"
@@ -363,7 +200,6 @@ def register_subparser(
         control.add_argument("--reason", default=f"cli-{kind}")
         control.set_defaults(handler=handle_daemon_agent_control, agent_control=kind)
         _add_output_options(control)
-
     scheduling_reload = queue_subparsers.add_parser(
         "daemon-scheduling-reload",
         help="reload protected coordinator scheduling configuration",
@@ -374,7 +210,6 @@ def register_subparser(
     scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
     scheduling_reload.set_defaults(handler=handle_daemon_scheduling_reload)
     _add_output_options(scheduling_reload)
-
     time_recovery = queue_subparsers.add_parser(
         "daemon-time-recover",
         help="recover one exact degraded coordinator time revision",
@@ -386,7 +221,6 @@ def register_subparser(
     time_recovery.add_argument("--reason", default="cli-time-recovery")
     time_recovery.set_defaults(handler=handle_daemon_time_recover)
     _add_output_options(time_recovery)
-
     replacement = queue_subparsers.add_parser(
         "daemon-replace-agent-session",
         help="fence one completely classified lost agent session before re-registration",
@@ -397,7 +231,6 @@ def register_subparser(
     replacement.add_argument("--reason", default="cli-session-replacement")
     replacement.set_defaults(handler=handle_daemon_replace_agent_session)
     _add_output_options(replacement)
-
     recovery = queue_subparsers.add_parser(
         "daemon-recover-unknown",
         help="close one exact unknown assignment from a guarded request",
@@ -408,143 +241,13 @@ def register_subparser(
     _add_output_options(recovery)
 
 
-def handle_preflight(namespace: argparse.Namespace) -> int:
-    """Handle ``loom queue preflight``."""
-
-    result = build_queue_preflight_result(
-        namespace.config,
-        authority_config=_explicit_authority_config_from_namespace(namespace),
-    )
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
-        sys.stdout.write(
-            format_json_envelope(
-                schema_version=QUEUE_PREFLIGHT_SCHEMA_VERSION,
-                ok=result.ok,
-                warnings=[],
-                payload_name="result",
-                payload=result.to_dict(),
-            )
-        )
-    else:
-        sys.stdout.write(format_queue_preflight_text(result) + "\n")
-    return int(
-        ExitCode.PIPELINE if _enum_value(result.status) == "FAIL" else ExitCode.SUCCESS
-    )
-
-
-def handle_start(namespace: argparse.Namespace) -> int:
-    """Handle ``loom queue start``."""
-
-    result = build_queue_status_result(namespace.config)
-    return _emit_status_result(result, namespace)
-
-
-def handle_status(namespace: argparse.Namespace) -> int:
-    """Handle ``loom queue status``."""
-
-    result = build_queue_status_result(
-        namespace.config,
-        queue_item_id=namespace.queue_item_id,
-        pool_name=namespace.pool_name,
-        refresh_adapters=bool(namespace.refresh_adapters),
-    )
-    return _emit_status_result(result, namespace)
-
-
-def handle_cancel(namespace: argparse.Namespace) -> int:
-    """Handle ``loom queue cancel``."""
-
-    result = build_queue_cancel_result(
-        namespace.config,
-        namespace.queue_item_id,
-        requested_by=namespace.requested_by,
-        reason=namespace.reason,
-        adapter_cancel=bool(namespace.adapter_cancel),
-    )
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
-        sys.stdout.write(
-            format_json_envelope(
-                schema_version=QUEUE_CANCEL_SCHEMA_VERSION,
-                ok=True,
-                warnings=[],
-                payload_name="result",
-                payload=result.to_dict(),
-            )
-        )
-    else:
-        sys.stdout.write(format_queue_cancel_text(result) + "\n")
-    return int(ExitCode.SUCCESS)
-
-
-def handle_drain_foreground(namespace: argparse.Namespace) -> int:
-    """Handle ``loom queue drain-foreground``."""
-
-    result = build_queue_drain_result(
-        namespace.config,
-        pool_name=namespace.pool_name,
-        max_items=namespace.max_items,
-        poll_interval_seconds=namespace.poll_interval,
-        enable_slurm=bool(namespace.slurm),
-    )
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
-        sys.stdout.write(
-            format_json_envelope(
-                schema_version=QUEUE_DRAIN_SCHEMA_VERSION,
-                ok=True,
-                warnings=[],
-                payload_name="result",
-                payload=result.to_dict(),
-            )
-        )
-    else:
-        sys.stdout.write(format_queue_drain_text(result) + "\n")
-    return int(ExitCode.SUCCESS)
-
-
-def handle_drive_slurm_foreground(namespace: argparse.Namespace) -> int:
-    """Handle bounded service-less prepared-run SLURM driving."""
-
-    result = build_slurm_drive_result(
-        namespace.config,
-        pool_name=namespace.pool_name,
-        run_root=namespace.run_root,
-        authority_config=authority_config_from_namespace(namespace),
-        until_quiescent=not bool(namespace.once),
-    )
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
-        sys.stdout.write(
-            format_json_envelope(
-                schema_version=QUEUE_SLURM_DRIVE_SCHEMA_VERSION,
-                ok=True,
-                warnings=[],
-                payload_name="result",
-                payload=result.to_dict(),
-            )
-        )
-    else:
-        dispatched = result.to_dict()["dispatched_count"]
-        sys.stdout.write(
-            "SLURM foreground drive: "
-            f"cycles={len(result.cycles)} "
-            f"dispatched={dispatched} "
-            f"quiescent={str(result.quiescent).lower()}\n"
-        )
-    return int(ExitCode.SUCCESS)
-
-
 def handle_daemon_check(namespace: argparse.Namespace) -> int:
     """Report coordinator and optional local-agent readiness without initialization."""
-
     return _handle_role_check(namespace, "coordinator")
 
 
 def handle_daemon_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete coordinator deployment bundle."""
-
     from loom.queue import LocalDaemon
     from loom.queue.deployment import load_coordinator_service_config
 
@@ -574,10 +277,21 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     from loom.service_runtime import serve_coordinator
 
     try:
-        service = load_coordinator_service_config(namespace.config, env_file=namespace.env_file)
+        service = load_coordinator_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
 
-        def ready(status, port):  # type: ignore[no-untyped-def]
-            _emit_daemon_payload(namespace, {"operation": "serve", "endpoint": str(service.daemon.endpoint), "agent_port": port, "coordinator_id": status.coordinator_id, "coordinator_epoch": status.coordinator_epoch})
+        def ready(status, port):
+            _emit_daemon_payload(
+                namespace,
+                {
+                    "operation": "serve",
+                    "endpoint": str(service.daemon.endpoint),
+                    "agent_port": port,
+                    "coordinator_id": status.coordinator_id,
+                    "coordinator_epoch": status.coordinator_epoch,
+                },
+            )
 
         serve_coordinator(service, stop=Event(), ready=ready)
     except QueueError as exc:
@@ -587,7 +301,6 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
 
 def handle_agent_check(namespace: argparse.Namespace) -> int:
     """Report outbound-agent readiness without initializing its root."""
-
     return _handle_role_check(namespace, "agent")
 
 
@@ -639,7 +352,6 @@ def _handle_role_check(namespace: argparse.Namespace, role: str) -> int:
 
 def handle_agent_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete outbound-agent role root."""
-
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
     from loom.queue.deployment import load_outbound_agent_service_config
 
@@ -662,9 +374,7 @@ def handle_agent_init(namespace: argparse.Namespace) -> int:
 
 def handle_agent_serve(namespace: argparse.Namespace) -> int:
     """Run one foreground outbound agent with bounded reconnect."""
-
     from threading import Event
-
     from loom.queue.deployment import (
         load_outbound_agent_service_config,
         run_outbound_agent_service,
@@ -774,7 +484,9 @@ def handle_daemon_start_run(namespace: argparse.Namespace) -> int:
         request = RunRequest.from_dict(raw)
         result = _daemon_client(namespace).start_run(request)
     except (OSError, json.JSONDecodeError) as exc:
-        raise _queue_cli_error(QueueServiceError("run request file is unavailable or invalid JSON")) from exc
+        raise _queue_cli_error(
+            QueueServiceError("run request file is unavailable or invalid JSON")
+        ) from exc
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -798,8 +510,7 @@ def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
             expected_coordinator_id=namespace.expected_coordinator_id,
         )
     return CoordinatorClient.from_unix_socket(
-        namespace.endpoint,
-        expected_coordinator_id=namespace.expected_coordinator_id,
+        namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id
     )
 
 
@@ -1016,206 +727,6 @@ def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result)
 
 
-def build_queue_preflight_result(
-    config_path: str | Path,
-    *,
-    authority_config: "AuthorityConfig | None" = None,
-) -> "QueuePreflightResult":
-    """Build queue preflight diagnostics for the CLI."""
-
-    from loom.queue.preflight import run_queue_preflight
-
-    try:
-        return run_queue_preflight(
-            config_path,
-            authority_config=authority_config,
-            workspace_id=getattr(authority_config, "workspace_id", None),
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-
-
-def build_queue_status_result(
-    config_path: str | Path,
-    *,
-    queue_item_id: str | None = None,
-    pool_name: str | None = None,
-    refresh_adapters: bool = False,
-) -> "QueueOperationalStatus":
-    """Build queue service or item status."""
-
-    service = _started_service(config_path)
-    adapters = _default_refresh_adapters() if refresh_adapters else None
-    return build_queue_operational_status(
-        service,
-        queue_item_id=queue_item_id,
-        pool_name=pool_name,
-        adapters=adapters,
-    )
-
-
-def build_queue_cancel_result(
-    config_path: str | Path,
-    queue_item_id: str,
-    *,
-    requested_by: str,
-    reason: str,
-    adapter_cancel: bool = False,
-) -> QueueCancellationStatus:
-    """Cancel one queue item through the queue service."""
-
-    service = _started_service(config_path)
-    if adapter_cancel:
-        from loom.queue.controller import QueueController
-
-        step = QueueController(
-            service,
-            adapters=_default_dispatch_adapters(enable_slurm=True),
-        ).cancel_item(
-            queue_item_id,
-            requested_by=requested_by,
-            reason=reason,
-        )
-        if step.item is None:
-            raise CliError(
-                "queue cancellation did not return an item",
-                code="cli.queue.cancel_missing_item",
-                exit_code=ExitCode.RUN_STATE,
-            )
-        return QueueCancellationStatus(item=step.item)
-    try:
-        item = service.cancel_item(
-            queue_item_id,
-            requested_by=requested_by,
-            reason=reason,
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return QueueCancellationStatus(item=item)
-
-
-def build_queue_drain_result(
-    config_path: str | Path,
-    *,
-    pool_name: str | None = None,
-    max_items: int | None = None,
-    poll_interval_seconds: float = 0.1,
-    enable_slurm: bool = False,
-) -> "QueueDrainResult":
-    """Run the foreground queue controller loop."""
-
-    service = _started_service(config_path)
-    from loom.queue.controller import QueueController
-
-    try:
-        return QueueController(
-            service,
-            adapters=_default_dispatch_adapters(enable_slurm=enable_slurm),
-        ).drain_foreground(
-            pool_name=pool_name,
-            max_items=max_items,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-
-
-def build_slurm_drive_result(
-    config_path: str | Path,
-    *,
-    pool_name: str | None,
-    run_root: str | Path,
-    authority_config: "AuthorityConfig | None",
-    until_quiescent: bool,
-) -> "QueueForegroundDriveResult":
-    """Compose the one foreground driver with project-owned run storage."""
-
-    from loom.pipeline.execution import create_authority_backed_serial_run_store
-    from loom.queue.controller import QueueController
-    from loom.queue.slurm import SLURM_QUEUE_ADAPTER_NAME, SlurmQueueDispatchAdapter
-
-    service = _started_service(config_path)
-    selected_pool = pool_name or service.spec.controller.default_pool_name
-    if selected_pool is None:
-        raise CliError(
-            "SLURM foreground drive requires --pool or controller.default_pool_name",
-            code="cli.queue.slurm_drive_pool_required",
-            exit_code=ExitCode.USAGE,
-        )
-    try:
-        run_store = create_authority_backed_serial_run_store(
-            run_root,
-            authority_config=authority_config,
-            owner_id="queue-slurm-foreground",
-        )
-        return QueueController(
-            service,
-            adapters={
-                SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(run_store=run_store)
-            },
-        ).drive_foreground(
-            pool_name=selected_pool,
-            until_quiescent=until_quiescent,
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-
-
-def _emit_status_result(
-    result: "QueueOperationalStatus",
-    namespace: argparse.Namespace,
-) -> int:
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
-        sys.stdout.write(
-            format_json_envelope(
-                schema_version=QUEUE_STATUS_SCHEMA_VERSION,
-                ok=True,
-                warnings=[],
-                payload_name="result",
-                payload=result.to_dict(),
-            )
-        )
-    else:
-        sys.stdout.write(format_queue_status_text(result) + "\n")
-    return int(ExitCode.SUCCESS)
-
-
-def _started_service(config_path: str | Path) -> "QueueService":
-    from loom.queue import QueueService, load_queue_spec
-
-    try:
-        service = QueueService.from_spec(load_queue_spec(config_path))
-        service.start()
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return service
-
-
-def _default_refresh_adapters() -> "Mapping[str, QueueInspectableDispatchAdapter]":
-    from loom.queue.slurm import SLURM_QUEUE_ADAPTER_NAME, SlurmQueueDispatchAdapter
-
-    return {
-        SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(),
-    }
-
-
-def _default_dispatch_adapters(
-    *,
-    enable_slurm: bool,
-) -> "Mapping[str, QueueDispatchAdapter]":
-    from loom.queue.controller import FakeQueueDispatchAdapter
-
-    adapters: dict[str, QueueDispatchAdapter] = {
-        "fake": FakeQueueDispatchAdapter(),
-    }
-    if enable_slurm:
-        from loom.queue.slurm import SLURM_QUEUE_ADAPTER_NAME, SlurmQueueDispatchAdapter
-
-        adapters[SLURM_QUEUE_ADAPTER_NAME] = SlurmQueueDispatchAdapter()
-    return adapters
-
-
 def _queue_cli_error(error: QueueError) -> CliError:
     exit_code = (
         ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
@@ -1233,23 +744,6 @@ def _queue_cli_error(error: QueueError) -> CliError:
         context={"error_type": type(error).__name__},
         exit_code=exit_code,
     )
-
-
-def _explicit_authority_config_from_namespace(
-    namespace: argparse.Namespace,
-) -> "AuthorityConfig | None":
-    option_names = (
-        "authority_backend",
-        "authority_profile",
-        "authority_endpoint",
-        "authority_workspace",
-        "authority_state",
-        "authority_reference",
-        "authority_metadata_json",
-    )
-    if not any(getattr(namespace, name, None) is not None for name in option_names):
-        return None
-    return authority_config_from_namespace(namespace)
 
 
 def _emit_daemon_payload(
@@ -1277,7 +771,6 @@ def _emit_daemon_admission_payload(
     namespace: argparse.Namespace, payload: Mapping[str, PlainData]
 ) -> int:
     """Present an admission while preserving its generic JSON envelope."""
-
     if output_format_from_namespace(namespace) is OutputFormat.JSON:
         return _emit_daemon_payload(namespace, payload)
     result = _emit_daemon_payload(namespace, payload)
@@ -1293,7 +786,6 @@ def _emit_daemon_admission_payload(
 
 def _admission_execution_failure_lines(payload: Mapping[str, PlainData]) -> list[str]:
     """Render portable Loom wrapper chains without interpreting domain payloads."""
-
     from collections.abc import Mapping, Sequence
     from loom.diagnostics import render_diagnostic_failure
 
@@ -1319,13 +811,15 @@ def _admission_execution_failure_lines(payload: Mapping[str, PlainData]) -> list
             diagnostic = details.get("diagnostic_failure")
             if diagnostic is not None:
                 lines.extend(
-                    indent + "  " + line
-                    for line in render_diagnostic_failure(diagnostic).splitlines()
+                    (
+                        indent + "  " + line
+                        for line in render_diagnostic_failure(diagnostic).splitlines()
+                    )
                 )
             traceback_text = details.get("traceback")
             if isinstance(traceback_text, str):
                 lines.extend(
-                    indent + "  " + line for line in traceback_text.splitlines()
+                    (indent + "  " + line for line in traceback_text.splitlines())
                 )
             failure = details.get("worker_failure")
             indent += "  "
@@ -1399,17 +893,9 @@ __all__ = [
     "QUEUE_PREFLIGHT_SCHEMA_VERSION",
     "QUEUE_STATUS_SCHEMA_VERSION",
     "LOCAL_DAEMON_SCHEMA_VERSION",
-    "build_queue_cancel_result",
-    "build_queue_drain_result",
-    "build_slurm_drive_result",
-    "build_queue_preflight_result",
-    "build_queue_status_result",
     "handle_agent_init",
     "handle_agent_check",
     "handle_agent_serve",
-    "handle_cancel",
-    "handle_drain_foreground",
-    "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
     "handle_daemon_cancel_preparation",
     "handle_daemon_start_run",
@@ -1433,8 +919,4 @@ __all__ = [
     "handle_daemon_submit",
     "handle_daemon_prepare",
     "handle_daemon_wait",
-    "handle_preflight",
-    "handle_start",
-    "handle_status",
-    "register_subparser",
 ]

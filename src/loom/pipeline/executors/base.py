@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -107,27 +106,15 @@ class ExecutorRegistry:
         return executor
 
 
-def create_default_executor_registry(
-    *,
-    worker_plugin_selectors: Sequence[str] = (),
-) -> ExecutorRegistry:
-    """Build the ordinary built-in registrations without importing backends."""
-
-    selectors = tuple(worker_plugin_selectors)
+def create_default_executor_registry() -> ExecutorRegistry:
+    """Construct the stage-only primitive used by plugin contract inspection."""
     registry = ExecutorRegistry()
-    for name, factory in (
-        ("local", _build_local_executor),
-        ("subprocess", _subprocess_factory(selectors)),
-        ("docker", _docker_factory(selectors)),
-        ("apptainer", _apptainer_factory(selectors, singularity=False)),
-        ("singularity", _apptainer_factory(selectors, singularity=True)),
-    ):
-        registry.register(
-            ExecutorRegistration(
-                descriptor=DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve(name),
-                factory=factory,
-            )
+    registry.register(
+        ExecutorRegistration(
+            descriptor=DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("local"),
+            factory=_build_local_executor,
         )
+    )
     return registry
 
 
@@ -138,55 +125,6 @@ def _build_local_executor(
     from loom.pipeline.executors.local import LocalExecutor
 
     return LocalExecutor()
-
-
-def _subprocess_factory(selectors: tuple[str, ...]) -> ExecutorFactory:
-    def build(*, services: "RuntimeServices", options: "RunOptions") -> Executor:
-        del options
-        from loom.pipeline.executors.subprocess import SubprocessExecutor
-
-        return SubprocessExecutor(
-            worker_results=services.worker_results,
-            plugin_selectors=selectors,
-        )
-
-    return build
-
-
-def _docker_factory(selectors: tuple[str, ...]) -> ExecutorFactory:
-    def build(*, services: "RuntimeServices", options: "RunOptions") -> Executor:
-        del options
-        from loom.pipeline.execution.services import runtime_store_facade
-        from loom.pipeline.executors.docker import DockerExecutor
-
-        return DockerExecutor(
-            run_store=runtime_store_facade(services),
-            plugin_selectors=selectors,
-        )
-
-    return build
-
-
-def _apptainer_factory(
-    selectors: tuple[str, ...],
-    *,
-    singularity: bool,
-) -> ExecutorFactory:
-    def build(*, services: "RuntimeServices", options: "RunOptions") -> Executor:
-        del options
-        from loom.pipeline.execution.services import runtime_store_facade
-        from loom.pipeline.executors.apptainer import (
-            ApptainerExecutor,
-            SingularityExecutor,
-        )
-
-        executor_type = SingularityExecutor if singularity else ApptainerExecutor
-        return executor_type(
-            run_store=runtime_store_facade(services),
-            plugin_selectors=selectors,
-        )
-
-    return build
 
 
 __all__ = [

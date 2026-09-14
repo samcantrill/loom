@@ -1,16 +1,9 @@
 """Unit tests for SLURM option and argv contracts."""
 
 from __future__ import annotations
-
+from typing import Any, cast
 import pytest
-
-from loom.pipeline.executors.slurm import (
-    SlurmMode,
-    SlurmOptionError,
-    SlurmOptions,
-    build_single_job_command_argv,
-    build_stage_job_command_argv,
-)
+from loom.pipeline.executors.slurm import SlurmMode, SlurmOptionError, SlurmOptions
 
 
 def test_slurm_mode_wire_values_are_stable() -> None:
@@ -35,9 +28,7 @@ def test_options_round_trip_modeled_fields_and_launcher() -> None:
         extra_sbatch={"--mail-type": "END", "exclusive": True},
         launcher_argv=("uv", "run", "loom"),
     )
-
     payload = options.to_dict()
-
     assert payload["extra_sbatch"] == {"exclusive": True, "mail-type": "END"}
     assert payload["launcher_argv"] == ["uv", "run", "loom"]
     assert SlurmOptions.from_dict(payload) == options
@@ -69,7 +60,7 @@ def test_options_reject_mutually_exclusive_memory_directives() -> None:
 )
 def test_extra_sbatch_validation(extra: dict[str, object], message: str) -> None:
     with pytest.raises(SlurmOptionError, match=message):
-        SlurmOptions(extra_sbatch=extra)  # type: ignore[arg-type]
+        SlurmOptions(extra_sbatch=cast(Any, extra))
 
 
 def test_extra_sbatch_rejects_duplicate_normalized_names() -> None:
@@ -79,62 +70,7 @@ def test_extra_sbatch_rejects_duplicate_normalized_names() -> None:
 
 def test_launcher_argv_defaults_and_rejects_bad_entries() -> None:
     assert SlurmOptions().launcher_argv == ("loom",)
-
     with pytest.raises(SlurmOptionError, match="must not be empty"):
         SlurmOptions(launcher_argv=())
-    with pytest.raises(SlurmOptionError, match=r"launcher_argv\[1\]"):
+    with pytest.raises(SlurmOptionError, match="launcher_argv\\[1\\]"):
         SlurmOptions(launcher_argv=("uv", ""))
-
-
-def test_generated_single_job_command_targets_phase_two_command() -> None:
-    command = build_single_job_command_argv(
-        "file:///runs/run-1",
-        launcher_argv=("uv", "run", "loom"),
-    )
-
-    assert command.argv == (
-        "uv",
-        "run",
-        "loom",
-        "prepared-run",
-        "continue",
-        "--run-uri",
-        "file:///runs/run-1",
-        "--executor",
-        "local",
-    )
-    assert command.to_dict()["argv"] == list(command.argv)
-
-
-def test_generated_stage_job_command_targets_phase_two_command() -> None:
-    command = build_stage_job_command_argv("file:///runs/run-1", "build")
-
-    assert command.argv == (
-        "loom",
-        "stage-job",
-        "run",
-        "--run-uri",
-        "file:///runs/run-1",
-        "--stage",
-        "build",
-        "--executor",
-        "local",
-    )
-
-
-def test_generated_stage_job_command_carries_applicable_plugin_selectors() -> None:
-    command = build_stage_job_command_argv(
-        "file:///runs/run-1",
-        "build",
-        plugin_selectors=(
-            "loom.codecs:stage28.tagged-json.v1",
-            "loom.resource_validators:stage28.device",
-        ),
-    )
-
-    assert command.command_args[-4:] == (
-        "--plugin",
-        "loom.codecs:stage28.tagged-json.v1",
-        "--plugin",
-        "loom.resource_validators:stage28.device",
-    )

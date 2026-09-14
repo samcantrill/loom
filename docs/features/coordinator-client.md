@@ -249,5 +249,4 @@ retains its distinct read-only credential policy.
 
 The facade and compatibility adapter share lower-level control behavior and
 codecs. `loom.coordinator` combines these values with diagnostics above queue;
-queue/runtime modules do not import the facade or an MCP SDK. `QueueClient` and
-`QueueService` keep their existing queue semantics.
+queue/runtime modules do not import the facade or an MCP SDK. The native facade is the supported run control API; old whole-run queue execution APIs are removed.

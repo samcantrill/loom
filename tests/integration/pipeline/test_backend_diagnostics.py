@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from loom.diagnostics.backend import inspect_backend, inspect_backend_capabilities
-from loom.pipeline import PipelineRunner, RunRequest
+from tests.support.authority_read_fixture import seed_completed_authority_run
 from loom.pipeline.stores import (
     BackendRevision,
     create_run_store,
@@ -20,7 +20,6 @@ from loom.pipeline.stores.service_authority import (
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.unit.loom.pipeline.execution.test_authority_adapter import (
-    _pipeline,
     _store,
 )
 
@@ -34,9 +33,7 @@ def test_backend_inspection_reports_materialization_warnings_without_mutation(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     run_store = _store(tmp_path, authority)
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
-    PipelineRunner(run_store=run_store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(run_store, run_uri)
     before = authority.snapshot(run_uri).revision.sequence
     config_snapshot = run_uri_to_path(run_uri) / "config" / "resolved.yaml"
     if config_snapshot.exists():
@@ -67,9 +64,7 @@ def test_backend_capability_requirements_are_diagnostic_only(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     run_store = _store(tmp_path, authority)
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
-    PipelineRunner(run_store=run_store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(run_store, run_uri)
     before = authority.snapshot(run_uri).revision.sequence
 
     result = inspect_backend_capabilities(

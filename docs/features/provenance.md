@@ -1545,7 +1545,7 @@ Future run provenance may include a summary owned by the runner/run store:
 }
 ```
 
-For current v1 composed configs, `PipelineRunner` persists the composition
+For current v1 composed configs, the native coordinator persists the composition
 manifest, recipe manifest, and artifact-safe config provenance metadata as plain
 data. It does not persist `config/resolved.yaml`,
 `config/resolved.redacted.yaml`, resolver outputs, or raw source bytes by

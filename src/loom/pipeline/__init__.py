@@ -1,7 +1,6 @@
 """Pipeline package."""
 
 from typing import TYPE_CHECKING
-
 from loom.pipeline.errors import (
     InputBindingError,
     PipelineCycleError,
@@ -94,7 +93,6 @@ from loom.pipeline.transition_policy import (
 
 if TYPE_CHECKING:
     from loom.pipeline.context import ProcessContainmentOwner, StageContext
-    from loom.pipeline.execution import PipelineRunner, RunRequest, RunResult
 
 
 def __getattr__(name: str) -> object:
@@ -102,10 +100,6 @@ def __getattr__(name: str) -> object:
         from loom.pipeline import context
 
         return getattr(context, name)
-    if name in {"PipelineRunner", "RunRequest", "RunResult"}:
-        from loom.pipeline import execution
-
-        return getattr(execution, name)
     raise AttributeError(f"module 'loom.pipeline' has no attribute {name!r}")
 
 
@@ -142,9 +136,6 @@ __all__ = [
     "PipelineCycleError",
     "StageContractError",
     "StatusSerializationError",
-    "PipelineRunner",
-    "RunRequest",
-    "RunResult",
     "ResourceRequest",
     "ResourceEntry",
     "parse_resource_request",

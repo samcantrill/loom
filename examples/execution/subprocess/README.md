@@ -12,13 +12,11 @@ for inspection; artifacts default to this example's `runs/` directory. Set
 
 The success script runs two stages in supervised native workers and reports
 materialized outputs. The failure script retains the failed stage's stderr and
-structured failure. The separate direct-worker example retains its prepared-stage
-primitive; it does not demonstrate the ordinary managed run entrypoint.
+structured failure. The restricted resident worker is internal to native execution.
 
 ```sh
 uv run python examples/execution/subprocess/run_subprocess_pipeline.py
 uv run python examples/execution/subprocess/run_failure_diagnostics.py
-uv run python examples/execution/subprocess/run_direct_worker.py
 ```
 
 ## Variants

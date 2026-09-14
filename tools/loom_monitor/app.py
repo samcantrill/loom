@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -407,7 +408,7 @@ class LoomMonitorApp(App[None]):
         if self.paused and not force:
             return
         self.run_worker(
-            self._refresh_queue(),
+            self._refresh_queue,
             group="queue",
             exclusive=True,
             exit_on_error=False,
@@ -417,7 +418,7 @@ class LoomMonitorApp(App[None]):
         if self.paused and not force:
             return
         self.run_worker(
-            self._refresh_authority(),
+            self._refresh_authority,
             group="authority",
             exclusive=True,
             exit_on_error=False,
@@ -430,7 +431,7 @@ class LoomMonitorApp(App[None]):
         if not run_uris:
             return
         self.run_worker(
-            self._refresh_runs(run_uris),
+            partial(self._refresh_runs, run_uris),
             group="runs",
             exclusive=True,
             exit_on_error=False,
@@ -442,7 +443,7 @@ class LoomMonitorApp(App[None]):
         if self.selected_item_id is None:
             return
         self.run_worker(
-            self._refresh_selected(self.selected_item_id),
+            partial(self._refresh_selected, self.selected_item_id),
             group="selected",
             exclusive=True,
             exit_on_error=False,
@@ -452,10 +453,10 @@ class LoomMonitorApp(App[None]):
         if self.paused and not force:
             return
         selected = self._selected_work()
-        if selected is None or selected.item.pool_mode != "delegated":
+        if selected is None or selected.item.pool_mode not in {"delegated", "native"}:
             return
         self.run_worker(
-            self._refresh_jobs(selected.item.run_uri),
+            partial(self._refresh_jobs, selected.item.run_uri),
             group="jobs",
             exclusive=True,
             exit_on_error=False,
@@ -468,7 +469,7 @@ class LoomMonitorApp(App[None]):
         if selected is None or self.selected_stage is None:
             return
         self.run_worker(
-            self._refresh_logs(selected.item.run_uri, self.selected_stage),
+            partial(self._refresh_logs, selected.item.run_uri, self.selected_stage),
             group="logs",
             exclusive=True,
             exit_on_error=False,
@@ -637,7 +638,7 @@ class LoomMonitorApp(App[None]):
                             pool.queued,
                             pool.claimed,
                             pool.dispatched,
-                            f"{pool.active}/{pool.controller_limit}",
+                            f"{pool.active}/{pool.controller_limit if pool.controller_limit is not None else '—'}",
                             pool.succeeded,
                             pool.failed,
                             pool.cancelled,
@@ -820,7 +821,7 @@ class LoomMonitorApp(App[None]):
             _add_rows(
                 execution,
                 (
-                    ("Mode", "delegated"),
+                    ("Mode", item.pool_mode),
                     ("Backend", item.adapter or "—"),
                     ("Scheduler job", "—" if job is None else job.scheduler_job_id),
                     (
@@ -908,7 +909,7 @@ class LoomMonitorApp(App[None]):
                             one_line(
                                 stage.message or _failure_message(stage.failure) or "—"
                             ),
-                            stage.input_count,
+                            stage.input_count if stage.input_count is not None else "—",
                             stage.output_count,
                             backend_by_stage.get(stage.stage_name, "—"),
                             log_state,
@@ -1165,7 +1166,7 @@ class LoomMonitorApp(App[None]):
         jobs = self._selected_jobs(work)
         table.add_row(
             "Scheduler state",
-            "delegated scheduler",
+            "agent scheduler observation",
             (
                 _observation_detail(self.snapshot.jobs, now=now)
                 if jobs
@@ -1485,7 +1486,7 @@ def _claim_text(item: QueueRecord) -> str:
 
 
 def _work_age(item: QueueRecord, *, now: datetime) -> str:
-    if item.status == "QUEUED":
+    if item.status in {"QUEUED", "WAITING"}:
         return format_duration(item.enqueued_at, now)
     if item.status in ACTIVE_QUEUE_STATUSES:
         started = item.claimed_at or item.dispatched_at or item.updated_at
@@ -1494,7 +1495,7 @@ def _work_age(item: QueueRecord, *, now: datetime) -> str:
 
 
 def _age_label(item: QueueRecord) -> str:
-    if item.status == "QUEUED":
+    if item.status in {"QUEUED", "WAITING"}:
         return "Wait age"
     if item.status in ACTIVE_QUEUE_STATUSES:
         return "Active age"

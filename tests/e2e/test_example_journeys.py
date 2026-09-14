@@ -42,25 +42,16 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
     payload = _parse_summary(_run_example_script(script, output_root))
 
     assert payload["first_status"] == "SUCCEEDED"
-    assert payload["resume_status"] == "SUCCEEDED"
-    assert payload["repair_status"] == "SUCCEEDED"
-    first_stage_actions = payload["first_stage_actions"]
-    resume_stage_actions = payload["resume_stage_actions"]
-    repair_stage_actions = payload["repair_stage_actions"]
-    assert isinstance(first_stage_actions, dict)
-    assert isinstance(resume_stage_actions, dict)
-    assert isinstance(repair_stage_actions, dict)
-    stage_names = {"left_seed", "left_summarize", "right_seed", "right_summarize"}
-    assert set(first_stage_actions) == stage_names
-    assert set(resume_stage_actions) == stage_names
-    assert set(repair_stage_actions) == stage_names
-    assert set(resume_stage_actions.values()) == {"REUSE"}
-    assert repair_stage_actions == {
-        "left_seed": "RUN",
-        "left_summarize": "RUN",
-        "right_seed": "REUSE",
-        "right_summarize": "REUSE",
-    }
+    assert payload["repair_execution"] == "not_requested"
+    assert payload["committed_stage_count"] == "4"
+    assert (
+        payload["reuse_plan"]
+        == "left_seed=REUSE,left_summarize=REUSE,right_seed=REUSE,right_summarize=REUSE"
+    )
+    assert (
+        payload["repair_plan"]
+        == "left_seed=RUN,left_summarize=RUN,right_seed=REUSE,right_summarize=REUSE"
+    )
     assert payload["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
@@ -93,48 +84,12 @@ def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
         / "run_dry_run_basics.py"
     )
     output_root = tmp_path / "slurm"
-    summaries = _parse_slurm_summaries(_run_example_script(script, output_root))
-
-    modes = {summary["mode"] for summary in summaries}
-    assert modes == {"slurm-single-job", "slurm-afterok"}
-    assert len(summaries) == 2
-    for summary in summaries:
-        assert _require_int(summary["jobs"]) >= 1
-        assert _require_int(summary["dependencies"]) >= 0
-        assert summary["scheduler_ids_absent"] is True
-        manifest = Path(_require_str(summary["manifest"]))
-        assert manifest.is_file()
-        for relative in _parse_csv_list(summary["scripts"]):
-            path = _resolve_dry_run_path(relative, manifest)
-            assert path.is_file()
-        for relative in _parse_csv_list(summary["logs"]):
-            path = _resolve_dry_run_path(relative, manifest)
-            assert path.suffix == ".log"
-        assert "executor.slurm.sbatch" in _require_str(summary["warnings"])
-
-
-def test_e2e_example_service_less_slurm_reopens_without_a_service(
-    tmp_path: Path,
-) -> None:
-    script = (
-        EXAMPLES_ROOT
-        / "operations"
-        / "service-less-slurm-driving"
-        / "run_service_less_slurm.py"
-    )
-    payload = _parse_summary(_run_example_script(script, tmp_path / "service-less"))
-
-    summary = payload["service_less_slurm"]
-    assert isinstance(summary, dict)
-    assert summary == {
-        "prepared_runs": 2,
-        "modes": "slurm-single-job,slurm-afterok",
-        "first_cycle_dispatched": 1,
-        "reopened_cycle_dispatched": 1,
-        "scheduler_job_count": 3,
-        "completed_queue_items": 2,
-        "no_network_service": True,
-    }
+    payload = _parse_summary(_run_example_script(script, output_root))["graph_plan"]
+    assert isinstance(payload, dict)
+    assert payload["stages"] == "seed,summarize"
+    assert str(payload["edges"]) == "1"
+    assert payload["scheduler_submission"] == "not_requested"
+    assert str(payload["generated_commands"]) == "0"
 
 
 def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(

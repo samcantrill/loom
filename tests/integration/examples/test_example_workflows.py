@@ -43,16 +43,40 @@ def test_example_captured_logs_records_captured_output(
     assert (run_uri_path / "artifacts" / "noisy" / "report.txt").read_text(
         encoding="utf-8"
     ) == "registered report\n"
+    result = json.loads((run_uri_path / "stages/noisy/worker_result.json").read_text())[
+        "worker_result"
+    ]
+    workspace = Path(result["stdout_path"]).parent.parent / "workspace"
     assert (
-        run_uri_path / "stages" / "noisy" / "workspace" / "notes" / "project.log"
-    ).read_text(encoding="utf-8") == "project-owned workspace file\n"
+        workspace / "notes/project.log"
+    ).read_text() == "project-owned workspace file\n"
+    # A retained native path is evidence, not a promise of remote/indefinite content.
+    from loom.diagnostics.inspection import (
+        inspect_stage_logs,
+        DiagnosticsInspectionError,
+    )
+
+    stdout_path = Path(result["stdout_path"])
+    before = (run_uri_path / "stages/noisy/worker_result.json").read_bytes()
+    stdout_path.unlink()
+    unavailable = inspect_stage_logs(
+        fields["run_uri"], "noisy", streams=("stdout",), paths_only=True
+    )
+    assert unavailable.streams[0].path == str(stdout_path)
+    assert unavailable.streams[0].available is False
+    with pytest.raises(DiagnosticsInspectionError, match="no log content"):
+        inspect_stage_logs(fields["run_uri"], "noisy", streams=("stdout",))
+    assert (run_uri_path / "stages/noisy/worker_result.json").read_bytes() == before
 
 
 def test_example_failing_run_reports_diagnostics_summary(
     tmp_path: Path,
 ) -> None:
     output = _run_example_script(
-        script=EXAMPLES_ROOT / "operations" / "failing-run" / "run_failure_diagnostics.py",
+        script=EXAMPLES_ROOT
+        / "operations"
+        / "failing-run"
+        / "run_failure_diagnostics.py",
         tmp_path=tmp_path / "failing-run",
     )
     fields = _summary_fields(output)
@@ -86,7 +110,10 @@ def test_example_resource_leases_coordinate_blocked_then_released_state(
     tmp_path: Path,
 ) -> None:
     output = _run_example_script(
-        script=EXAMPLES_ROOT / "operations" / "resource-leases" / "run_resource_leases.py",
+        script=EXAMPLES_ROOT
+        / "operations"
+        / "resource-leases"
+        / "run_resource_leases.py",
         tmp_path=tmp_path / "resource-leases",
     )
     fields = _summary_fields(output)
@@ -129,10 +156,12 @@ def test_example_run_catalog_and_bundles_compares_and_preserves_payload(
     )
     for _ in range(2):
         fields = _summary_fields(
-            _run_example_script(script=script, tmp_path=tmp_path / "run-catalog-and-bundles")
+            _run_example_script(
+                script=script, tmp_path=tmp_path / "run-catalog-and-bundles"
+            )
         )
-        assert fields["indexed_run_count"] == "2"
-        assert fields["listed_run_count"] == "2"
+        assert int(fields["indexed_run_count"]) >= 2
+        assert int(fields["listed_run_count"]) >= 2
         assert int(fields["different_entries"]) > 0
         assert fields["exported_payload_count"] == "1"
         assert fields["inspected_payload_count"] == "1"
@@ -149,17 +178,14 @@ def test_example_local_pipeline_reuses_then_repairs_only_affected_branch(
     fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
 
     assert fields["first_status"] == "SUCCEEDED"
-    assert fields["resume_status"] == "SUCCEEDED"
-    assert fields["repair_status"] == "SUCCEEDED"
-    assert fields["config_fingerprint"].startswith("sha256:")
+    assert fields["repair_execution"] == "not_requested"
+    assert fields["committed_stage_count"] == "4"
     assert int(fields["pipeline_stage_fingerprint_count"]) > 0
-    assert fields["resume_actions"] == (
-        "left_seed=REUSE,left_summarize=REUSE,"
-        "right_seed=REUSE,right_summarize=REUSE"
+    assert fields["reuse_plan"] == (
+        "left_seed=REUSE,left_summarize=REUSE,right_seed=REUSE,right_summarize=REUSE"
     )
-    assert fields["repair_actions"] == (
-        "left_seed=RUN,left_summarize=RUN,"
-        "right_seed=REUSE,right_summarize=REUSE"
+    assert fields["repair_plan"] == (
+        "left_seed=RUN,left_summarize=RUN,right_seed=REUSE,right_summarize=REUSE"
     )
     assert fields["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
 
@@ -188,12 +214,7 @@ def test_example_fake_backend_and_local_materialization(tmp_path: Path) -> None:
 def test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts(
     tmp_path: Path,
 ) -> None:
-    script = (
-        EXAMPLES_ROOT
-        / "experiments"
-        / "deterministic-sweep"
-        / "run_sweep.py"
-    )
+    script = EXAMPLES_ROOT / "experiments" / "deterministic-sweep" / "run_sweep.py"
     for _ in range(2):
         fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
 
@@ -287,7 +308,9 @@ def _summary_fields(output: str) -> dict[str, str]:
         if separator:
             parsed[key] = value
     if not parsed:
-        raise AssertionError("expected example output to include key-value summary lines")
+        raise AssertionError(
+            "expected example output to include key-value summary lines"
+        )
     return parsed
 
 
@@ -322,20 +345,29 @@ def _run_uri_path(run_uri: str) -> Path:
         ("operations/local-diagnostics/run_diagnostics.py", "SUCCEEDED", 18),
     ],
 )
-def test_installed_native_examples_settle_and_preserve_results(tmp_path, relative, status, total):
-    fields = _summary_fields(_run_example_script(
-        script=EXAMPLES_ROOT / relative, tmp_path=tmp_path,
-    ))
+def test_installed_native_examples_settle_and_preserve_results(
+    tmp_path, relative, status, total
+):
+    fields = _summary_fields(
+        _run_example_script(
+            script=EXAMPLES_ROOT / relative,
+            tmp_path=tmp_path,
+        )
+    )
     assert fields["run_status"] == status
     assert fields["coordinator_cleanup"] == "stopped"
     root = _run_uri_path(fields["run_uri"])
     if total is not None:
         summary = json.loads((root / "artifacts/summarize/summary.json").read_text())
         assert summary["total"] == total
-        record = json.loads((root / "stages/summarize/worker_result.json").read_text())["worker_result"]
+        record = json.loads((root / "stages/summarize/worker_result.json").read_text())[
+            "worker_result"
+        ]
         assert record["executor_metadata"]["managed_successful_exit"] is True
     else:
-        record = json.loads((root / "stages/fail/worker_result.json").read_text())["worker_result"]
+        record = json.loads((root / "stages/fail/worker_result.json").read_text())[
+            "worker_result"
+        ]
         assert record["failure"] is not None
         assert record["status"] == "FAILED"
         assert Path(record["stderr_path"]).read_text()

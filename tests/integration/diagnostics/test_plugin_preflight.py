@@ -40,14 +40,21 @@ def test_plugin_preflight_reports_selected_load_failure_and_metadata_together(
         ),
     )
 
+    original_import_module = importlib.import_module
+
     def import_module(name: str, package: str | None = None) -> ModuleType:
         del package
         if name == "loom.plugins._broken":
             raise RuntimeError("broken import")
+        if name != "loom.plugins._ok":
+            return original_import_module(name)
         module = _RecipeModule(name)
         module.recipe = lambda value: {"value": value}
         return module
 
+    if importlib.util.find_spec("weave") is not None:
+        recipe_load = original_import_module("weave.recipes.load")
+        monkeypatch.setattr(recipe_load, "import_module", import_module)
     monkeypatch.setattr(importlib, "import_module", import_module)
 
     result = run_preflight(

@@ -396,19 +396,34 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         )
         assert prior.lease is not None
         predecessor = authority.record_output_commit(
-            run_uri, "preprocess", attempt_id=prior.attempt.attempt_id,
+            run_uri,
+            "preprocess",
+            attempt_id=prior.attempt.attempt_id,
             fencing_token=prior.lease.fencing_token,
-            outputs={"data": ArtifactRef(artifact_id="prior/data", uri=f"{run_uri}/prior", artifact_type="json")},
+            outputs={
+                "data": ArtifactRef(
+                    artifact_id="prior/data",
+                    uri=f"{run_uri}/prior",
+                    artifact_type="json",
+                )
+            },
         )
         authority.transition_stage(
-            run_uri, "preprocess", from_status=StageStatus.SUCCEEDED,
-            to_status=StageStatus.STALE, intent=TransitionIntent.RESUME,
+            run_uri,
+            "preprocess",
+            from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.STALE,
+            intent=TransitionIntent.RESUME,
         )
         run_store.write_stage_status(
-            run_uri, "preprocess",
+            run_uri,
+            "preprocess",
             StageStatusRecord(
-                run_uri=run_uri, stage_name="preprocess", status=StageStatus.STALE,
-                attempt=1, updated_at="2020-01-01T00:00:00Z",
+                run_uri=run_uri,
+                stage_name="preprocess",
+                status=StageStatus.STALE,
+                attempt=1,
+                updated_at="2020-01-01T00:00:00Z",
             ),
         )
 
@@ -487,13 +502,23 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         if predecessor is not None:
             assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
             snapshot = authority.open_run(run_uri)
-            request = run_store.read_stage_worker_request(run_uri, "preprocess", attempt=2)
+            request = run_store.read_stage_worker_request(
+                run_uri, "preprocess", attempt=2
+            )
             assert request is not None
-            assert cast(Mapping[str, object], request["metadata"])["managed_output_predecessor"] == predecessor.commit.commit_id
+            assert (
+                cast(Mapping[str, object], request["metadata"])[
+                    "managed_output_predecessor"
+                ]
+                == predecessor.commit.commit_id
+            )
             head = snapshot.stages[0].latest_commit
             assert head is not None
             assert head.supersedes_commit_id == predecessor.commit.commit_id
-            assert len(authority.list_output_commits(run_uri, stage_name="preprocess")) == 2
+            assert (
+                len(authority.list_output_commits(run_uri, stage_name="preprocess"))
+                == 2
+            )
             return
         if retained_worker == "exact":
             assert retained_path.read_bytes() == retained_bytes
@@ -2927,10 +2952,12 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
     LocalDaemon.initialize(config)
     original_projection = LocalDaemonExecution._terminal_outcome
 
-    def project_like_previous_version(self, admission, plan, snapshot, scoped):
+    def project_like_previous_version(
+        self, admission, plan, snapshot, scoped, **policy
+    ):
         if any(stage.status is StageStatus.CANCELLED for stage in snapshot.stages):
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-        return original_projection(self, admission, plan, snapshot, scoped)
+        return original_projection(self, admission, plan, snapshot, scoped, **policy)
 
     with monkeypatch.context() as legacy:
         if legacy_projection:

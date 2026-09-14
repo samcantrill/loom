@@ -346,12 +346,10 @@ Apptainer executor requires apptainer or singularity
 Preflight should report executor availability as a check result, not as an
 unstructured exception.
 
-Current subprocess checks run only when `subprocess` is the selected executor.
-They verify that the current Python executable is available and that the public
-`loom stage run` worker command can be resolved through `loom.cli.main` without
-launching user stage code. Missing Python or worker command availability is
-reported as selected-executor availability failure, distinct from an unknown
-executor name.
+Installed native profiles are checked through explicit role preflight and
+readiness. These checks resolve the selected interpreter, imports, capacity and
+container capabilities without invoking authored stage code. They do not expose
+a public direct-worker continuation command.
 
 Reliability timeout checks are capability diagnostics, not process probes. A
 selected timeout policy reports whether the executor support level is

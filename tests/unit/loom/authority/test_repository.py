@@ -99,7 +99,7 @@ def test_repository_hard_cuts_pre_coordinator_schema_without_mutation(tmp_path) 
     assert version == ("4",)
 
 
-def test_repository_migrates_v5_coordinator_admissions_to_principal_binding(
+def test_repository_rejects_old_coordinator_schema_without_migration(
     tmp_path,
 ) -> None:
     repository = AuthorityRepository(tmp_path)
@@ -127,17 +127,14 @@ def test_repository_migrates_v5_coordinator_admissions_to_principal_binding(
             """
         )
 
-    identity = AuthorityRepository(tmp_path).initialize()
-
-    assert identity.schema_version == AUTHORITY_REPOSITORY_SCHEMA_VERSION
-    with sqlite3.connect(database_path) as conn:
-        columns = {
-            row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(coordinator_admission_receipts)"
-            )
-        }
-    assert "service_principal" in columns
+    before = database_path.read_bytes()
+    with pytest.raises(AuthorityRepositoryCompatibilityError) as exc_info:
+        AuthorityRepository(tmp_path).initialize()
+    assert (
+        exc_info.value.failure.kind
+        is AuthorityRepositoryCompatibilityKind.UNSUPPORTED_OLDER
+    )
+    assert database_path.read_bytes() == before
 
 
 def test_read_identity_fails_for_missing_database(tmp_path) -> None:

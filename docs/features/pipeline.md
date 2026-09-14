@@ -1604,52 +1604,13 @@ CI smoke tests
 
 The local executor may return `ArtifactRef`s directly from the stage call.
 
-### 16.3 Subprocess Executor
+### 16.3 Native worker isolation
 
-Post-v0.
-
-Runs one stage through:
-
-```bash
-loom stage run --run-uri RUN_URI --stage STAGE_NAME
-```
-
-Use cases:
-
-```text
-stage isolation
-independent logs
-closer to parent-managed worker execution
-debugging stage entry points
-```
-
-Future subprocess executors should not require Python object sharing across
-stages. They should communicate through run store files and artifact refs.
-Submitted afterok backends use the separate `loom stage-job run` command when
-there is no live parent process to finalize the stage.
-
-### 16.4 SLURM Executors
-
-Post-v0.
-
-SLURM behavior should live in executor implementations, not in the core planner.
-
-Initial SLURM modes:
-
-```text
-single-job:
-  one dry-run script plans whole-run continuation in v6
-
-afterok:
-  one dry-run script per RUN stage, with logical afterok dependencies in v6
-```
-
-Detailed SLURM behavior should have a separate design document. The pipeline
-layer should expose enough structured plan information for SLURM executors to
-generate scripts and dependencies. Live scheduler submission and job IDs are
-v7/later behavior.
-
----
+Installed agent workers execute one fenced ready stage in a supervised process
+or configured container. They exchange immutable requests, artifact references
+and retained result records, not shared Python objects. The coordinator accepts
+outputs and owns dependency readiness. A configured connected SLURM route uses
+a restricted bootstrap for one ready attempt. See [execution](execution.md).
 
 ## 17. Stores and Run Layout
 
@@ -1825,157 +1786,18 @@ them limited.
 
 ---
 
-## 20. Public API
+## 20. Public API and execution
 
-Recommended API:
+Use `PipelineSpec`, `StageSpec`, `OutputSpec`, `StageContext`,
+`validate_pipeline_config` and `plan_pipeline` for pure stage definitions,
+validation and planning. Planning does not invoke stages. Use the
+[native coordinator client](coordinator-client.md) and explicit preparation
+selection to execute a run. The coordinator owns lifecycle and stage readiness;
+there is no independent Python pipeline runner or direct worker CLI.
 
-```python
-from loom.pipeline import (
-    PipelineSpec,
-    StageSpec,
-    OutputSpec,
-    StageContext,
-    PipelineError,
-    validate_pipeline,
-    plan_pipeline,
-)
-
-from loom.pipeline.execution import PipelineRunner, create_authority_backed_serial_run_store
-from loom.pipeline.executors import LocalExecutor
-from loom.pipeline.stores import LocalArtifactStore, LocalRunArtifactStore
-```
-
-### 20.1 Validation
-
-```python
-from loom.pipeline import validate_pipeline
-
-validate_pipeline(spec)
-```
-
-Should raise a path-aware `PipelineValidationError` or return a structured
-validation result. Raising is simpler for v0.
-
-### 20.2 Planning
-
-```python
-from loom.pipeline import plan_pipeline
-
-plan = plan_pipeline(
-    spec,
-    run_store=run_store,
-    artifact_store=artifact_store,
-    resume=True,
-    selectors=selectors,
-)
-```
-
-Planning should not invoke stages.
-
-### 20.3 Running
-
-```python
-from loom.pipeline.execution import PipelineRunner
-
-runner = PipelineRunner(
-    run_store=run_store,
-    artifact_store=artifact_store,
-    executor=LocalExecutor(),
-)
-
-result = runner.run(spec, resolved_config=cfg)
-```
-
-The runner should return a structured result:
-
-```text
-run_uri
-final status
-stage results
-artifact index
-plan
-```
-
----
-
-## 21. CLI Integration
-
-Functional CLI integration is future roadmap work. V1-post is Python-API-only:
-it provides public Python pipeline/config APIs and no functional `loom` CLI
-commands or console script entry points. When implemented, the pipeline package
-should support CLI commands without becoming CLI-specific.
-
-Future CLI commands can call Python APIs:
-
-```text
-loom validate experiment.yaml
-loom plan experiment.yaml
-loom run experiment.yaml
-loom stage run --run-uri RUN_URI --stage STAGE
-loom status RUN_DIR
-loom logs RUN_DIR STAGE
-loom artifacts list RUN_DIR
-```
-
-### 21.1 `loom validate`
-
-Should:
-
-```text
-compose config
-expand recipes
-resolve interpolation
-build PipelineSpec
-validate pipeline DAG and stage specs
-not run stages
-```
-
-### 21.2 `loom plan`
-
-Should:
-
-```text
-compose config
-build PipelineSpec
-open or create run planning context
-compute execution plan
-print stage actions and reasons
-not run stages
-```
-
-### 21.3 `loom run`
-
-Should:
-
-```text
-compose config
-persist resolved config
-build PipelineSpec
-plan execution
-run selected stages
-write run status
-return non-zero on failure
-```
-
-### 21.4 `loom stage run`
-
-Post-v0.
-
-Should:
-
-```text
-load run directory
-load resolved config and pipeline spec
-bind inputs for one stage
-run exactly that stage
-write status/outputs/failure metadata
-```
-
-This command is required for post-v0 parent-managed subprocess execution.
-Submitted afterok execution uses `loom stage-job run` so the stage can finalize
-itself from durable run-store state without a parent runner.
-
----
+CLI validation and planning remain read-only tooling. Execution, status,
+cancellation and reconnect use the native operations documented in
+[execution](execution.md).
 
 ## 22. Error Model
 

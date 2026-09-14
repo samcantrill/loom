@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
@@ -15,6 +16,7 @@ from loom.state_sources import (
     unknown_source,
 )
 from loom.pipeline.stores import parse_artifact_key
+from loom.pipeline.stores.errors import CorruptStoreDocumentError
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 
 
@@ -593,10 +595,10 @@ def _authoritative_stage_summary(
         is not None,
         log_paths={
             "stdout": _optional_str(
-                store.local_stage_log_path(run_uri, stage_name, "stdout")
+                _stage_log_path(store, run_uri, stage_name, "stdout")
             ),
             "stderr": _optional_str(
-                store.local_stage_log_path(run_uri, stage_name, "stderr")
+                _stage_log_path(store, run_uri, stage_name, "stderr")
             ),
         },
         log_available={
@@ -750,9 +752,9 @@ def _stream_summary(
     tail: int,
     paths_only: bool,
 ) -> LogStreamSummary:
-    path = str(store.local_stage_log_path(run_uri, stage_name, stream))
+    path = str(_stage_log_path(store, run_uri, stage_name, stream))
     if paths_only:
-        content = store.read_stage_log(run_uri, stage_name, stream)
+        content = _read_stage_log(store, run_uri, stage_name, stream)
         return LogStreamSummary(
             stream=stream,
             path=path,
@@ -760,7 +762,7 @@ def _stream_summary(
             state_source=local_materialization_source(path=path),
         )
 
-    content = store.read_stage_log(run_uri, stage_name, stream)
+    content = _read_stage_log(store, run_uri, stage_name, stream)
     if content is None:
         return LogStreamSummary(
             stream=stream,
@@ -838,11 +840,9 @@ def _authoritative_read(
                 AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
             }:
                 return None
-            from loom.pipeline.stores.service_authority import (
-                create_service_authority_store,
-            )
+            from loom.diagnostics.backend import _default_authority_store
 
-            authority_store = create_service_authority_store(config)
+            authority_store = _default_authority_store(run_uri=run_uri)
             check = authority_store.check_schema(run_uri)
             if (
                 check.failure is not None
@@ -992,11 +992,47 @@ def _safe_plain_mapping(read: Any) -> Mapping[str, PlainData] | None:
         return None
 
 
+def _stage_log_path(store: Any, run_uri: str, stage_name: str, stream: str) -> Path:
+    """Prefer an existing local projection, then the retained worker reference.
+
+    A recorded path is only locally inspectable evidence. Its presence does not
+    establish remote reachability or request an agent-side read.
+    """
+    projected = Path(store.local_stage_log_path(run_uri, stage_name, stream))
+    if projected.exists():
+        return projected
+    try:
+        status = store.read_stage_status(run_uri, stage_name)
+        attempt = None if status is None else status.attempt
+        if attempt is not None:
+            result = store.read_stage_worker_result(
+                run_uri, stage_name, attempt=attempt
+            )
+            if isinstance(result, Mapping):
+                path = result.get(f"{stream}_path")
+                if isinstance(path, str) and Path(path).is_absolute():
+                    return Path(path)
+    except (OSError, ValueError, CorruptStoreDocumentError):
+        # Damaged optional materialization must not conceal authority status.
+        pass
+    return projected
+
+
+def _read_stage_log(
+    store: Any, run_uri: str, stage_name: str, stream: str
+) -> str | None:
+    path = _stage_log_path(store, run_uri, stage_name, stream)
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+    except (OSError, UnicodeError):
+        return None
+
+
 def _safe_read_stage_log(
     store: Any, run_uri: str, stage_name: str, stream: str
 ) -> str | None:
     try:
-        return store.read_stage_log(run_uri, stage_name, stream)
+        return _read_stage_log(store, run_uri, stage_name, stream)
     except Exception:
         return None
 

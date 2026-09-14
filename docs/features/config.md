@@ -442,7 +442,7 @@ run the workflow without guessing which recipe, overlay, or override string was
 used. `weave` returns that resolved view to the caller, but it remains
 persistence-free and does not choose run-store paths.
 
-For a v1 composed config passed through `PipelineRunner`, the current default
+For a v1 composed config passed through the native coordinator, the current default
 run-store config artifacts are:
 
 ```text
@@ -1261,7 +1261,7 @@ codec = instantiate(cfg["serialization"]["codec"])
 ```
 
 Do not use generic `instantiate()` on `pipeline` stage mappings in v0.
-`PipelineRunner` parses `pipeline.stages` into `PipelineSpec`/`StageSpec`
+the native coordinator parses `pipeline.stages` into `PipelineSpec`/`StageSpec`
 objects, where authored `factory._target_` is stored as
 `StageSpec.factory.target_path` and authored `config` is stored as
 `StageSpec.stage_config`. Stage targets are not
@@ -1333,7 +1333,7 @@ however they prefer, and keep project-specific flags in `unparsed_args`.
 
 Future Loom CLI commands should wrap the same public APIs without adding
 separate config semantics. For example, a future `loom run` adapter may compose
-config, create a run directory, and hand execution to `PipelineRunner`. The
+config, create a run directory, and hand execution to the native coordinator. The
 runner/run store, not `weave`, owns persistence.
 
 ---

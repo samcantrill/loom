@@ -17,16 +17,8 @@ from loom.pipeline.executors.apptainer import (
 )
 from loom.pipeline.executors.apptainer import _timeout
 from loom.pipeline.executors.containers import ContainerMount, ContainerOptions
-from loom.queue.local import SubprocessLocalProcessRunner
 from tests.container_acceptance.test_real_container_runtimes import (
     _required_apptainer_resource_command,
-)
-from tests.unit.loom.queue.test_local_adapter import (
-    _active_amount,
-    _adapter,
-    _item,
-    _store,
-    _with_dispatch_handle,
 )
 
 
@@ -239,78 +231,6 @@ def test_deadline_during_runtime_startup_reports_missing_init(
     assert "namespace init identity unavailable; cleanup unresolved" in result.error
 
 
-@pytest.mark.parametrize("root_first", [False, True])
-def test_real_legacy_capacity_waits_for_namespace_group_settlement(
-    runtime: tuple[str, str],
-    tmp_path: Path,
-    root_first: bool,
-) -> None:
-    command = _command(runtime, tmp_path)
-    code = (
-        "from loom.pipeline.executors.apptainer import ApptainerExecCommand, SubprocessApptainerExecRunner; "
-        f"SubprocessApptainerExecRunner().run(ApptainerExecCommand.from_argv({tuple(command.argv)!r}), timeout_seconds=30)"
-    )
-    store = _store()
-    store.set_resource_limit("workspace-1", "cpu", limit=1)
-    adapter = _adapter(store, SubprocessLocalProcessRunner())
-    item = _item("namespace-fixture", resources={"cpu": 1})
-    item = replace(
-        item,
-        admission_digest=None,
-        launch_contract=replace(
-            item.launch_contract,
-            snapshot={"argv": [sys.executable, "-c", code]},
-        ),
-    )
-    started = adapter.dispatch(item)
-    assert started.handle_id is not None
-    dispatched = _with_dispatch_handle(item, started.handle_id, started.evidence)
-    root = adapter._active[started.handle_id].process.pid  # noqa: SLF001 - fixture's creation-owned handle
-    handles = {root: os.pidfd_open(root)}
-    try:
-        deadline = monotonic() + 5
-        while not (tmp_path / "ready").exists():
-            assert monotonic() < deadline
-            sleep(0.01)
-        os.close(handles.pop(root))
-        handles.update(_pin_tree(root))
-        assert len(handles) >= 5
-        assert any(os.getpgid(pid) != root for pid in handles)
-        init = next(
-            pid
-            for pid in handles
-            if "Name:\tsinit\n" in Path(f"/proc/{pid}/status").read_text()
-        )
-        assert os.getpgid(init) == root
-        assert _active_amount(store, "cpu") == 1
-        if root_first:
-            signal.pidfd_send_signal(handles[root], signal.SIGKILL)
-        else:
-            cancellation = adapter.cancel(
-                dispatched, requested_by="test", reason="fixture"
-            )
-            assert cancellation.evidence["exit_observed"] is False
-        assert not adapter.inspect(dispatched).terminal
-        assert _active_amount(store, "cpu") == 1
-        deadline = monotonic() + 6
-        while True:
-            observation = adapter.inspect(dispatched)
-            if observation.terminal:
-                assert all(_exited(fd) for fd in handles.values())
-                assert _active_amount(store, "cpu") == 0
-                break
-            assert _active_amount(store, "cpu") == 1
-            assert monotonic() < deadline
-            sleep(0.02)
-    finally:
-        _cleanup(handles)
-        # Let the actual adapter reap its own root, including on assertion failure.
-        adapter.cancel(dispatched, requested_by="test", reason="fixture cleanup")
-        deadline = monotonic() + 5
-        while not adapter.inspect(dispatched).terminal and monotonic() < deadline:
-            sleep(0.02)
-
-
 def test_real_resident_query_then_contain_settles_namespace(
     runtime: tuple[str, str],
     tmp_path: Path,
@@ -379,67 +299,3 @@ def test_real_resident_query_then_contain_settles_namespace(
     finally:
         _cleanup(handles)
         supervisor.contain(launch)
-
-
-def test_real_early_success_file_cannot_override_timeout(
-    runtime: tuple[str, str],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import json
-    import shlex
-    from loom.pipeline.executors.apptainer import ApptainerExecutor
-    from loom.pipeline.reliability import ReliabilityPolicy, TimeoutPolicy
-    from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-    from loom.pipeline.status import StageStatus
-    from tests.unit.loom.pipeline.executors.apptainer.test_apptainer_executor import (
-        _request,
-        _worker_success,
-    )
-
-    store, run_uri, request = _request(tmp_path)
-    assert isinstance(request.resolved_runtime, ResolvedStageRuntimeOptions)
-    request = replace(
-        request,
-        resolved_runtime=replace(
-            request.resolved_runtime,
-            adapter_options={
-                "container": {
-                    "image": {"reference": runtime[1]},
-                    "workdir": str(store.local_run_dir(run_uri)),
-                },
-                "apptainer": {"command": runtime[0], "cleanenv": True},
-            },
-            reliability=ReliabilityPolicy(
-                timeout=TimeoutPolicy(enabled=True, duration_seconds=1)
-            ),
-        ),
-    )
-    result_path = store.local_stage_worker_result_path(run_uri, "build")
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(_worker_success(run_uri).to_dict())
-    worker = (
-        "sh",
-        "-c",
-        f"sleep 0.5; printf %s {shlex.quote(payload)} > {shlex.quote(str(result_path))}; sleep 30",
-    )
-    # The shell-only SIF supplies a worker-protocol fixture. The real executor,
-    # builder, runner, deadline, namespace cleanup and file-admission gate run.
-    monkeypatch.setattr(
-        "loom.pipeline.executors.apptainer.executor.build_stage_worker_command",
-        lambda **kwargs: worker,
-    )
-
-    def forbidden_read(**kwargs):  # noqa: ANN003, ANN202
-        pytest.fail("timed-out execution must reject before reading success")
-
-    monkeypatch.setattr(
-        "loom.pipeline.executors.apptainer.executor._read_worker_result", forbidden_read
-    )
-    result = ApptainerExecutor(run_store=store).execute(request)
-    assert result_path.is_file(), result.failure
-    assert json.loads(result_path.read_text())["status"] == "SUCCEEDED"
-    assert result.status is StageStatus.FAILED and not result.outputs
-    assert result.failure is not None
-    assert "container execution deadline exceeded" in result.failure.message
-    assert "unresolved" not in result.failure.message

@@ -347,6 +347,23 @@ def authority_config_from_namespace(namespace: Any) -> "AuthorityConfig":
         ) from exc
 
 
+def explicit_authority_config_from_namespace(
+    namespace: argparse.Namespace,
+) -> "AuthorityConfig | None":
+    option_names = (
+        "authority_backend",
+        "authority_profile",
+        "authority_endpoint",
+        "authority_workspace",
+        "authority_state",
+        "authority_reference",
+        "authority_metadata_json",
+    )
+    if not any((getattr(namespace, name, None) is not None for name in option_names)):
+        return None
+    return authority_config_from_namespace(namespace)
+
+
 def authority_config_to_worker_args(config: "AuthorityConfig") -> tuple[str, ...]:
     """Return CLI args for worker/submitted-job handoff commands."""
 
@@ -355,7 +372,9 @@ def authority_config_to_worker_args(config: "AuthorityConfig") -> tuple[str, ...
     return authority_config_to_cli_args(config)
 
 
-def authority_resolution_mode_from_namespace(namespace: Any) -> "AuthorityResolutionMode":
+def authority_resolution_mode_from_namespace(
+    namespace: Any,
+) -> "AuthorityResolutionMode":
     """Resolve authority mode from optional CLI namespace fields."""
 
     from loom.pipeline.stores import authority_resolution_mode_from_mapping
@@ -497,7 +516,9 @@ def _format_supervisor_text(result: "AuthoritySupervisorCommandResult") -> str:
     if result.generation_matches is not None:
         lines.append(f"generation_matches: {result.generation_matches}")
     for diagnostic in result.diagnostics:
-        lines.append(f"{diagnostic.get('severity')}: {diagnostic.get('code')}: {diagnostic.get('message')}")
+        lines.append(
+            f"{diagnostic.get('severity')}: {diagnostic.get('code')}: {diagnostic.get('message')}"
+        )
     return "\n".join(lines)
 
 
@@ -528,6 +549,7 @@ __all__ = [
     "AUTHORITY_OFFLINE_IMPORT_SCHEMA_VERSION",
     "add_authority_options",
     "authority_config_from_namespace",
+    "explicit_authority_config_from_namespace",
     "authority_config_to_worker_args",
     "authority_metadata_summary",
     "authority_resolution_mode_from_namespace",

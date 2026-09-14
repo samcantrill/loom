@@ -4182,7 +4182,10 @@ class LocalDaemonExecution:
             ):
                 return None
         if terminal_failures:
-            if self.coordinator.list_run_live_states(admission.run_uri):
+            if any(
+                state not in {"terminal", "logical_released"}
+                for _, state in self.coordinator.list_run_live_states(admission.run_uri)
+            ):
                 return LocalDaemonExecutionOutcome(
                     LocalDaemonAdmissionState.ACTIVE,
                     "existing assignments are settling after stage failure",

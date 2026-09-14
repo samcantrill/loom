@@ -24,3 +24,7 @@ uv run --extra config python examples/extensions/event-sink/run_event_sink.py
 The [Discord example](../discord-webhook/README.md) supplies an installed downstream
 factory using a protected environment secret. See [event and reliability behavior](../../../docs/features/reliability.md#event-hooks)
 for event vocabulary, authority ownership and delivery limits.
+
+## Public Python Surface
+
+Installed factories return `EventSinkRegistration`. Native coordinator events are observed through the selected `EventSinkRegistry`.

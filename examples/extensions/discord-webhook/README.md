@@ -131,3 +131,7 @@ protected selection for future events. Commit, event append and callback are
 separate steps; a crash can omit an event or delivery. Queries, restart and same-ID
 run replay do not resend historical notifications. Observer-record persistence
 failures are logged visibly and never change scientific status.
+
+## Public Python Surface
+
+Protected native coordinator factories return `EventSinkRegistration`; the installed extension implements `DiscordWebhookEventSink` and its coordinator reporter.

@@ -35,7 +35,7 @@ uv run loom preflight examples/execution/containers/slurm-apptainer/pipeline.yam
 ```
 
 On a real Slurm cluster, allocation remains owned by the existing
-`slurm-single-job` or `slurm-afterok` path; Apptainer owns its worker environment.
+explicit native ready-stage route; Apptainer owns its worker environment.
 Live scheduler/container qualification remains site-specific and opt-in.
 
 ## Variants
