@@ -4124,6 +4124,8 @@ class LocalDaemonExecution:
             RunStatus.SUCCEEDED,
         }:
             return False
+        if any(stage.status is StageStatus.CANCELLED for stage in snapshot.stages):
+            return False
         return intent.continue_independent or not any(
             stage.status is StageStatus.FAILED
             and not _current_attempt_retry_is_authorized(stage)
@@ -4156,6 +4158,12 @@ class LocalDaemonExecution:
             for stage in plan.stage_plans
             if stage.action is PlanAction.RUN
         }
+        if any(facts.get(name) is StageStatus.CANCELLED for name in run_stages):
+            requested = self._daemon_owner()._cancel(
+                admission.queue_item_id,
+                principal_id=f"coordinator:{self.coordinator_id}",
+            )
+            return self._cancel(requested, authority, plan.stage_order)
         terminal_failures = tuple(
             stage_facts[name]
             for name in run_stages
@@ -4200,12 +4208,6 @@ class LocalDaemonExecution:
                 LocalDaemonAdmissionState.FAILED,
                 "authority reports a failed stage",
             )
-        if any(facts.get(name) is StageStatus.CANCELLED for name in run_stages):
-            requested = self._daemon_owner()._cancel(
-                admission.queue_item_id,
-                principal_id=f"coordinator:{self.coordinator_id}",
-            )
-            return self._cancel(requested, authority, plan.stage_order)
         expected = {
             stage.stage_name: (
                 {StageStatus.SKIPPED}
