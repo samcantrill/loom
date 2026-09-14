@@ -1,21 +1,13 @@
 """Unit tests for execution models."""
 
-from collections.abc import Mapping, Sequence
 from dataclasses import replace
 import inspect
 import json
 from typing import Any, cast
-
 import pytest
-
 from loom.pipeline import PipelineSpec
-from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
-from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution import (
-    ConfigSnapshotInputs,
     ExecutionFailure,
-    FailurePolicy,
-    RunRequest,
     RunRequestError,
     StageReportedFailure,
     StageWorkerRequest,
@@ -23,15 +15,9 @@ from loom.pipeline.execution import (
     redact_executor_metadata,
 )
 from loom.pipeline.execution.models import STAGE_WORKER_REQUEST_SCHEMA_VERSION
-from loom.pipeline.planning import (
-    FingerprintContext,
-    PlanSelectors,
-    ResumeOptions,
-    build_stage_fingerprint,
-)
-from loom.pipeline.runtime import ResolvedStageRuntimeOptions, RunOptions
+from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
-from loom.serialization import PlainData
 from loom.artifacts import ArtifactRef
 
 
@@ -71,9 +57,7 @@ def _worker_request() -> StageWorkerRequest:
         executor_name="local",
         inputs={},
         fingerprint=build_stage_fingerprint(
-            stage,
-            bound_inputs={},
-            fingerprint_context=FingerprintContext(),
+            stage, bound_inputs={}, fingerprint_context=FingerprintContext()
         ),
         stdout_path="/tmp/run/stages/build/logs/stdout.log",
         stderr_path="/tmp/run/stages/build/logs/stderr.log",
@@ -84,227 +68,6 @@ def _worker_request() -> StageWorkerRequest:
         ._to_worker_metadata(),
         executor_metadata={"command": ["python", "-m", "loom"]},
     )
-
-
-def test_run_request_requires_config_or_pipeline() -> None:
-    with pytest.raises(RunRequestError):
-        RunRequest()
-
-
-def test_run_request_accepts_direct_pipeline_spec() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(pipeline=spec, run_uri="run1")
-
-    assert request.pipeline is spec
-    assert request.config is None
-
-
-def test_run_request_accepts_plain_mapping_config() -> None:
-    config = cast(
-        Mapping[str, PlainData],
-        {
-            "pipeline": {
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                        },
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    },
-                ]
-            }
-        },
-    )
-
-    request = RunRequest(config=config, run_uri="run1")
-
-    assert request.config == config
-
-
-def test_run_request_accepts_explicit_event_sink_registry() -> None:
-    spec = _minimal_pipeline_spec()
-    registry = EventSinkRegistry()
-
-    def sink(
-        event: PipelineEventRecord | EventReference,
-        context: EventSinkContext,
-    ) -> None:
-        _ = event, context
-
-    registry.register("audit.capture", sink)
-
-    request = RunRequest(
-        pipeline=spec,
-        run_uri="file:///runs/demo",
-        event_sink_registry=registry,
-        event_persistence="non_durable",
-    )
-
-    assert request.event_sink_registry is registry
-    assert request.event_persistence == "non_durable"
-
-
-def test_run_request_rejects_non_durable_without_sinks() -> None:
-    spec = _minimal_pipeline_spec()
-
-    with pytest.raises(RunRequestError, match="non-empty event_sink_registry"):
-        RunRequest(
-            pipeline=spec,
-            run_uri="file:///runs/demo",
-            event_persistence="non_durable",
-        )
-
-
-def test_run_request_options_are_canonical_invocation_policy() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(
-        pipeline=spec,
-        options={
-            "run_uri": "file:///runs/demo",
-            "selectors": {"only_stages": ["build"]},
-            "resume": {"enabled": False},
-        },
-    )
-
-    options = cast(RunOptions, request.options)
-    assert options.run_uri == "file:///runs/demo"
-    assert request.run_uri == "file:///runs/demo"
-    assert request.selectors == PlanSelectors(only_stages=("build",))
-    assert request.resume == ResumeOptions(enabled=False)
-
-
-def test_run_request_legacy_fields_normalize_into_options() -> None:
-    spec = _minimal_pipeline_spec()
-
-    request = RunRequest(
-        pipeline=spec,
-        run_uri="file:///runs/demo",
-        selectors=PlanSelectors(only_stages=("build",)),
-        resume=ResumeOptions(enabled=False),
-    )
-
-    options = cast(RunOptions, request.options)
-    assert options.run_uri == "file:///runs/demo"
-    assert options.to_plan_selectors() == PlanSelectors(only_stages=("build",))
-    assert options.to_resume_options() == ResumeOptions(enabled=False)
-
-
-def test_run_request_rejects_conflicting_legacy_options() -> None:
-    spec = _minimal_pipeline_spec()
-
-    with pytest.raises(RunRequestError, match="run_uri conflicts"):
-        RunRequest(
-            pipeline=spec,
-            run_uri="file:///runs/legacy",
-            options={"run_uri": "file:///runs/options"},
-        )
-
-
-def test_run_request_accepts_duck_typed_composed_config() -> None:
-    class FakeComposedConfig:
-        @property
-        def resolved(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def redacted(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def manifest(self) -> Mapping[str, PlainData]:
-            return {"source_artifacts": []}
-
-        @property
-        def provenance(self) -> object:
-            return object()
-
-        @property
-        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
-            return ()
-
-    config = FakeComposedConfig()
-
-    request = RunRequest(config=config, run_uri="run1")
-
-    assert request.config is config
-
-
-def test_run_request_requires_manifest_for_composed_config_duck_type() -> None:
-    class AlmostComposedConfig:
-        @property
-        def resolved(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def redacted(self) -> Mapping[str, PlainData]:
-            return {"pipeline": {"stages": []}}
-
-        @property
-        def provenance(self) -> object:
-            return object()
-
-        @property
-        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
-            return ()
-
-    with pytest.raises(RunRequestError, match="ComposedConfig or mapping"):
-        RunRequest(config=cast(Any, AlmostComposedConfig()), run_uri="run1")
-
-
-def test_config_snapshot_inputs_remain_explicit_user_provided_fields() -> None:
-    snapshots = ConfigSnapshotInputs(
-        raw="raw", overlays="overlays", cli_overrides="cli"
-    )
-
-    assert snapshots.raw == "raw"
-    assert snapshots.overlays == "overlays"
-    assert snapshots.cli_overrides == "cli"
-    assert not hasattr(snapshots, "resolved")
-    assert not hasattr(snapshots, "resolved_redacted")
-
-
-def test_run_request_accepts_continue_independent_failure_policy() -> None:
-    request = RunRequest(
-        pipeline=PipelineSpec.from_config(
-            {
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                        },
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    }
-                ]
-            }
-        ),
-        failure_policy=FailurePolicy(stop_on_first_failure=False),
-    )
-
-    assert request.failure_policy.stop_on_first_failure is False
-
-
-def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:
-    with pytest.raises(RunRequestError, match="stop_on_first_failure"):
-        RunRequest(
-            pipeline=PipelineSpec.from_config(
-                {
-                    "stages": [
-                        {
-                            "name": "build",
-                            "factory": {
-                                "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                            },
-                            "outputs": {"data": {"artifact_type": "json"}},
-                        }
-                    ]
-                }
-            ),
-            failure_policy={"stop_on_first_failure": "false"},  # type: ignore[arg-type]
-        )
 
 
 def test_execution_failure_round_trips_plain_data() -> None:
@@ -319,15 +82,12 @@ def test_execution_failure_round_trips_plain_data() -> None:
         message="boom",
         details={"path": "x"},
     )
-
     assert ExecutionFailure.from_dict(failure.to_dict()) == failure
 
 
 def test_stage_reported_failure_normalizes_a_detached_plain_payload() -> None:
     payload: Any = {"record": {"items": [1]}}
-
     failure = StageReportedFailure(payload)
-
     payload["record"]["items"].append(2)
     assert failure.domain_failure == {"record": {"items": [1]}}
     assert str(failure) == "stage reported a domain failure"
@@ -370,7 +130,6 @@ def test_execution_failure_plain_data_is_frozen_and_serialization_is_independent
         message="boom",
         details=details,
     )
-
     details["nested"]["items"].append("changed")
     assert failure.details == {"nested": {"items": ("original",)}}
     payload = cast(Any, failure.to_dict())
@@ -391,7 +150,6 @@ def test_execution_failure_preserves_signal_separately_from_exit_code() -> None:
         message="terminated",
         signal=15,
     )
-
     assert ExecutionFailure.from_dict(failure.to_dict()).signal == 15
     with pytest.raises(RunRequestError, match="exit_code and signal"):
         ExecutionFailure(
@@ -443,14 +201,12 @@ def test_execution_failure_from_dict_rejects_unknown_fields() -> None:
 
 def test_stage_worker_request_round_trips_plain_data() -> None:
     request = _worker_request()
-
     assert StageWorkerRequest.from_dict(request.to_dict()) == request
 
 
 def test_stage_worker_request_validates_runtime_identity() -> None:
     data = _worker_request().to_dict()
     data["resolved_runtime"] = {"stage_id": "other", "executor": "local"}
-
     with pytest.raises(RunRequestError, match="stage_id"):
         StageWorkerRequest.from_dict(data)
 
@@ -468,7 +224,6 @@ def test_stage_worker_result_round_trips_success() -> None:
         outputs={"data": _artifact_ref()},
         exit_code=0,
     )
-
     assert StageWorkerResult.from_dict(result.to_dict()) == result
 
 
@@ -539,17 +294,11 @@ def test_executor_metadata_redaction_removes_secrets_and_environment_values() ->
             "nested": {"password": "secret"},
         }
     )
-
     assert redacted == {
         "command": ["python", "[redacted]"],
         "environment": {"key_count": 2, "keys": ["PATH", "TOKEN"]},
         "nested": {"password": "[redacted]"},
     }
-
-
-def test_config_snapshot_inputs_validate_strings() -> None:
-    with pytest.raises(RunRequestError):
-        ConfigSnapshotInputs(raw=object())  # type: ignore[arg-type]
 
 
 def test_public_worker_request_hides_execution_paths_without_changing_private_handoff() -> (

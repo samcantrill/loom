@@ -493,7 +493,7 @@ from weave import (
     instantiate,
     register_recipe,
 )
-from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
+from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext
 from loom.diagnostics import PreflightRequest, run_preflight
 ```
 
@@ -829,7 +829,7 @@ failures, and finalizes runs.
 Current execution modules:
 
 ```text
-runner.py      PipelineRunner facade and local serial orchestration
+native coordinator/agent modules own all run orchestration
 eventing.py    typed local lifecycle event append helpers
 event_sinks.py import-light observer sink registry and observer fact records
 run_locks.py   runner-held run lock owner/acquire/release helpers
@@ -863,12 +863,7 @@ relay. Historical whole-run/single-job/`afterok` controllers remain separate
 owners. No generic external-scheduler package or protocol is added for this one
 consumer.
 
-When Stage 29 is implemented, `PipelineRunner` remains the synchronous public
-facade but managed execution delegates readiness/progress to the durable
-orchestrator and executes one prepared, assignment-fenced stage at a time through
-the agent boundary. The current in-memory serial/thread-pool loop and full-run
-lock must not remain a second managed scheduling owner. Direct/delegated
-compatibility behavior must stay explicit rather than silently sharing state.
+The native coordinator is the sole run orchestrator. Clients, sweeps and MCP use its operations; installed agent workers execute fenced ready attempts.
 
 ### 6.7 Stores and State
 

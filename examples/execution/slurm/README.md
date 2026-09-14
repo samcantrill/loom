@@ -7,9 +7,9 @@ cluster for runnable examples.
 
 | Example | Demonstrates |
 | --- | --- |
-| `execution.slurm.dry-run-basics` | Public `slurm-single-job` and `slurm-afterok` dry-runs that generate reviewable scripts and manifests without scheduler submission. |
+| `execution.slurm.dry-run-basics` | Pure dependency graph planning without scheduler submission or generated commands. |
 | `execution.slurm.afterok-diamond` | Afterok dependency planning for a diamond DAG, stage-level SLURM options/resources, generated continuation commands, and secret-safe dry-run artifacts. |
-| `execution.slurm.live` | Manual live SLURM submit/status/cancel commands for `slurm-single-job` and `slurm-afterok` on a shared cluster filesystem. |
+| `execution.slurm.live` | Manual connected native SLURM admission, status and cancellation on a qualified site. |
 
 Run from the repository root:
 

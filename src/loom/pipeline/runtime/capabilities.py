@@ -699,38 +699,6 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
     )
 
 
-def _slurm_descriptor(name: str) -> ExecutorDescriptor:
-    supported = ResourceCapability(
-        support_level=ResourceSupportLevel.SUPPORTED,
-        enforcement=ResourceEnforcementExpectation.ENFORCED,
-        severity=CapabilitySeverity.INFO,
-        details={"reason": "SLURM planning maps this resource to SBATCH directives"},
-    )
-    return ExecutorDescriptor(
-        name=name,
-        resource_capabilities={
-            "cpu": supported,
-            "memory": supported,
-            "gpu": supported,
-        },
-        adapter_namespaces=(
-            "apptainer",
-            "container",
-            "container_build",
-            "singularity",
-            "slurm",
-        ),
-        timeout_support=TimeoutSupportLevel.DELEGATED,
-        details={
-            "built_in": True,
-            "dry_run_only": False,
-            "live_submission": True,
-            "scheduler_commands": True,
-            "container_composition": True,
-        },
-    )
-
-
 def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
     mapped = ResourceCapability(
         support_level=ResourceSupportLevel.SUPPORTED,
@@ -1414,8 +1382,6 @@ DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
         "docker": _docker_descriptor(),
         "local": _local_descriptor(),
         "singularity": _apptainer_descriptor("singularity"),
-        "slurm-afterok": _slurm_descriptor("slurm-afterok"),
-        "slurm-single-job": _slurm_descriptor("slurm-single-job"),
         "subprocess": _subprocess_descriptor(),
     }
 )

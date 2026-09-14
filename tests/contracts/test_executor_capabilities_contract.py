@@ -9,7 +9,8 @@ from typing import cast
 
 import pytest
 
-from loom.pipeline.execution.models import RunRequest, StageExecutionRequest
+from loom.coordinator import RunRequest
+from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import (
     ResourceEntry,
@@ -171,7 +172,6 @@ def test_default_registry_includes_apptainer_and_singularity_descriptor_contract
 ):
     apptainer = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("apptainer")
     singularity = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
-    slurm = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
 
     assert apptainer.adapter_namespaces == (
         "apptainer",
@@ -183,13 +183,6 @@ def test_default_registry_includes_apptainer_and_singularity_descriptor_contract
     assert apptainer.details["apptainer_cli"] is True
     assert apptainer.details["singularity_compatible"] is False
     assert singularity.details["singularity_compatible"] is True
-    assert slurm.adapter_namespaces == (
-        "apptainer",
-        "container",
-        "container_build",
-        "singularity",
-        "slurm",
-    )
 
 
 def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> None:
@@ -219,6 +212,6 @@ def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> No
 
 
 def test_execution_envelope_exposes_runtime_handoff_without_adapter_lock_in() -> None:
-    assert "options" in RunRequest.__dataclass_fields__
+    assert "preparation" in RunRequest.__dataclass_fields__
     assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__

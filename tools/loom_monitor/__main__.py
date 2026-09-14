@@ -16,14 +16,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m tools.loom_monitor",
         description=(
-            "Open a read-only, evidence-aware TUI for one Loom queue configuration."
+            "Open a read-only, evidence-aware TUI for one native Loom coordinator."
         ),
     )
     parser.add_argument(
         "config",
         nargs="?",
         type=Path,
-        help="trusted Loom queue YAML config (omit with --demo)",
+        help="protected coordinator connection file or local socket (omit with --demo)",
     )
     parser.add_argument(
         "--demo",
@@ -146,6 +146,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         app.run()
     finally:
+        if demo_session is None:
+            collector.close()
         if demo_session is not None:
             if demo_session.preserved:
                 sys.stderr.write(

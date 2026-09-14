@@ -18,18 +18,14 @@ from loom.diagnostics.inspection import (
     StageLogsSummary,
     StageStatusSummary,
 )
-from loom.pipeline.executors.slurm.status import (
-    SlurmJobStatusSummary,
-    SlurmJobsStatusReport,
-)
-from loom.queue import QueueEnqueueRequest, QueueService, normalize_queue_spec
 from loom.state_sources import (
     authoritative_service_source,
     local_materialization_source,
 )
 from tools.loom_monitor.app import HelpScreen, LoomMonitorApp
 from tools.loom_monitor.collector import MonitorCollector
-from tools.loom_monitor.demo import _claim_demo_item, create_demo_session
+from tools.loom_monitor.demo import DemoCoordinator, create_demo_session
+from tools.loom_monitor.models import JobsData, JobRecord
 from tools.loom_monitor.__main__ import main as monitor_main
 from tools.loom_monitor.models import (
     ActiveAttempt,
@@ -251,7 +247,7 @@ def test_app_uses_full_width_detail_below_narrow_breakpoint(
 
             assert len(app.query("#attention")) == 0
             assert work_table.row_count == 1
-            assert work_table.get_cell("item-1", "queue") == "CLAIMED"
+            assert work_table.get_cell("item-1", "queue") == "ACTIVE"
             assert work_table.get_cell("item-1", "run_state") == "RUNNING"
             assert workspace.has_class("narrow")
             assert app.selected_item_id == "item-1"
@@ -272,31 +268,7 @@ def test_app_uses_full_width_detail_below_narrow_breakpoint(
 def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
     tmp_path: Path,
 ) -> None:
-    service = QueueService.from_spec(
-        normalize_queue_spec(
-            {
-                "db_path": str(tmp_path / "queue.sqlite"),
-                "pools": [{"pool_name": "batch", "mode": "delegated"}],
-                "queues": [{"queue_name": "jobs", "pool_name": "batch"}],
-            }
-        ),
-        clock=lambda: "2026-08-19T00:00:00Z",
-    )
-    service.start()
-    service.enqueue(
-        QueueEnqueueRequest(
-            queue_item_id="scheduled-item",
-            queue_name="jobs",
-            run_uri="file:///runs/scheduled-item",
-            adapter="slurm",
-        )
-    )
-    _claim_demo_item(
-        service,
-        "batch",
-        owner_id="controller",
-        claim_id="claim-1",
-    )
+    service = DemoCoordinator(items=(DemoCoordinator.item("scheduled-item", "ACTIVE"),))
     calls = {
         "authority": 0,
         "run": 0,
@@ -304,7 +276,7 @@ def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
         "jobs": 0,
         "logs": 0,
     }
-    original_inspect_item = service.inspect_item
+    original_inspect_item = service.admission_for_queue_item
 
     def inspect_item(queue_item_id: str):  # noqa: ANN202
         calls["selected"] += 1
@@ -314,24 +286,25 @@ def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
         calls["run"] += 1
         return _inspect_run(run_uri)
 
-    def inspect_jobs(run_uri: str, **_: Any) -> SlurmJobsStatusReport:
+    def inspect_jobs(run_uri: str, **_: Any) -> JobsData:
         calls["jobs"] += 1
-        return SlurmJobsStatusReport(
+        return JobsData(
             run_uri=run_uri,
-            run_status="RUNNING",
-            submission={"submission_id": "submission-1", "state": "SUBMITTED"},
-            manifest_path="/runs/scheduled-item/slurm/manifest.json",
-            manifest_relative_path="slurm/manifest.json",
             jobs=(
-                SlurmJobStatusSummary(
-                    logical_key="stage:build",
+                JobRecord(
+                    logical_key="assignment-1",
                     scheduler_job_id="12345",
                     status="RUNNING",
-                    source="squeue",
+                    source="agent-observation",
                     scheduler_state="RUNNING",
                     loom_run_status="RUNNING",
                     loom_stage_status="RUNNING",
                     stage_name="build",
+                    exit_code=None,
+                    dependency_state=None,
+                    dependency_job_ids=(),
+                    log_paths={},
+                    warnings=(),
                 ),
             ),
         )
@@ -365,7 +338,7 @@ def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
         calls["authority"] += 1
         return AuthorityData(state="READY", workspace_id="workspace")
 
-    service.inspect_item = inspect_item  # type: ignore[method-assign]
+    service.admission_for_queue_item = inspect_item  # type: ignore[method-assign]
     collector = MonitorCollector(
         config_path=tmp_path / "queue.yaml",
         service=service,
@@ -403,100 +376,35 @@ def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
     asyncio.run(exercise())
 
 
-def test_demo_uses_real_queue_state_and_advances_mock_work(tmp_path: Path) -> None:
+def test_demo_observes_native_admissions_without_creating_queue_state(tmp_path):
     clock = _ManualMonotonic()
-    session = create_demo_session(
-        output_root=tmp_path,
-        monotonic=clock,
-        seed=7,
-    )
+    session = create_demo_session(output_root=tmp_path, monotonic=clock)
     try:
-        snapshot = session.collector.refresh_queue()
-
-        assert session.preserved is True
-        assert session.config_path.is_file()
-        assert (session.workspace_path / "queue.sqlite").is_file()
-        assert snapshot.queue.value is not None
-        initial = {
-            item.queue_item_id: item.status for item in snapshot.queue.value.items
+        initial = session.collector.refresh_queue().queue.value
+        assert initial is not None
+        assert {item.status for item in initial.items} >= {
+            "ACTIVE",
+            "WAITING",
+            "FAILED",
+            "BLOCKED",
         }
-        assert initial["demo-live-analysis"] == "DISPATCHED"
-        assert initial["demo-waiting-large"] == "QUEUED"
-        assert initial["demo-feature-failed"] == "FAILED"
-        assert initial["demo-cancelled"] == "CANCELLED"
-        assert initial["demo-recovery-unknown"] == "UNKNOWN"
-
+        assert not (tmp_path / "queue.sqlite").exists()
         clock.value = 20
-        advanced = session.collector.refresh_queue()
-
-        assert advanced.queue.value is not None
-        current = {
-            item.queue_item_id: item.status for item in advanced.queue.value.items
-        }
-        assert current["demo-live-analysis"] == "SUCCEEDED"
-        assert current["demo-slurm-train"] == "SUCCEEDED"
-        assert current["demo-waiting-large"] == "DISPATCHED"
-        assert current["demo-slurm-dependent"] == "DISPATCHED"
+        updated = session.collector.refresh_queue().queue.value
+        assert updated is not None
+        assert (
+            next(
+                item
+                for item in updated.items
+                if item.queue_item_id == "demo-live-analysis"
+            ).status
+            == "SUCCEEDED"
+        )
+        jobs = session.collector.refresh_jobs("file:///demo/demo-slurm-train").jobs
+        assert jobs.error is None and jobs.value is not None
+        assert jobs.value.jobs[0].scheduler_job_id == "1234"
     finally:
         session.close()
-
-    reopened = MonitorCollector.from_config(session.config_path).refresh_queue()
-    assert reopened.queue.value is not None
-    assert len(reopened.queue.value.items) == 10
-
-
-def test_demo_projects_scheduler_logs_and_retained_authority_failure() -> None:
-    clock = _ManualMonotonic()
-    session = create_demo_session(
-        scenario="failures",
-        monotonic=clock,
-        seed=11,
-    )
-    workspace_path = session.workspace_path
-    try:
-        snapshot = session.collector.refresh_queue()
-        assert snapshot.queue.value is not None
-        slurm = next(
-            item
-            for item in snapshot.queue.value.items
-            if item.queue_item_id == "demo-slurm-train"
-        )
-
-        jobs_snapshot = session.collector.refresh_jobs(slurm.run_uri)
-        assert jobs_snapshot.jobs.value is not None
-        assert [job.scheduler_state for job in jobs_snapshot.jobs.value.jobs] == [
-            "RUNNING",
-            "PENDING",
-            "PENDING",
-        ]
-
-        run_snapshot = session.collector.refresh_runs((slurm.run_uri,))
-        run = run_snapshot.runs[slurm.run_uri].value
-        assert run is not None
-        logs_snapshot = session.collector.refresh_logs(
-            slurm.run_uri,
-            run.stages[0].stage_name,
-            tail=2,
-        )
-        assert logs_snapshot.logs.value is not None
-        stdout = logs_snapshot.logs.value.streams[0]
-        assert stdout.available is True
-        assert stdout.displayed_line_count == 2
-        assert stdout.truncated is True
-        assert Path(stdout.path).is_file()
-
-        ready = session.collector.refresh_authority()
-        assert ready.authority.value is not None
-        clock.value = 10
-        session.collector.refresh_queue()
-        stale = session.collector.refresh_authority()
-        assert stale.authority.value == ready.authority.value
-        assert stale.authority.stale is True
-        assert "temporarily offline" in (stale.authority.error or "")
-    finally:
-        session.close()
-
-    assert not workspace_path.exists()
 
 
 def test_demo_cli_launches_without_queue_config(
@@ -522,9 +430,9 @@ def test_demo_cli_launches_without_queue_config(
         == 0
     )
     assert len(launched) == 1
-    assert launched[0].collector.workspace_name == "DEMO · scheduler"
+    assert launched[0].collector.workspace_name == "Native demo (scheduler)"
     assert launched[0].current_view is MonitorView.ALL
-    assert launched[0].pool_filter == "slurm-pool"
+    assert launched[0].pool_filter is None
     assert launched[0].queue_interval == 1.0
     assert launched[0].run_interval == 1.0
     assert launched[0].authority_interval == 1.0
@@ -554,34 +462,10 @@ def _queue_record(
     )
 
 
-def _queue_service(tmp_path: Path, *, claimed: bool = False) -> QueueService:
-    service = QueueService.from_spec(
-        normalize_queue_spec(
-            {
-                "db_path": str(tmp_path / "queue.sqlite"),
-                "pools": [{"pool_name": "local", "mode": "managed"}],
-                "queues": [{"queue_name": "default", "pool_name": "local"}],
-            }
-        ),
-        clock=lambda: "2026-08-19T00:00:00Z",
+def _queue_service(tmp_path: Path, *, claimed: bool = False):
+    return DemoCoordinator(
+        items=(DemoCoordinator.item("item-1", "ACTIVE" if claimed else "WAITING"),)
     )
-    service.start()
-    service.enqueue(
-        QueueEnqueueRequest(
-            queue_item_id="item-1",
-            queue_name="default",
-            run_uri="file:///runs/item-1",
-            adapter="local",
-        )
-    )
-    if claimed:
-        _claim_demo_item(
-            service,
-            "local",
-            owner_id="controller",
-            claim_id="claim-1",
-        )
-    return service
 
 
 def _inspect_run(run_uri: str, **_: Any) -> RunStatusSummary:

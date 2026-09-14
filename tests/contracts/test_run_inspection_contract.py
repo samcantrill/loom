@@ -14,11 +14,11 @@ from loom.diagnostics import (
 from loom.queue import (
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
-    QueueEnqueueRequest,
-    QueueService,
+    QueueItem,
+    RunIntent,
+    LaunchContract,
     QueueStorageError,
     SQLiteQueueRepository,
-    normalize_queue_spec,
 )
 
 
@@ -87,21 +87,19 @@ def test_direct_and_unix_sources_share_the_exact_v1_model(tmp_path: Path) -> Non
 
 def test_existing_queue_can_be_read_exactly_without_writes(tmp_path: Path) -> None:
     database = tmp_path / "queue.sqlite"
-    spec = normalize_queue_spec(
-        {
-            "schema_version": 2,
-            "db_path": str(database),
-            "pools": [{"pool_name": "pool", "mode": "delegated"}],
-            "queues": [{"queue_name": "queue", "pool_name": "pool"}],
-        }
-    )
-    service = QueueService.from_spec(spec)
-    service.start()
-    service.enqueue(
-        QueueEnqueueRequest(
+    repository = SQLiteQueueRepository(database)
+    repository.enqueue(
+        QueueItem(
             queue_item_id="item-1",
             queue_name="queue",
+            pool_name="pool",
             run_uri="file:///runs/item-1",
+            run_intent=RunIntent(run_uri="file:///runs/item-1"),
+            launch_contract=LaunchContract(
+                adapter="historical", entrypoint="historical.worker"
+            ),
+            enqueued_at="2026-08-19T00:00:00Z",
+            updated_at="2026-08-19T00:00:00Z",
         )
     )
     before = database.read_bytes()

@@ -14,13 +14,6 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 import yaml
 
-from weave import compose_config
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.planning import PlanAction
-from loom.pipeline.stores import path_to_run_uri
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
@@ -81,8 +74,6 @@ CO_LOCATED_VARIANT_EXAMPLES = {
     "execution.runtime-profile",
     "execution.subprocess",
     "execution.offline-first-import",
-    "execution.slurm.dry-run-basics",
-    "execution.slurm.afterok-diamond",
     "operations.local-diagnostics",
     "operations.failing-run",
     "operations.offline-import-rejections",
@@ -118,22 +109,6 @@ pipeline:
 """
     )
     return config
-
-
-def test_readme_python_api_example_runs_and_reuses_same_run(tmp_path: Path) -> None:
-    run_store = create_authority_backed_serial_run_store(
-        tmp_path / "runs",
-        authority_store=SQLitePerRunAuthorityStore(),
-    )
-    runner = PipelineRunner(run_store=run_store)
-    config = compose_config(_config_path(tmp_path)).resolved
-    run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
-    first = runner.run(RunRequest(config=config, run_uri=run_uri))
-    second = runner.run(RunRequest(config=config, run_uri=run_uri, open_existing=True))
-
-    assert first.status.name == "SUCCEEDED"
-    assert second.stage_results["build"].action == PlanAction.REUSE
-    assert second.stage_results["report"].action == PlanAction.REUSE
 
 
 def test_examples_catalog_manifests_are_valid() -> None:

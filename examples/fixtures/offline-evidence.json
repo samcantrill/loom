@@ -1,0 +1,1311 @@
+{
+  "schema_version": 1,
+  "kind": "loom.offline_evidence_manifest",
+  "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+  "generated_at": "2020-01-01T00:00:18Z",
+  "manifest_status": "complete",
+  "state_source": {
+    "authoritative": false,
+    "description": "state comes from offline evidence that has not been imported",
+    "details": {},
+    "label": "offline_evidence",
+    "policy": "offline_first"
+  },
+  "run_status": {
+    "created_at": "2026-09-13T22:52:36Z",
+    "finished_at": "2020-01-01T00:00:17Z",
+    "message": null,
+    "metadata": {},
+    "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+    "schema_version": 1,
+    "started_at": "2020-01-01T00:00:01Z",
+    "status": "SUCCEEDED",
+    "updated_at": "2020-01-01T00:00:17Z"
+  },
+  "plan": {
+    "fingerprint_context": {
+      "algorithm": "sha256",
+      "dependencies": {},
+      "extra": {},
+      "git": {},
+      "loom_version": "0.1.0",
+      "policy_name": "loom.stage.semantic",
+      "policy_version": 2,
+      "python_version": "3.12.3"
+    },
+    "kind": "loom.execution_plan",
+    "pipeline_name": "demo",
+    "reasons": [],
+    "resume": {
+      "enabled": true
+    },
+    "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+    "schema_version": 1,
+    "selectors": {
+      "force_stages": [],
+      "from_stage": null,
+      "only_stages": [],
+      "skip_stages": []
+    },
+    "stage_order": [
+      "build",
+      "report"
+    ],
+    "stage_plans": [
+      {
+        "action": "RUN",
+        "base_action": "RUN",
+        "bound_inputs": {},
+        "declared_outputs": {
+          "data": {
+            "artifact_type": "json",
+            "codec_key": "json.v1",
+            "metadata": {},
+            "schema_version": null
+          }
+        },
+        "downstream_stages": [
+          "report"
+        ],
+        "fingerprint": {
+          "algorithm": "sha256",
+          "fingerprint": "sha256:41e165bb14ee764967d76d4e4bc653d6521a18a457ea47398af554b70472ad20",
+          "inputs_summary": {
+            "dependency_names": [],
+            "extra_keys": [],
+            "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+            "git": {},
+            "input_artifacts": {},
+            "input_names": [],
+            "loom_version": "0.1.0",
+            "output_names": [
+              "data"
+            ],
+            "python_version": "3.12.3",
+            "stage_name": "build"
+          },
+          "payload": {
+            "bound_inputs": {},
+            "declared_inputs": {},
+            "declared_outputs": {
+              "data": {
+                "artifact_type": "json",
+                "codec_key": "json.v1",
+                "metadata": {},
+                "schema_version": null
+              }
+            },
+            "dependencies": {},
+            "extra": {},
+            "factory_init": {},
+            "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+            "fingerprint_fields": {},
+            "git": {},
+            "loom_version": "0.1.0",
+            "policy_name": "loom.stage.semantic",
+            "policy_version": 2,
+            "python_version": "3.12.3",
+            "schema_version": 2,
+            "stage_config": {
+              "value": 1
+            },
+            "stage_name": "build"
+          },
+          "policy_name": "loom.stage.semantic",
+          "policy_version": 2,
+          "schema_version": 2
+        },
+        "fingerprint_status": "COMPUTED",
+        "invalidated_by": [],
+        "pending_inputs": [],
+        "reasons": [
+          {
+            "code": "NO_PRIOR_STATUS",
+            "details": {},
+            "input_name": null,
+            "message": "no prior stage status exists",
+            "output_name": null,
+            "stage_name": "build",
+            "upstream_stage": null
+          }
+        ],
+        "resume_check": {
+          "action": "RUN",
+          "attempt": null,
+          "current_fingerprint": {
+            "algorithm": "sha256",
+            "fingerprint": "sha256:41e165bb14ee764967d76d4e4bc653d6521a18a457ea47398af554b70472ad20",
+            "inputs_summary": {
+              "dependency_names": [],
+              "extra_keys": [],
+              "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+              "git": {},
+              "input_artifacts": {},
+              "input_names": [],
+              "loom_version": "0.1.0",
+              "output_names": [
+                "data"
+              ],
+              "python_version": "3.12.3",
+              "stage_name": "build"
+            },
+            "payload": {
+              "bound_inputs": {},
+              "declared_inputs": {},
+              "declared_outputs": {
+                "data": {
+                  "artifact_type": "json",
+                  "codec_key": "json.v1",
+                  "metadata": {},
+                  "schema_version": null
+                }
+              },
+              "dependencies": {},
+              "extra": {},
+              "factory_init": {},
+              "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+              "fingerprint_fields": {},
+              "git": {},
+              "loom_version": "0.1.0",
+              "policy_name": "loom.stage.semantic",
+              "policy_version": 2,
+              "python_version": "3.12.3",
+              "schema_version": 2,
+              "stage_config": {
+                "value": 1
+              },
+              "stage_name": "build"
+            },
+            "policy_name": "loom.stage.semantic",
+            "policy_version": 2,
+            "schema_version": 2
+          },
+          "inputs": {},
+          "outputs": {},
+          "prior_fingerprint": null,
+          "reasons": [
+            {
+              "code": "NO_PRIOR_STATUS",
+              "details": {},
+              "input_name": null,
+              "message": "no prior stage status exists",
+              "output_name": null,
+              "stage_name": "build",
+              "upstream_stage": null
+            }
+          ],
+          "stage_name": "build",
+          "status": null
+        },
+        "reusable_outputs": {},
+        "selected_by": [],
+        "stage_name": "build",
+        "upstream_stages": []
+      },
+      {
+        "action": "RUN",
+        "base_action": "RUN",
+        "bound_inputs": {},
+        "declared_outputs": {
+          "text": {
+            "artifact_type": "text",
+            "codec_key": "text.v1",
+            "metadata": {},
+            "schema_version": null
+          }
+        },
+        "downstream_stages": [],
+        "fingerprint": null,
+        "fingerprint_status": "PENDING_INPUTS",
+        "invalidated_by": [
+          {
+            "code": "UPSTREAM_WILL_RUN",
+            "details": {},
+            "input_name": "data",
+            "message": "upstream stage 'build' action is RUN",
+            "output_name": "data",
+            "stage_name": "report",
+            "upstream_stage": "build"
+          }
+        ],
+        "pending_inputs": [
+          {
+            "input_name": "data",
+            "reason": {
+              "code": "UPSTREAM_WILL_RUN",
+              "details": {},
+              "input_name": "data",
+              "message": "upstream stage 'build' action is RUN",
+              "output_name": "data",
+              "stage_name": "report",
+              "upstream_stage": "build"
+            },
+            "source_output": "data",
+            "source_stage": "build"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "UPSTREAM_WILL_RUN",
+            "details": {},
+            "input_name": "data",
+            "message": "upstream stage 'build' action is RUN",
+            "output_name": "data",
+            "stage_name": "report",
+            "upstream_stage": "build"
+          }
+        ],
+        "resume_check": null,
+        "reusable_outputs": {},
+        "selected_by": [],
+        "stage_name": "report",
+        "upstream_stages": [
+          "build"
+        ]
+      }
+    ],
+    "summary": {
+      "BLOCKED": 0,
+      "REUSE": 0,
+      "RUN": 2,
+      "SKIP": 0,
+      "STALE": 0
+    }
+  },
+  "runtime": {
+    "adapter_options": {
+      "namespace_count": 0,
+      "namespaces": []
+    },
+    "dry_run": false,
+    "environment": {
+      "inherit": true,
+      "set_variable_count": 0,
+      "unset_variable_count": 0
+    },
+    "execution": {
+      "setting_keys": []
+    },
+    "executor": "local",
+    "notes": [],
+    "options_schema_version": 2,
+    "profile": null,
+    "reliability": null,
+    "resource_policy": {
+      "account_for": "all",
+      "enforce": []
+    },
+    "resume": {
+      "enabled": true
+    },
+    "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+    "schema_version": 1,
+    "selectors": {
+      "force_stages": [],
+      "from_stage": null,
+      "only_stages": [],
+      "skip_stages": []
+    },
+    "stages": {
+      "build": {
+        "adapter_options": {
+          "namespace_count": 0,
+          "namespaces": []
+        },
+        "environment": {
+          "run": {
+            "inherit": true,
+            "set_variable_count": 0,
+            "unset_variable_count": 0
+          },
+          "stage": {
+            "inherit": true,
+            "set_variable_count": 0,
+            "unset_variable_count": 0
+          }
+        },
+        "execution": {
+          "setting_keys": []
+        },
+        "executor": "local",
+        "reliability": {
+          "retry": {
+            "enabled": false,
+            "max_attempts": 1
+          }
+        },
+        "resource_policy": {
+          "account_for": "all",
+          "enforce": []
+        },
+        "resources": {
+          "entries": {},
+          "schema_version": 2
+        },
+        "stage_id": "build"
+      },
+      "report": {
+        "adapter_options": {
+          "namespace_count": 0,
+          "namespaces": []
+        },
+        "environment": {
+          "run": {
+            "inherit": true,
+            "set_variable_count": 0,
+            "unset_variable_count": 0
+          },
+          "stage": {
+            "inherit": true,
+            "set_variable_count": 0,
+            "unset_variable_count": 0
+          }
+        },
+        "execution": {
+          "setting_keys": []
+        },
+        "executor": "local",
+        "reliability": {
+          "retry": {
+            "enabled": false,
+            "max_attempts": 1
+          }
+        },
+        "resource_policy": {
+          "account_for": "all",
+          "enforce": []
+        },
+        "resources": {
+          "entries": {},
+          "schema_version": 2
+        },
+        "stage_id": "report"
+      }
+    },
+    "tags": {}
+  },
+  "config": {
+    "composition_manifest": null,
+    "recipe_manifest": [],
+    "snapshots": {
+      "cli_overrides": {
+        "checksum": null,
+        "diagnostics": [
+          {
+            "code": "offline_evidence.config_cli_overrides_missing",
+            "detail": {
+              "path": "/historical/loom-fixture/offline-runs/offline-run/config/cli_overrides.yaml"
+            },
+            "message": "referenced evidence file is missing",
+            "severity": "warning"
+          }
+        ],
+        "exists": false,
+        "path": "/historical/loom-fixture/offline-runs/offline-run/config/cli_overrides.yaml",
+        "size_bytes": null
+      },
+      "overlays": {
+        "checksum": null,
+        "diagnostics": [
+          {
+            "code": "offline_evidence.config_overlays_missing",
+            "detail": {
+              "path": "/historical/loom-fixture/offline-runs/offline-run/config/overlays.yaml"
+            },
+            "message": "referenced evidence file is missing",
+            "severity": "warning"
+          }
+        ],
+        "exists": false,
+        "path": "/historical/loom-fixture/offline-runs/offline-run/config/overlays.yaml",
+        "size_bytes": null
+      },
+      "raw": {
+        "checksum": null,
+        "diagnostics": [
+          {
+            "code": "offline_evidence.config_raw_missing",
+            "detail": {
+              "path": "/historical/loom-fixture/offline-runs/offline-run/config/raw.yaml"
+            },
+            "message": "referenced evidence file is missing",
+            "severity": "warning"
+          }
+        ],
+        "exists": false,
+        "path": "/historical/loom-fixture/offline-runs/offline-run/config/raw.yaml",
+        "size_bytes": null
+      },
+      "resolved": {
+        "checksum": "sha256:db347878143098a91615d3d712be3af09229f84d10178772ebdadd833d07c7fd",
+        "diagnostics": [],
+        "exists": true,
+        "path": "/historical/loom-fixture/offline-runs/offline-run/config/resolved.yaml",
+        "size_bytes": 762
+      },
+      "resolved_redacted": {
+        "checksum": "sha256:db347878143098a91615d3d712be3af09229f84d10178772ebdadd833d07c7fd",
+        "diagnostics": [],
+        "exists": true,
+        "path": "/historical/loom-fixture/offline-runs/offline-run/config/resolved.redacted.yaml",
+        "size_bytes": 762
+      }
+    }
+  },
+  "provenance": {
+    "documents": {
+      "command": {
+        "argv": [
+          "-"
+        ],
+        "command_string": "-",
+        "cwd": "/historical/loom-fixture/project",
+        "kind": "loom.command_provenance",
+        "launcher": null,
+        "metadata": {},
+        "schema_version": 1
+      },
+      "dependencies": {
+        "kind": "loom.dependency_provenance",
+        "metadata": {},
+        "missing_packages": [],
+        "packages": {
+          "loom": "0.1.0"
+        },
+        "schema_version": 1
+      },
+      "environment": {
+        "container": {},
+        "hostname": "sleipnir",
+        "kind": "loom.environment_provenance",
+        "machine": "x86_64",
+        "metadata": {
+          "captured_with": "2026-09-13T22:52:36Z"
+        },
+        "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.39",
+        "processor": "x86_64",
+        "python_executable": "/historical/loom-fixture/venv/bin/python",
+        "python_version": "3.12.3",
+        "schema_version": 1,
+        "selected_env": {},
+        "user": null
+      },
+      "git": null
+    }
+  },
+  "stages": [
+    {
+      "stage_name": "build",
+      "plan": {
+        "action": "RUN",
+        "base_action": "RUN",
+        "bound_inputs": {},
+        "declared_outputs": {
+          "data": {
+            "artifact_type": "json",
+            "codec_key": "json.v1",
+            "metadata": {},
+            "schema_version": null
+          }
+        },
+        "downstream_stages": [
+          "report"
+        ],
+        "fingerprint": {
+          "algorithm": "sha256",
+          "fingerprint": "sha256:41e165bb14ee764967d76d4e4bc653d6521a18a457ea47398af554b70472ad20",
+          "inputs_summary": {
+            "dependency_names": [],
+            "extra_keys": [],
+            "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+            "git": {},
+            "input_artifacts": {},
+            "input_names": [],
+            "loom_version": "0.1.0",
+            "output_names": [
+              "data"
+            ],
+            "python_version": "3.12.3",
+            "stage_name": "build"
+          },
+          "payload": {
+            "bound_inputs": {},
+            "declared_inputs": {},
+            "declared_outputs": {
+              "data": {
+                "artifact_type": "json",
+                "codec_key": "json.v1",
+                "metadata": {},
+                "schema_version": null
+              }
+            },
+            "dependencies": {},
+            "extra": {},
+            "factory_init": {},
+            "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+            "fingerprint_fields": {},
+            "git": {},
+            "loom_version": "0.1.0",
+            "policy_name": "loom.stage.semantic",
+            "policy_version": 2,
+            "python_version": "3.12.3",
+            "schema_version": 2,
+            "stage_config": {
+              "value": 1
+            },
+            "stage_name": "build"
+          },
+          "policy_name": "loom.stage.semantic",
+          "policy_version": 2,
+          "schema_version": 2
+        },
+        "fingerprint_status": "COMPUTED",
+        "invalidated_by": [],
+        "pending_inputs": [],
+        "reasons": [
+          {
+            "code": "NO_PRIOR_STATUS",
+            "details": {},
+            "input_name": null,
+            "message": "no prior stage status exists",
+            "output_name": null,
+            "stage_name": "build",
+            "upstream_stage": null
+          }
+        ],
+        "resume_check": {
+          "action": "RUN",
+          "attempt": null,
+          "current_fingerprint": {
+            "algorithm": "sha256",
+            "fingerprint": "sha256:41e165bb14ee764967d76d4e4bc653d6521a18a457ea47398af554b70472ad20",
+            "inputs_summary": {
+              "dependency_names": [],
+              "extra_keys": [],
+              "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+              "git": {},
+              "input_artifacts": {},
+              "input_names": [],
+              "loom_version": "0.1.0",
+              "output_names": [
+                "data"
+              ],
+              "python_version": "3.12.3",
+              "stage_name": "build"
+            },
+            "payload": {
+              "bound_inputs": {},
+              "declared_inputs": {},
+              "declared_outputs": {
+                "data": {
+                  "artifact_type": "json",
+                  "codec_key": "json.v1",
+                  "metadata": {},
+                  "schema_version": null
+                }
+              },
+              "dependencies": {},
+              "extra": {},
+              "factory_init": {},
+              "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+              "fingerprint_fields": {},
+              "git": {},
+              "loom_version": "0.1.0",
+              "policy_name": "loom.stage.semantic",
+              "policy_version": 2,
+              "python_version": "3.12.3",
+              "schema_version": 2,
+              "stage_config": {
+                "value": 1
+              },
+              "stage_name": "build"
+            },
+            "policy_name": "loom.stage.semantic",
+            "policy_version": 2,
+            "schema_version": 2
+          },
+          "inputs": {},
+          "outputs": {},
+          "prior_fingerprint": null,
+          "reasons": [
+            {
+              "code": "NO_PRIOR_STATUS",
+              "details": {},
+              "input_name": null,
+              "message": "no prior stage status exists",
+              "output_name": null,
+              "stage_name": "build",
+              "upstream_stage": null
+            }
+          ],
+          "stage_name": "build",
+          "status": null
+        },
+        "reusable_outputs": {},
+        "selected_by": [],
+        "stage_name": "build",
+        "upstream_stages": []
+      },
+      "status": {
+        "attempt": 1,
+        "finished_at": "2026-09-13T22:52:36Z",
+        "message": null,
+        "metadata": {
+          "action": "RUN"
+        },
+        "owner": {},
+        "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+        "schema_version": 1,
+        "stage_name": "build",
+        "started_at": "2026-09-13T22:52:36Z",
+        "status": "SUCCEEDED",
+        "updated_at": "2026-09-13T22:52:36Z"
+      },
+      "inputs": {},
+      "outputs": {
+        "data": {
+          "artifact_id": "build/data",
+          "artifact_type": "json",
+          "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+          "codec_key": "json.v1",
+          "created_at": "2026-09-13T22:52:36Z",
+          "fingerprint": null,
+          "metadata": {},
+          "producer_stage": "build",
+          "schema_version": 1,
+          "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/build/data.json"
+        }
+      },
+      "fingerprint": {
+        "algorithm": "sha256",
+        "fingerprint": "sha256:41e165bb14ee764967d76d4e4bc653d6521a18a457ea47398af554b70472ad20",
+        "inputs_summary": {
+          "dependency_names": [],
+          "extra_keys": [],
+          "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+          "git": {},
+          "input_artifacts": {},
+          "input_names": [],
+          "loom_version": "0.1.0",
+          "output_names": [
+            "data"
+          ],
+          "python_version": "3.12.3",
+          "stage_name": "build"
+        },
+        "payload": {
+          "bound_inputs": {},
+          "declared_inputs": {},
+          "declared_outputs": {
+            "data": {
+              "artifact_type": "json",
+              "codec_key": "json.v1",
+              "metadata": {},
+              "schema_version": null
+            }
+          },
+          "dependencies": {},
+          "extra": {},
+          "factory_init": {},
+          "factory_target": "tests.support.pipeline_execution_stages.JsonProducerStage",
+          "fingerprint_fields": {},
+          "git": {},
+          "loom_version": "0.1.0",
+          "policy_name": "loom.stage.semantic",
+          "policy_version": 2,
+          "python_version": "3.12.3",
+          "schema_version": 2,
+          "stage_config": {
+            "value": 1
+          },
+          "stage_name": "build"
+        },
+        "policy_name": "loom.stage.semantic",
+        "policy_version": 2,
+        "schema_version": 2
+      },
+      "failure": null,
+      "resources": {
+        "entries": {},
+        "schema_version": 2
+      },
+      "artifacts": [
+        {
+          "name": "data",
+          "ref": {
+            "artifact_id": "build/data",
+            "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/build/data.json",
+            "artifact_type": "json",
+            "codec_key": "json.v1",
+            "schema_version": 1,
+            "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+            "fingerprint": null,
+            "producer_stage": "build",
+            "created_at": "2026-09-13T22:52:36Z",
+            "metadata": {}
+          },
+          "payload": {
+            "path": "/historical/loom-fixture/offline-runs/offline-run/artifacts/build/data.json",
+            "exists": true,
+            "size_bytes": 17,
+            "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+            "diagnostics": []
+          },
+          "diagnostics": []
+        }
+      ],
+      "logs": {
+        "stderr": {
+          "checksum": null,
+          "diagnostics": [
+            {
+              "code": "offline_evidence.stderr_log_missing",
+              "detail": {
+                "path": "/historical/loom-fixture/offline-runs/offline-run/stages/build/logs/stderr.log"
+              },
+              "message": "referenced evidence file is missing",
+              "severity": "warning"
+            }
+          ],
+          "exists": false,
+          "path": "/historical/loom-fixture/offline-runs/offline-run/stages/build/logs/stderr.log",
+          "size_bytes": null
+        },
+        "stdout": {
+          "checksum": null,
+          "diagnostics": [
+            {
+              "code": "offline_evidence.stdout_log_missing",
+              "detail": {
+                "path": "/historical/loom-fixture/offline-runs/offline-run/stages/build/logs/stdout.log"
+              },
+              "message": "referenced evidence file is missing",
+              "severity": "warning"
+            }
+          ],
+          "exists": false,
+          "path": "/historical/loom-fixture/offline-runs/offline-run/stages/build/logs/stdout.log",
+          "size_bytes": null
+        }
+      },
+      "diagnostics": []
+    },
+    {
+      "stage_name": "report",
+      "plan": {
+        "action": "RUN",
+        "base_action": "RUN",
+        "bound_inputs": {},
+        "declared_outputs": {
+          "text": {
+            "artifact_type": "text",
+            "codec_key": "text.v1",
+            "metadata": {},
+            "schema_version": null
+          }
+        },
+        "downstream_stages": [],
+        "fingerprint": null,
+        "fingerprint_status": "PENDING_INPUTS",
+        "invalidated_by": [
+          {
+            "code": "UPSTREAM_WILL_RUN",
+            "details": {},
+            "input_name": "data",
+            "message": "upstream stage 'build' action is RUN",
+            "output_name": "data",
+            "stage_name": "report",
+            "upstream_stage": "build"
+          }
+        ],
+        "pending_inputs": [
+          {
+            "input_name": "data",
+            "reason": {
+              "code": "UPSTREAM_WILL_RUN",
+              "details": {},
+              "input_name": "data",
+              "message": "upstream stage 'build' action is RUN",
+              "output_name": "data",
+              "stage_name": "report",
+              "upstream_stage": "build"
+            },
+            "source_output": "data",
+            "source_stage": "build"
+          }
+        ],
+        "reasons": [
+          {
+            "code": "UPSTREAM_WILL_RUN",
+            "details": {},
+            "input_name": "data",
+            "message": "upstream stage 'build' action is RUN",
+            "output_name": "data",
+            "stage_name": "report",
+            "upstream_stage": "build"
+          }
+        ],
+        "resume_check": null,
+        "reusable_outputs": {},
+        "selected_by": [],
+        "stage_name": "report",
+        "upstream_stages": [
+          "build"
+        ]
+      },
+      "status": {
+        "attempt": 1,
+        "finished_at": "2026-09-13T22:52:36Z",
+        "message": null,
+        "metadata": {
+          "action": "RUN"
+        },
+        "owner": {},
+        "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+        "schema_version": 1,
+        "stage_name": "report",
+        "started_at": "2026-09-13T22:52:36Z",
+        "status": "SUCCEEDED",
+        "updated_at": "2026-09-13T22:52:36Z"
+      },
+      "inputs": {
+        "data": {
+          "artifact_id": "build/data",
+          "artifact_type": "json",
+          "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+          "codec_key": "json.v1",
+          "created_at": "2026-09-13T22:52:36Z",
+          "fingerprint": null,
+          "metadata": {},
+          "producer_stage": "build",
+          "schema_version": 1,
+          "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/build/data.json"
+        }
+      },
+      "outputs": {
+        "text": {
+          "artifact_id": "report/text",
+          "artifact_type": "text",
+          "checksum": "sha256:c599aa674d585cbd76c7bc9f9fec911b3d5078a0a4f5ad2e29b0dd61b34b4eb0",
+          "codec_key": "text.v1",
+          "created_at": "2026-09-13T22:52:36Z",
+          "fingerprint": null,
+          "metadata": {},
+          "producer_stage": "report",
+          "schema_version": 1,
+          "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/report/text.txt"
+        }
+      },
+      "fingerprint": {
+        "algorithm": "sha256",
+        "fingerprint": "sha256:c34edccf406e3de8058cf9b03f2ef943506837327bdf29bb8d55d254e6c1f71d",
+        "inputs_summary": {
+          "dependency_names": [],
+          "extra_keys": [],
+          "factory_target": "tests.support.pipeline_execution_stages.TextConsumerStage",
+          "git": {},
+          "input_artifacts": {
+            "data": {
+              "artifact_id": "build/data",
+              "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+              "fingerprint": null,
+              "source": "build.data"
+            }
+          },
+          "input_names": [
+            "data"
+          ],
+          "loom_version": "0.1.0",
+          "output_names": [
+            "text"
+          ],
+          "python_version": "3.12.3",
+          "stage_name": "report"
+        },
+        "payload": {
+          "bound_inputs": {
+            "data": {
+              "artifact_id": "build/data",
+              "artifact_type": "json",
+              "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+              "codec_key": "json.v1",
+              "fingerprint": null,
+              "metadata": {},
+              "producer_stage": "build",
+              "schema_version": 1,
+              "source_output": "data",
+              "source_stage": "build"
+            }
+          },
+          "declared_inputs": {
+            "data": "build.data"
+          },
+          "declared_outputs": {
+            "text": {
+              "artifact_type": "text",
+              "codec_key": "text.v1",
+              "metadata": {},
+              "schema_version": null
+            }
+          },
+          "dependencies": {},
+          "extra": {},
+          "factory_init": {},
+          "factory_target": "tests.support.pipeline_execution_stages.TextConsumerStage",
+          "fingerprint_fields": {},
+          "git": {},
+          "loom_version": "0.1.0",
+          "policy_name": "loom.stage.semantic",
+          "policy_version": 2,
+          "python_version": "3.12.3",
+          "schema_version": 2,
+          "stage_config": {},
+          "stage_name": "report"
+        },
+        "policy_name": "loom.stage.semantic",
+        "policy_version": 2,
+        "schema_version": 2
+      },
+      "failure": null,
+      "resources": {
+        "entries": {},
+        "schema_version": 2
+      },
+      "artifacts": [
+        {
+          "name": "text",
+          "ref": {
+            "artifact_id": "report/text",
+            "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/report/text.txt",
+            "artifact_type": "text",
+            "codec_key": "text.v1",
+            "schema_version": 1,
+            "checksum": "sha256:c599aa674d585cbd76c7bc9f9fec911b3d5078a0a4f5ad2e29b0dd61b34b4eb0",
+            "fingerprint": null,
+            "producer_stage": "report",
+            "created_at": "2026-09-13T22:52:36Z",
+            "metadata": {}
+          },
+          "payload": {
+            "path": "/historical/loom-fixture/offline-runs/offline-run/artifacts/report/text.txt",
+            "exists": true,
+            "size_bytes": 17,
+            "checksum": "sha256:c599aa674d585cbd76c7bc9f9fec911b3d5078a0a4f5ad2e29b0dd61b34b4eb0",
+            "diagnostics": []
+          },
+          "diagnostics": []
+        }
+      ],
+      "logs": {
+        "stderr": {
+          "checksum": null,
+          "diagnostics": [
+            {
+              "code": "offline_evidence.stderr_log_missing",
+              "detail": {
+                "path": "/historical/loom-fixture/offline-runs/offline-run/stages/report/logs/stderr.log"
+              },
+              "message": "referenced evidence file is missing",
+              "severity": "warning"
+            }
+          ],
+          "exists": false,
+          "path": "/historical/loom-fixture/offline-runs/offline-run/stages/report/logs/stderr.log",
+          "size_bytes": null
+        },
+        "stdout": {
+          "checksum": null,
+          "diagnostics": [
+            {
+              "code": "offline_evidence.stdout_log_missing",
+              "detail": {
+                "path": "/historical/loom-fixture/offline-runs/offline-run/stages/report/logs/stdout.log"
+              },
+              "message": "referenced evidence file is missing",
+              "severity": "warning"
+            }
+          ],
+          "exists": false,
+          "path": "/historical/loom-fixture/offline-runs/offline-run/stages/report/logs/stdout.log",
+          "size_bytes": null
+        }
+      },
+      "diagnostics": []
+    }
+  ],
+  "events": [
+    {
+      "event_id": "1f6b6dce79184e06a3ce7a98feda9933",
+      "event_type": "run.created",
+      "occurred_at": "2020-01-01T00:00:02Z",
+      "payload": {
+        "open_existing": false
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+        },
+        "kind": "run"
+      },
+      "related_resources": [],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 1
+    },
+    {
+      "event_id": "aa7a6a9640d544ce964dfc3c251e7eb5",
+      "event_type": "run.planned",
+      "occurred_at": "2020-01-01T00:00:04Z",
+      "payload": {
+        "summary": {
+          "BLOCKED": 0,
+          "REUSE": 0,
+          "RUN": 2,
+          "SKIP": 0,
+          "STALE": 0
+        }
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+        },
+        "kind": "run"
+      },
+      "related_resources": [],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 2
+    },
+    {
+      "event_id": "ada204ed78574d2bb27c70008ca905b1",
+      "event_type": "stage.planned",
+      "occurred_at": "2020-01-01T00:00:05Z",
+      "payload": {
+        "action": "RUN",
+        "reason_codes": [
+          "NO_PRIOR_STATUS"
+        ]
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "build"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 3
+    },
+    {
+      "event_id": "b304fce6f63e4f08921a478458b3814c",
+      "event_type": "stage.planned",
+      "occurred_at": "2020-01-01T00:00:06Z",
+      "payload": {
+        "action": "RUN",
+        "reason_codes": [
+          "UPSTREAM_WILL_RUN"
+        ]
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "report"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 4
+    },
+    {
+      "event_id": "65f7a8ce7c9b48da810fc4bb33b9c9c2",
+      "event_type": "run.started",
+      "occurred_at": "2020-01-01T00:00:08Z",
+      "payload": {
+        "stage_count": 2
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+        },
+        "kind": "run"
+      },
+      "related_resources": [],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 5
+    },
+    {
+      "event_id": "bc8b229b777946fab69bc914cb709c59",
+      "event_type": "stage.started",
+      "occurred_at": "2020-01-01T00:00:10Z",
+      "payload": {
+        "action": "RUN",
+        "attempt": 1
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "build"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 6
+    },
+    {
+      "event_id": "700c463cd6fc4238ab59feee4fe3ce94",
+      "event_type": "stage.completed",
+      "occurred_at": "2020-01-01T00:00:12Z",
+      "payload": {
+        "action": "RUN",
+        "attempt": 1,
+        "status": "SUCCEEDED"
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "build"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 7
+    },
+    {
+      "event_id": "7a386a84c23441eba22a5b13e278562c",
+      "event_type": "stage.started",
+      "occurred_at": "2020-01-01T00:00:14Z",
+      "payload": {
+        "action": "RUN",
+        "attempt": 1
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "report"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 8
+    },
+    {
+      "event_id": "d106d068f4c24ca699c9a7eba6693cbe",
+      "event_type": "stage.completed",
+      "occurred_at": "2020-01-01T00:00:16Z",
+      "payload": {
+        "action": "RUN",
+        "attempt": 1,
+        "status": "SUCCEEDED"
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+          "stage_name": "report"
+        },
+        "kind": "stage"
+      },
+      "related_resources": [
+        {
+          "identifiers": {
+            "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+          },
+          "kind": "run"
+        }
+      ],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 9
+    },
+    {
+      "event_id": "333020f9ca564e6e99c4948a6bfd2f39",
+      "event_type": "run.completed",
+      "occurred_at": "2020-01-01T00:00:17Z",
+      "payload": {
+        "status": "SUCCEEDED"
+      },
+      "primary_resource": {
+        "identifiers": {
+          "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run"
+        },
+        "kind": "run"
+      },
+      "related_resources": [],
+      "run_uri": "file:///historical/loom-fixture/offline-runs/offline-run",
+      "schema_version": 2,
+      "sequence": 10
+    }
+  ],
+  "artifact_index": {
+    "build.data": {
+      "artifact_id": "build/data",
+      "artifact_type": "json",
+      "checksum": "sha256:6bb1b9dd0e4bc676b1627469d12c2187c08145f30f557ebed8cfc3415f7d4f9c",
+      "codec_key": "json.v1",
+      "created_at": "2026-09-13T22:52:36Z",
+      "fingerprint": null,
+      "metadata": {},
+      "producer_stage": "build",
+      "schema_version": 1,
+      "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/build/data.json"
+    },
+    "report.text": {
+      "artifact_id": "report/text",
+      "artifact_type": "text",
+      "checksum": "sha256:c599aa674d585cbd76c7bc9f9fec911b3d5078a0a4f5ad2e29b0dd61b34b4eb0",
+      "codec_key": "text.v1",
+      "created_at": "2026-09-13T22:52:36Z",
+      "fingerprint": null,
+      "metadata": {},
+      "producer_stage": "report",
+      "schema_version": 1,
+      "uri": "file:///historical/loom-fixture/offline-runs/offline-run/artifacts/report/text.txt"
+    }
+  },
+  "diagnostics": []
+}

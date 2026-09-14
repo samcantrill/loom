@@ -1537,8 +1537,12 @@ class LocalDaemon:
             Callable[[LocalDaemonConfig], Callable[[], None]] | None
         ) = None,
         preparation: PreparationCallbacks | None = None,
+        event_observers: Any = None,
     ) -> None:
         self.config = config
+        from ._lifecycle_observers import LifecycleObservers
+
+        self._event_observers = event_observers or LifecycleObservers()
         self._clock = clock
         self._trusted_scheduling_loader = trusted_scheduling_loader
         self._prepare_role_reload = prepare_role_reload
@@ -1771,6 +1775,7 @@ class LocalDaemon:
                 raise QueueStorageError(
                     "active scheduling configuration is unavailable"
                 )
+            self._event_observers.start()
             # This is the same cross-owner proof used by normal shutdown.  It
             # rejects unavailable owner state before process creation and
             # identifies retained work that must keep a newly started service
@@ -2435,6 +2440,7 @@ class LocalDaemon:
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
         with self._cycle_lock:
+            self._event_observers.flush_prepared()
             # A reload may replace providers while the bounded query runs.
             # Its new provider starts unknown and is refreshed next cycle.
             time_healthy = self._sample_clock_health()
@@ -2476,6 +2482,12 @@ class LocalDaemon:
                 except Exception:  # one unhealthy run cannot stop other admissions
                     self._record_admission_health(admission.admission_id, "unavailable")
                 else:
+                    if outcome.state in {
+                        LocalDaemonAdmissionState.SUCCEEDED,
+                        LocalDaemonAdmissionState.FAILED,
+                        LocalDaemonAdmissionState.CANCELLED,
+                    }:
+                        self._event_observers.flush_prepared(admission.run_uri)
                     self._record_admission_health(
                         admission.admission_id,
                         (
@@ -4452,18 +4464,22 @@ def _initialize_coordinator_schema(
         _initialize_preparation_schema(conn)
 
 
-def _initialize_preparation_schema(conn: sqlite3.Connection, *, legacy: bool = False) -> None:
+def _initialize_preparation_schema(
+    conn: sqlite3.Connection, *, legacy: bool = False
+) -> None:
     conn.execute(
         "CREATE TABLE preparation_operations ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
         + (
             "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
-            if legacy else "kind TEXT NOT NULL, queue_item_id TEXT, "
+            if legacy
+            else "kind TEXT NOT NULL, queue_item_id TEXT, "
         )
         + "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
         + (
             "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
-            if legacy else "selected_json TEXT NOT NULL, target_name TEXT, "
+            if legacy
+            else "selected_json TEXT NOT NULL, target_name TEXT, "
         )
         + "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
         "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
@@ -4506,7 +4522,9 @@ def _validate_coordinator_schema(
 
     try:
         with sqlite3.connect(":memory:") as expected:
-            _initialize_coordinator_schema(expected, preparation=preparation and not legacy_preparation)
+            _initialize_coordinator_schema(
+                expected, preparation=preparation and not legacy_preparation
+            )
             if legacy_preparation:
                 _initialize_preparation_schema(expected, legacy=True)
             tables = tuple(
@@ -4563,7 +4581,9 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
         if role == "coordinator":
             _validate_coordinator_schema(
-                conn, preparation=version in (15, _COORDINATOR_SCHEMA_VERSION), legacy_preparation=version == 15
+                conn,
+                preparation=version in (15, _COORDINATOR_SCHEMA_VERSION),
+                legacy_preparation=version == 15,
             )
         values = {
             str(row[0]): str(row[1])

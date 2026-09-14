@@ -208,48 +208,6 @@ def test_cli_preflight_failed_config_returns_diagnostics_result(tmp_path: Path) 
     assert stderr.getvalue() == ""
 
 
-def test_cli_continuation_commands_reject_recursive_executors_as_json() -> None:
-    for argv, executor in (
-        (
-            [
-                "prepared-run",
-                "continue",
-                "--run-uri",
-                "file:///tmp/missing-run",
-                "--executor",
-                "slurm-single-job",
-                "--format",
-                "json",
-            ],
-            "slurm-single-job",
-        ),
-        (
-            [
-                "stage-job",
-                "run",
-                "--run-uri",
-                "file:///tmp/missing-run",
-                "--stage",
-                "build",
-                "--executor",
-                "slurm-afterok",
-                "--format",
-                "json",
-            ],
-            "slurm-afterok",
-        ),
-    ):
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-
-        assert main(argv, stdout=stdout, stderr=stderr) == 7
-        payload = json.loads(stdout.getvalue())
-        assert payload["ok"] is False
-        assert payload["error"]["code"] == "execution.continuation.unsupported_executor"
-        assert payload["error"]["context"]["executor"] == executor
-        assert stderr.getvalue() == ""
-
-
 def test_cli_preflight_strict_resource_warning_exits_pipeline_failure(
     tmp_path: Path,
 ) -> None:
@@ -364,13 +322,12 @@ def test_cli_validate_defers_invalid_stage_factory_to_execution(
     assert stdout.getvalue() == f"OK validate {config_path}: 2 stages\n"
     assert stderr.getvalue() == ""
 
-    run_uri = path_to_run_uri(tmp_path / "runs" / "invalid-stage")
-    from tests.support.executed_run_fixture import execute_fixture
-    with LocalAuthorityService.start() as service:
-        result, _ = execute_fixture(config_path, run_uri, authority_config=service.config())
-    assert result.status.value == "FAILED"
-    assert result.failure is not None
-    assert "did not construct a Stage-compatible object" in result.failure.message
+    from tests.support.native_run_fixture import run_native_fixture
+
+    admission, store = run_native_fixture(config_path)
+    assert admission.state.value == "FAILED"
+    result = store.read_stage_worker_result(admission.run_uri, "build", attempt=1)
+    assert "did not construct a Stage-compatible object" in str(result)
 
 
 def test_cli_validate_does_not_reject_invalid_generic_target(
@@ -388,8 +345,6 @@ def test_cli_validate_does_not_reject_invalid_generic_target(
     assert main(["validate", str(config_path)], stdout=stdout, stderr=stderr) == 0
     assert stdout.getvalue() == f"OK validate {config_path}: 2 stages\n"
     assert stderr.getvalue() == ""
-
-
 
 
 def test_cli_status_submitted_state_smoke(tmp_path: Path) -> None:

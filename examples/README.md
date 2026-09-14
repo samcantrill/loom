@@ -24,7 +24,7 @@ provider concepts.
 
 | Group | Primary public Python surfaces |
 | --- | --- |
-| [Execution](execution/README.md) | `PipelineRunner` run/resume flows and `RunOptions` construction and validation. |
+| [Execution](execution/README.md) | Native run lifecycle and reuse planning and `RunOptions` construction and validation. |
 | [Operations](operations/README.md) | Captured-log execution setup and authority-backed resource coordination APIs. |
 | [Storage](storage/README.md) | Backend registry contracts and explicit local artifact materialization. |
 

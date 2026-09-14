@@ -43,9 +43,6 @@ def test_execution_failure_capture_does_not_import_diagnostics() -> None:
         """
         import sys
         import loom.pipeline.executors.local
-        import loom.pipeline.executors.subprocess
-        import loom.pipeline.executors.apptainer.executor
-        import loom.pipeline.executors.docker.executor
         import loom.pipeline.execution.stage_worker
         assert not any(name == "loom.diagnostics" or name.startswith("loom.diagnostics.")
                        for name in sys.modules), "execution imported higher-level diagnostics"
@@ -385,10 +382,7 @@ def test_import_queue_control_modules_do_not_import_authority_or_config() -> Non
         """
         import sys
 
-        import loom.queue.client
         import loom.queue.config
-        import loom.queue.controller
-        import loom.queue.service
 
         for forbidden in (
             "weave",
@@ -706,38 +700,6 @@ def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() ->
     assert result.stdout.strip() == "ok"
 
 
-def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> (
-    None
-):
-    script = dedent(
-        """
-        import sys
-
-        import loom.queue.local
-        import loom.queue.resources
-
-        for forbidden in (
-            "loom.authority",
-            "loom.authority._repository",
-            "loom.pipeline.executors",
-            "loom.pipeline.executors.slurm",
-            "loom.cli",
-            "fastapi",
-            "starlette",
-        ):
-            if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through queue local modules")
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
-
-
 def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> (
     None
 ):
@@ -768,35 +730,6 @@ def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback()
     )
     assert "SQLitePerRunAuthorityStore" not in production
     assert "sqlite_authority" not in production
-
-
-def test_import_queue_slurm_adapter_uses_public_scheduler_boundary_only() -> None:
-    script = dedent(
-        """
-        import sys
-
-        import loom.queue.slurm
-
-        if "loom.pipeline.executors.slurm.commands" not in sys.modules:
-            raise SystemExit("SLURM command boundary was not imported")
-        for forbidden in (
-            "loom.authority",
-            "loom.authority._repository",
-            "loom.cli",
-            "fastapi",
-            "starlette",
-        ):
-            if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through queue SLURM adapter")
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
 
 
 def test_import_queue_preflight_avoids_private_authority_and_scheduler_modules() -> (
@@ -1487,8 +1420,6 @@ def test_import_slurm_dry_run_modules_does_not_import_forbidden_layers() -> None
         """
         import sys
 
-        import loom.pipeline.executors.slurm.artifacts
-        import loom.pipeline.executors.slurm.planning
         import loom.pipeline.executors.slurm.rendering
 
         for forbidden in (
@@ -1730,7 +1661,6 @@ def test_import_cli_diagnostics_commands_remain_import_light() -> None:
         import loom.cli.status
         import loom.cli.logs
         import loom.cli.artifacts
-        import loom.cli.cancel
         import loom.cli.runs
 
         for forbidden in (
@@ -1851,73 +1781,6 @@ def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
                 ],
             }
         )
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
-
-
-def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
-    script = dedent(
-        """
-        import sys
-        from tempfile import TemporaryDirectory
-
-        def assert_forbidden_absent(phase):
-            for forbidden in (
-                "weave",
-                "loom.cli",
-                "project",
-                "yaml",
-                "omegaconf",
-                "pydantic",
-            ):
-                if forbidden in sys.modules:
-                    raise SystemExit(f"{forbidden} was imported {phase}")
-
-        from loom.pipeline import PipelineRunner, PipelineSpec, RunRequest
-        from loom.pipeline.execution import create_authority_backed_serial_run_store
-        from loom.pipeline.status import RunStatus
-        from loom.pipeline.stores import path_to_run_uri
-        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-        assert_forbidden_absent("before direct pipeline run")
-
-        spec = PipelineSpec.from_config(
-            {
-                "name": "direct-boundary",
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
-                        },
-                        "config": {"value": 42},
-                        "outputs": {"data": {"artifact_type": "json"}},
-                    }
-                ],
-            }
-        )
-        with TemporaryDirectory() as tmpdir:
-            run_store = create_authority_backed_serial_run_store(
-                tmpdir,
-                authority_store=SQLitePerRunAuthorityStore(),
-            )
-            run_uri = path_to_run_uri(f"{tmpdir}/run1")
-            result = PipelineRunner(run_store=run_store).run(
-                RunRequest(pipeline=spec, run_uri=run_uri)
-            )
-            if result.status is not RunStatus.SUCCEEDED:
-                raise SystemExit(f"run failed with status {result.status!r}")
-            if set(run_store.read_artifact_index(run_uri)) != {"build.data"}:
-                raise SystemExit("direct run did not write expected artifact index")
-
-        assert_forbidden_absent("during direct pipeline run")
         print("ok")
         """
     )

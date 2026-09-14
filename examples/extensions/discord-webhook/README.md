@@ -3,7 +3,9 @@
 `loom-discord` is a small downstream package that turns selected committed Loom
 events into Discord webhook messages, and includes a coordinator sidecar that
 polls local managed-run status. Both are intentionally best effort: Discord
-delivery never changes a Loom run result or delays coordinator scheduling.
+delivery never changes a Loom run result. Selected lifecycle callbacks run
+synchronously and their bounded IO can delay coordinator scheduling. The separate
+progress reporter has its own lifetime.
 
 ## Setup
 
@@ -75,43 +77,31 @@ Keep the environment file owner-readable only and adapt the user, executable,
 and socket paths to the deployment. The reporter is independent of the
 coordinator service's success and restart policy.
 
-## Public Python Surface
+## Coordinator Selection
 
-For a direct Python integration, construct the factory in the process that
-creates the `RunRequest`, then register its returned subscription unchanged.
+Add this fragment to the protected coordinator service configuration after
+installing the package in that service's environment:
 
-```python
-from loom.pipeline.event_sinks import EventSinkRegistry
-from loom_discord import discord_event_sink
-
-registration = discord_event_sink()
-registry = EventSinkRegistry()
-registry.register(
-    "notifications.discord",
-    registration.sink,
-    subscription=registration.subscription,
-)
+```json
+{"event_sinks": [{"name": "notifications.discord", "factory": {
+  "_target_": "loom_discord.discord_event_sink"
+}}]}
 ```
 
-Run the included manual pipeline after the package is installed and the secret
-is available:
+The factory returns its terminal-event subscription unchanged. It constructs in
+the coordinator, not the calling client. Inject `LOOM_DISCORD_WEBHOOK_URL` only
+into that protected coordinator environment. Workers and agents do not need it.
+The installed entry point remains package metadata; the native service selects
+the explicit factory without discovery or a `--plugin` option.
+
+The included example creates a configured fresh native local deployment:
 
 ```sh
-uv run python examples/extensions/discord-webhook/run_discord_webhook.py
+uv run --extra config python examples/extensions/discord-webhook/run_discord_webhook.py
 ```
 
-## Execution Selection
-
-The runnable script selects the installed event-sink entry point through the
-existing library composition. The webhook URL remains in the lifecycle owner's
-environment. Ordinary managed `loom run` uses the deployment selection and does
-not accept the former `--plugin` control. Native terminal-event integration has
-its own later cutover owner.
-
-For a prepared run or SLURM continuation, inject the secret only into the
-parent, `stage-job`, or continuation process that commits the relevant terminal
-event. Do not pass it in command arguments or authored configuration. Direct
-stage workers do not own terminal run commits and do not construct event sinks.
+This command sends real notifications when explicitly run with a configured URL.
+Automated validation uses fake HTTP responses only.
 
 ## Delivery Boundary
 
@@ -121,9 +111,11 @@ stage name when its primary resource is a stage. Content is clipped to Discord's
 `wait=true` and a finite timeout, following Discord's
 [execute-webhook contract](https://docs.discord.com/developers/resources/webhook#execute-webhook).
 
-The manual runner prints `notification_status: accepted` only after Discord
-returns a successful response. A failed notification remains recorded beside
-the event and leaves `run_status: SUCCEEDED`, while the wrapper exits nonzero so
+The native example selects `loom_discord.discord_event_sink` in protected
+coordinator `event_sinks` configuration; the URL stays in the coordinator environment.
+It prints `notification_status: no_failure_recorded` when no failure evidence was
+retained. This is not a delivery guarantee. A failed notification remains recorded beside
+the event and leaves `run_status: SUCCEEDED`, while the example exits nonzero so
 an operator does not mistake the report for delivered.
 
 This example has no retry, rate-limit sleep, background queue, durable outbox,
@@ -132,3 +124,14 @@ clients to follow returned rate-limit headers rather than hard-code quotas; a
 deployment that needs retry or buffering should use an external durable relay.
 Automated tests use a fake HTTP transport; they do not prove Discord
 availability.
+
+Lifecycle callbacks construct once per coordinator startup, apply coordinator-wide,
+and survive client detachment. A deliberate same-root restart loads the current
+protected selection for future events. Commit, event append and callback are
+separate steps; a crash can omit an event or delivery. Queries, restart and same-ID
+run replay do not resend historical notifications. Observer-record persistence
+failures are logged visibly and never change scientific status.
+
+## Public Python Surface
+
+Protected native coordinator factories return `EventSinkRegistration`; the installed extension implements `DiscordWebhookEventSink` and its coordinator reporter.

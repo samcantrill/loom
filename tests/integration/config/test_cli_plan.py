@@ -9,11 +9,7 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
-from loom.pipeline.stores.service_authority import LocalAuthorityService
-from weave import compose_config
+from loom.pipeline.stores import path_to_run_uri
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -47,7 +43,9 @@ def _write_pipeline_config(path: Path, *, value: int = 1) -> None:
     )
 
 
-def test_plan_fresh_without_run_uri_does_not_create_default_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_fresh_without_run_uri_does_not_create_default_run_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path)
@@ -72,7 +70,14 @@ def test_plan_explicit_new_run_uri_is_read_only(tmp_path: Path) -> None:
 
     assert (
         main(
-            ["plan", str(config_path), "--run-uri", path_to_run_uri(run_path), "--format", "json"],
+            [
+                "plan",
+                str(config_path),
+                "--run-uri",
+                path_to_run_uri(run_path),
+                "--format",
+                "json",
+            ],
             stdout=stdout,
             stderr=stderr,
         )
@@ -109,44 +114,38 @@ def test_plan_existing_run_uri_without_resume_fails(tmp_path: Path) -> None:
 
 def test_plan_resume_reports_reuse_for_existing_valid_run(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
-    with LocalAuthorityService.start() as service:
-        authority_config = service.config()
-        authority_args = authority_config_to_cli_args(authority_config)
-        run_store = create_authority_backed_serial_run_store(
-            tmp_path / "runs",
-            authority_config=authority_config,
-        )
-        run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
-        _write_pipeline_config(config_path)
-        composed = compose_config(config_path)
-        result = PipelineRunner(run_store=run_store).run(
-            RunRequest(config=composed, run_uri=run_uri)
-        )
-        assert result.status.value == "SUCCEEDED"
+    from tests.support.native_run_fixture import run_native_fixture
 
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+    _write_pipeline_config(config_path)
+    admission, _ = run_native_fixture(config_path)
+    assert admission.state.value == "SUCCEEDED"
+    run_uri = admission.run_uri
+    authority_args = ()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
 
-        assert (
-            main(
-                [
-                    "plan",
-                    str(config_path),
-                    "--run-uri",
-                    run_uri,
-                    "--resume",
-                    *authority_args,
-                    "--format",
-                    "json",
-                ],
-                stdout=stdout,
-                stderr=stderr,
-            )
-            == 0
+    assert (
+        main(
+            [
+                "plan",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--resume",
+                *authority_args,
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
         )
+        == 0
+    )
 
     payload = json.loads(stdout.getvalue())
-    actions = {stage["stage"]: stage["action"] for stage in payload["result"]["stage_actions"]}
+    actions = {
+        stage["stage"]: stage["action"] for stage in payload["result"]["stage_actions"]
+    }
     assert actions == {"build": "REUSE", "report": "REUSE"}
     assert payload["result"]["summary"]["REUSE"] == 2
 

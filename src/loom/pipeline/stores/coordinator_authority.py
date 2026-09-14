@@ -13,6 +13,8 @@ from typing import cast
 from urllib import request
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -77,18 +79,12 @@ COORDINATOR_FINALIZE_CANCELLATION_PATH = (
 COORDINATOR_PREPARE_ATTEMPT_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/prepare"
 )
-COORDINATOR_BIND_ATTEMPT_PATH = (
-    f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/bind"
-)
+COORDINATOR_BIND_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/bind"
 COORDINATOR_UNBIND_ATTEMPT_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/unbind"
 )
-COORDINATOR_GRANT_ATTEMPT_PATH = (
-    f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/grant"
-)
-COORDINATOR_START_ATTEMPT_PATH = (
-    f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/start"
-)
+COORDINATOR_GRANT_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/grant"
+COORDINATOR_START_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/start"
 COORDINATOR_TERMINAL_ATTEMPT_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/terminal"
 )
@@ -190,7 +186,7 @@ def coordinator_authority_identity(factory: object) -> dict[str, PlainData]:
 
 
 def publish_prepared_run(
-    factory: object, run_uri: str, publication_digest: str
+    factory: object, run_uri: str, publication_digest: str, *, observers: object = None
 ) -> None:
     """Reconcile exact idempotent creation and publication at the selected owner."""
     coordinator_authority_identity(factory)
@@ -211,7 +207,13 @@ def publish_prepared_run(
             raise
     else:
         assert isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory)
-        factory(run_uri).publish_prepared_run(run_uri, publication_digest)
+        authority = factory(run_uri)
+        authority.require_observer_capability(run_uri)
+        created_revision = authority.publish_prepared_run(run_uri, publication_digest)
+        if created_revision is not None:
+            _observe_publication(
+                authority, run_uri, publication_digest, observers, created_revision
+            )
         return
     snapshot = authority.open_run(run_uri)
     if snapshot.status is RunStatus.CREATED:
@@ -220,6 +222,35 @@ def publish_prepared_run(
             from_status=RunStatus.CREATED,
             to_status=RunStatus.PLANNED,
             expected_revision=snapshot.revision,
+        )
+
+        _observe_publication(
+            authority, run_uri, publication_digest, observers, snapshot.revision
+        )
+
+
+def _observe_publication(
+    authority,
+    run_uri: str,
+    digest: str,
+    observers: object,
+    created_revision: BackendRevision,
+) -> None:
+    from loom.queue._lifecycle_observers import LifecycleObservers
+
+    observer = (
+        observers if isinstance(observers, LifecycleObservers) else LifecycleObservers()
+    )
+    snapshot = authority.open_run(run_uri)
+    for event_type in ("run.created", "run.planned"):
+        observer.emit(
+            authority,
+            run_uri,
+            event_type=event_type,
+            revision=created_revision
+            if event_type == "run.created"
+            else snapshot.revision,
+            identity=digest,
         )
 
 
@@ -314,13 +345,13 @@ class AuthenticatedCoordinatorAuthority:
         self._client = client
         self._service_id = _non_empty(service_id, "service_id")
         self._workspace_id = _non_empty(workspace_id, "workspace_id")
-        self._service_generation = _non_empty(
-            service_generation, "service_generation"
-        )
+        self._service_generation = _non_empty(service_generation, "service_generation")
 
-    def publish_prepared_run(self, run_uri: str, publication_digest: str) -> None:
+    def publish_prepared_run(
+        self, run_uri: str, publication_digest: str
+    ) -> BackendRevision | None:
         """Publish an exact checked target, reconciling a lost response by identity."""
-        self._call(
+        result = self._call(
             COORDINATOR_PUBLISH_RUN_PATH,
             run_uri,
             body={
@@ -328,6 +359,15 @@ class AuthenticatedCoordinatorAuthority:
                     publication_digest, "publication_digest"
                 )
             },
+        )
+
+        published = _body_required(result, "published")
+        if not isinstance(published, bool):
+            raise AuthorityStoreError("authority publication capability is unsupported")
+        return (
+            BackendRevision.from_dict(_body_required(result, "created_revision"))
+            if published
+            else None
         )
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -461,9 +501,7 @@ class AuthenticatedCoordinatorAuthority:
         )
         return _execution_fence(_body_required(result, "fence"))
 
-    def confirm_execution_started(
-        self, run_uri: str, *, fence: ExecutionFence
-    ) -> None:
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
         self._call(
             COORDINATOR_START_ATTEMPT_PATH,
             run_uri,
@@ -544,6 +582,74 @@ class AuthenticatedCoordinatorAuthority:
             },
         )
         return OutputCommit.from_dict(_body_required(result, "commit"))
+
+    def require_observer_capability(self, run_uri: str) -> None:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/capability", run_uri
+        )
+        if _body_required(result, "version") != 1:
+            raise AuthorityStoreError("authority observer capability is unsupported")
+
+    def append_audit_event(
+        self, run_uri: str, fact: PipelineEvent
+    ) -> PipelineEventRecord:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/append",
+            run_uri,
+            body={"fact": fact.to_dict()},
+        )
+        return PipelineEventRecord.from_dict(_body_required(result, "record"))
+
+    def list_audit_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/list", run_uri
+        )
+        return tuple(
+            PipelineEventRecord.from_dict(item)
+            for item in _body_sequence(result, "records")
+        )
+
+    def append_event_sink_failure(
+        self, run_uri: str, fact: EventSinkFailureRecord
+    ) -> BackendRevision:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/failures/append",
+            run_uri,
+            body={"fact": fact.to_dict()},
+        )
+        return _required_revision(result)
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/failures/read", run_uri
+        )
+        return tuple(
+            EventSinkFailureRecord.from_dict(item)
+            for item in _body_sequence(result, "records")
+        )
+
+    def append_event_observer_link(
+        self, run_uri: str, fact: EventObserverLinkRecord
+    ) -> BackendRevision:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/links/append",
+            run_uri,
+            body={"fact": fact.to_dict()},
+        )
+        return _required_revision(result)
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/events/links/read", run_uri
+        )
+        return tuple(
+            EventObserverLinkRecord.from_dict(item)
+            for item in _body_sequence(result, "records")
+        )
 
     def write_reliability_policy_fact(
         self, run_uri: str, fact: ReliabilityPolicyFact
@@ -703,7 +809,9 @@ class AuthenticatedCoordinatorAuthority:
         body: Mapping[str, PlainData] | None = None,
     ) -> AuthorityProtocolResult:
         if run_uri != self._run_uri:
-            raise AuthorityStoreError("authenticated coordinator authority run conflicts")
+            raise AuthorityStoreError(
+                "authenticated coordinator authority run conflicts"
+            )
         plain_body = {} if body is None else dict(body)
         digest = hashlib.sha256(
             json.dumps(

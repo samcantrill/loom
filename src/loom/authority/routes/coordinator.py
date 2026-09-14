@@ -32,6 +32,13 @@ router = APIRouter(
 )
 
 _ROUTES = {
+    "/events/capability": AuthorityMutationOperation.COORDINATOR_OBSERVERS_CAPABILITY,
+    "/events/append": AuthorityMutationOperation.APPEND_AUDIT_EVENT,
+    "/events/list": AuthorityMutationOperation.LIST_AUDIT_EVENTS,
+    "/events/failures/append": AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE,
+    "/events/failures/read": AuthorityMutationOperation.READ_EVENT_SINK_FAILURES,
+    "/events/links/append": AuthorityMutationOperation.APPEND_EVENT_OBSERVER_LINK,
+    "/events/links/read": AuthorityMutationOperation.READ_EVENT_OBSERVER_LINKS,
     "/runs/publish": AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
     "/runs/open": AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
     "/runs/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,

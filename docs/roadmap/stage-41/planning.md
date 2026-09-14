@@ -231,6 +231,199 @@ It must not create nested sbatch work by accident. New allocation hosting,
 multi-node identity and allocation acquisition are deferred; site qualification
 is required before claiming this deployment works.
 
+### Phase 9 amendment: native lifecycle observers
+
+Status: independently reviewed and explicitly approved by the maintainer on
+2026-09-14. Implementation is authorized within Phase 9. The manifest Quality Gate
+owns the bounded independent review and approval receipt. Existing
+Phases 1–8 and their approval/evidence remain unchanged. This amendment supplies
+the missing event-consumer contract within FR-41-13, DQ-41-06 and VAL-41-12; it
+does not add a tenth phase or reopen execution/backend semantics.
+
+#### Evidence and decision
+
+At published source `d0e2dd33729cb465d5af313fe22379a6dad5c27d`, the supported
+`examples/extensions/event-sink` and `examples/extensions/discord-webhook`
+consumers construct an `EventSinkRegistry` in the old runner process. They rely
+on committed run/stage events and event-adjacent callback failure records;
+`docs/features/reliability.md` Event Hooks, Event Record Shape and Notification
+Boundary own those existing meanings. `pipeline/execution/{runner,continuation}`
+emit run lifecycle events, while the native `PrepareRunRequest` has no observer
+input and `queue/coordinator_authority.py` has no event/observer capabilities.
+The broader authority store and `pipeline/execution/eventing.py` already provide
+strict event models, append/deduplication, registry dispatch and failure facts.
+Deleting the old execution owners without replacing these consumers loses a
+current feature. Serializing the old live registry violates the accepted native
+request boundary.
+
+Recommend coordinator-owned lifecycle event publication and explicitly configured
+coordinator-local callbacks. The coordinator already observes authoritative run
+and stage transitions across resident/container/Slurm execution and survives
+client detachment. Reuse the existing event models/registry and narrow authority
+adapters. Notification implementations remain installed project/plugin code.
+
+| Alternative | Consequence | Accepted disposition |
+| --- | --- | --- |
+| Protected coordinator configuration selects local sink factories | One lifecycle owner can notify across clients/backends; installed callback code executes with that service's privileges | Recommended; explicit administrator-selected trust boundary |
+| External observer wrapper alone | Independent observer lifetime, catch-up and observer-fact storage need a separate contract; client-local callbacks stop on detach | Defer as a separate consumer capability; retain existing read-only primitives |
+| Carry the live registry in RunRequest | Cannot reconstruct safely across process/machine/restart boundaries | Reject; no compatibility path |
+| Delete notifications with the runner | Drops supported committed-event/failure evidence behavior | Reject |
+
+#### Selection and trust
+
+Add optional `event_sinks` to the protected coordinator service configuration.
+It is an ordered list of unique existing registry names and installed factory
+specifications. For example (target implementation is installed trusted code):
+
+```json
+{
+  "event_sinks": [
+    {
+      "name": "project.notifications",
+      "factory": {"_target_": "project_notifications.make_registration"}
+    }
+  ]
+}
+```
+
+This fragment joins the existing coordinator service configuration, not the
+public run request. Each factory returns an existing `EventSinkRegistration`;
+subscription filtering uses that model. Omission means no callbacks. Explicit
+selection is coordinator-wide; no per-run sink override, plugin discovery,
+package installation or new worker provisioning is added. Native run intent,
+prepared identity and scientific configuration remain unchanged.
+
+Parse these specifications as data during configuration inspection. Construct
+the selected factories once per actual coordinator process startup, after its
+native root/identity guards and before it advertises readiness. Imports, client
+construction, connect-only queries, MCP discovery and preparation workers do
+not construct sinks. Invalid names/factories or failed explicit construction
+refuse service startup with a diagnostic; they do not silently disable a selected
+sink. An already-running service retains its loaded selection; a deliberate
+same-root restart loads the current protected configuration for future emission.
+Historical events/accepted run intent are not rewritten by an observer change.
+
+The coordinator operator authorizes this code and its external effects for runs
+handled by that service. Factory parameters are trusted configuration; secrets
+come from the coordinator's protected environment and must not be copied into
+run requests, prepared artifacts, worker environments, tool results or public
+configuration summaries. Workers and agents do not load notification sinks.
+Factories must only construct callbacks; delivery occurs on explicit event
+dispatch. Service-specific networking remains downstream code, as today.
+
+#### Event truth, authority and dispatch
+
+The native owner commits the lifecycle fact first, then appends its event using
+the selected authority, then dispatches configured callbacks with that exact
+persisted record. Schematic ordering, not new method names:
+
+```python
+transition = native_owner.commit_transition(...)
+record = selected_authority.append_audit_event(
+    run_uri, event_from_committed_transition(transition)
+)
+registry.dispatch(record, observer_context)
+```
+
+Preserve the existing event vocabulary and resource/causal references at the
+native transition they describe. Preparation publication owns created/planned
+facts; coordinator admission/execution/finalization owns its run/stage facts.
+A run resolved entirely by reuse/skip has no invented `run.started`; emit that
+only for the real RUNNING transition. Admission is not `run.completed`, a
+scheduler exit is not `stage.completed`, and bootstrap/result delivery is not
+an independent success authority. `run.opened` denotes a real deliberate reopen,
+not a status query; emit interruption or preparation failure only from the
+corresponding retained native outcome. Existing event assertions must migrate
+to truthful native owners rather than mechanically reproducing old ordering.
+
+The Phase 9 removal audit records each surviving event producer and the native
+fact it uses. Reuse supported strict `PipelineEvent`/`PipelineEventRecord`,
+`EventReference`, subscriptions, callback-failure and observer-link shapes.
+Use stable event identity derived from the original native fact/attempt/operation
+and retain its occurrence time on replay. Existing append idempotence rejects
+changed intent under the same event ID. Do not invent timestamps/history from
+current status or create a second event database, notification outbox or scheduler.
+
+Extend only the narrow coordinator authority capabilities and authenticated
+routes needed to append/read the existing event and observer facts. Embedded
+and authenticated execution retain the same ownership and authorization; no
+fallback to a local authority or generic store access. Existing local run-store
+projection remains readable through its current owner where supported. Event
+and observer writes obey the authority's revision rules and must not invalidate
+admitted output predecessors, success qualification, fencing or explicit retry.
+Each changed durable/wire decoder gets an explicit compatible-version/refusal
+disposition; unchanged event/root formats remain unchanged. Unsupported required
+authority capability is rejected before new admission/execution mutation.
+
+Callbacks are observe-only. Reuse registry exception isolation and event-adjacent
+failure/link recording through the selected authority context. A callback's
+return value or exception cannot change run/stage status, retry policy, artifacts,
+output commits, admission or resource accounting. Failure-record persistence
+errors remain visible diagnostics; do not turn a failed notification into a
+failed scientific run or claim that unavailable failure evidence was retained.
+
+#### Lifetime and delivery limits
+
+Event records remain inspectable after client/service exit. Callback code belongs
+to the configured coordinator process; client disconnect does not remove it,
+and a same-root restart reconstructs the configured factories for subsequent
+events. Completed callbacks do not become retained work or prevent otherwise
+permitted run-owned service retirement.
+
+Delivery is the existing best-effort callback model. A normal new event emission
+attempts dispatch after its durable record is available. Coordinator death
+between a state commit, event append and callback can omit an event or delivery;
+there is no atomic state/event/outbound transaction or promised crash catch-up.
+Already retained events keep their exact identity and are inspectable. Restart,
+status queries and same-ID run replay do not automatically resend historical
+notifications. Explicit native reconciliation must not duplicate an already
+persisted event, and event replay is not notification retry authorization.
+No exactly-once, guaranteed external delivery, durable callback queue, automatic
+webhook retry or full historical event backfill is added. These limits must be
+stated in the migrated examples and operator docs.
+
+Retain synchronous registry dispatch as the bounded implementation scope. Trusted
+sinks must bound their own external IO; the existing Discord sink already has
+an explicit timeout. Callback latency can delay the coordinating process, like
+other configured trusted components; this amendment adds no callback isolation,
+watchdog or responsiveness guarantee. Exceptions remain isolated. This operational
+tradeoff and coordinator-wide privileges are material parts of approval.
+
+#### Implementation and validation owner
+
+Phase 9 implements this bridge together with the dependent event-sink/webhook
+consumer migration and removal. Retain programmatic registry/plugin loading for
+local composition and tests; remove the old runner request fields with their old
+API. Do not introduce a notification-specific CLI/MCP tool or persist Python
+callback objects. Native execution always retains durable event facts that were
+successfully appended; the old per-run non-durable callback mode is removed with
+the runner, while independent event-reference/registry primitives keep current
+non-execution consumers.
+
+VAL-41-12 owns causal checks at the changed boundary:
+
+- Native synthetic execution observes committed start/stage completion/run
+  completion facts; an injected throwing sink leaves successful outputs/status
+  unchanged and records the exact triggering event reference when storage works.
+- Cold service startup/restart loads only the explicitly selected factories;
+  inert construction/query/discovery does not. Detached execution still reaches
+  the configured coordinator callback. No notification secret reaches requests,
+  worker payloads or public projections.
+- Reuse-only/skip, failure/cancel and explicit failed-admission retry retain real
+  native status/event meaning; stable event replay neither duplicates facts nor
+  resends historical callbacks. Test the actual changed owner rather than a
+  Cartesian matrix across unchanged backends.
+- Embedded/authenticated authority calls preserve permission, exact event
+  identity and output-predecessor/revision semantics. Unsupported capability
+  refuses before execution; observer failure/recording failure cannot fabricate
+  experiment failure or successful evidence retention.
+- Migrate the existing event-sink and Discord fake-transport assertions; actual
+  webhooks are not sent as acceptance tests. Keep read-only old evidence usable.
+
+Both approved full Phase 9 gates remain required after implementation. Reuse
+unchanged P1–P8 backend/cancellation/physical-qualification receipts; the amendment
+itself is documentation and does not establish runtime or live qualification.
+
 ## Minimum Design
 
 Reuse Stage 40's high-level `loom.coordinator` client. Add native deployment/run

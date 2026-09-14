@@ -15,28 +15,18 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
     import loom.pipeline.execution as execution
 
     assert execution.__all__ == [
-        "ConfigSnapshotInputs",
-        "ContinuationStateError",
         "ExecutionFailure",
-        "FailurePolicy",
-        "InsufficientPreparedStateError",
         "LifecycleError",
         "OutputValidationError",
-        "OfflineEvidenceRunStore",
         "ParallelExecutionUnsupportedError",
         "PipelineExecutionError",
-        "PipelineRunner",
         "PlanExecutionError",
         "PREPARED_RUN_CONTINUATION_WHOLE_RUN",
         "PREPARED_RUN_SCHEMA_VERSION",
         "PreparedRunPayloadError",
         "PreparedRunRecord",
-        "PreparedRunContinueRequest",
-        "PreparedRunContinueResult",
-        "RunRequest",
         "RunRequestError",
         "StageReportedFailure",
-        "RunResult",
         "RuntimeServices",
         "ResourceAdmissionDecision",
         "ResourceAdmissionError",
@@ -48,33 +38,23 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "StageExecutionRequest",
         "StageExecutionResult",
         "StageExecutionRuntimeError",
-        "StageJobRunRequest",
-        "StageJobRunResult",
         "StageRunResult",
-        "StageWorkerRunRequest",
         "StageWorkerRequest",
         "StageWorkerResult",
         "StageWorkerStateError",
-        "UnsupportedContinuationExecutorError",
         "acquire_resource_admission",
-        "continue_prepared_run",
         "create_authority_backed_serial_run_store",
-        "create_offline_evidence_run_store",
-        "infer_stage_worker_attempt",
-        "is_offline_evidence_run_store",
         "prepare_stage_attempt",
         "reconcile_resource_limits",
-        "reconstruct_stage_execution_request",
         "redact_executor_metadata",
         "release_resource_admission",
         "resource_requests_from_runtime",
-        "run_stage_worker",
-        "run_stage_job",
-        "run_pipeline",
         "validate_stage_outputs",
     ]
     assert "PipelineRunner" not in loom.__all__
-    assert {"PipelineRunner", "RunRequest", "RunResult"} <= set(loom.pipeline.__all__)
+    assert not {"PipelineRunner", "RunRequest", "RunResult"} & set(
+        loom.pipeline.__all__
+    )
 
 
 @pytest.mark.parametrize("forbidden", ["loom.cli", "subprocess"])

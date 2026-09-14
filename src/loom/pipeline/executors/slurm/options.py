@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
 
-from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
 from loom.serialization import (
     PlainData,
     freeze_plain_data,
@@ -323,63 +322,6 @@ class SlurmOptions:
         return directives
 
 
-def build_single_job_command_argv(
-    run_uri: str,
-    *,
-    launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV,
-    authority_config: AuthorityConfig | None = None,
-) -> SlurmCommandArgv:
-    run_uri_text = _required_string(run_uri, path="run_uri")
-    command_args = [
-        "prepared-run",
-        "continue",
-        "--run-uri",
-        run_uri_text,
-        "--executor",
-        "local",
-    ]
-    if authority_config is not None:
-        command_args.extend(authority_config_to_cli_args(authority_config))
-    return SlurmCommandArgv(
-        launcher_argv=launcher_argv,
-        command_args=tuple(command_args),
-    )
-
-
-def build_stage_job_command_argv(
-    run_uri: str,
-    stage_name: str,
-    *,
-    launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV,
-    authority_config: AuthorityConfig | None = None,
-    plugin_selectors: Sequence[str] = (),
-) -> SlurmCommandArgv:
-    run_uri_text = _required_string(run_uri, path="run_uri")
-    stage_text = _required_string(stage_name, path="stage_name")
-    command_args = [
-        "stage-job",
-        "run",
-        "--run-uri",
-        run_uri_text,
-        "--stage",
-        stage_text,
-        "--executor",
-        "local",
-    ]
-    if authority_config is not None:
-        command_args.extend(authority_config_to_cli_args(authority_config))
-    for selector in plugin_selectors:
-        if not isinstance(selector, str) or not selector:
-            raise SlurmOptionError(
-                "plugin_selectors must contain non-empty GROUP:NAME strings"
-            )
-        command_args.extend(("--plugin", selector))
-    return SlurmCommandArgv(
-        launcher_argv=launcher_argv,
-        command_args=tuple(command_args),
-    )
-
-
 def normalize_extra_sbatch(
     extra_sbatch: Mapping[str, str | bool],
     *,
@@ -565,7 +507,5 @@ __all__ = [
     "SLURM_OPTIONS_SCHEMA_VERSION",
     "SlurmCommandArgv",
     "SlurmOptions",
-    "build_single_job_command_argv",
-    "build_stage_job_command_argv",
     "normalize_extra_sbatch",
 ]

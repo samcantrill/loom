@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -25,14 +26,13 @@ from loom.pipeline.cleanup import (
     CleanupTargetKind,
     CleanupTargetRef,
 )
-from loom.pipeline import PipelineRunner, RunRequest
+from tests.support.authority_read_fixture import seed_completed_authority_run
 from loom.pipeline.stores import BackendRevision, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import (
     SQLitePerRunAuthorityStore,
     _authority_database_path,
 )
 from tests.unit.loom.pipeline.execution.test_authority_adapter import (
-    _pipeline,
     _store,
 )
 
@@ -181,9 +181,7 @@ def _authority_run(tmp_path: Path) -> tuple[SQLitePerRunAuthorityStore, str]:
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     run_store = _store(tmp_path, authority)
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
-    PipelineRunner(run_store=run_store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
-    )
+    seed_completed_authority_run(run_store, run_uri)
     return authority, run_uri
 
 
@@ -233,3 +231,28 @@ def _cleanup_result(run_uri: str) -> CleanupResult:
             ),
         ),
     )
+
+
+def test_embedded_read_does_not_override_explicit_authority_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.diagnostics.backend import _default_authority_store
+    from loom.pipeline.stores import AuthorityConfig
+
+    for name in tuple(os.environ):
+        if name.startswith("LOOM_AUTHORITY_"):
+            monkeypatch.delenv(name)
+    run_uri = path_to_run_uri(tmp_path / "native")
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri)
+    assert isinstance(
+        _default_authority_store(run_uri=run_uri), SQLitePerRunAuthorityStore
+    )
+    with pytest.raises(
+        BackendDiagnosticsError, match="authoritative backend is missing"
+    ):
+        _default_authority_store(AuthorityConfig(), run_uri=run_uri)
+    monkeypatch.setenv("LOOM_AUTHORITY_BACKEND", "co_located_service")
+    with pytest.raises(
+        BackendDiagnosticsError, match="authoritative backend is missing"
+    ):
+        _default_authority_store(run_uri=run_uri)

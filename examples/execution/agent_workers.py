@@ -20,6 +20,7 @@ def prepare_example_deployment(
     container=None,
     configuration_policy="portable",
     run_root: Path | None = None,
+    event_sinks=(),
 ) -> Path:
     """Write one explicit local deployment for the current example consumers."""
     config = config.resolve()
@@ -101,6 +102,8 @@ def prepare_example_deployment(
             },
         },
     }
+    if event_sinks:
+        coordinator["event_sinks"] = list(event_sinks)
     source = PreparationSource("shared", "project", ".", (config.name,))
     selection = {
         "schema_version": 1,
@@ -129,6 +132,8 @@ def run_example(
     run_options=None,
     overrides=(),
     configuration_policy="portable",
+    event_sinks=(),
+    run_root=None,
 ):
     """Prepare and run importable project code, then settle owned services."""
     config = config.resolve()
@@ -137,6 +142,8 @@ def run_example(
         output_root,
         container=container,
         configuration_policy=configuration_policy,
+        event_sinks=event_sinks,
+        run_root=run_root,
     )
     root = selection.parent
     source = PreparationSource("shared", "project", ".", (config.name,))

@@ -15,6 +15,8 @@ from time import monotonic, sleep
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -67,9 +69,7 @@ def _authority_factory(tmp_path, *, workspace_id: str = "workspace-a"):
     repository = initialize_authority_repository(
         tmp_path / "authority", service_generation="generation-1"
     )
-    services = repository_authority_services(
-        repository, workspace_id="workspace-a"
-    )
+    services = repository_authority_services(repository, workspace_id="workspace-a")
     app_client = TestClient(create_authority_app(services=services))
 
     def transport(
@@ -604,3 +604,104 @@ def test_selected_authority_publisher_reconciles_unknown_reply(
         )
         == receipt
     )
+
+
+def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_path):
+    from loom.pipeline.event_sinks import (
+        EventObserverExternalRef,
+        EventObserverLinkRecord,
+        EventSinkFailureRecord,
+    )
+    from loom.pipeline.events import EventScope, PipelineEvent
+
+    repository, authority = _authority(tmp_path)
+    revision = repository.admit_run(RUN_URI)
+    authority.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-observer",
+            coordinator_id="coordinator-1",
+            run_uri=RUN_URI,
+            intent_digest="observer-intent",
+        ),
+    )
+    event = PipelineEvent(
+        scope=EventScope.run(),
+        event_type="run.started",
+        timestamp=revision.created_at,
+        event_id="native-committed-event",
+    )
+    record = authority.append_audit_event(RUN_URI, event)
+    assert authority.append_audit_event(RUN_URI, event) == record
+    assert authority.list_audit_events(RUN_URI) == (record,)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError):
+        authority.append_audit_event(
+            RUN_URI, replace(event, event_type="run.completed")
+        )
+    # Observation revision advancement never changes the exact committed output.
+    prepared = authority.ensure_prepared_attempt(
+        RUN_URI, _prepared_request(authority.open_run(RUN_URI).revision)
+    )
+    authority.bind_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    fence = authority.grant_prepared_attempt(
+        RUN_URI,
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    authority.confirm_execution_started(RUN_URI, fence=fence)
+    artifact = ArtifactRef(
+        artifact_id="build/out",
+        uri="file:///artifacts/build/out.json",
+        artifact_type="json",
+    )
+    commit_args: dict[str, Any] = dict(
+        assignment_id="assignment-observer",
+        attempt_id=prepared.attempt.attempt_id,
+        fencing_token=fence.fencing_token,
+        outputs={"out": artifact},
+    )
+    commit = authority.record_output_commit(RUN_URI, "build", **commit_args)
+    authority.append_audit_event(
+        RUN_URI,
+        replace(
+            event,
+            event_id="native-completed-event",
+            event_type="stage.completed",
+            scope=EventScope.stage("build"),
+        ),
+    )
+    assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
+    assert authority.read_event_sink_failures(RUN_URI) == ()
+    assert authority.read_event_observer_links(RUN_URI) == ()
+    failure = EventSinkFailureRecord.from_exception(
+        sink_name="test.capture", event_reference=record.to_event_reference(),
+        exc=RuntimeError("synthetic callback failure"), failed_at=record.timestamp,
+    )
+    link = EventObserverLinkRecord(
+        sink_name="test.capture", run_uri=RUN_URI,
+        event_reference=record.to_event_reference(), recorded_at=record.timestamp,
+        external_ref=EventObserverExternalRef("test.message", {"message_id": "retained-1"}),
+    )
+    before_facts = authority.open_run(RUN_URI)
+    failure_revision = authority.append_event_sink_failure(RUN_URI, failure)
+    link_revision = authority.append_event_observer_link(RUN_URI, link)
+    assert before_facts.revision.sequence < failure_revision.sequence < link_revision.sequence
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)
+    assert repository.read_event_sink_failures(RUN_URI) == (failure,)
+    assert repository.read_event_observer_links(RUN_URI) == (link,)
+    assert authority.open_run(RUN_URI).status == before_facts.status
+    assert authority.record_output_commit(RUN_URI, "build", **commit_args) == commit
+    _, wrong_workspace = _authority(tmp_path, workspace_id="another-workspace")
+    revision_before_refusal = authority.open_run(RUN_URI).revision
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_sink_failure(RUN_URI, failure)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        wrong_workspace.append_event_observer_link(RUN_URI, link)
+    assert authority.open_run(RUN_URI).revision == revision_before_refusal
+    assert authority.read_event_sink_failures(RUN_URI) == (failure,)
+    assert authority.read_event_observer_links(RUN_URI) == (link,)

@@ -1,6 +1,6 @@
 id: execution.slurm.dry-run-basics
 title: SLURM Dry-Run Basics
-summary: Generate single-job and afterok SLURM dry-run artifacts without scheduler submission.
+summary: Inspect the stage dependency graph without scheduler submission or continuation generation.
 capability: execution
 level: intermediate
 introduced_in: v6

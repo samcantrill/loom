@@ -14,14 +14,14 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 
 | Example | Demonstrates |
 | --- | --- |
-| `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics, and invoking a prepared stage through `loom stage run`. |
+| `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics. |
 | `execution.containers.docker` | Running stage attempts through the existing Docker executor library, selected-Docker preflight diagnostics, Docker failure inspection, and optional live Docker smoke guidance. |
 | `execution.containers.slurm-apptainer` | Hermetic fake-Apptainer execution with `--cleanenv --nv`, plus optional live and SLURM composition guidance. |
 | `execution.runtime-profile` | Configured runtime profile, CLI tags/notes, resource diagnostics, local run, and safe `runtime.json`. |
 | `execution.offline-first-import` | Explicit `--offline-first` execution, pre-import status behavior, authority import, and post-import authoritative status. |
-| `execution.slurm.dry-run-basics` | Public `slurm-single-job` and `slurm-afterok` dry-runs that generate reviewable scripts and manifests without scheduler submission. |
+| `execution.slurm.dry-run-basics` | Pure dependency graph planning without scheduler submission or generated commands. |
 | `execution.slurm.afterok-diamond` | Afterok dependency planning for a diamond DAG, stage-level SLURM options/resources, generated continuation commands, and secret-safe dry-run artifacts. |
-| `execution.slurm.live` | Manual live SLURM submit/status/cancel commands for `slurm-single-job` and `slurm-afterok` on a shared cluster filesystem. |
+| `execution.slurm.live` | Manual connected native SLURM admission, status and cancellation on a qualified site. |
 
 ## Public Python API Workflows
 

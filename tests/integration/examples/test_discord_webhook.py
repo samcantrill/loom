@@ -14,12 +14,8 @@ from typing import cast
 import httpx
 import pytest
 
-from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
 from loom.pipeline.events import EventScope, PipelineEventRecord
-from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.status import RunStatus
-from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     LocalDaemonAdmission,
@@ -28,7 +24,6 @@ from loom.queue import (
     DaemonStatus,
 )
 from loom.serialization import PlainData
-from tests.support.pipeline_execution_configs import local_execution_config
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -177,21 +172,38 @@ def test_transport_failure_is_sanitized_and_does_not_change_run_status(
         registration.sink,
         subscription=registration.subscription,
     )
-    store = create_authority_backed_serial_run_store(
-        tmp_path / "runs", authority_store=SQLitePerRunAuthorityStore()
-    )
-    run_uri = path_to_run_uri(tmp_path / "runs" / "discord-failure")
+    from loom.coordinator import RunRequest
+    from loom.preparation import CoordinatorPreparation
+    from loom.queue import LocalDaemon
+    from loom.queue._lifecycle_observers import LifecycleObservers
+    from tests.integration.queue.test_run_operations import _two_stage_service, _request
 
-    result = PipelineRunner(run_store=store).run(
-        RunRequest(
-            config=local_execution_config(),
-            run_uri=run_uri,
-            event_sink_registry=registry,
+    service = _two_stage_service(tmp_path)
+    observers = LifecycleObservers()
+    observers.start()
+    observers._registry = registry
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(
+        service.daemon,
+        preparation=CoordinatorPreparation(service),
+        event_observers=observers,
+    )
+    daemon.start()
+    try:
+        daemon.start_run(
+            RunRequest(_request(), "target-admission"), principal_id="caller"
         )
-    )
+        assert (
+            daemon.wait_operation("prepare-1", timeout=60).operation.state == "applied"
+        )
+        admission = daemon._wait("target-admission", timeout_seconds=60)
+        assert admission.state.value == "SUCCEEDED"
+        failures = SQLitePerRunAuthorityStore(
+            admission.run_uri
+        ).read_event_sink_failures(admission.run_uri)
+    finally:
+        daemon.stop()
 
-    assert result.status is RunStatus.SUCCEEDED
-    failures = store.read_event_sink_failures(run_uri)
     assert len(failures) == 1
     failure = failures[0]
     assert failure.failure_type == DiscordWebhookError.__name__

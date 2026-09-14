@@ -18,7 +18,6 @@ from loom.pipeline.event_sinks import EventSinkRegistration, EventSinkSubscripti
 from loom.pipeline.executors import (
     ExecutorRegistration,
     LocalExecutor,
-    SubprocessExecutor,
 )
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.runtime import (
@@ -122,25 +121,6 @@ def _build_project_executor(
     return ProjectExecutor()
 
 
-class ProjectSubprocessExecutor(SubprocessExecutor):
-    name = "stage28-subprocess"
-
-
-def _build_project_subprocess_executor(
-    *,
-    services: RuntimeServices,
-    options: RunOptions,
-) -> ProjectSubprocessExecutor:
-    del options
-    return ProjectSubprocessExecutor(
-        worker_results=services.worker_results,
-        plugin_selectors=(
-            "loom.codecs:stage28.tagged-json.v1",
-            "loom.resource_validators:stage28.device",
-        ),
-    )
-
-
 PROJECT_EXECUTOR_REGISTRATION = ExecutorRegistration(
     descriptor=ExecutorDescriptor(
         name="stage28-project",
@@ -154,25 +134,10 @@ PROJECT_EXECUTOR_REGISTRATION = ExecutorRegistration(
     factory=_build_project_executor,
 )
 
-PROJECT_SUBPROCESS_EXECUTOR_REGISTRATION = ExecutorRegistration(
-    descriptor=ExecutorDescriptor(
-        name="stage28-subprocess",
-        resource_capabilities={
-            "stage28.device": ResourceCapability(
-                support_level=ResourceSupportLevel.SUPPORTED,
-                enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
-            )
-        },
-    ),
-    factory=_build_project_subprocess_executor,
-)
-
 
 __all__ = [
     "PROJECT_EXECUTOR_REGISTRATION",
-    "PROJECT_SUBPROCESS_EXECUTOR_REGISTRATION",
     "ProjectExecutor",
-    "ProjectSubprocessExecutor",
     "Stage28ProducerStage",
     "TaggedJsonCodec",
     "filtered_event_sink",

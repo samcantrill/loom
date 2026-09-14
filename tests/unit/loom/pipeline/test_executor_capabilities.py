@@ -134,8 +134,6 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
         "docker",
         "local",
         "singularity",
-        "slurm-afterok",
-        "slurm-single-job",
         "subprocess",
     )
     assert descriptor.name == "local"
@@ -206,30 +204,6 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
     assert singularity_descriptor.details["singularity_compatible"] is True
     assert singularity_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
-    slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
-    assert slurm_descriptor.adapter_namespaces == (
-        "apptainer",
-        "container",
-        "container_build",
-        "singularity",
-        "slurm",
-    )
-    assert slurm_descriptor.timeout_support is TimeoutSupportLevel.DELEGATED
-    assert slurm_descriptor.details["dry_run_only"] is False
-    assert slurm_descriptor.details["live_submission"] is True
-    assert slurm_descriptor.details["scheduler_commands"] is True
-    assert slurm_descriptor.details["container_composition"] is True
-    afterok_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
-    assert afterok_descriptor.details["dry_run_only"] is False
-    assert afterok_descriptor.details["live_submission"] is True
-    assert afterok_descriptor.details["scheduler_commands"] is True
-    assert {
-        kind: capability.to_dict()["support_level"]
-        for kind, capability in cast(
-            dict[str, ResourceCapability],
-            slurm_descriptor.resource_capabilities,
-        ).items()
-    } == {"cpu": "supported", "memory": "supported", "gpu": "supported"}
 
 
 def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() -> None:
@@ -258,34 +232,11 @@ def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() 
         result.raise_for_errors()
 
 
-def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
-    result = validate_executor_capabilities(
-        RunOptions(
-            executor="slurm-afterok",
-            adapter_options={"slurm": {"launcher_argv": ["loom"]}},
-            stage_options={
-                "train": StageRuntimeOptions(
-                    resources=ResourceRequest(
-                        entries={
-                            "cpu": ResourceEntry(kind="cpu", amount=2),
-                            "memory": ResourceEntry(
-                                kind="memory", amount=4, unit="GiB"
-                            ),
-                            "gpu": ResourceEntry(kind="gpu", amount=1),
-                        }
-                    )
-                )
-            },
-        )
-    )
-
-    assert result.ok
-    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["code"], item["resource_kind"]) for item in diagnostics] == [
-        ("resource.supported", "cpu"),
-        ("resource.supported", "gpu"),
-        ("resource.supported", "memory"),
-    ]
+@pytest.mark.parametrize("name", ["slurm-afterok", "slurm-single-job"])
+def test_removed_whole_run_modes_are_not_execution_capabilities(name):
+    result = validate_executor_capabilities(RunOptions(executor=name))
+    assert not result.ok
+    assert "unknown" in repr(result.to_dict())
 
 
 def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None:
@@ -466,22 +417,8 @@ def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
             },
         )
     )
-    slurm_result = validate_executor_capabilities(
-        RunOptions(
-            executor="slurm-afterok",
-            adapter_options={
-                "slurm": {"partition": "debug"},
-                "container": {"target": "analysis-env"},
-                "container_build": {},
-                "apptainer": {"cleanenv": True},
-            },
-        )
-    )
-
     assert apptainer_result.ok
-    assert slurm_result.ok
     assert "adapter_namespace.unclaimed" not in repr(apptainer_result.to_dict())
-    assert "adapter_namespace.unclaimed" not in repr(slurm_result.to_dict())
 
 
 def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:

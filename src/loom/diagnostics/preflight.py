@@ -227,7 +227,9 @@ def run_preflight(request: PreflightRequest) -> PreflightResult:
     return _run_checks(_Context(request=request))
 
 
-def run_preflight_composed(composed: object, request: PreflightRequest) -> PreflightResult:
+def run_preflight_composed(
+    composed: object, request: PreflightRequest
+) -> PreflightResult:
     """Run ordinary checks over one already composed configuration.
 
     Preparation workers call this entrypoint after composing their captured
@@ -238,7 +240,9 @@ def run_preflight_composed(composed: object, request: PreflightRequest) -> Prefl
     if not isinstance(request, PreflightRequest):
         raise TypeError("request must be a PreflightRequest")
     if request.overlays or request.overrides:
-        raise ValueError("supplied composition preflight does not accept overlays or overrides")
+        raise ValueError(
+            "supplied composition preflight does not accept overlays or overrides"
+        )
     if composed is None:
         raise TypeError("supplied composition must not be None")
     return _run_checks(_Context(request=request, composed=composed))
@@ -2513,8 +2517,8 @@ def _check_subprocess_python() -> PreflightCheckResult:
 
 
 def _check_subprocess_worker() -> PreflightCheckResult:
-    module_name = "loom.cli.main"
-    command = "loom stage run"
+    module_name = "loom.queue._resident_stage_worker"
+    command = "python -m loom.queue._resident_stage_worker"
     try:
         spec = importlib.util.find_spec(module_name)
     except Exception as exc:  # noqa: BLE001 - import resolution failure is a structured diagnostic.

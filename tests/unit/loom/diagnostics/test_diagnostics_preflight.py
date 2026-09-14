@@ -31,7 +31,9 @@ from loom.pipeline.stores import (
 pytestmark = pytest.mark.unit
 
 
-def test_supplied_composition_is_checked_without_reloading_or_reapplying_overrides() -> None:
+def test_supplied_composition_is_checked_without_reloading_or_reapplying_overrides() -> (
+    None
+):
     @dataclass
     class _Composed:
         source_artifacts: tuple[object, ...] = ()
@@ -44,7 +46,9 @@ def test_supplied_composition_is_checked_without_reloading_or_reapplying_overrid
     with pytest.raises(ValueError, match="overlays"):
         run_preflight_composed(
             _Composed(),
-            PreflightRequest(config_path="missing.yaml", groups=("config",), overlays=("other.yaml",)),
+            PreflightRequest(
+                config_path="missing.yaml", groups=("config",), overlays=("other.yaml",)
+            ),
         )
 
 
@@ -372,8 +376,8 @@ def test_selected_subprocess_executor_fails_when_worker_module_is_unavailable(
     assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
     assert by_id["executor.subprocess.worker"].status is PreflightCheckStatus.FAIL
     assert by_id["executor.subprocess.worker"].details == {
-        "module": "loom.cli.main",
-        "command": "loom stage run",
+        "module": "loom.queue._resident_stage_worker",
+        "command": "python -m loom.queue._resident_stage_worker",
         "reason": "module_not_found",
     }
 
@@ -1149,104 +1153,6 @@ def test_selected_apptainer_environment_reports_missing_required_host_env(
     assert missing == [{"stage_id": "train", "name": "MISSING_APPTAINER_TOKEN"}]
 
 
-def test_slurm_container_preflight_resolves_build_target_and_warns_without_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import loom.diagnostics.preflight as preflight_module
-
-    _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("executor", "resources"),
-            runtime_options={
-                "executor": "slurm-afterok",
-                "dry_run": True,
-                "adapter_options": {
-                    "container": {"target": "analysis-env"},
-                    "container_build": {
-                        "targets": {
-                            "analysis-env": {
-                                "name": "analysis-env",
-                                "runtime": "apptainer",
-                                "source": {
-                                    "kind": "definition_file",
-                                    "path": "containers/analysis.def",
-                                },
-                                "output": {
-                                    "kind": "apptainer_sif",
-                                    "path": ".loom/containers/analysis.sif",
-                                },
-                            }
-                        }
-                    },
-                },
-            },
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.WARN
-    assert by_id["executor.container_build.targets"].status is PreflightCheckStatus.PASS
-    assert (
-        by_id["executor.apptainer.container_options"].status
-        is PreflightCheckStatus.PASS
-    )
-    assert by_id["executor.apptainer.command"].status is PreflightCheckStatus.WARN
-    assert (
-        by_id["resources.slurm.container_compatibility"].status
-        is PreflightCheckStatus.PASS
-    )
-
-
-def test_slurm_container_preflight_keeps_cpu_memory_mapping_scheduler_owned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_runtime_preflight_dependencies(monkeypatch)
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("resources",),
-            runtime_options={
-                "executor": "slurm-afterok",
-                "dry_run": True,
-                "adapter_options": {
-                    "container": {"image": {"reference": "analysis.sif"}},
-                },
-                "stage_options": {
-                    "train": {
-                        "resources": {
-                            "entries": {
-                                "cpu": {"kind": "cpu", "amount": 2},
-                                "memory": {
-                                    "kind": "memory",
-                                    "amount": 512,
-                                    "unit": "MiB",
-                                },
-                            }
-                        }
-                    }
-                },
-            },
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert by_id["resources.apptainer.mapping"].status is PreflightCheckStatus.PASS
-    mapped = cast(
-        list[dict[str, Any]],
-        by_id["resources.apptainer.mapping"].details["mapped_resources"],
-    )
-    assert [(item["resource_kind"], item["enforcement"]) for item in mapped] == [
-        ("cpu", "slurm_enforced"),
-        ("memory", "slurm_enforced"),
-    ]
-    assert all("runtime_argument" not in item for item in mapped)
-
-
 def test_container_build_filesystem_checks_sources_and_never_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1303,240 +1209,6 @@ def test_container_build_filesystem_checks_sources_and_never_outputs(
         sort_keys=True,
     )
     assert "build-secret" not in json.dumps(result.to_dict(), sort_keys=True)
-
-
-def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    import loom.diagnostics.preflight as preflight_module
-    from loom.pipeline.stores import path_to_run_uri
-
-    _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("pipeline: {}\n", encoding="utf-8")
-    run_uri = path_to_run_uri(tmp_path / "runs" / "dry")
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path=config_path,
-            groups=("runtime", "run", "executor", "resources", "filesystem"),
-            runtime_options={
-                "run_uri": run_uri,
-                "executor": "slurm-afterok",
-                "dry_run": True,
-                "adapter_options": {
-                    "slurm": {
-                        "schema_version": 1,
-                        "launcher_argv": ["loom", "--profile", "batch"],
-                    }
-                },
-                "stage_options": {
-                    "train": {
-                        "resources": {
-                            "entries": {
-                                "cpu": {"kind": "cpu", "amount": 2},
-                                "memory": {
-                                    "kind": "memory",
-                                    "amount": 4,
-                                    "unit": "GiB",
-                                },
-                            }
-                        }
-                    }
-                },
-            },
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.WARN
-    for check_id in (
-        "runtime.slurm.options",
-        "run_uri.slurm.local",
-        "executor.slurm.mode",
-        "executor.slurm.launcher",
-        "executor.slurm.sbatch",
-        "resources.slurm.mapping",
-        "filesystem.slurm.generated_paths",
-    ):
-        assert check_id in by_id
-    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.WARN
-    assert by_id["executor.slurm.sbatch"].details["available"] is False
-    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
-    assert by_id["resources.slurm.mapping"].status is PreflightCheckStatus.PASS
-
-
-def test_slurm_afterok_live_preflight_requires_sbatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import loom.diagnostics.preflight as preflight_module
-
-    _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("executor",),
-            runtime_options={"executor": "slurm-afterok"},
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.FAIL
-    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.slurm.mode"].details["live_submission"] is True
-    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.FAIL
-
-
-def test_slurm_single_job_live_preflight_requires_sbatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import loom.diagnostics.preflight as preflight_module
-
-    _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("executor",),
-            runtime_options={"executor": "slurm-single-job"},
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.FAIL
-    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.slurm.mode"].details["live_submission"] is True
-    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.FAIL
-    assert by_id["executor.slurm.sbatch"].details["required"] is True
-
-
-def test_slurm_live_preflight_warns_for_optional_status_and_cancel_commands(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import loom.diagnostics.preflight as preflight_module
-
-    _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(
-        preflight_module.shutil,
-        "which",
-        lambda name: f"/usr/bin/{name}" if name == "sbatch" else None,
-    )
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("executor",),
-            runtime_options={"executor": "slurm-afterok"},
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.WARN
-    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.PASS
-    for check_id in (
-        "executor.slurm.squeue",
-        "executor.slurm.sacct",
-        "executor.slurm.scancel",
-    ):
-        assert by_id[check_id].status is PreflightCheckStatus.WARN
-        assert by_id[check_id].details["required"] is False
-
-
-def test_slurm_run_preflight_fails_existing_active_submission(
-    tmp_path,
-) -> None:
-    from loom.pipeline.execution import create_authority_backed_serial_run_store
-    from loom.pipeline.stores import path_to_run_uri
-    from loom.pipeline.stores.service_authority import LocalAuthorityService
-    from loom.pipeline.submitted import (
-        SubmittedOperationRecord,
-        SubmittedOperationState,
-    )
-
-    run_uri = path_to_run_uri(tmp_path / "runs" / "active")
-    with LocalAuthorityService.start() as service:
-        authority_config = service.config()
-        store = create_authority_backed_serial_run_store(
-            tmp_path / "runs",
-            authority_config=authority_config,
-        )
-        store.create_run(run_uri)
-        store.write_submitted_operation(
-            run_uri,
-            SubmittedOperationRecord(
-                run_uri=run_uri,
-                submission_id="planning-1",
-                backend="slurm",
-                mode="slurm-afterok",
-                created_at="2026-05-08T00:00:00Z",
-                updated_at="2026-05-08T00:00:01Z",
-                state=SubmittedOperationState.SUBMITTED,
-                manifest_relative_path="slurm/submissions/planning-1/manifest.json",
-                summary_counts={"submitted": 1, "active": 1},
-            ),
-        )
-
-        result = run_preflight(
-            PreflightRequest(
-                config_path="config.yaml",
-                groups=("run",),
-                run_uri=run_uri,
-                runtime_options={
-                    "executor": "slurm-afterok",
-                    "resume": {"enabled": True},
-                },
-                authority_config=authority_config,
-            )
-        )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.FAIL
-    assert by_id["run_uri.resolve"].status is PreflightCheckStatus.PASS
-    assert by_id["run_uri.slurm.active_submission"].status is PreflightCheckStatus.FAIL
-    source = cast(
-        dict[str, Any],
-        by_id["run_uri.slurm.active_submission"].details["state_source"],
-    )
-    assert source["label"] == "authoritative_service_truth"
-    assert by_id["run_uri.slurm.active_submission"].details["submission_id"] == (
-        "planning-1"
-    )
-
-
-def test_slurm_filesystem_preflight_probes_generated_path_writability(
-    tmp_path,
-) -> None:
-    from loom.pipeline.stores import path_to_run_uri
-
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("pipeline: {}\n", encoding="utf-8")
-    run_uri = path_to_run_uri(tmp_path / "runs" / "writable")
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path=config_path,
-            groups=("filesystem",),
-            run_uri=run_uri,
-            runtime_options={
-                "executor": "slurm-afterok",
-                "dry_run": True,
-            },
-        )
-    )
-
-    by_id = {check.check_id: check for check in result.checks}
-    assert result.status is PreflightStatus.PASS
-    assert by_id["filesystem.slurm.generated_paths"].status is PreflightCheckStatus.PASS
-    assert (
-        by_id["filesystem.slurm.generated_writable"].status is PreflightCheckStatus.PASS
-    )
-    assert not (tmp_path / "runs" / "writable").exists()
 
 
 @dataclass(frozen=True, slots=True)

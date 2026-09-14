@@ -1,7 +1,5 @@
 """Docker executor contracts and implementation."""
 
-from typing import TYPE_CHECKING
-
 from loom.pipeline.executors.docker.build import (
     DockerBuildOptions,
     DockerContainerBuilder,
@@ -25,18 +23,12 @@ from loom.pipeline.executors.docker.commands import (
     command_result_from_exception,
 )
 
-if TYPE_CHECKING:
-    from loom.pipeline.executors.docker.executor import DockerExecutor
-
 
 def __getattr__(name: str) -> object:
-    if name == "DockerExecutor":
-        from loom.pipeline.executors.docker.executor import DockerExecutor
-
-        return DockerExecutor
     raise AttributeError(
         f"module 'loom.pipeline.executors.docker' has no attribute {name!r}"
     )
+
 
 __all__ = [
     "DOCKER_COMMAND_RESULT_SCHEMA_VERSION",
@@ -45,7 +37,6 @@ __all__ = [
     "DockerCommandResult",
     "DockerCommandRunner",
     "DockerContainerBuilder",
-    "DockerExecutor",
     "DockerCommandUnavailableError",
     "DockerOptionError",
     "DockerOptions",

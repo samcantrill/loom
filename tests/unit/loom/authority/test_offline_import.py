@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from itertools import count
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 import pytest
+
+from tests.support.historical_offline_evidence import (
+    complete_manifest as _complete_manifest,
+)
 
 from loom.authority._repository import (
     AuthorityRepositoryError,
@@ -19,14 +22,10 @@ from loom.authority.offline_import import (
     import_offline_evidence_manifest,
     validate_offline_import_manifest,
 )
-from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_offline_evidence_run_store
 from loom.pipeline.events import PipelineEventRecord
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import path_to_run_uri
 from loom.serialization import thaw_plain_data
-from tests.support.pipeline_execution_configs import local_execution_config
 
 
 pytestmark = pytest.mark.unit
@@ -212,30 +211,3 @@ def test_offline_import_rolls_back_repository_transaction_on_mid_import_failure(
 
     with pytest.raises(AuthorityRepositoryError, match="unknown run"):
         repository.open_run(manifest.run_uri)
-
-
-def _complete_manifest(
-    tmp_path: Path, *, name: str = "offline-run"
-) -> OfflineEvidenceManifest:
-    run_store = create_offline_evidence_run_store(
-        tmp_path / "offline-runs",
-        owner_id="offline-test",
-        workspace_id="workspace-a",
-    )
-    run_uri = path_to_run_uri(tmp_path / "offline-runs" / name)
-    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
-        RunRequest(config=local_execution_config(), run_uri=run_uri)
-    )
-    assert result.status is RunStatus.SUCCEEDED
-    manifest = run_store.read_offline_evidence_manifest(run_uri)
-    assert manifest is not None
-    return manifest
-
-
-def _sequence_clock() -> Callable[[], str]:
-    ticks = count(1)
-
-    def clock() -> str:
-        return f"2020-01-01T00:00:{next(ticks):02d}Z"
-
-    return clock

@@ -2508,6 +2508,17 @@ class SQLitePerRunAuthorityStore:
             _touch_run(conn, revision)
             return record
 
+    def list_audit_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
+        """Read retained event identities without changing run state."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            return tuple(
+                _audit_event_from_row(row, run_uri=run_uri)
+                for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence")
+            )
+
     def append_event_sink_failure(
         self, run_uri: str, failure: EventSinkFailureRecord
     ) -> BackendRevision:

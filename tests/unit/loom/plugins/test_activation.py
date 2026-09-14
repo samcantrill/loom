@@ -15,8 +15,6 @@ from loom.plugins.entrypoints import (
     PluginInvalidEntryPointError,
     PluginRecord,
 )
-from loom.pipeline.execution.models import RunRequest
-from loom.pipeline.execution.errors import RunRequestError
 
 
 def _record(
@@ -92,12 +90,7 @@ def test_reconstruction_comparison_never_invents_distribution_identity() -> None
     )
 
 
-def test_caller_metadata_cannot_claim_plugin_activation_authority() -> None:
-    with pytest.raises(RunRequestError, match="reserved plugin_activations"):
-        RunRequest(
-            config={},
-            metadata={"plugin_activations": {"schema_version": 1, "plugins": []}},
-        )
+def test_plugin_reconstruction_rejects_changed_target() -> None:
     assert compare_plugin_activation_records(
         (_record(),), (_record(value="project.plugins:other"),)
     ) == ("plugin target changed for loom.codecs:example",)

@@ -87,11 +87,11 @@ def test_import_loom_queue_public_api() -> None:
     )
 
     assert "QueueItem" in loom.queue.__all__
-    assert "QueueService" in loom.queue.__all__
-    assert "QueueClient" in loom.queue.__all__
-    assert "QueueController" in loom.queue.__all__
-    assert "QueueCycleResult" in loom.queue.__all__
-    assert "QueueDispatchDisposition" in loom.queue.__all__
+    assert "QueueService" not in loom.queue.__all__
+    assert "QueueClient" not in loom.queue.__all__
+    assert "QueueController" not in loom.queue.__all__
+    assert "QueueCycleResult" not in loom.queue.__all__
+    assert "QueueDispatchDisposition" not in loom.queue.__all__
     assert "QueueSelectionCandidate" in loom.queue.__all__
     assert "QueueSelectionContext" in loom.queue.__all__
     assert "QueueSelectionDisposition" in loom.queue.__all__

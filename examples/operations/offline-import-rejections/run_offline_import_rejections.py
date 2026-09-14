@@ -4,7 +4,6 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -32,21 +31,16 @@ def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"offline-rejection-{uuid4().hex[:8]}")
-    config_path = HERE / "pipeline.yaml"
 
     authority = start_authority_session(output_root)
     try:
-        from weave import compose_config
-        from loom.pipeline.execution import PipelineRunner, RunRequest, create_offline_evidence_run_store
-        from loom.pipeline.runtime import merge_config_run_options
-        from loom.pipeline.executors import LocalExecutor
-        composed = compose_config(str(config_path))
-        execution_options = merge_config_run_options(composed.resolved, explicit={"run_uri": run_uri, "executor": 'local'})
-        execution_store = create_offline_evidence_run_store(run_root)
-        offline = PipelineRunner(run_store=execution_store, executor=LocalExecutor()).run(RunRequest(config=composed, options=execution_options))
-        assert offline.status.value == "SUCCEEDED"
-        offline_evidence = execution_store.offline_evidence_summary(run_uri)
-        manifest_path = Path(offline_evidence["manifest_path"])
+        from examples.historical_evidence import complete_manifest
+        import json
+
+        manifest = complete_manifest(output_root, name=Path(run_uri).name)
+        run_uri = manifest.run_uri
+        manifest_path = output_root / "historical-manifest.json"
+        manifest_path.write_text(json.dumps(manifest.to_dict()))
         incomplete_path = output_root / "incomplete-manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["manifest_status"] = "incomplete"

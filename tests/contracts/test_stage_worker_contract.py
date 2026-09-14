@@ -1,22 +1,24 @@
-"""Contract tests for the direct worker handoff boundary."""
+"""Contract tests for the restricted resident worker result boundary."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from loom.pipeline import PipelineSpec
+from loom.pipeline import PipelineSpec, ProcessContainmentOwner
 from loom.pipeline.execution import (
-    StageWorkerRunRequest,
     prepare_stage_attempt,
-    run_stage_worker,
 )
+from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
+from loom.pipeline.execution.models import StageWorkerRequest
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
-def test_direct_worker_writes_only_worker_result_handoff(tmp_path: Path) -> None:
+def test_resident_worker_returns_outputs_without_finalizing_canonical_state(
+    tmp_path: Path,
+) -> None:
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
     store.create_run(run_uri)
@@ -29,7 +31,9 @@ def test_direct_worker_writes_only_worker_result_handoff(tmp_path: Path) -> None
                     "factory": {
                         "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
                     },
-                    "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+                    "outputs": {
+                        "data": {"artifact_type": "json", "codec_key": "json.v1"}
+                    },
                 }
             ],
         }
@@ -46,17 +50,23 @@ def test_direct_worker_writes_only_worker_result_handoff(tmp_path: Path) -> None
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
-        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="build", executor="local"),
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build", executor="local"
+        ),
         clock=lambda: "2020-01-01T00:00:00Z",
     )
 
-    result = run_stage_worker(
-        run_store=store,
-        request=StageWorkerRunRequest(run_uri=run_uri, stage_name="build"),
+    result = execute_resident_stage_worker_request(
+        worker_request=StageWorkerRequest.from_dict(
+            store.read_stage_worker_request(run_uri, "build", attempt=1)
+        ),
+        workspace_root=tmp_path / "agent-assignment",
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
     )
 
     assert result.status == StageStatus.SUCCEEDED
-    assert store.read_stage_worker_result(run_uri, "build", attempt=1) == result.to_dict()
+    assert store.read_stage_worker_result(run_uri, "build", attempt=1) is None
+    assert result.outputs
     assert store.read_stage_outputs(run_uri, "build") is None
     assert store.read_stage_failure(run_uri, "build") is None
     assert store.read_stage_provenance(run_uri, "build") is None

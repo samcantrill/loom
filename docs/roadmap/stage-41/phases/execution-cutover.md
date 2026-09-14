@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: 41 / 9
 - Manifest: [implementation-plan.md](../implementation-plan.md)
 - Branch: agent/stage-41-p9-execution-cutover
 - Stage worktree and coordination branch: from the manifest Execution Context;
   all phases share that stage worktree through synchronized closeout.
-- Base revision: published develop after Phase 8 merges; record exact SHA at execution preparation
+- Base revision: `d0e2dd33729cb465d5af313fe22379a6dad5c27d` (published Phase 8 completion metadata after PR 319)
 - PR target: develop
 - PR title: Stage 41 Unified Run Lifecycle And Agent Execution - Phase 9: Complete Execution Cutover
 - Dependencies: Phase 8 remotely merged; approved Stage 41 plan
 - Plan approval: maintained behavior and nine-phase structure approved on 2026-09-10
 - Workflow path: expanded for this card's public/durable/ownership boundary; retain the reviewed contracts
-- Blockers: source predecessor pending; no unresolved planning blocker
+- Blockers: none; native observer amendment independently reviewed and explicitly approved on 2026-09-14
 
 ## Objective And Context
 
@@ -139,6 +139,15 @@ contract. Historical roadmap/evidence records need not be rewritten, but must no
 be presented as current supported workflows. No numerical/project behavior is
 replaced merely to make a removal audit empty.
 
+### Approved native observer bridge
+
+The source audit found that deleting the old runner would remove committed
+lifecycle notification behavior from current event-sink/webhook consumers.
+[The approved native lifecycle observer amendment](../planning.md#phase-9-amendment-native-lifecycle-observers)
+is the single owner of the new selection, authority, delivery/trust and validation
+contracts. The maintainer explicitly approved it on 2026-09-14. Phase 9 owns that bridge and consumer migration atomically with removal; existing backend,
+run identity and scientific behavior remain fixed. The native bridge is implemented; the Workflow State records owner-level corrections and validation.
+
 ### Documentation and operator behavior
 
 Document coordinator service, agent service, stage worker, backend, supervisor,
@@ -251,23 +260,121 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 
 ## Workflow State
 
-- Manager preparation: approved card; execution revision/worktree pending
+- Manager preparation: passed on the manifest stage worktree and canonical Phase 9 branch at the Base revision above. Phase 8 PR 319 merged as `928df2e42ec29b9f2c68a7cdb8bfff2c9d09d1b4`; completion metadata is published, synchronization verified matching stage/local/fetched/advertised develop, and exact predecessor local/remote branches are retired. All predecessor agents/processes are terminal; successor start and preflight passed.
+- Source reconciliation: remaining runner/continuation/offline/whole-run queue and generated Slurm continuation owners are removed. Static imports, configured plugin targets, CLI parser registrations, generated command builders, examples and the repository monitor now use native operations or explicitly read-only primitives. The disposition and meaningful surviving assertion owners are recorded below. Historical roadmap records are retained.
+- Validation selection: package/public/isolated imports, runtime profiles, native CLI/Python/sweep/MCP journeys, affected diagnostics/event/log/catalog examples, removed entrypoint refusal and source/dynamic/doc disposition. The card's named test paths remain present; use the locked isolated environments owned by tests/README.md. Both full make gates remain binding. Expand for changed shared execution/planner/artifact/resource boundaries, a failing supported consumer or a missing accepted assertion; reuse unchanged predecessor backend/race evidence.
+- Qualification reconciliation: P3/P4/P6/P8 phase records own the actual local evidence and unavailable physical fleet/NAS/container/Slurm/live-assistant cases. Final docs must retain these limits; no external workload, provisioning, allocation acquisition or active project environment changes are required by this phase.
+- Resolved contract gap: the event-sink/webhook consumers depended on old runner event emission and retained callback failures. The native request/coordinator authority lacked an observer selection/dispatch contract. The executor stopped before edits; manager authored the bounded amendment linked above. Independent plan review passed at `1ec0bc01a6a94d6f1a7340de1c645ace2e2bc51f`; the maintainer explicitly approved it on 2026-09-14, authorizing implementation. The amendment used no implementation correction; the two subsequent owner-level corrections are recorded below.
+- Execution delegation: one executor is justified for the remaining cross-package orchestration removal, consumer/test migration and integrated operator documentation. It owns Phase 9 source/tests/current docs/examples and this card; manager owns the manifest, delivery and independent review. No children, extra branches or lifecycle sidecars.
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
-- Implementation: not started
+- Implementation: observer bridge, failure-policy restoration, consumer migrations and remaining engine removal are committed; both required final gates passed. Default read-only status/backend/artifact/plan consumers select an existing embedded authority, explicit service selection remains authoritative, and bounded local log inspection follows retained native references with truthful unavailable cases. The manager confirmed these as accepted consumer migrations.
 - Refiner: not used
-- Pre-submit gate: not run
-- Independent implementation review: required for final hard public/dynamic removal and stage integration
-- Blocker corrections: 0/3
-- PR and merge: not started
+- Pre-submit gate: manager acceptance and both fresh required full gates passed after correction 3 on `10ea8d48cfb315565fb389b3281623a47f4be399`, tree `0c7fd731794ca5462fe883ff28c5e781a8b68269`. Manager independently parsed all seven XML receipts (3,260 passed, 15 skipped, zero failures/errors), verified all 35 archived evidence files byte-for-byte and inspected the metadata-only delta. Same-reviewer confirmation is the remaining review gate.
+- Independent implementation review: PR 321 head `f8685a13dd747128db33162006affeafbb0ff6e8` reviewed. No supported product defect established; delivery waits for the accepted observer coverage below. Removal, current native ownership, failure/cancellation corrections and qualified evidence passed. The same reviewer confirms the scoped correction before delivery.
+- Blocker corrections: 3/3. Native runtime options already retained `continue_independent`, but admission finalization ignored it and failed before unrelated branches settled. Manager confirmed restoration within the accepted contract. Consume the existing serialized policy at native readiness/finalization, retain failed descendants and explicit retry semantics, and stop new work after a known failure under the default policy. No new durable policy schema is introduced. The discriminating failure and rechecks are archived under `/tmp/loom-stage41-p9-evidence/native-failure-policy*.log` and `native-policy-settlement.log`.
+- Correction 2: manager reproduced failure plus independent early-stop remaining WAITING/RUNNING with both stage facts terminal. Historical authored parallel behavior gives cancellation precedence for a still-live run. Native cancellation now runs before independent-failure waiting; fresh dispatch refuses an observed cancelled stage. Terminal run guards and existing containment/release ownership remain intact. The regression retains failed/early-stop facts, original reason, cancellation outcome, and no managed binding for a further independent branch. Eleven focused failure/cancellation/late-terminal tests pass (`native-failure-cancellation-owner-recheck.log`).
+- Correction 3: the independent reviewer identified incomplete coverage of the approved observer amendment. Manager added native same-root coordinator restart with changed protected factory selection, detached completion and historical callback suppression; failure/cancellation event facts; explicit retry event identity; reuse/skip without fabricated starts; authenticated failure/link round trips, revision/output replay and workspace refusal. These extend existing owner-level journeys and test helpers; production code is unchanged. The first focused check passed 14 cases and exposed one incorrect fixture expectation: reuse publication had already retained events before callback startup. The corrected assertion preserves those exact historical facts and requires callbacks only for new events. All 15 focused cases and both fresh full gates passed. Evidence is retained under `/tmp/loom-stage41-p9-evidence/correction-3/`; no coverage obligation was removed or relaxed.
+- Base drift: develop advanced through [PR 320](https://github.com/samcantrill/loom/pull/320), merge `1681c52803caeb88e7d7a6c2be01291ca4aaa69b`, during validation. Its one-expression retained-container-launch fix and tests are untouched by this phase; adjacent supervisor/workspace/container owners are unchanged and the retained worker differs only in its docstring. Manager verified the separate 49+8 passing XML receipts and independent review. The Phase 9 reviewer confirmed no demonstrated interaction and accepted reuse; final merge preserves that published fix.
+- PR and merge: [PR 321](https://github.com/samcantrill/loom/pull/321) is open, non-draft and mergeable against develop with the canonical phase title and branch; independent review and gated delivery remain pending.
+
+## Removal and coverage disposition
+
+| Retired owner | Surviving behavior and current consumer |
+| --- | --- |
+| `execution/runner`, continuation, offline adapter and Slurm controller | `LocalDaemonExecution`, native preparation/publication/run operations. Native production/reconciled-run/failure-policy suites retain scientific artifacts, branch dependencies, explicit retry, output predecessor, cancellation, replay and restart assertions. |
+| Whole-run queue client/service/controller/local/Slurm adapters and generated CLI commands | Native daemon/agent/client operations, current sweeps and MCP. Mixed native CLI/public-contract suites were retained; obsolete whole-run adapter/drive tests were removed. `test_execution_cutover_contract` checks removed imports and parser refusal. |
+| Direct subprocess/container executor classes and unrestricted stage worker | Restricted `execute_resident_stage_worker_request`, native resident/container supervisor and Slurm bootstrap. Worker contract retains output payload/ref assertions without worker-owned authority finalization; containment, GPU, resource and native backend suites remain. |
+| Generated whole-run Slurm planning/submission/cancel/status/script wrappers | Connected agent ready-stage owner and fixed restricted bootstrap. Pure directives, GPU allocation projection, command parsing, resource mapping and Apptainer wrapping remain used by `ready_stage.py`; historical manifest serializers/readers remain read-only evidence. |
+| Runner-built diagnostic/import fixtures | Native execution for current CLI/log/invalid-factory consumers; explicit synthetic authority facts for read-only diagnostics; one frozen historical offline manifest shared by tests and import examples. Import rejection, checksums, artifact indexes and bundle payload equality remain asserted. |
+| Repository monitor's old queue engine and scheduler queries | Existing native client admission pages/details, authority facts and retained scheduler observations. Demo is in-memory presentation data; missing capacity/input counts are unknown. Collector failure/staleness, refresh, bounded logs and native state assertions remain. |
+| Legacy public runner/examples and dynamic plugin targets | Local/log/catalog/event/webhook/backend examples use native sessions. Local example checks unchanged reuse and corruption-local repair through the pure planner, without implicit reexecution. Whole-run queue examples point to native sweep/ready-stage journeys. Graph-only Slurm examples generate no commands. |
+
+Retained pure storage/resource interfaces have current consumers:
+`RuntimeServices` supplies installed executor registry factories and extension
+inspection; its unused store compatibility facade is removed. The authority
+adapter remains a pure authority-backed store used by planning, diagnostics,
+read-only fixtures and store conformance. Queue record/config/repository models
+support historical inspection; assignment/resource providers are used by native
+agents. Prepared-run and Slurm manifest records retain read-only serialization
+and import/inspection consumers. None executes a second run lifecycle.
+
+The final deleted-suite inventory is archived as
+`/tmp/loom-stage41-p9-evidence/retired-owner-test-inventory-final.json` (54 removed
+files, 358 test functions at the audit snapshot). Mixed files retain native
+assertions; deletion counts are not a coverage claim. Earlier phase completion
+records remain the owners of backend qualification: P3
+`service-startup-lifetime.md`, P4 `agent-worker-execution.md`, P5
+`agent-slurm-jobs.md`, and P6 `slurm-result-recovery.md`. Their physical fleet,
+container, shared-storage and Slurm gaps are unchanged. No physical workload,
+webhook delivery, provisioning or live-site success is claimed here.
+
+The broad diagnostic run recorded 2,957 passes and 13 failures while the worktree
+was still changing. Retired-mode tests and stale import/schema expectations were
+reconciled; native late cancellation exposed that failed run authority must not
+wait for already-terminal provider release. The smallest correction retains
+waiting for executable assignments while allowing terminal authority and
+cleanup to remain distinct. The existing late-cancel/provider-release test,
+native failure-policy test, and cancellation restart test own the recheck.
+The old-projection test double now accepts the existing native policy keyword.
+Explicit authority selections, including a default-valued service selection or
+environment selection, now refuse missing service endpoints instead of silently
+reading embedded authority. The focused consumer recheck passed 26 tests
+(`explicit-authority-selection.log`). Full-gate evidence below must be fresh on
+the stable candidate.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Not started |
-| Tests added, updated or intentionally removed | None; planning only |
-| Validated revision/tree and evidence | Pending implementation |
-| Validation-relevant changes after evidence | None |
-| Replaced-code removal / retained primitive consumers | Pending this phase's removal audit |
-| PR, review and merge | Pending |
-| Residual risk and cleanup | Final dynamic removal and qualified deployment evidence audit pending |
+| Implementation and changed paths | Native protected observers and committed selected-authority event/failure/link facts; authored failure-policy restoration; remaining execution engine removal; current diagnostics/monitor/examples/operator cutover conversions. |
+| Tests added, updated or intentionally removed | Native observer identity/delivery/persistence diagnostics, failure-policy and descendants, restricted workers, read-only native diagnostics/log availability, historical import/bundle artifacts, hard command/import refusal, and retained native CLI/agent/Slurm suites. See disposition above. |
+| Validated revision/tree and evidence | `10ea8d48cfb315565fb389b3281623a47f4be399`, tree `0c7fd731794ca5462fe883ff28c5e781a8b68269`. Both fresh final gates passed; complete gate logs, seven suite XML/coverage artifacts, report and exact environment are under `/tmp/loom-stage41-p9-evidence/correction-3/gates/`. |
+| Validation-relevant changes after evidence | None. Only phase/manifest review, delivery and closeout metadata follow the validated candidate. |
+| Replaced-code removal / retained primitive consumers | Implemented; explicit owner mapping above. |
+| PR, review and merge | [PR 321](https://github.com/samcantrill/loom/pull/321) opened against develop; independent review and delivery pending. |
+| Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Final owned runtime process audit is empty; correction 3 scratch/cache roots were removed after evidence retention. Earlier exact task orphan PID 1189812 was stopped after identity verification and prior scratch roots were removed. Unrelated processes/roots were preserved. |
+
+
+Final `make validate-pr` passed Ruff, Pyright (zero errors), default tests
+(2,937 passed, two optional-import skips, 323 deselected), config tests
+(277 passed, 15 opt-in physical-container skips, 2,987 deselected), MCP tests
+(44 passed, 3,218 deselected), and sdist/wheel builds. Final `make test-summary`
+passed all seven rows: package 124, unit 2,060, contract 303, integration 429,
+e2e 23, config 277, MCP 44; overall 3,260 passed, zero failures/errors, 15 skipped.
+Per-suite coverage and actual skip reasons are in the archived report/XML.
+The final correction archive is `/tmp/loom-stage41-p9-evidence/correction-3-evidence.tar.gz`,
+SHA256 `9b8f81a2e04502158b0a23ae8c309eb92b635c0d30c1fc0efd1f9d7f2c7746fc`.
+The earlier complete archive is `/tmp/loom-stage41-p9-evidence/evidence-archive.tar.gz`,
+SHA256 `3627cd384602e3a2a9d1fa4ea9aba65e86d4a6adfee1c1aba71a80f42ee40660`.
+
+Failed gates remain qualified evidence, never overwritten as success:
+`gates-8a346be` found an explicit test import missing for Pyright;
+`gates-b63af55` found one obsolete continuation CLI assertion;
+`gates-81ee9dd` found a parsed integer example count asserted as a string.
+Each was corrected before the final candidate. `gates-9fe3df9` preserves a
+passing prior validation gate and failed coverage summary (one recovery wait,
+two resident probe timeouts, two explicit disk-full errors). The local root
+filesystem reached capacity. All five failed cases passed unchanged after
+manager-approved private local tmpfs scratch, with executable fixtures and
+cross-process SQLite locking verified; NAS storage was not substituted.
+Manager's separate early-stop reproducer then required correction 2 above,
+invalidating that earlier candidate for final delivery.
+
+Earlier correction 2 validation used private local `/dev/shm` scratch and cache. The first
+corrected-candidate summary passed six rows but its long temporary-directory
+prefix exceeded AF_UNIX path limits in the managed remote journey; its complete
+artifacts remain under `gates-final/summary-long-tmpdir/`. Shortening only the
+scratch root to `/dev/shm/l9` resolved this, and a fresh full summary passed.
+The intermediate no-extra single-case probe skipped for absent dotenv and is
+not passing journey evidence; the final e2e row executed and passed that journey.
+`gates-final/scratch-environment.json` records exact environment differences.
+Tmpfs receipts establish local POSIX lifecycle behavior, not power-loss,
+physical-storage, container fleet or Slurm qualification. No source or test
+assertion was weakened to address storage or temporary-path failures.
+
+Correction 3 used a fresh private short root `/dev/shm/l9m` and its own uv cache
+for both final gates; the unrelated inherited virtual environment was unset.
+`correction-3/gates/candidate.json` owns the exact command environment and tested
+identity. Both gates passed on their first correction 3 runs, with no source or
+assertion edits during validation. The private scratch/cache and focused-test
+root are removed; archived receipts retain the same physical-qualification limits.
