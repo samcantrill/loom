@@ -43,7 +43,7 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
 
     assert payload["first_status"] == "SUCCEEDED"
     assert payload["repair_execution"] == "not_requested"
-    assert payload["committed_stage_count"] == "4"
+    assert payload["committed_stage_count"] == 4
     assert (
         payload["reuse_plan"]
         == "left_seed=REUSE,left_summarize=REUSE,right_seed=REUSE,right_summarize=REUSE"
