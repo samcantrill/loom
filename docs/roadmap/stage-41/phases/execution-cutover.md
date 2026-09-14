@@ -269,11 +269,11 @@ not private helper choices. You are not alone in the codebase; preserve others' 
 - Planning review: original accepted contracts retained; 2026-09-12 published-source amendments and current readiness receipt are owned by the manifest Quality Gate
 - Implementation: observer bridge, failure-policy restoration, consumer migrations and remaining engine removal are committed; both required final gates passed. Default read-only status/backend/artifact/plan consumers select an existing embedded authority, explicit service selection remains authoritative, and bounded local log inspection follows retained native references with truthful unavailable cases. The manager confirmed these as accepted consumer migrations.
 - Refiner: not used
-- Pre-submit gate: original manager acceptance and both required full gates passed on `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Manager independently parsed all seven XML receipts (3,257 passed, 15 skipped, zero failures/errors) and verified the archive hash. Correction 3 adds accepted missing test coverage; final acceptance now waits for its fresh validation and same-reviewer confirmation.
+- Pre-submit gate: manager acceptance and both fresh required full gates passed after correction 3 on `10ea8d48cfb315565fb389b3281623a47f4be399`, tree `0c7fd731794ca5462fe883ff28c5e781a8b68269`. Manager independently parsed all seven XML receipts (3,260 passed, 15 skipped, zero failures/errors), verified all 35 archived evidence files byte-for-byte and inspected the metadata-only delta. Same-reviewer confirmation is the remaining review gate.
 - Independent implementation review: PR 321 head `f8685a13dd747128db33162006affeafbb0ff6e8` reviewed. No supported product defect established; delivery waits for the accepted observer coverage below. Removal, current native ownership, failure/cancellation corrections and qualified evidence passed. The same reviewer confirms the scoped correction before delivery.
 - Blocker corrections: 3/3. Native runtime options already retained `continue_independent`, but admission finalization ignored it and failed before unrelated branches settled. Manager confirmed restoration within the accepted contract. Consume the existing serialized policy at native readiness/finalization, retain failed descendants and explicit retry semantics, and stop new work after a known failure under the default policy. No new durable policy schema is introduced. The discriminating failure and rechecks are archived under `/tmp/loom-stage41-p9-evidence/native-failure-policy*.log` and `native-policy-settlement.log`.
 - Correction 2: manager reproduced failure plus independent early-stop remaining WAITING/RUNNING with both stage facts terminal. Historical authored parallel behavior gives cancellation precedence for a still-live run. Native cancellation now runs before independent-failure waiting; fresh dispatch refuses an observed cancelled stage. Terminal run guards and existing containment/release ownership remain intact. The regression retains failed/early-stop facts, original reason, cancellation outcome, and no managed binding for a further independent branch. Eleven focused failure/cancellation/late-terminal tests pass (`native-failure-cancellation-owner-recheck.log`).
-- Correction 3: the independent reviewer identified incomplete coverage of the approved observer amendment. Manager added native same-root coordinator restart with changed protected factory selection, detached completion and historical callback suppression; failure/cancellation event facts; explicit retry event identity; reuse/skip without fabricated starts; authenticated failure/link round trips, revision/output replay and workspace refusal. These extend existing owner-level journeys and test helpers; production code is unchanged. The first focused check passed 14 cases and exposed one incorrect fixture expectation: reuse publication had already retained events before callback startup. The corrected assertion preserves those exact historical facts and requires callbacks only for new events. Focused and fresh full-gate evidence is retained under `/tmp/loom-stage41-p9-evidence/correction-3/`.
+- Correction 3: the independent reviewer identified incomplete coverage of the approved observer amendment. Manager added native same-root coordinator restart with changed protected factory selection, detached completion and historical callback suppression; failure/cancellation event facts; explicit retry event identity; reuse/skip without fabricated starts; authenticated failure/link round trips, revision/output replay and workspace refusal. These extend existing owner-level journeys and test helpers; production code is unchanged. The first focused check passed 14 cases and exposed one incorrect fixture expectation: reuse publication had already retained events before callback startup. The corrected assertion preserves those exact historical facts and requires callbacks only for new events. All 15 focused cases and both fresh full gates passed. Evidence is retained under `/tmp/loom-stage41-p9-evidence/correction-3/`; no coverage obligation was removed or relaxed.
 - Base drift: develop advanced through [PR 320](https://github.com/samcantrill/loom/pull/320), merge `1681c52803caeb88e7d7a6c2be01291ca4aaa69b`, during validation. Its one-expression retained-container-launch fix and tests are untouched by this phase; adjacent supervisor/workspace/container owners are unchanged and the retained worker differs only in its docstring. Manager verified the separate 49+8 passing XML receipts and independent review. The Phase 9 reviewer confirmed no demonstrated interaction and accepted reuse; final merge preserves that published fix.
 - PR and merge: [PR 321](https://github.com/samcantrill/loom/pull/321) is open, non-draft and mergeable against develop with the canonical phase title and branch; independent review and gated delivery remain pending.
 
@@ -328,21 +328,23 @@ the stable candidate.
 | --- | --- |
 | Implementation and changed paths | Native protected observers and committed selected-authority event/failure/link facts; authored failure-policy restoration; remaining execution engine removal; current diagnostics/monitor/examples/operator cutover conversions. |
 | Tests added, updated or intentionally removed | Native observer identity/delivery/persistence diagnostics, failure-policy and descendants, restricted workers, read-only native diagnostics/log availability, historical import/bundle artifacts, hard command/import refusal, and retained native CLI/agent/Slurm suites. See disposition above. |
-| Validated revision/tree and evidence | `42cc9957d43f85144fc6538aa610103e0df49f32`, tree `753d32979eae3793a49c16f53a5afd390bbbdf99`. Both final gates passed; complete gate logs, seven suite XML/coverage artifacts, report, skips and checksummed archive are under `/tmp/loom-stage41-p9-evidence/gates-final/`. |
-| Validation-relevant changes after evidence | Correction 3 adds observer assertions and test helpers without production changes. Fresh focused/full gates and same-reviewer confirmation are pending. |
+| Validated revision/tree and evidence | `10ea8d48cfb315565fb389b3281623a47f4be399`, tree `0c7fd731794ca5462fe883ff28c5e781a8b68269`. Both fresh final gates passed; complete gate logs, seven suite XML/coverage artifacts, report and exact environment are under `/tmp/loom-stage41-p9-evidence/correction-3/gates/`. |
+| Validation-relevant changes after evidence | None. Only phase/manifest review, delivery and closeout metadata follow the validated candidate. |
 | Replaced-code removal / retained primitive consumers | Implemented; explicit owner mapping above. |
 | PR, review and merge | [PR 321](https://github.com/samcantrill/loom/pull/321) opened against develop; independent review and delivery pending. |
-| Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Owned process audit is empty; exact task orphan PID 1189812 was stopped after identity verification, and both private tmpfs scratch roots were removed. Unrelated processes/roots were preserved. |
+| Residual risk and cleanup | Approved synchronous best-effort observer delivery tradeoffs; no replay/outbox guarantee. Physical qualification remains with prior phase records. Final owned runtime process audit is empty; correction 3 scratch/cache roots were removed after evidence retention. Earlier exact task orphan PID 1189812 was stopped after identity verification and prior scratch roots were removed. Unrelated processes/roots were preserved. |
 
 
 Final `make validate-pr` passed Ruff, Pyright (zero errors), default tests
-(2,937 passed, two optional-import skips, 320 deselected), config tests
-(274 passed, 15 opt-in physical-container skips, 2,987 deselected), MCP tests
-(44 passed, 3,215 deselected), and sdist/wheel builds. Final `make test-summary`
+(2,937 passed, two optional-import skips, 323 deselected), config tests
+(277 passed, 15 opt-in physical-container skips, 2,987 deselected), MCP tests
+(44 passed, 3,218 deselected), and sdist/wheel builds. Final `make test-summary`
 passed all seven rows: package 124, unit 2,060, contract 303, integration 429,
-e2e 23, config 274, MCP 44; overall 3,257 passed, zero failures/errors, 15 skipped.
+e2e 23, config 277, MCP 44; overall 3,260 passed, zero failures/errors, 15 skipped.
 Per-suite coverage and actual skip reasons are in the archived report/XML.
-The complete archive is `/tmp/loom-stage41-p9-evidence/evidence-archive.tar.gz`,
+The final correction archive is `/tmp/loom-stage41-p9-evidence/correction-3-evidence.tar.gz`,
+SHA256 `9b8f81a2e04502158b0a23ae8c309eb92b635c0d30c1fc0efd1f9d7f2c7746fc`.
+The earlier complete archive is `/tmp/loom-stage41-p9-evidence/evidence-archive.tar.gz`,
 SHA256 `3627cd384602e3a2a9d1fa4ea9aba65e86d4a6adfee1c1aba71a80f42ee40660`.
 
 Failed gates remain qualified evidence, never overwritten as success:
@@ -358,7 +360,7 @@ cross-process SQLite locking verified; NAS storage was not substituted.
 Manager's separate early-stop reproducer then required correction 2 above,
 invalidating that earlier candidate for final delivery.
 
-Final validation used private local `/dev/shm` scratch and cache. The first
+Earlier correction 2 validation used private local `/dev/shm` scratch and cache. The first
 corrected-candidate summary passed six rows but its long temporary-directory
 prefix exceeded AF_UNIX path limits in the managed remote journey; its complete
 artifacts remain under `gates-final/summary-long-tmpdir/`. Shortening only the
@@ -369,3 +371,10 @@ not passing journey evidence; the final e2e row executed and passed that journey
 Tmpfs receipts establish local POSIX lifecycle behavior, not power-loss,
 physical-storage, container fleet or Slurm qualification. No source or test
 assertion was weakened to address storage or temporary-path failures.
+
+Correction 3 used a fresh private short root `/dev/shm/l9m` and its own uv cache
+for both final gates; the unrelated inherited virtual environment was unset.
+`correction-3/gates/candidate.json` owns the exact command environment and tested
+identity. Both gates passed on their first correction 3 runs, with no source or
+assertion edits during validation. The private scratch/cache and focused-test
+root are removed; archived receipts retain the same physical-qualification limits.
