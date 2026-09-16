@@ -2399,3 +2399,49 @@ def test_installed_processor_is_protected_local_policy_and_identity(tmp_path: Pa
     _write_protected(source, payload)
     with pytest.raises(QueueConfigError, match="unsupported.*capability"):
         load_coordinator_service_config(source)
+
+
+def test_embedded_state_root_is_private_resolved_and_retained(tmp_path: Path) -> None:
+    from loom.pipeline.stores.coordinator_authority import coordinator_authority_identity
+    from loom.queue.local_daemon import _validate_deployment_binding
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["authority"]["state_root"] = "local-authority"
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="state root is unavailable"):
+        load_coordinator_service_config(source)
+    root = tmp_path / "local-authority"
+    root.mkdir(mode=0o755)
+    with pytest.raises(QueueConfigError, match="owner-protected"):
+        load_coordinator_service_config(source)
+    root.chmod(0o700)
+    service = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(service.daemon)
+    _validate_deployment_binding(service.daemon)
+    identity = coordinator_authority_identity(service.daemon.coordinator_authority_factory)
+    assert identity["family"] == "embedded"
+    assert str(root) not in json.dumps(identity)
+    payload["authority"]["state_root"] = str(root)
+    _write_protected(source, payload)
+    reopened = load_coordinator_service_config(source)
+    _validate_deployment_binding(reopened.daemon)
+    assert reopened.immutable_fingerprint == service.immutable_fingerprint
+    other = tmp_path / "other-authority"
+    other.mkdir(mode=0o700)
+    payload["authority"]["state_root"] = str(other)
+    _write_protected(source, payload)
+    changed = load_coordinator_service_config(source)
+    with pytest.raises(QueueServiceError, match="binding"):
+        _validate_deployment_binding(changed.daemon)
+    payload["authority"].pop("state_root")
+    _write_protected(source, payload)
+    with pytest.raises(QueueServiceError, match="binding"):
+        _validate_deployment_binding(load_coordinator_service_config(source).daemon)
+    root.rmdir()
+    from loom.pipeline.stores import AuthorityStoreError
+
+    factory = service.daemon.coordinator_authority_factory
+    assert factory is not None
+    with pytest.raises(AuthorityStoreError, match="state root is unavailable"):
+        factory("file:///unused")

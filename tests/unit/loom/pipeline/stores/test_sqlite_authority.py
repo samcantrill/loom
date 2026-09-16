@@ -1543,3 +1543,30 @@ def test_v2_migration_preserves_legacy_pending_attempt_without_backfill(
                 next_attempt=2,
             ),
         )
+
+
+def test_separate_state_root_keeps_database_and_live_wal_out_of_materialization(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "shared" / "run")
+    state_root = tmp_path / "local"
+    authority = SQLitePerRunAuthorityStore(run_uri, state_root=state_root)
+    revision = authority.create_run(run_uri)
+    database = next(state_root.rglob("authority.sqlite3"))
+    with sqlite3.connect(database) as held:
+        held.execute("PRAGMA journal_mode = WAL")
+        held.execute("BEGIN")
+        held.execute("SELECT * FROM run_state").fetchall()
+        transition = authority.transition_run(
+            run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.PLANNED,
+            expected_revision=revision,
+        )
+        assert Path(str(database) + "-wal").is_file()
+        assert Path(str(database) + "-shm").is_file()
+        assert not (tmp_path / "shared").exists()
+    reopened = SQLitePerRunAuthorityStore(run_uri, state_root=state_root)
+    assert reopened.open_run(run_uri).revision == transition.revision
+    database.unlink()
+    with pytest.raises(AuthoritySchemaError, match="missing"):
+        reopened.open_run(run_uri)
+    with pytest.raises(sqlite3.OperationalError):
+        reopened.read_cancellation_epoch_receipt(run_uri, "missing")
+    assert not database.exists()

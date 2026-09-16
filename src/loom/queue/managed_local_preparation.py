@@ -22,7 +22,7 @@ from loom.pipeline.runtime import (
 )
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.coordinator_authority import (
-    embedded_coordinator_authority,
+    is_embedded_coordinator_authority,
     AuthenticatedCoordinatorAuthorityError,
     coordinator_authority_identity,
     publish_prepared_run,
@@ -280,7 +280,7 @@ def _validate_embedded_service(service: CoordinatorServiceConfig) -> None:
         raise QueueServiceError(
             "managed-local preparation does not support SLURM profiles"
         )
-    if daemon.coordinator_authority_factory is not embedded_coordinator_authority:
+    if not is_embedded_coordinator_authority(daemon.coordinator_authority_factory):
         raise QueueServiceError("managed-local preparation requires embedded authority")
 
 
@@ -435,13 +435,12 @@ def _replay_receipt(
         _replay_matches(
             store, run_uri, composed, pipeline, options, requirements, service
         )
-        if (
-            service.daemon.coordinator_authority_factory
-            is embedded_coordinator_authority
-        ):
+        if is_embedded_coordinator_authority(service.daemon.coordinator_authority_factory):
             # Local publication failures leave an inspectable conflict. Only the
             # authenticated owner reconciles uncertain remote publication.
-            authority = embedded_coordinator_authority(run_uri)
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            authority = factory(run_uri)
             if authority.open_run(run_uri).status is RunStatus.CREATED:
                 raise QueueServiceError("local authority publication is incomplete")
         record = load_managed_local_runtime_record(store, run_uri)
@@ -456,10 +455,7 @@ def _replay_receipt(
             "managed-local preparation conflicts with existing partial, corrupt, or changed state"
         ) from exc
 
-    if (
-        service.daemon.coordinator_authority_factory
-        is not embedded_coordinator_authority
-    ):
+    if not is_embedded_coordinator_authority(service.daemon.coordinator_authority_factory):
         _publish_authority(service, run_uri, runtime_digest)
     return _receipt(run_uri, plan, runtime_digest)
 

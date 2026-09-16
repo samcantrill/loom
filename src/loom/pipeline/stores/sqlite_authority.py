@@ -335,7 +335,12 @@ class SQLitePerRunAuthorityStore:
 
     The database location and schema are private implementation details. The
     class intentionally is not re-exported from ``loom.pipeline.stores`` so the
-    package root remains import-light.
+    package root remains import-light. ``state_root`` optionally places the
+    database and WAL under a protected local directory, keyed by canonical run
+    URI; materialization identity is unchanged. Its deployment owner validates
+    this directory. Omitting it preserves the run-local layout. Only
+    ``create_run`` initializes missing databases; all other operations open
+    existing state.
     """
 
     def __init__(
@@ -343,9 +348,11 @@ class SQLitePerRunAuthorityStore:
         run_uri: str | None = None,
         *,
         clock: Callable[[], datetime | str] | None = None,
+        state_root: Path | None = None,
     ) -> None:
         self._run_uri = run_uri
         self._clock = clock
+        self._state_root = None if state_root is None else Path(state_root).resolve()
         self._lease_run_uris: dict[str, str] = {}
 
     def capabilities(self) -> BackendCapabilitySet:
@@ -393,7 +400,7 @@ class SQLitePerRunAuthorityStore:
         )
 
     def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
-        database_path = _authority_database_path(run_uri)
+        database_path = _authority_database_path(run_uri, self._state_root)
         if not database_path.exists():
             return AuthoritySchemaCheck(
                 current_version=AUTHORITY_SCHEMA_VERSION,
@@ -429,9 +436,9 @@ class SQLitePerRunAuthorityStore:
         self._bind_run_uri(run_uri)
         run_metadata = _plain_mapping(metadata or {}, "metadata")
         persisted_metadata = _admission_metadata(run_metadata, idempotency_key)
-        database_path = _authority_database_path(run_uri)
+        database_path = _authority_database_path(run_uri, self._state_root)
         database_exists = database_path.exists()
-        database_path.parent.mkdir(parents=True, exist_ok=True)
+        database_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self._write_connection(
             database_path, initialize=not database_exists
         ) as conn:
@@ -1156,7 +1163,7 @@ class SQLitePerRunAuthorityStore:
     ) -> CancellationEpochReceipt | None:
         """Read one durable cancellation receipt for the daemon status projection."""
         self._bind_run_uri(run_uri)
-        with self._connect(_authority_database_path(run_uri)) as conn:
+        with self._connect(_authority_database_path(run_uri, self._state_root)) as conn:
             row = conn.execute(
                 "SELECT receipt_json FROM cancellation_epoch_receipts WHERE operation_id = ?",
                 (operation_id,),
@@ -3001,7 +3008,7 @@ class SQLitePerRunAuthorityStore:
 
     @contextmanager
     def _read_connection_for_run(self, run_uri: str) -> Iterator[sqlite3.Connection]:
-        database_path = _authority_database_path(run_uri)
+        database_path = _authority_database_path(run_uri, self._state_root)
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._connect(database_path) as conn:
@@ -3019,7 +3026,7 @@ class SQLitePerRunAuthorityStore:
 
     @contextmanager
     def _transaction(self, run_uri: str) -> Iterator[sqlite3.Connection]:
-        database_path = _authority_database_path(run_uri)
+        database_path = _authority_database_path(run_uri, self._state_root)
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._write_connection(database_path, initialize=False) as conn:
@@ -3032,7 +3039,7 @@ class SQLitePerRunAuthorityStore:
     def _write_connection(
         self, database_path: Path, *, initialize: bool
     ) -> Iterator[sqlite3.Connection]:
-        with self._connect(database_path) as conn:
+        with self._connect(database_path, initialize=initialize) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 if initialize:
@@ -3045,9 +3052,12 @@ class SQLitePerRunAuthorityStore:
                 conn.commit()
 
     @contextmanager
-    def _connect(self, database_path: Path) -> Iterator[sqlite3.Connection]:
+    def _connect(
+        self, database_path: Path, *, initialize: bool = False
+    ) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(
-            database_path,
+            database_path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
+            uri=True,
             timeout=_SQLITE_TIMEOUT_SECONDS,
             isolation_level=None,
         )
@@ -3084,8 +3094,12 @@ class SQLitePerRunAuthorityStore:
         return utc_timestamp(value)
 
 
-def _authority_database_path(run_uri: str) -> Path:
+def _authority_database_path(run_uri: str, state_root: Path | None = None) -> Path:
     run_root = run_uri_to_path(run_uri)
+    if state_root is not None:
+        canonical_uri = run_root.resolve().as_uri()
+        key = hashlib.sha256(canonical_uri.encode()).hexdigest()
+        return state_root / key / _AUTHORITY_DB_NAME
     return run_root / _AUTHORITY_DIR / _AUTHORITY_DB_NAME
 
 

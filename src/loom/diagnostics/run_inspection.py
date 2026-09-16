@@ -444,7 +444,16 @@ class RunInspectionProjection:
 
         authority_unavailable = False
         try:
-            authoritative = _authoritative_read(run_uri, run_store=self._run_store)
+            factory = getattr(
+                getattr(self._daemon, "config", None),
+                "coordinator_authority_factory",
+                None,
+            )
+            authoritative = _authoritative_read(
+                run_uri,
+                run_store=self._run_store,
+                authority_store=factory(run_uri) if callable(factory) else None,
+            )
         except Exception:
             # Inspection is an observational join.  One unavailable owner must
             # not erase facts from the other exact owners of a known run.
