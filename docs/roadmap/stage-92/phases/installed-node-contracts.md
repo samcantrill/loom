@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; U1 implemented, final validation in progress.
+- Status: in_progress; U1 implementation and local validation passed; independent review pending.
 - Branch: `agent/stage-92-p1-installed-node-contracts`.
 - Base: `c8f23852af2018109c318d17d03186ba9e49893f`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 1: Installed Node Contracts`.
@@ -157,7 +157,31 @@ metadata safety, native admission, request replay and resident publication affec
 multiple public/durable consumers. Focused new-path and affected tests are diagnostic
 checks; the required stable-tree final gate is `make validate-pr` plus
 `git diff --check`. Expand only for a concrete gate failure or affected consumer.
-Final exact tree/commit and gate receipt will be recorded here after completion.
+Final gates passed against implementation commit
+`fd97d00bbeb16ffd494ff66209b3ed793d183086`, Git tree
+`f431a4bcd507ac0b70948aa7228199de5080c272`. The only subsequent tracked change is
+this completion receipt; `git diff --check` also passed on that prose update.
+
+- `make validate-pr`: exit 0. Ruff passed; Pyright reported 0 errors/warnings.
+  Locked Python 3.12.3 baseline: 3024 passed, 2 skipped, 331 deselected.
+  Config-extra: 285 passed, 15 skipped, 3074 deselected. MCP-extra: 44 passed,
+  3313 deselected. Source distribution and wheel both built successfully.
+- The final config-extra lane executed all four installed-node integration cases,
+  the existing 61 preparation-operation cases and 17 reconciliation cases. The
+  baseline lane covered the selected request/context, prepared-run/store,
+  authority, resident transport, supervisor and Slurm-delivery owners.
+- Focused native integration command:
+  `uv run --python 3.12 --isolated --locked --group dev --extra config pytest tests/integration/queue/test_installed_node_contracts.py -xq`:
+  4 passed (104.23s); the final full gate subsequently reconfirmed those cases.
+- Skip dispositions: two existing unmarked queue CLI journey tests require
+  `python-dotenv`, absent from the isolated baseline. Fifteen config-extra skips
+  are the ten opt-in Apptainer timeout cases and five opt-in real-container
+  smoke/build/resource cases. None of the four U1 integration cases was skipped.
+  These pre-existing optional/physical omissions are not U1 acceptance gaps.
+- Retained local evidence:
+  `build/validation/installed-node-contracts/validate-pr.log` and
+  `build/validation/installed-node-contracts/native-integration.log`.
+  No extra summary rerun was needed. No implementation blocker remains.
 Physical SIF/fleet/Slurm qualification is not claimed by these local fixtures.
 
 Manager retains manifest, cross-repository authorization, PR/delivery and independent
