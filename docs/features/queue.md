@@ -323,6 +323,17 @@ Every operation, including each long-poll renewal, rechecks the principal
 against the current credential-policy revision. Removing a credential therefore
 fences future operations even on an established connection; it does not retire
 the durable session, prove process containment, or release work.
+
+To enroll another worker while jobs run, use `daemon-scheduling-reload` with
+an added agent rule, its mTLS fingerprint and observed execution profile. Keep
+`agent_policy.revision` and every existing agent rule unchanged, and use a new
+agent identity. The reload advances the coordinator's scheduling epoch and
+configuration revision; these are separate from the credential-policy revision
+that fences live sessions. Changing that policy revision, removing/changing an
+existing worker rule, or adding another credential for an existing worker is
+rejected while any agent session is active. Client/operator scopes still apply
+from the current protected policy on each operation. A rejected reload preserves
+the accepted policy; an uncertain reply is replayed with the same operation ID.
 Mutations use principal/content-bound idempotency plus expected generations,
 revisions, and fences; codecs impose method/content-type/schema/version/size/
 cardinality bounds and safe errors before mutation. One connection is delivery-

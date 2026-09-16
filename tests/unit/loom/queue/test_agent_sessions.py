@@ -978,6 +978,130 @@ def test_remote_start_permit_serializes_with_cancellation_request(
         daemon.stop()
 
 
+def test_scheduling_reload_enrolls_distinct_worker_without_fencing_live_session(
+    tmp_path: Path,
+) -> None:
+    policy = _policy()
+    config = _config(tmp_path, policy)
+    replacement = replace(
+        config,
+        agent_policy=replace(
+            policy,
+            agents=(
+                *policy.agents,
+                AgentPrincipalPolicy(
+                    "agent-b", "principal-b", "agent-b", ("default",), ("python",)
+                ),
+            ),
+            principals=(
+                replace(policy.principals[0], agent_ids=("agent-a", "agent-b")),
+            ),
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        first = _register(daemon)
+        request = CoordinatorSchedulingReload(
+            operation_id="enroll-distinct-worker",
+            expected_scheduling_epoch=before.scheduling_epoch,
+            reason="add worker while existing session continues",
+        )
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        result = operator.reload_scheduling(request)
+        assert result["state"] == "applied"
+        assert result["configuration_revision"] == 2
+        assert result["scheduling_epoch"] != before.scheduling_epoch
+        assert operator.reload_scheduling(request) == result
+        # No reconciliation or session migration is needed for the old worker.
+        _view(daemon).publish_offer(
+            _offer(first.session_id, first.coordinator_epoch),
+            idempotency_key="existing-worker-after-enrollment",
+        )
+        second_view = daemon.agent_view(
+            LocalDaemonPrincipal("principal-b", LocalDaemonRole.AGENT, "agent-b")
+        )
+        second = second_view.register(
+            AgentRegistration(
+                idempotency_key="register-b",
+                coordinator_id=first.coordinator_id,
+                coordinator_epoch=first.coordinator_epoch,
+                agent_root_id="agent-root-b",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                declared_pools=("default",),
+                declared_capabilities=("python",),
+                retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+            )
+        )
+        assert second.agent_id == "agent-b"
+        assert second.policy_revision == first.policy_revision == policy.revision
+        second_view.publish_offer(
+            _offer(second.session_id, second.coordinator_epoch),
+            idempotency_key="new-worker-offer",
+        )
+        ScopedAuthorizer(daemon.config.agent_policy).require_operator(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR),
+            "drain",
+            agent_id="agent-b",
+            pool="default",
+        )
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("change", ["revision", "remove", "capability", "alias"])
+def test_live_enrollment_rejects_existing_worker_policy_mutations(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    policy = _policy()
+    if change == "revision":
+        candidate = replace(policy, revision="policy-2")
+    elif change == "remove":
+        candidate = replace(policy, agents=())
+    elif change == "capability":
+        candidate = replace(
+            policy, agents=(replace(policy.agents[0], capabilities=()),)
+        )
+    else:
+        candidate = replace(
+            policy,
+            agents=(
+                *policy.agents,
+                replace(policy.agents[0], credential_id="rotated-credential"),
+            ),
+        )
+    config = _config(tmp_path, policy)
+    replacement = replace(config, agent_policy=candidate)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        first = _register(daemon)
+        result = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reject-existing-worker-change",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="unsupported mutation during live enrollment",
+            )
+        )
+        assert result["code"] == "reload_rejected"
+        assert daemon.config is config
+        _view(daemon).publish_offer(
+            _offer(first.session_id, first.coordinator_epoch),
+            idempotency_key="old-policy-still-accepted",
+        )
+    finally:
+        daemon.stop()
+
+
 def test_scheduling_reload_rejects_credential_change_for_a_live_agent_session(
     tmp_path: Path,
 ) -> None:
