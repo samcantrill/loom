@@ -47,8 +47,9 @@ from tests.integration.queue.test_preparation_operations import (
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
+@pytest.mark.parametrize("pure_coordinator", [False, True])
 def test_two_agents_publish_and_consume_complete_large_shared_closure(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, pure_coordinator
 ):
     _service(tmp_path)
     root = tmp_path / "nas" / "outputs"
@@ -117,6 +118,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                     imports=("loom", "loom.preparation", "weave")
                 ),
                 shared_roots=roots(path),
+                preparation_shared_roots={"projects": tmp_path / "snapshots"},
             )
         )
         for name, path in (("b", root), ("c", alternate))
@@ -126,12 +128,17 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
         REMOTE_EXECUTION_CAPABILITY,
         REGULAR_FILE_RELAY_CAPABILITY,
         SHARED_EXECUTION_CAPABILITY,
+        "preparation-input-v2",
     )
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
     authored["preparation"]["profiles"]["existing-project"].update(
         configuration_policy="shared", shared_locations=[]
     )
+    if pure_coordinator:
+        authored["local_agent"] = None
+        authored["shared_roots"] = roots(root)
+        authored["preparation"]["profiles"]["existing-project"]["resident_profile_id"] = profiles[0].descriptor.profile_id
     authored["remote_profiles"] = [profile.descriptor.to_dict() for profile in profiles]
     authored["agent_policy"]["agents"] = [
         {
@@ -214,6 +221,11 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
             )
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
             client.prepare_run(_request())
+            if pure_coordinator:
+                assert daemon.config.resident_worker_launch_profile is None
+                prepared = clients[0].execute_one(sessions[0].session_id,
+                    sessions[0].availability_revision, sequence=1, wait_timeout_ms=5000)
+                assert prepared["state"] == "RELEASED", prepared
             operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert operation.state == "applied", operation
             result = _result(operation)
@@ -255,11 +267,14 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
 
             monkeypatch.setattr(clients[0], "declare_outputs", lost_publication_ack)
             client.submit(LocalDaemonAdmissionRequest("target", target_uri))
-            for remote, session in zip(clients, sessions, strict=True):
+            for remote in clients:
+                remote.refresh_resource_offer()
+                current = remote.active_session()
+                assert current is not None
                 executed = remote.execute_one(
-                    session.session_id,
-                    session.availability_revision,
-                    sequence=1,
+                    current.session_id,
+                    current.availability_revision,
+                    sequence=remote.next_poll_sequence(current.session_id),
                     wait_timeout_ms=5000,
                 )
                 assert executed["state"] == "RELEASED", executed

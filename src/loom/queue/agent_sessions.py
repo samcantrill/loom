@@ -3677,12 +3677,12 @@ class AgentSessionService:
             if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
                 if report.schema_version != 4:
                     raise QueueConflictError("shared publication report capability is missing")
-                profile = self._daemon.config.resident_worker_launch_profile
-                if profile is None:
+                roots = self._daemon.config.coordinator_shared_roots
+                if not roots:
                     raise QueueConflictError("coordinator shared root mapping is unavailable")
                 self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
                 session_row = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
-                shared_outputs = publish(request, report, profile.shared_roots,
+                shared_outputs = publish(request, report, roots,
                     agent_id=str(session_row["agent_root_id"]), fence=fence)
             elif any(shared_binding(item.metadata) is not None for item in report.outputs):
                 raise QueueConflictError("shared output was not admitted")
@@ -5701,10 +5701,10 @@ def _target_remote_delivery(
                 row = transfer_rows[item.transfer_id]
                 if shared_binding(item.metadata) is not None:
                     from ._shared_publication import resolve_input
-                    profile = daemon.config.resident_worker_launch_profile
-                    if profile is None:
+                    roots = daemon.config.coordinator_shared_roots
+                    if not roots:
                         raise QueueConflictError("coordinator shared mapping is unavailable")
-                    source = resolve_input(item, profile.shared_roots)
+                    source = resolve_input(item, roots)
                     if str(row["private_path"]) != str(source) or str(row["descriptor_json"]) != _canonical_json(item.to_dict()) or not row["finalized"]:
                         raise QueueConflictError("shared input retention replay conflicts")
                     continue
@@ -5772,10 +5772,10 @@ def _target_remote_delivery(
         for item in request.inputs:
             if shared_binding(item.metadata) is not None:
                 from ._shared_publication import resolve_input
-                profile = daemon.config.resident_worker_launch_profile
-                if profile is None:
+                roots = daemon.config.coordinator_shared_roots
+                if not roots:
                     raise QueueConflictError("coordinator shared mapping is unavailable")
-                source = resolve_input(item, profile.shared_roots)
+                source = resolve_input(item, roots)
                 retained_inputs.append((request.assignment_id, "input", item.transfer_id, item.logical_name,
                     item.digest, item.size_bytes, str(source), item.size_bytes, 1, _canonical_json(item.to_dict())))
                 continue
