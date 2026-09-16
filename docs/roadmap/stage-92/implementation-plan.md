@@ -42,7 +42,7 @@ yet authorized. It does not relax any protocol, qualification or review gate.
 | Phase | Package | Card | Branch | Status | Dependency / bounded outcome |
 | --- | --- | --- | --- | --- | --- |
 | 1 | U1 | [Installed Node Contracts](phases/installed-node-contracts.md) | `agent/stage-92-p1-installed-node-contracts` | merged | Approved protocol; persist checked opaque node contracts, forward authoritative context, preserve v1/v2 and v3 whole-target lifecycle |
-| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | pending | U1 merged, metadata published and synchronized; native verified result selection, demand ownership and idempotent fresh generation |
+| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | in_progress | U1 merged, metadata published and synchronized; native verified result selection, demand ownership and idempotent fresh generation |
 
 U1 may merge independently without cross-graph reuse. U2 is one coherent result
 lifecycle: identity, claims, verification, binding, retention, cancellation and
@@ -86,5 +86,7 @@ Keep current completion evidence in the phase cards; no lifecycle sidecars.
 U1 [PR #331](https://github.com/samcantrill/loom/pull/331) merged into develop at
 `a0d29b3fedac7495bbb994e630b07aa41f7cf579` after the required local gate and
 independent actual-head review passed. The Phase 1 card owns the validation,
-skip and delivery receipts. Shared transition passed; publish this metadata and
-synchronize before U2 startup. U2 and rphys integration remain outstanding.
+skip and delivery receipts. Shared transition, metadata publication and synchronization passed at
+`32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`. U2 startup is active on its fresh
+phase branch; its card records the bounded ownership refinement. U2 delivery and
+rphys integration remain outstanding.
