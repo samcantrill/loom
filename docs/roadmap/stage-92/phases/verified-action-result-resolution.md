@@ -310,19 +310,37 @@ resolve private wiring in scope. Do not alter U1's accepted public wire shapes.
 
 ### Current Implementation Progress
 
-Causal action identity is separate from the existing audit fingerprint. Native
-RunRequest/CLI fresh selection is captured into durable generation tokens before
-retryable preparation; preparation envelope 8 carries nonempty generation maps
-while prior envelopes retain their encodings. Unknown selected nodes fail before
-target admission; whole-target identity includes generation without changing the
-project key. Cross-graph resolution, verified bindings, ownership/cancellation
-and full qualification remain unfinished; these private implementation commits
-are not a separately deliverable fresh shortcut.
+Causal identity and native fresh intent are implemented. Coordinator schema 17
+adds atomic claims/demands and offline migration from 12/15/16. Per-run authority
+schema 7 and authenticated repository schema 8 add immutable consumer bindings;
+read models expose original commits/facts without consumer attempts or copied
+commit rows. Native preparation envelope 9 reuses the managed child for installed
+`verify_result`; envelope 8 retains fresh generation transport. Reuse opts out
+unless protected resident readiness qualifies explicit nonempty source roots.
 
-Focused diagnostic selection (locked Python 3.12, config extra):
-`tests/unit/loom/queue/test_preparation.py`,
-`tests/unit/loom/pipeline/planning/test_action_identity.py`, and
-`tests/integration/queue/test_action_result_resolution.py`: 47 passed, no skips.
-The native cases prove retained-token replay/conflicting intent, distinct fresh
-and default target identity, preserved default target, and unknown-node failure.
-This is partial implementation evidence, not the required final U2 gate.
+Current implementation checkpoint:
+`4db7181f14924d18ab694333c5668a0c2a47d755`, tree
+`2d4c3ddcc0229f738c154ca225ec357fa3dcd652`.
+`build/validation/action-result-foundations/{pytest,ruff,pyright}.log` retains
+123 focused passes (no skips, 168.73 s), Ruff pass and Pyright zero errors/warnings.
+The selection covers preparation codecs, claims/migration, verifier rejection
+boundaries, both authority adapters, renamed-graph reuse, fresh/default behavior
+with identical output bytes, existing U1 native cases, and authority repositories.
+`git diff --check` passed. This is partial evidence, not the final U2 gate.
+
+P7 exposed an existing U1 admission defect: worker metadata freezes nested JSON
+lists to tuples, while the retained report remains lists. Native
+`validate_admitted_worker` now compares normalized plain data; the installed text
+fixture carries nested sequence payloads and the native tests pass. rphys remains
+on merged U1 until the corrected U2 implementation is reviewed and merged.
+
+Remaining implementation is required before delivery: exact producer continuation
+through cancellation epochs and local/remote/SLURM fan-out; final-demand settlement
+and restart; native authorized producer retry; retention of complete shared
+publication closures; explicit terminal corruption failures; and translated
+read-only verifier artifact access through existing native input materialization.
+Move remote/SLURM claim-fence persistence into their existing coordinator
+transaction: their grant paths hold control.sqlite, so a nested connection from
+the current grant callback would conflict. Keep the original authority fence.
+Then run required causal boundary tests, documentation, full `make validate-pr`,
+actual PR-head independent review and delivery. No partial U2 merge is permitted.
