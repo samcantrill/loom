@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     )
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.stores.errors import ArtifactStoreError
+from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, file_identity, verify_ref
 from loom.io.uris import uri_to_path
 from loom.pipeline.execution.models import (
     ExecutionFailure,
@@ -110,6 +112,15 @@ def _opaque_identity(value: object, field: str) -> str:
         raise QueueServiceError(f"{field} is invalid")
     return value
 
+
+
+def shared_binding(metadata: Mapping[str, PlainData]) -> dict[str, PlainData] | None:
+    if not isinstance(metadata, Mapping):
+        raise QueueServiceError("shared artifact metadata must be a mapping")
+    try:
+        return _artifact_shared_binding(metadata)
+    except ArtifactStoreError as exc:
+        raise QueueServiceError(str(exc)) from exc
 
 def _bounded_size(value: object) -> int:
     if (
@@ -580,7 +591,10 @@ class _RemoteArtifact:
             _identifier(value, name)
         _opaque_identity(self.artifact_id, "artifact_id")
         _digest(self.digest)
-        _bounded_size(self.size_bytes)
+        if shared_binding(self.metadata) is None:
+            _bounded_size(self.size_bytes)
+        elif type(self.size_bytes) is not int or self.size_bytes < 0:
+            raise QueueServiceError("shared artifact size must be nonnegative")
         if self.codec_key is not None:
             _identifier(self.codec_key, "codec_key")
         if (
@@ -598,7 +612,7 @@ class _RemoteArtifact:
         metadata = freeze_plain_data(self.metadata, path="remote artifact metadata")
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote artifact metadata is invalid")
-        _reject_path_bearing_data(metadata, "artifact metadata")
+        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "artifact metadata")
         object.__setattr__(self, "metadata", metadata)
 
     @classmethod
@@ -610,10 +624,19 @@ class _RemoteArtifact:
             if source.is_symlink():
                 raise QueueConflictError("remote transfer source is a link")
             path = source.resolve(strict=True)
+            if shared_binding(ref.metadata) is not None:
+                verify_ref(ref, path)
+                size, digest = file_identity(path)
+                if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
+                    raise QueueConflictError("shared input checksum conflicts with its bytes")
+                return (cls(transfer_id=transfer_id, logical_name=logical_name, digest=digest, size_bytes=size,
+                    artifact_id=ref.artifact_id, artifact_type=ref.artifact_type, codec_key=ref.codec_key,
+                    artifact_schema_version=ref.schema_version, fingerprint=ref.fingerprint,
+                    producer_stage=ref.producer_stage, created_at=ref.created_at, metadata=ref.metadata), path)
             data = _read_regular_file_bytes(path)
-        except (OSError, QueueConflictError) as exc:
+        except (OSError, QueueConflictError, ArtifactStoreError) as exc:
             raise QueueServiceError(
-                "remote execution supports local regular-file inputs only"
+                "shared input closure integrity is unavailable or conflicting" if shared_binding(ref.metadata) is not None else "remote execution supports local regular-file inputs only"
             ) from exc
         digest = hashlib.sha256(data).hexdigest()
         if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
@@ -849,7 +872,7 @@ class _ResidentAssignmentBundle:
             or len({item.logical_name for item in inputs}) != len(inputs)
         ):
             raise QueueServiceError("resident input logical names must be unique")
-        if sum(item.size_bytes for item in inputs) > MAX_TRANSFER_BYTES:
+        if sum(item.size_bytes for item in inputs if shared_binding(item.metadata) is None) > MAX_TRANSFER_BYTES:
             raise QueueServiceError(
                 "resident assignment inputs exceed the configured bound"
             )
@@ -1092,7 +1115,10 @@ class _RemoteOutputArtifact:
             _identifier(value, name)
         _opaque_identity(self.artifact_id, "artifact_id")
         _digest(self.digest)
-        _bounded_size(self.size_bytes)
+        if shared_binding(self.metadata) is None:
+            _bounded_size(self.size_bytes)
+        elif type(self.size_bytes) is not int or self.size_bytes < 0:
+            raise QueueServiceError("shared artifact size must be nonnegative")
         if self.codec_key is not None:
             _identifier(self.codec_key, "codec_key")
         if (
@@ -1112,7 +1138,7 @@ class _RemoteOutputArtifact:
         )
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote output artifact metadata is invalid")
-        _reject_path_bearing_data(metadata, "output artifact metadata")
+        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "output artifact metadata")
         object.__setattr__(self, "metadata", metadata)
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -1166,6 +1192,13 @@ class _RemoteOutputArtifact:
         )
 
 
+    def local_ref(self, path: Path) -> ArtifactRef:
+        return ArtifactRef(artifact_id=self.artifact_id, uri=path.resolve().as_uri(),
+            artifact_type=self.artifact_type, codec_key=self.codec_key, schema_version=self.artifact_schema_version,
+            checksum=f"sha256:{self.digest}", fingerprint=self.fingerprint, producer_stage=self.producer_stage,
+            created_at=self.created_at, metadata=self.metadata)
+
+
 @dataclass(frozen=True, slots=True)
 class _RemoteExecutionReport:
     """Portable terminal worker facts; the coordinator restores its run URI."""
@@ -1189,7 +1222,7 @@ class _RemoteExecutionReport:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3}:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3, 4}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1218,11 +1251,13 @@ class _RemoteExecutionReport:
         if (
             len({item.logical_name for item in outputs}) != len(outputs)
             or len({item.transfer_id for item in outputs}) != len(outputs)
-            or sum(item.size_bytes for item in outputs) > MAX_TRANSFER_BYTES
+            or sum(item.size_bytes for item in outputs if shared_binding(item.metadata) is None) > MAX_TRANSFER_BYTES
         ):
             raise QueueServiceError("remote result output manifest is invalid")
         if self.status is not StageStatus.SUCCEEDED and outputs:
             raise QueueServiceError("failed remote result must not expose outputs")
+        if any(shared_binding(item.metadata) is not None for item in outputs) and self.schema_version != 4:
+            raise QueueServiceError("shared output requires shared publication report capability")
         object.__setattr__(self, "outputs", outputs)
         for value, name in (
             (self.failure_type, "failure_type"),
@@ -1269,7 +1304,7 @@ class _RemoteExecutionReport:
             raise QueueServiceError(
                 "retained remote result cannot carry route metadata"
             )
-        if self.schema_version == 3:
+        if self.schema_version >= 3:
             if not isinstance(self.executor_metadata, Mapping):
                 raise QueueServiceError("remote result route metadata is invalid")
             object.__setattr__(
@@ -1345,7 +1380,7 @@ class _RemoteExecutionReport:
                     "process_created": self.process_created,
                 }
             )
-        if self.schema_version == 3:
+        if self.schema_version >= 3:
             result["executor_metadata"] = thaw_plain_data(
                 self.executor_metadata, path="remote route metadata"
             )
@@ -1381,7 +1416,7 @@ class _RemoteExecutionReport:
             raise QueueServiceError("legacy remote execution report shape is invalid")
         if schema_version == 2 and set(value) != current:
             raise QueueServiceError("remote execution report shape is invalid")
-        if schema_version == 3 and set(value) != with_routes:
+        if schema_version in {3, 4} and set(value) != with_routes:
             raise QueueServiceError("remote route report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
@@ -1530,14 +1565,19 @@ class _ResidentAssignmentWorkspace:
                 (encoded,),
             )
             for item in request.inputs:
+                if shared_binding(item.metadata) is not None:
+                    from ._shared_publication import resolve_input
+                    resolve_input(item, launch_profile.shared_roots)
                 conn.execute(
                     "INSERT INTO transfers(transfer_id, logical_name, digest, "
-                    "size_bytes, direction) VALUES (?, ?, ?, ?, 'input')",
+                    "size_bytes, direction, received_bytes, finalized) VALUES (?, ?, ?, ?, 'input', ?, ?)",
                     (
                         item.transfer_id,
                         item.logical_name,
                         item.digest,
                         item.size_bytes,
+                        item.size_bytes if shared_binding(item.metadata) is not None else 0,
+                        int(shared_binding(item.metadata) is not None),
                     ),
                 )
 
@@ -1736,7 +1776,12 @@ class _ResidentAssignmentWorkspace:
             else str(row["supervisor_launch_json"])
         )
 
-    def worker_request(self) -> StageWorkerRequest:
+    def worker_request(self, *, resolve_shared: bool = False) -> StageWorkerRequest:
+        """Project native request facts; execution alone resolves shared payloads.
+
+        No-start cancellation/failure projections need no payload access or launch.
+        The actual worker requests resolution in its selected host/container namespace.
+        """
         request = self.request()
         scope = _assignment_local_scope(request)
         if scope is not None:
@@ -1750,8 +1795,15 @@ class _ResidentAssignmentWorkspace:
         fingerprint = StageFingerprintRecord.from_dict(
             thaw_plain_data(request.fingerprint, path="remote fingerprint")
         )
+        def input_path(item):
+            if shared_binding(item.metadata) is None or not resolve_shared:
+                return self.input_path(item.logical_name)
+            from ._shared_publication import resolve_input
+            from .shared_execution import execution_roots
+            profile = self.shared_launch_profile()
+            return resolve_input(item, execution_roots(profile.shared_roots, container=profile.container is not None))
         inputs = {
-            item.logical_name: item.local_ref(self.input_path(item.logical_name))
+            item.logical_name: item.local_ref(input_path(item))
             for item in request.inputs
             if item.logical_name in fingerprint.payload.declared_inputs
         }
@@ -2037,7 +2089,13 @@ class _ResidentAssignmentWorkspace:
         if result is None:
             raise QueueConflictError("remote result is not durable")
         outputs: list[_RemoteOutputArtifact] = []
-        if result.status is StageStatus.SUCCEEDED:
+        from ._shared_publication import selected, retain
+        shared_publication = selected(request) is not None
+        if result.status is StageStatus.SUCCEEDED and shared_publication:
+            if set(result.outputs) != set(request.declared_outputs):
+                raise QueueConflictError("shared result does not match declared outputs")
+            outputs = retain(self, result)
+        if result.status is StageStatus.SUCCEEDED and not shared_publication:
             if set(result.outputs) != set(request.declared_outputs):
                 raise QueueConflictError(
                     "remote result does not match declared outputs"
@@ -2166,7 +2224,7 @@ class _ResidentAssignmentWorkspace:
             ),
             process_created=process_created,
             executor_metadata=redact_executor_metadata(route_metadata, public=True),
-            schema_version=3,
+            schema_version=4 if shared_publication else 3,
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:
@@ -2313,6 +2371,9 @@ def _reject_path_bearing_data(value: object, field: str) -> None:
     forbidden_keys = ("path", "root", "uri", "url", "directory", "cwd")
     if isinstance(value, Mapping):
         for key, item in value.items():
+            if key == SHARED_PUBLICATION:
+                shared_binding({SHARED_PUBLICATION: item})
+                continue
             lowered = key.lower()
             if any(part in lowered for part in forbidden_keys):
                 raise QueueServiceError(
@@ -2370,6 +2431,21 @@ def _validate_remote_semantic_data(
             payload["factory_init"] = {}
         payload["fingerprint_fields"] = fields
         fingerprint = {**fingerprint, "payload": payload}
+    def validate_references(value: object) -> None:
+        if isinstance(value, Mapping):
+            if SHARED_PUBLICATION in value:
+                reference = shared_binding(value)
+                assert reference is not None
+                roots = {} if shared is None else cast(Mapping[str, Mapping[str, PlainData]], shared["roots"])
+                root = roots.get(str(reference["root_id"]))
+                if root is None or root.get("publication") != reference["budgets"]:
+                    raise QueueServiceError("shared artifact input root or budget is not admitted")
+            for child in value.values():
+                validate_references(child)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                validate_references(child)
+    validate_references(fingerprint)
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")

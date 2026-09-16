@@ -1083,3 +1083,19 @@ def test_event_replay_after_commit_can_be_acknowledged_exactly_once(tmp_path) ->
         == 1
     )
     assert journal.acknowledge(command.assignment.assignment_id, sequence) == 1
+
+
+def test_shared_local_projection_keeps_native_tree_without_copy(tmp_path, monkeypatch):
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+    from loom.queue._managed_local import _project_resident_result
+    from loom.pipeline.stores import LocalRunStore
+    import loom.queue._managed_local as managed
+    workspace, _, _, result = _shared_publication_workspace(tmp_path)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("shared local outputs must not be copied or relayed")
+    monkeypatch.setattr(workspace, "output_chunk", forbidden)
+    monkeypatch.setattr(managed, "_publish_regular_file_tree", forbidden)
+    projected = _project_resident_result(result, report=workspace.retain_outputs(), workspace=workspace,
+        worker_request=workspace.worker_request(), run_store=LocalRunStore(tmp_path / "runs"))
+    assert "/loom-artifacts/" in projected.outputs["result"].uri
+    assert not (workspace.root / "retained-outputs").exists()

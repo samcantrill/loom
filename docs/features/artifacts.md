@@ -1610,3 +1610,22 @@ forcing all artifacts through generic serialization
 
 This keeps artifact passing explicit and reproducible while leaving concrete
 artifact semantics in project code.
+
+
+## Native shared publication references
+
+Resident shared execution can retain one immutable regular-member closure on a
+qualified shared filesystem. Native artifact metadata carries a versioned
+root-relative publication binding and receipt digest. `LocalArtifactStore`
+verifies the complete closure, including companions and nested catalogs, when
+loading, validating, or returning the local path of such a reference.
+
+For a retained reference whose file URI belongs to another host, construct
+`LocalArtifactStore(local_root, shared_roots=protected_bindings)`. The immutable
+reference remains unchanged; the store resolves its logical root under the
+consumer's mapping before opening files. This supports candidate and checkpoint
+verification using the same binding as ordinary downstream stage inputs.
+
+[Shared artifact publication](agent-preparation.md#shared-artifact-publication)
+owns the protected configuration, finite budgets, native fencing, atomic
+publication, container mount scope and conservative retention policy.

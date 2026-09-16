@@ -140,3 +140,23 @@ def test_safety_reports_unsupported_remote_ref() -> None:
 
     assert decision.status is CleanupSafetyStatus.REJECTED
     assert decision.reason_code is CleanupSafetyReason.UNSUPPORTED_TARGET_KIND
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_shared_attempt_and_committed_closure_are_retained(tmp_path, published):
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+    from loom.queue._shared_publication import publish
+    from pathlib import Path
+    workspace, profile, _, result = _shared_publication_workspace(tmp_path)
+    if published:
+        ref = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots,
+                      agent_id="agent-1", fence="fence-1")["result"]
+    else:
+        # Worker completion is not publication or authority settlement.
+        ref = result.outputs["result"]
+    primary = Path(ref.uri.removeprefix("file://"))
+    for target in (primary, primary.parent, tmp_path / "shared"):
+        decision = assess_local_target_safety(_target(target), (_root(tmp_path),))
+        assert not decision.approved
+        assert decision.reason_code is CleanupSafetyReason.RETAINED_SHARED_PUBLICATION
+        assert primary.is_file()

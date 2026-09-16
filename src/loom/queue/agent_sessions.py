@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Concatenate, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.stores.shared_artifacts import binding as shared_binding, verify_ref
 from loom.pipeline.status import StageStatus
 from loom.scheduling import (
     CapacityAtom,
@@ -3657,6 +3658,20 @@ class AgentSessionService:
                 or output_mismatch
             ):
                 raise QueueConflictError("remote result does not match its request")
+            shared_outputs = None
+            from ._shared_publication import selected, publish
+            if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+                if report.schema_version != 4:
+                    raise QueueConflictError("shared publication report capability is missing")
+                profile = self._daemon.config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueConflictError("coordinator shared root mapping is unavailable")
+                self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
+                session_row = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
+                shared_outputs = publish(request, report, profile.shared_roots,
+                    agent_id=str(session_row["agent_root_id"]), fence=fence)
+            elif any(shared_binding(item.metadata) is not None for item in report.outputs):
+                raise QueueConflictError("shared output was not admitted")
             if row["report_json"] is not None:
                 if str(row["report_json"]) != encoded:
                     raise QueueConflictError("remote result replay conflicts")
@@ -3673,11 +3688,14 @@ class AgentSessionService:
                     / "outputs"
                     / item.logical_name
                 )
+                if shared_outputs is not None:
+                    from loom.io.uris import uri_to_path
+                    target = uri_to_path(shared_outputs[item.logical_name].uri)
                 conn.execute(
                     "INSERT INTO remote_transfers(assignment_id, direction, "
                     "transfer_id, logical_name, digest, size_bytes, private_path, "
                     "received_bytes, finalized, descriptor_json) "
-                    "VALUES (?, 'output', ?, ?, ?, ?, ?, 0, 0, ?)",
+                    "VALUES (?, 'output', ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         assignment_id,
                         item.transfer_id,
@@ -3685,6 +3703,8 @@ class AgentSessionService:
                         item.digest,
                         item.size_bytes,
                         str(target),
+                        item.size_bytes if shared_outputs is not None else 0,
+                        int(shared_outputs is not None),
                         _canonical_json(item.to_dict()),
                     ),
                 )
@@ -4178,6 +4198,7 @@ class AgentSessionService:
                 created_at=descriptor.created_at,
                 metadata=descriptor.metadata,
             )
+            verify_ref(outputs[str(row["logical_name"])], path)
         return outputs
 
     def _remote_execution(self):  # type: ignore[no-untyped-def]
@@ -5566,6 +5587,15 @@ def _target_remote_delivery(
                 )
             for item in request.inputs:
                 row = transfer_rows[item.transfer_id]
+                if shared_binding(item.metadata) is not None:
+                    from ._shared_publication import resolve_input
+                    profile = daemon.config.resident_worker_launch_profile
+                    if profile is None:
+                        raise QueueConflictError("coordinator shared mapping is unavailable")
+                    source = resolve_input(item, profile.shared_roots)
+                    if str(row["private_path"]) != str(source) or str(row["descriptor_json"]) != _canonical_json(item.to_dict()) or not row["finalized"]:
+                        raise QueueConflictError("shared input retention replay conflicts")
+                    continue
                 target = (
                     daemon.config.coordinator_root
                     / "remote-relay"
@@ -5628,6 +5658,15 @@ def _target_remote_delivery(
             )
         retained_inputs: list[tuple[object, ...]] = []
         for item in request.inputs:
+            if shared_binding(item.metadata) is not None:
+                from ._shared_publication import resolve_input
+                profile = daemon.config.resident_worker_launch_profile
+                if profile is None:
+                    raise QueueConflictError("coordinator shared mapping is unavailable")
+                source = resolve_input(item, profile.shared_roots)
+                retained_inputs.append((request.assignment_id, "input", item.transfer_id, item.logical_name,
+                    item.digest, item.size_bytes, str(source), item.size_bytes, 1, _canonical_json(item.to_dict())))
+                continue
             unresolved_source = Path(input_paths[item.transfer_id])
             if unresolved_source.is_symlink():
                 raise QueueServiceError("targeted remote input must be a regular file")

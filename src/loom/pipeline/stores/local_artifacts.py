@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Mapping, Sequence
+from typing import Literal, Mapping, Sequence, cast
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import hash_bytes, validate_digest
@@ -14,7 +14,7 @@ from loom.io.uris import (
     path_to_file_uri,
     uri_to_path,
 )
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data
 from loom.timestamps import utc_timestamp
 
 from ._paths import validate_output_name, validate_stage_name
@@ -32,7 +32,11 @@ from .local_runs import LocalRunStore
 
 
 class LocalArtifactStore:
-    """Filesystem-backed local artifact store."""
+    """Filesystem-backed artifact store with optional protected shared mappings.
+
+    ``shared_roots`` translates native immutable publication references under the
+    consumer's qualified root prefixes, preserving identity and full integrity.
+    """
 
     _SUFFIX_BY_CODEC: dict[str, str] = {
         "json.v1": ".json",
@@ -45,8 +49,13 @@ class LocalArtifactStore:
         root: str | Path,
         *,
         codec_registry: CodecRegistry | None = None,
+        shared_roots: Mapping[str, PlainData] | None = None,
     ) -> None:
         self.root = Path(root).resolve()
+        if shared_roots is not None and not isinstance(shared_roots, Mapping):
+            raise ArtifactStoreError("shared_roots must be a protected mapping")
+        self._shared_roots = None if shared_roots is None else cast(
+            Mapping[str, PlainData], freeze_plain_data(shared_roots, path="shared_roots"))
         if codec_registry is None:
             codec_registry = create_default_codec_registry()
         self._registry = codec_registry
@@ -179,7 +188,7 @@ class LocalArtifactStore:
                 f"No codec available for artifact {ref.uri!r}; pass codec_key=... to load()",
             )
 
-        path = self.local_path(ref)
+        path = self._reference_path(ref)
         if not path.is_file():
             raise ArtifactTypeMismatchError(
                 f"Cannot load non-file artifact path {path}"
@@ -198,7 +207,7 @@ class LocalArtifactStore:
             ) from exc
 
     def exists(self, ref: ArtifactRef) -> bool:
-        path = self._require_local_path(ref.uri)
+        path = self._reference_path(ref)
         return path.exists()
 
     def verify_checksum(self, ref: ArtifactRef) -> bool:
@@ -206,6 +215,9 @@ class LocalArtifactStore:
             return False
 
         path = self.local_path(ref)
+        return self._verify_checksum_path(ref, path)
+
+    def _verify_checksum_path(self, ref: ArtifactRef, path: Path) -> bool:
         if not path.exists():
             raise ArtifactNotFoundError(f"Artifact file does not exist: {path}")
         if not path.is_file():
@@ -246,7 +258,7 @@ class LocalArtifactStore:
             )
 
         if ref.checksum is not None:
-            self.verify_checksum(ref)
+            self._verify_checksum_path(ref, path)
 
     def local_stage_dir(self, stage_name: str) -> Path:
         validate_stage_name(stage_name, field="stage_name")
@@ -263,8 +275,23 @@ class LocalArtifactStore:
         suffix = self._SUFFIX_BY_CODEC.get(codec_key, "")
         return self.local_stage_dir(stage_name=stage_name) / f"{name}{suffix}"
 
-    def local_path(self, ref: ArtifactRef) -> Path:
+    def _reference_path(self, ref: ArtifactRef) -> Path:
+        from .shared_artifacts import binding, reference_path
+        reference = binding(ref.metadata)
+        if reference is not None and self._shared_roots is not None:
+            return reference_path(reference, self._shared_roots)
         return self._require_local_path(ref.uri)
+
+    def local_path(self, ref: ArtifactRef) -> Path:
+        """Resolve a native shared binding and verify its entire immutable closure.
+
+        ``shared_roots`` supplies protected consumer mappings when retained file
+        URIs belong to another host; the reference's identity stays unchanged.
+        """
+        from .shared_artifacts import verify_ref
+        path = self._reference_path(ref)
+        verify_ref(ref, path)
+        return path
 
     def _is_supported_uri(self, uri: str | Path) -> bool:
         scheme = get_uri_scheme(uri)

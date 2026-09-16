@@ -42,6 +42,7 @@ class CleanupSafetyReason(StrEnum):
     TARGET_IS_SYMLINK = "target_is_symlink"
     SYMLINK_COMPONENT_NOT_ALLOWED = "symlink_component_not_allowed"
     RETAINED_PREPARATION_EVIDENCE = "retained_preparation_evidence"
+    RETAINED_SHARED_PUBLICATION = "retained_shared_publication"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +170,12 @@ def assess_local_target_safety(
             managed_root_id=root.root_id,
             detail={"path": str(target_path)},
         )
+    from loom.pipeline.stores.shared_artifacts import publication_path_is_retained
+    if publication_path_is_retained(target_path):
+        return _decision(target, CleanupSafetyStatus.REJECTED,
+            CleanupSafetyReason.RETAINED_SHARED_PUBLICATION,
+            "target is retained by a native shared publication or unsettled attempt",
+            managed_root_id=root.root_id)
     from .preparation_pins import preparation_path_is_retained
 
     if preparation_path_is_retained(target_path):

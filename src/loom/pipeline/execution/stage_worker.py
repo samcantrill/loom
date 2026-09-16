@@ -62,6 +62,8 @@ def execute_resident_stage_worker_request(
     workspace_root: Path,
     process_containment_owner: ProcessContainmentOwner,
     location_resolver: Callable[[object], object] | None = None,
+    artifact_root: Path | None = None,
+    shared_roots: Mapping[str, PlainData] | None = None,
 ) -> StageWorkerResult:
     """Execute one path-free resident request in an agent-owned workspace.
 
@@ -69,7 +71,9 @@ def execute_resident_stage_worker_request(
     exact stage, while the agent owns only an assignment-local artifact and
     workspace layout. Lifecycle and output authority remain with the caller.
     An optional trusted location resolver materializes typed config/factory
-    locations without changing the retained semantic fingerprint.
+    locations without changing the retained semantic fingerprint. ``artifact_root``
+    optionally selects the protected assignment-owned shared output directory;
+    mutable scratch and execution records remain below ``workspace_root``.
     """
 
     if not isinstance(worker_request, StageWorkerRequest):
@@ -100,7 +104,7 @@ def execute_resident_stage_worker_request(
         selected_by=(),
         invalidated_by=(),
     )
-    artifact_store = LocalArtifactStore(root / "artifacts")
+    artifact_store = LocalArtifactStore(root / "artifacts" if artifact_root is None else artifact_root, shared_roots=shared_roots)
     worker_executor = LocalExecutor(capture_stdout_stderr=True)
     try:
         stage_object = construct_stage(

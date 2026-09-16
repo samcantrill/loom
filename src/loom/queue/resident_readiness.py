@@ -59,6 +59,13 @@ if request.get("shared_execution", False):
         result["shared_execution_available"] = SHARED_EXECUTION_CAPABILITY == "shared-execution-v1"
     except Exception:
         result["shared_execution_available"] = False
+if request.get("shared_publication", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.queue._shared_publication import CAPABILITY
+        result["shared_publication_available"] = CAPABILITY == "shared-artifact-publication-v1"
+    except Exception:
+        result["shared_publication_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -492,6 +499,7 @@ def qualify_resident_profile(
         request["preparation"] = True
     if profile.shared_roots:
         request["shared_execution"] = True
+        request["shared_publication"] = any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values())
         if profile.container is not None:
             request["shared_container"] = True
     if requirements.preparation_staged:
@@ -581,6 +589,11 @@ def qualify_resident_profile(
         add("packages.shared_execution", PreflightGroup.PACKAGES,
             observed.get("shared_execution_available") is True,
             "Selected installation supports shared-execution-v1." if observed.get("shared_execution_available") is True else "Selected installation lacks shared-execution-v1.",
+            "Install a compatible Loom in the selected interpreter or image.")
+    if request.get("shared_publication"):
+        add("packages.shared_publication", PreflightGroup.PACKAGES,
+            observed.get("shared_publication_available") is True,
+            "Selected installation supports shared artifact publication." if observed.get("shared_publication_available") is True else "Selected installation lacks shared artifact publication.",
             "Install a compatible Loom in the selected interpreter or image.")
     environment_ok = observed["environment"] == {
         name: True for name in requirements.required_environment

@@ -3504,6 +3504,9 @@ class LocalDaemonExecution:
                     logical_name=logical_name,
                     ref=ref,
                 )
+                from loom.pipeline.stores.shared_artifacts import binding
+                if binding(descriptor.metadata) is not None:
+                    raise QueueServiceError("shared artifact inputs require the qualified resident route")
                 total_bytes += descriptor.size_bytes
                 if total_bytes > MAX_TRANSFER_BYTES:
                     raise QueueServiceError(
@@ -4959,7 +4962,8 @@ class LocalDaemonExecution:
                     logical_name=logical_name,
                     ref=ref,
                 )
-                total_bytes += descriptor.size_bytes
+                from loom.pipeline.stores.shared_artifacts import binding
+                total_bytes += descriptor.size_bytes if binding(descriptor.metadata) is None else 0
                 if total_bytes > MAX_TRANSFER_BYTES:
                     return False
         except (OSError, QueueConflictError, QueueServiceError):
@@ -5258,7 +5262,8 @@ class LocalDaemonExecution:
                     logical_name=logical_name,
                     ref=ref,
                 )
-                total_bytes += descriptor.size_bytes
+                from loom.pipeline.stores.shared_artifacts import binding
+                total_bytes += descriptor.size_bytes if binding(descriptor.metadata) is None else 0
                 if total_bytes > MAX_TRANSFER_BYTES:
                     raise QueueServiceError(
                         "remote assignment inputs exceed the configured bound"
@@ -5536,6 +5541,15 @@ class LocalDaemonExecution:
             )
             - 1
         )
+
+    def remote_publication_fence(self, assignment_id: str, *, fence: str) -> None:
+        """Validate current authority ownership before retaining shared publication."""
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        granted = authority.grant_prepared_attempt(str(record["run_uri"]),
+            assignment_id=assignment_id, attempt_id=str(record["attempt_id"]))
+        if granted.fencing_token != fence:
+            raise QueueConflictError("shared publication fence conflicts")
 
     def remote_commit(
         self,

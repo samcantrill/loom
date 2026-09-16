@@ -46,7 +46,7 @@ def root_bindings(value: object) -> dict[str, PlainData]:
     result: dict[str, PlainData] = {}
     for alias, raw in value.items():
         if (not isinstance(alias, str) or not alias or "/" in alias or not isinstance(raw, Mapping)
-            or set(raw) != {"host_path", "container_path", "access", "challenge"}):
+            or set(raw) - {"publication"} != {"host_path", "container_path", "access", "challenge"}):
             raise QueueServiceError("protected shared root is invalid")
         if not isinstance(raw["host_path"], str) or not Path(raw["host_path"]).is_absolute():
             raise QueueServiceError("shared root host_path must be absolute")
@@ -61,6 +61,17 @@ def root_bindings(value: object) -> dict[str, PlainData]:
             raise QueueServiceError("shared root challenge or access is invalid")
         result[alias] = {"host_path": raw["host_path"], "container_path": target,
                          "access": raw["access"], "challenge": {"path": _relative(challenge["path"]), "sha256": challenge["sha256"]}}
+        if "publication" in raw:
+            from loom.pipeline.stores.shared_artifacts import budgets
+            if raw["access"] != "rw":
+                raise QueueServiceError("shared publication requires a writable root")
+            from loom.pipeline.stores.errors import ArtifactStoreError
+            try:
+                cast(dict[str, PlainData], result[alias])["publication"] = cast(PlainData, budgets(raw["publication"]))
+            except ArtifactStoreError as exc:
+                raise QueueServiceError(str(exc)) from exc
+    if sum("publication" in cast(Mapping[str, PlainData], root) for root in result.values()) > 1:
+        raise QueueServiceError("select exactly one shared publication root")
     targets = [str(cast(Mapping[str, PlainData], root)["container_path"]) for root in result.values()
                if cast(Mapping[str, PlainData], root)["container_path"] is not None]
     for index, target in enumerate(targets):
@@ -95,7 +106,7 @@ def qualifications(roots: Mapping[str, PlainData]) -> dict[str, PlainData]:
             raise QueueServiceError("shared root challenge must be a bounded regular file")
         if hashlib.sha256(path.read_bytes()).hexdigest() != challenge["sha256"]:
             raise QueueServiceError("shared root challenge bytes mismatch")
-        result[alias] = {"container_path": root["container_path"], "access": root["access"], "challenge": dict(challenge)}
+        result[alias] = {"container_path": root["container_path"], "access": root["access"], "challenge": dict(challenge), **({"publication": root["publication"]} if "publication" in root else {})}
     return result
 
 
@@ -105,7 +116,7 @@ def qualified_roots(value: object) -> dict[str, PlainData]:
         raise QueueServiceError("shared root qualifications must be a mapping")
     private = {}
     for alias, facts in value.items():
-        if not isinstance(facts, Mapping) or set(facts) != {"container_path", "access", "challenge"}:
+        if not isinstance(facts, Mapping) or set(facts) - {"publication"} != {"container_path", "access", "challenge"}:
             raise QueueServiceError("shared root qualification fields are invalid")
         private[alias] = {**facts, "host_path": "/"}
     return {alias: {key: item for key, item in cast(Mapping[str, PlainData], raw).items() if key != "host_path"}
@@ -146,6 +157,7 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
                 raise QueueServiceError("stage location is outside the preparation selection")
     aliases = {str(item["root_id"]) for item in locations}
     roots = cast(Mapping[str, PlainData], permitted["roots"])
+    aliases.update(alias for alias, facts in roots.items() if "publication" in cast(Mapping[str, PlainData], facts))
     if not aliases.issubset(roots):
         raise QueueServiceError("stage selects an undeclared shared root")
     return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
@@ -173,7 +185,11 @@ def require_bindings(required: Mapping[str, PlainData], roots: Mapping[str, Plai
 def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
     if required is None:
         return {}
+    publication = any("publication" in cast(Mapping[str, PlainData], facts)
+                      for facts in cast(Mapping[str, PlainData], required["roots"]).values())
+    from ._shared_publication import CAPABILITY
     return {"shared_execution_capability": SHARED_EXECUTION_CAPABILITY,
+            **({"shared_artifact_publication_capability": CAPABILITY} if publication else {}),
             **{"shared_root_" + alias: hash_mapping(facts) for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items()}}
 
 

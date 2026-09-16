@@ -765,7 +765,96 @@ assignment version 5 explicitly identify this scope. Older formats remain valid
 for their original scopes, and unsupported versions are rejected.
 
 Configuration capture happens once; the shared route has no staged input archive
-or per-agent configuration copy. Declared artifact inputs and outputs retain the
-existing relay behavior in this capability. The small synthetic receipt above
-uses that output relay; shared artifact publication is a separate capability.
+or per-agent configuration copy. Profiles without a `publication` binding retain
+the existing artifact relay. The shared artifact route below is selected explicitly.
 Physical NAS/container qualification must still be performed on the deployment.
+
+
+## Shared artifact publication
+
+A protected resident profile can select exactly one writable shared root for
+native artifact publication. Add `publication` to that root on the coordinator
+and each executing agent, using their respective host prefixes:
+
+```yaml
+shared_roots:
+  outputs:
+    host_path: /nas/fleet/outputs
+    container_path: /loom/outputs
+    access: rw
+    challenge:
+      path: challenge.bin
+      sha256: <digest-of-the-same-bounded-challenge-file>
+    publication:
+      max_members: 1024
+      max_payload_bytes: 268435456
+      max_manifest_bytes: 1048576
+```
+
+All three limits are required positive finite integers; booleans and implicit
+unlimited values are rejected. They bound data members, their total bytes and
+the complete native closure receipt respectively. They are admission limits,
+not reservations or evidence of free space. A larger research profile may select
+100,000 members, 1,099,511,627,776 payload bytes and 33,554,432 manifest bytes.
+Root qualification includes these protected limits. All agents for the admitted
+scope must qualify the same output root and policy. Profiles without this object
+retain their existing local/portable/shared-input relay behavior.
+
+Native stage output APIs write directly into a root-relative mutable subtree
+partitioned by stable agent-root identity, assignment and attempt. Local scratch,
+SQLite and IPC stay in the private local workspace. Container workers receive
+only their assigned output subtree read-write, their committed input trees
+read-only, and the existing challenge/input/workspace bindings. The whole
+writable shared root is never mounted into a worker.
+
+After execution is contained, Loom describes every regular data member below the
+stage artifact directory, including companions and nested checkpoint catalogs.
+Each member has a relative path, byte count and SHA-256 digest; each declared
+output names its primary member. Stages must keep their complete output closure
+inside that directory and use relative companion references. Symbolic links,
+FIFOs and external output paths are rejected. Domain manifest schemas and
+scientific interpretation remain owned by the stage.
+
+The native `.loom-publication.json` receipt begins with the attempt's ownership
+identity and becomes the complete bounded closure receipt after execution. It
+is metadata, excluded from the payload-member count. Resident result schema 4
+carries versioned `loom.shared_publication` bindings in native output metadata:
+logical root, immutable tree, publication identity, receipt digest, primary member
+and admitted budgets. The receipt stays on shared storage; even large manifests
+do not need an enlarged HTTP envelope or a second artifact catalog. The ordinary
+64 MiB relay bound does not apply to shared payloads.
+
+The coordinator checks its own mapping, current native fence, output association,
+complete closure and bytes, fsyncs the tree, and renames it on the same filesystem
+into its immutable publication location. Only then can the existing authority
+commit success. Publication identity derives from the native assignment, attempt,
+agent identity and fence. A lost acknowledgement replays that identity; an old
+fence, partial closure or exceeded budget cannot commit success or replace a
+winner. Publication errors retain inspectable ownership and bytes for native
+reconciliation; they do not fabricate a successful result.
+
+Downstream agents resolve the native binding through their own root mapping and
+verify every member before direct consumption. They neither download payload
+chunks nor copy companions beside each workspace. `LocalArtifactStore` validates
+that same closure for local reads and native reuse/resume checks. Consumers
+opening retained references from another host can pass their protected mapping as
+`LocalArtifactStore(local_root, shared_roots=bindings)`; the store resolves the
+native root-relative binding before accessing bytes, including candidate and
+checkpoint reads. Resident workers supply this mapping automatically. A missing or
+changed companion is an explicit integrity failure, even if the primary manifest
+still matches its checksum. Prefix translation changes location only.
+
+Cleanup rejects receipt-bearing staging, published trees, their members and
+containing directories. Native references and settlement retain ownership; there
+is no TTL, automatic eviction, or shared-root recursive recovery deletion. This
+conservative policy also retains unpublished or cancelled attempts. Explicit
+future reclamation must establish reference and execution settlement first.
+Cache policy is unchanged: use per-machine writable caches or an immutable
+prebuilt cache; this capability adds no distributed cache locking.
+
+The integration acceptance test runs two real resident processes through native
+HTTPS assignment/publication, reads a complete payload above 64 MiB and nested
+companions, injects a lost publication acknowledgement, and makes relay/copy
+paths fail if invoked. Its kernel root alias exercises distinct local prefixes;
+it does not qualify physical NAS atomicity or a second machine. Deployment
+qualification must establish the selected filesystem's rename/fsync guarantees.

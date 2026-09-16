@@ -2504,6 +2504,8 @@ class LocalDaemonAgentHttpClient:
                     continue
                 if profile.readiness_result is None or not profile.readiness_result.ok or not any(check.check_id == "packages.shared_execution" and check.status.value == "PASS" for check in profile.readiness_result.checks):
                     raise QueueServiceError("selected installation lacks shared execution qualification")
+                if any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values()) and not any(check.check_id == "packages.shared_publication" and check.status.value == "PASS" for check in profile.readiness_result.checks):
+                    raise QueueServiceError("selected installation lacks shared publication qualification")
                 if qualifications(profile.shared_roots) != profile.descriptor.shared_roots:
                     raise QueueServiceError("shared execution root qualification changed")
         staged = PREPARATION_STAGED_INPUT_CAPABILITY in request.declared_capabilities
@@ -3784,6 +3786,9 @@ class LocalDaemonAgentHttpClient:
         authorization_id = cast(str, authorization["authorization_id"])
         authorization_revision = cast(int, authorization["revision"])
         for item in request.inputs:
+            from loom.pipeline.stores.shared_artifacts import binding
+            if binding(item.metadata) is not None:
+                continue
             offset = 0
             while True:
                 response, authorization_id, authorization_revision = (
@@ -4523,6 +4528,9 @@ class LocalDaemonAgentHttpClient:
             ),
         )
         for item in report.outputs:
+            from loom.pipeline.stores.shared_artifacts import binding
+            if binding(item.metadata) is not None:
+                continue
             offset = 0
             while True:
                 _raise_if_application_suspended(suspend_requested)
@@ -6186,7 +6194,7 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
     if (
         isinstance(report, Mapping)
         and type(report.get("schema_version")) is int
-        and report["schema_version"] in {2, 3}
+        and report["schema_version"] in {2, 3, 4}
         and "failure" in report
     ):
         _bounded_failure_json(report["failure"])

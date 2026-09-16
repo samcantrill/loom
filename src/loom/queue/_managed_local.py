@@ -3474,7 +3474,8 @@ def run_managed_local_assignment(
         artifact, source = _RemoteArtifact.from_local_ref(
             transfer_id=transfer_id, logical_name=logical_name, ref=ref
         )
-        total_input_bytes += artifact.size_bytes
+        from loom.pipeline.stores.shared_artifacts import binding
+        total_input_bytes += artifact.size_bytes if binding(artifact.metadata) is None else 0
         if total_input_bytes > MAX_TRANSFER_BYTES:
             raise ManagedLocalError("resident assignment inputs exceed the bound")
         remote_inputs.append(artifact)
@@ -3502,6 +3503,9 @@ def run_managed_local_assignment(
     workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
     workspace.persist_request(delivered, resident_launch_profile)
     for artifact in remote_inputs:
+        from loom.pipeline.stores.shared_artifacts import binding
+        if binding(artifact.metadata) is not None:
+            continue
         _stage_same_host_input_closure(
             workspace=workspace,
             artifact=artifact,
@@ -4145,6 +4149,29 @@ def _project_resident_result(
         or report.status is not result.status
     ):
         raise ManagedLocalError("resident result report identity conflicts")
+    if report.executor_metadata and report.executor_metadata.get("executor") in (
+        "docker",
+        "apptainer",
+    ):
+        metadata = {**result.executor_metadata, **dict(report.executor_metadata or {})}
+        failure = cast(ExecutionFailure | None, result.failure)
+        result = replace(
+            result,
+            executor_metadata=metadata,
+            failure=None
+            if failure is None
+            else replace(
+                failure, executor_metadata={**failure.executor_metadata, **metadata}
+            ),
+        )
+    from ._shared_publication import selected, workspace_facts, publish
+    if selected(workspace.request()) is not None:
+        outputs = {}
+        if result.status is StageStatus.SUCCEEDED:
+            launch, owner = workspace_facts(workspace)
+            outputs = publish(workspace.request(), report, launch["profile"]["shared_roots"],
+                              agent_id=str(owner["agent_id"]), fence=str(owner["fence"]))
+        return _map_resident_result_identity(result, worker_request=worker_request, outputs=outputs)
     artifact_store = LocalArtifactStore(
         run_store.local_artifact_root(worker_request.run_uri)
     )
@@ -4204,21 +4231,6 @@ def _project_resident_result(
             producer_stage=item.producer_stage,
             created_at=item.created_at,
             metadata=item.metadata,
-        )
-    if report.executor_metadata and report.executor_metadata.get("executor") in (
-        "docker",
-        "apptainer",
-    ):
-        metadata = {**result.executor_metadata, **dict(report.executor_metadata or {})}
-        failure = cast(ExecutionFailure | None, result.failure)
-        result = replace(
-            result,
-            executor_metadata=metadata,
-            failure=None
-            if failure is None
-            else replace(
-                failure, executor_metadata={**failure.executor_metadata, **metadata}
-            ),
         )
     return _map_resident_result_identity(
         result, worker_request=worker_request, outputs=outputs

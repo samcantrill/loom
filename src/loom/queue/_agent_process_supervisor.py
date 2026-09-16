@@ -207,6 +207,7 @@ class ResidentWorkerLaunch:
             # the assignment runtime avoids recursively decoding it here.
             runtime=workspace.request().resolved_runtime,
             shared_scope=assignment_scope(workspace.request().fingerprint),
+            agent_id=self.agent_id,
             shared_snapshot=None if preparation is None else preparation.input_receipt,
         )
 
