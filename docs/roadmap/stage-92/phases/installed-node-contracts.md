@@ -6,6 +6,7 @@
 - Branch: `agent/stage-92-p1-installed-node-contracts`.
 - Base: `c8f23852af2018109c318d17d03186ba9e49893f`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 1: Installed Node Contracts`.
+- PR: [#331](https://github.com/samcantrill/loom/pull/331), open for independent review.
 - Target: develop. Paths and coordination branch: [manifest](../implementation-plan.md#execution-context).
 - Acceptance owner: approved native contract linked by the manifest, sections
   Preparation Protocol, Delivery Packages And Source Ownership (U1), and Example
@@ -160,7 +161,9 @@ checks; the required stable-tree final gate is `make validate-pr` plus
 Final gates passed against implementation commit
 `fd97d00bbeb16ffd494ff66209b3ed793d183086`, Git tree
 `f431a4bcd507ac0b70948aa7228199de5080c272`. The only subsequent tracked change is
-this completion receipt; `git diff --check` also passed on that prose update.
+validation/delivery prose in this card and the manifest; `git diff --check`
+also passed on those updates. No executable or contract change follows the
+validated implementation.
 
 - `make validate-pr`: exit 0. Ruff passed; Pyright reported 0 errors/warnings.
   Locked Python 3.12.3 baseline: 3024 passed, 2 skipped, 331 deselected.

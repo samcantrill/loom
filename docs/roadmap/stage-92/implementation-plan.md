@@ -83,6 +83,8 @@ Keep current completion evidence in the phase cards; no lifecycle sidecars.
 
 ## Current Delivery State
 
-Initial shared setup/preflight passed at `c8f23852` on the Phase 1 branch.
-No code, runtime qualification, PR or merge is claimed yet. U1 is the current
-delivery; U2 and rphys integration remain pending their predecessor gates.
+U1 implementation and required local validation passed; its current evidence and
+skip dispositions are in the Phase 1 card. [PR #331](https://github.com/samcantrill/loom/pull/331)
+is open against develop and awaits required independent review. No merge or
+physical qualification is claimed. U2 and rphys integration remain pending their
+predecessor gates.
