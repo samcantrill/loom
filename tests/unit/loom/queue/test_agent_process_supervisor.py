@@ -610,3 +610,187 @@ def test_contained_missing_result_binds_late_bytes_without_success(
     # Already bound bytes remain immutable evidence if the workspace changes.
     result_path.write_text('{"status":"succeeded"}')
     assert reopened.contain(launch) == repaired
+
+
+@pytest.mark.parametrize("backend", ["native", "apptainer"])
+def test_changed_boot_preserves_exact_historical_launch_and_terminal_truth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+
+    boot = {"host": "enrolled-host", "boot": "boot-before"}
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor._host_boot_evidence", lambda: dict(boot)
+    )
+    with fake_apptainer() if backend == "apptainer" else nullcontext(None) as binding:
+        profile = replace(_profile(), container=binding)
+        if binding is not None:
+            monkeypatch.setattr(
+                ResidentWorkerLaunch,
+                "container_command",
+                property(
+                    lambda self: SimpleNamespace(
+                        argv=(sys.executable, "-c", "import time; time.sleep(60)"),
+                        metadata={},
+                    )
+                ),
+            )
+        root = tmp_path / "agent"
+        root.mkdir()
+        owner = AgentProcessSupervisor.initialize(
+            root, agent_id="agent-A", profiles=(profile,)
+        )
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        launch = replace(_launch(owner, workspace), profile=profile)
+        started = owner.launch(launch)
+        # Stop the fixture-owned process without updating the durable receipt:
+        # this models the process/SQLite cut at kernel reboot, not PID adoption.
+        child = owner._children[launch.launch_operation_id]
+        assert child.contain()
+        for fd in owner._namespace_inits.values():
+            os.close(fd)
+        owner._namespace_inits.clear()
+        reopened = AgentProcessSupervisor(
+            root / "supervisor", agent_id="agent-A", profiles=(profile,)
+        )
+        blocked = reopened.recover_reboot("same-boot")
+        assert blocked["state"] == "blocked"
+        assert reopened.query(launch).state is SupervisorLaunchState.UNKNOWN
+        boot["boot"] = "boot-after"
+        recovered = reopened.recover_reboot("reboot-1")
+        assert recovered["state"] == "contained"
+        assert recovered["previous_generation"] == launch.continuity_epoch
+        assert recovered["generation"] != launch.continuity_epoch
+        assert reopened.recover_reboot("reboot-1") == recovered
+        receipt = reopened.launch(launch)
+        assert receipt.process_id == started.process_id
+        assert receipt.launch.spec_digest == launch.spec_digest
+        assert receipt.state is SupervisorLaunchState.CONTAINED
+        assert not receipt.qualified_success
+        never_accepted = replace(launch, launch_operation_id="workspace-only-launch")
+        late = reopened.launch(never_accepted)
+        assert late.state is SupervisorLaunchState.CONTAINED
+        assert not late.started
+        assert reopened.launch(never_accepted) == late
+        with pytest.raises(AgentProcessSupervisorError, match="conflicts"):
+            reopened.recover_reboot("same-boot")
+
+
+@pytest.mark.parametrize("fault", ["host", "legacy", "root"])
+def test_reboot_requires_prelaunch_host_root_and_boot_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    boot = {"host": "host-a", "boot": "boot-a"}
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor._host_boot_evidence", lambda: dict(boot)
+    )
+    root = tmp_path / "agent"
+    root.mkdir()
+    owner = AgentProcessSupervisor.initialize(
+        root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    owner.bind_execution_host()
+    if fault == "host":
+        boot["host"] = "host-b"
+    elif fault == "legacy":
+        with owner._connect() as conn:
+            conn.execute("DELETE FROM metadata WHERE key = 'boot_evidence'")
+            conn.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
+    else:
+        destination = tmp_path / "moved"
+        root.rename(destination)
+        root = destination
+    boot["boot"] = "boot-b"
+    reopened = AgentProcessSupervisor(
+        root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+    )
+    assert reopened.recover_reboot("reboot")["state"] == "blocked"
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_idle_reboot_rotates_without_clean_shutdown_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    historical: bool,
+) -> None:
+    boot = {"host": "host-a", "boot": "boot-a"}
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor._host_boot_evidence", lambda: dict(boot)
+    )
+    root = tmp_path / "agent"
+    root.mkdir()
+    owner = AgentProcessSupervisor.initialize(
+        root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    launch = None
+    terminal = None
+    if historical:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        launch = _launch(owner, workspace)
+        owner.launch(launch)
+        terminal = owner.contain(launch)
+    boot["boot"] = "boot-b"
+    reopened = AgentProcessSupervisor(
+        root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+    )
+    assert reopened.recover_reboot("idle-reboot")["state"] == "contained"
+    reopened.rotate_clean_continuity()
+    if historical:
+        assert launch is not None and terminal is not None
+        assert (
+            reopened.query(launch).worker_result_digest == terminal.worker_result_digest
+        )
+        assert reopened.query(launch).qualified_success == terminal.qualified_success
+
+
+def test_reboot_preserves_proven_success_and_result_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boot = {"host": "host-a", "boot": "boot-a"}
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor._host_boot_evidence", lambda: dict(boot)
+    )
+    root = tmp_path / "agent"
+    root.mkdir()
+    owner = AgentProcessSupervisor.initialize(
+        root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(owner, workspace)
+    real_popen = subprocess.Popen
+
+    def terminal_worker(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        return cast(Any, real_popen([sys.executable, "-c", "pass"], **kwargs))
+
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor.subprocess.Popen", terminal_worker
+    )
+    owner.launch(launch)
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor.subprocess.Popen", real_popen
+    )
+    deadline = monotonic() + 5
+    while owner._children[launch.launch_operation_id].root_status() is None:
+        assert monotonic() < deadline
+        sleep(0.01)
+    result_path = workspace / "worker-result.json"
+    result_path.write_text("retained worker bytes")
+    terminal = owner.contain(launch)
+    assert terminal.qualified_success
+    boot["boot"] = "boot-b"
+    reopened = AgentProcessSupervisor(
+        root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+    )
+    assert reopened.recover_reboot("reboot")["state"] == "contained"
+    assert reopened.query(launch) == terminal
+    assert result_path.read_text() == "retained worker bytes"

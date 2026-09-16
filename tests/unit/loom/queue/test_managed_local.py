@@ -1099,3 +1099,74 @@ def test_shared_local_projection_keeps_native_tree_without_copy(tmp_path, monkey
         worker_request=workspace.worker_request(), run_store=LocalRunStore(tmp_path / "runs"))
     assert "/loom-artifacts/" in projected.outputs["result"].uri
     assert not (workspace.root / "retained-outputs").exists()
+
+
+def test_guarded_recovery_settles_unknown_start_without_claiming_a_process_start(
+    tmp_path,
+) -> None:
+    journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
+    assignment = _assignment()
+    provider, command = _provider()
+    assert isinstance(command.assignment, ManagedAssignment)
+    journal.persist_request(assignment, {"request": "durable"})
+    journal.prepare_composite(assignment, (command,), {"cpu": provider})
+    journal.accept(assignment.assignment_id)
+    journal.grant(assignment.assignment_id, "fence-1")
+    journal.activate_composite(assignment.assignment_id, (command,), {"cpu": provider})
+    calls = 0
+
+    def ambiguous_launch() -> str:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError("spawn response was lost")
+
+    with pytest.raises(TimeoutError):
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
+    assert journal.read_state(assignment.assignment_id) is AssignmentState.START_UNKNOWN
+    with pytest.raises(ManagedLocalError, match="cannot be invoked again"):
+        journal.start_once(
+            assignment.assignment_id,
+            "process-1",
+            ambiguous_launch,
+            start_failure=lambda _error: pytest.fail("unknown launch is not no-start"),
+        )
+    from loom.pipeline.execution.models import StageWorkerResult
+    from loom.pipeline.status import StageStatus
+
+    result = StageWorkerResult(
+        schema_version=1,
+        run_uri=assignment.run_uri,
+        stage_name=assignment.stage_name,
+        attempt=1,
+        status=StageStatus.CANCELLED,
+        started_at="2030-01-01T00:00:00+00:00",
+        finished_at="2030-01-01T00:00:01+00:00",
+        executor_name="local",
+    )
+    with pytest.raises(ManagedLocalError, match="stale"):
+        journal.record_recovered_start_result(
+            assignment.assignment_id, fence="wrong", result=result.to_dict()
+        )
+    with pytest.raises(ManagedLocalError, match="cannot establish success"):
+        journal.record_recovered_start_result(
+            assignment.assignment_id,
+            fence="fence-1",
+            result=replace(result, status=StageStatus.SUCCEEDED).to_dict(),
+        )
+    assert (
+        journal.record_recovered_start_result(
+            assignment.assignment_id, fence="fence-1", result=result.to_dict()
+        )
+        is AssignmentState.RESULT_DURABLE
+    )
+    assert journal.read_result(assignment.assignment_id) == result
+    assert (
+        journal.acknowledge_terminal(assignment.assignment_id)
+        is AssignmentState.TERMINAL_ACKNOWLEDGED
+    )
+    assert calls == 1

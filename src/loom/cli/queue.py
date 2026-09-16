@@ -93,6 +93,11 @@ def register_subparser(
     _add_role_config_arguments(agent_init)
     _add_output_options(agent_init)
     agent_init.set_defaults(handler=handle_agent_init)
+    reboot = queue_subparsers.add_parser("agent-recover-reboot", help="prove retained local launches contained after a Linux reboot")
+    _add_role_config_arguments(reboot)
+    reboot.add_argument("--operation-id", required=True)
+    _add_output_options(reboot)
+    reboot.set_defaults(handler=handle_agent_recover_reboot)
     agent_serve = queue_subparsers.add_parser(
         "agent-serve", help="serve one initialized outbound-agent root"
     )
@@ -370,6 +375,23 @@ def handle_agent_init(namespace: argparse.Namespace) -> int:
             "coordinator_url": service.client.url,
         },
     )
+
+
+def handle_agent_recover_reboot(namespace: argparse.Namespace) -> int:
+    """Persist native reboot containment without starting or releasing work."""
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(
+            namespace.config, env_file=namespace.env_file
+        )
+        result = LocalDaemonAgentHttpClient.recover_reboot(
+            service.client, namespace.operation_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
 
 
 def handle_agent_serve(namespace: argparse.Namespace) -> int:
@@ -894,6 +916,7 @@ __all__ = [
     "QUEUE_STATUS_SCHEMA_VERSION",
     "LOCAL_DAEMON_SCHEMA_VERSION",
     "handle_agent_init",
+    "handle_agent_recover_reboot",
     "handle_agent_check",
     "handle_agent_serve",
     "handle_daemon_cancel",

@@ -926,3 +926,39 @@ def test_native_run_cli_keeps_request_ids_and_returns_cancel_control(
         assert json.loads(stdout.getvalue())["result"]["operation_id"] == expected
         assert stderr.getvalue() == ""
     assert calls == [request, "run-original"]
+
+
+def test_queue_agent_recover_reboot_is_local_idempotent_and_does_not_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.queue._agent_process_supervisor import _endpoint_for_root
+
+    observed = {"host": "enrolled-host", "boot": "before"}
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor._host_boot_evidence",
+        lambda: dict(observed),
+    )
+    config = _outbound_agent_service_config(tmp_path)
+    assert main(["queue", "agent-init", str(config)], stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    root = tmp_path / "remote-agent"
+    endpoint = _endpoint_for_root(root / "supervisor")
+    assert not endpoint.exists()
+
+    def recover(operation: str):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = main(
+            ["queue", "agent-recover-reboot", str(config), "--operation-id", operation, "--format", "json"],
+            stdout=stdout, stderr=stderr,
+        )
+        assert code == 0, stderr.getvalue()
+        return json.loads(stdout.getvalue())["result"]
+
+    blocked = recover("same-boot")
+    assert blocked["state"] == "blocked"
+    assert blocked["reason"] == "kernel_boot_unchanged"
+    observed["boot"] = "after"
+    contained = recover("after-reboot")
+    assert contained["state"] == "contained"
+    assert recover("after-reboot") == contained
+    assert not endpoint.exists()
+    assert (root / "journal.sqlite").is_file()

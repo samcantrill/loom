@@ -2037,6 +2037,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             LocalDaemonAdmissionState.CANCELLED
         )
         assert authority.open_run(run_uri).status is RunStatus.CANCELLED
+        assert agent._call("recovery_release_ready", {
+            "session_id": session.session_id,
+            "assignment_id": assignment_id,
+            "fence": fence,
+        }) == {"ready": True}
         release_agent.set()
         with pytest.raises(QueueConflictError):
             worker.result(timeout=10)

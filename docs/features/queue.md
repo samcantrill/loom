@@ -711,3 +711,42 @@ publish only an already-granted allocation for its fenced lifetime. Unallocated
 nodes are never Loom offers. Native execution does not implement allocation provisioning,
 automatic agent/SLURM fallback, multiple-profile ranking, or a generic external-
 scheduler backend.
+
+### Recovering an enrolled Linux worker after reboot
+
+For native and Apptainer resident workers, the supervisor records the Linux
+machine identity, kernel boot ID, canonical execution root and ownership
+generation before launching work. After a reboot, keep the same protected local
+agent root, profiles, credentials and session. With the agent stopped, run:
+
+```sh
+loom queue agent-recover-reboot /private/agent.yaml \
+  --env-file /private/agent.env --operation-id worker-reboot-001
+```
+
+Keep the operation ID for a lost-reply replay. The local command takes exclusive
+root and supervisor ownership, reads host/boot evidence itself, and durably
+reports `contained` or `blocked`. It starts no process, releases no resource
+claim and makes no scientific success or retry decision. A successful operation
+rotates supervisor ownership while preserving exact historical launch identities;
+replaying an old launch can never launch another process.
+
+Start the ordinary `agent-serve` command with that same configuration. Retained
+work keeps capacity unavailable while the agent reconciles. For each unresolved
+attempt, use `daemon-recover-unknown` with the exact assignment, execution fence,
+authority revision and a retained recovery ID. Its containment control consumes
+the supervisor's durable receipt. Proven ordinary terminal results retain their
+precedence. After the guarded authority close wins, the same agent session
+releases its providers, persists release proof, releases the coordinator claim
+and settles its retained delivery. Fresh provider observations are required
+before capacity returns. Retry or checkpoint resume remains an explicit separate
+scientific operation.
+
+A missing supervisor in the same boot, changed host, relocated execution root,
+unavailable Linux identity, legacy active state without pre-launch boot evidence,
+or missing/corrupt journals cannot establish containment. Preserve those roots
+for diagnosis; deleting state or replacing identity is not recovery. Schema 4
+opens schema 2/3 supervisor journals without inventing historical boot proof.
+This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
+state copied between hosts or hostile host attestation. Controlled-boot tests
+exercise native settlement; actual host reboot qualification is separate.

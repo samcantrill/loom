@@ -20,6 +20,21 @@ def _binding():
     }
 
 
+def _persist_shared_workspace(tmp_path, workspace, container, roots, **kwargs):
+    from dataclasses import replace
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
+
+    container = {**container, "options": {**container["options"], "command": sys.executable}}
+    if container["kind"] == "apptainer":
+        Path(container["container"]["image"]["reference"]).write_bytes(b"command-only SIF fixture")
+    resident = replace(_profile(tmp_path), project_root=tmp_path, container=container,
+                       shared_roots=roots, **kwargs)
+    request = replace(_request(resident), assignment_id=workspace.name)
+    _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).persist_request(request, resident)
+    return resident.launch_profile
+
+
 def test_binding_rejects_mutable_image_and_ambient_daemon():
     binding = _binding()
     binding["container"]["image"]["reference"] = "latest"
@@ -109,12 +124,11 @@ def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_p
         binding.update(kind="apptainer", daemon_endpoint=None)
         binding["container"]["image"]["reference"] = str(tmp_path / "installed.sif")
         binding["options"]["command"] = "/usr/bin/singularity"
-    profile = ResidentWorkerLaunchProfile(tmp_path, Path(sys.executable), {"profile_id": "installed"},
-        container=binding, shared_roots=roots)
     config = {"input": {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected"}}
     scope = stage_scope(config, {}, {"roots": qualifications(roots)})
     workspace = tmp_path / "agent" / "assignments" / "selected-attempt"
     workspace.mkdir(parents=True)
+    profile = _persist_shared_workspace(tmp_path, workspace, binding, roots)
     command = build_container_worker(profile, workspace=workspace, worker=("python3", "-m", "loom.queue._resident_stage_worker"),
         environment={"PYTHONPATH": str(tmp_path / "editable")}, shared_scope=scope)
     argv = " ".join(command.argv)
@@ -139,11 +153,11 @@ def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_pat
     (root / "challenge").write_bytes(b"shared")
     roots = {"snapshots": {"host_path": str(root), "container_path": "/loom/snapshots", "access": "ro",
         "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}}
-    profile = ResidentWorkerLaunchProfile(tmp_path, Path(sys.executable), {"profile_id": "installed"},
-        container=_binding(), shared_roots=roots, preparation_shared_roots={"projects": root})
     scope = {"capability": "shared-execution-v1", "roots": qualifications(roots), "locations": []}
     workspace = tmp_path / "agent" / "assignments" / "prepare"
     workspace.mkdir(parents=True)
+    profile = _persist_shared_workspace(tmp_path, workspace, _binding(), roots,
+        preparation_shared_roots={"projects": root})
     command = build_container_worker(profile, workspace=workspace, worker=("python3",), environment={}, shared_scope=scope,
         shared_snapshot=SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-one"))
     assert any("source=" + str(capture) in arg and "target=/loom/snapshots/capture-one" in arg for arg in command.argv)

@@ -1591,7 +1591,7 @@ class LocalDaemon:
         )
         try:
             staging.mkdir(mode=0o700)
-            cls.initialize(staged)
+            cls.initialize(staged, _final_agent_root=config.agent_root)
             coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
             agent_id = (
                 None
@@ -1635,7 +1635,9 @@ class LocalDaemon:
                 shutil.rmtree(staging)
 
     @classmethod
-    def initialize(cls, config: LocalDaemonConfig) -> None:
+    def initialize(
+        cls, config: LocalDaemonConfig, *, _final_agent_root: Path | None = None,
+    ) -> None:
         """Create fresh owner-private roots; existing/legacy roots are rejected."""
 
         if config.coordinator_root.exists() or (
@@ -1678,6 +1680,7 @@ class LocalDaemon:
                 AgentProcessSupervisorService.initialize_process_free(
                     config.agent_root,
                     configuration=SupervisorLaunchConfiguration(agent_id, (profile,)),
+                    final_agent_root=_final_agent_root,
                 )
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
