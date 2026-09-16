@@ -377,10 +377,10 @@ def _project_processor(value: object) -> dict[str, PlainData] | None:
     if value is None:
         return None
     if (not isinstance(value, Mapping)
-        or set(value) != ({"schema_version", "callable", "evidence_namespace", "recovery_stage"} | ({"target_prefix"} if value.get("schema_version") == 2 else set()))
-        or type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2)):
+        or set(value) != ({"schema_version", "callable", "evidence_namespace"} | ({"recovery_stage"} if value.get("schema_version") != 3 else set()) | ({"target_prefix"} if value.get("schema_version") in (2, 3) else set()))
+        or type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2, 3)):
         raise QueueServiceError("unsupported project preparation capability")
-    if value["schema_version"] == 2:
+    if value["schema_version"] in (2, 3):
         validate_queue_id(value["target_prefix"], "project target prefix")
     reference = value["callable"]
     if (not isinstance(reference, str) or ":" not in reference
@@ -388,7 +388,7 @@ def _project_processor(value: object) -> dict[str, PlainData] | None:
         or reference.count(":") != 1):
         raise QueueServiceError("project preparation callable is invalid")
     validate_queue_id(value["evidence_namespace"], "project evidence namespace")
-    if value["recovery_stage"] is not None:
+    if value.get("recovery_stage") is not None:
         validate_queue_id(value["recovery_stage"], "project recovery stage")
     return cast(dict[str, PlainData], dict(value))
 
@@ -419,7 +419,7 @@ def _project_binding(value: object) -> dict[str, PlainData] | None:
     uri = value["target_run_uri"]
     if "run_store_root_uri" in value:
         root = value["run_store_root_uri"]
-        if processor["schema_version"] != 2 or uri is not None or not isinstance(root, str) or path_to_run_uri(run_uri_to_path(root)) != root:
+        if processor["schema_version"] not in (2, 3) or uri is not None or not isinstance(root, str) or path_to_run_uri(run_uri_to_path(root)) != root:
             raise QueueServiceError("project reconciliation binding is invalid")
         return {"processor": processor, "target_run_uri": None, "run_store_root_uri": root}
     if not isinstance(uri, str) or path_to_run_uri(run_uri_to_path(uri)) != uri:
@@ -490,7 +490,7 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            "schema_version": 7 if self.project_preparation is not None and cast(Mapping[str, PlainData], self.project_preparation["processor"])["schema_version"] == 3 else 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
             **({"shared_scope": dict(self.shared_scope)} if self.shared_scope is not None else {}),
             **({"candidate": thaw_plain_data(self.candidate)} if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else {}),
             **({"project_preparation": dict(self.project_preparation)} if self.project_preparation is not None else {}),
@@ -505,13 +505,14 @@ class PreparationChildInput:
 
     @classmethod
     def from_dict(cls, value: object) -> "PreparationChildInput":
-        if isinstance(value, Mapping) and value.get("schema_version") == 6:
+        if isinstance(value, Mapping) and value.get("schema_version") in (6, 7):
             result = cls(
                 cast(str, value.get("operation_id")), cast(str, value.get("preparation_profile")),
                 cast(str, value.get("config_path")), input_receipt_from_dict(cast(Mapping[str, object], value.get("input_receipt"))),
                 cast(Mapping[str, PlainData], value.get("profile_descriptor")),
                 cast(tuple[str, ...], value.get("overlays")), cast(tuple[str, ...], value.get("overrides")),
                 cast(Mapping[str, PlainData], value.get("run_options")),
+                local_scope=cast(Mapping[str, PlainData] | None, value.get("local_scope")),
                 project_preparation=cast(Mapping[str, PlainData] | None, value.get("project_preparation")),
                 candidate=cast(Mapping[str, PlainData] | None, value.get("candidate")),
                 shared_scope=cast(Mapping[str, PlainData] | None, value.get("shared_scope")),

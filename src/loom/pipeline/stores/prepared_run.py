@@ -246,6 +246,12 @@ def validate_prepared_run_typed_metadata(
                 "metadata key is reserved for unsafe prepared-run payloads",
                 category="unsafe_field",
             )
+        if name == "loom.project_contracts":
+            from loom.pipeline._project_contracts import report_entry
+            try:
+                report_entry(entry)
+            except ValueError as exc:
+                raise PreparedRunStorePayloadError(entry_field, str(exc), category="opaque_payload") from exc
         if name == "plugin_activations":
             if not isinstance(entry, dict):
                 raise PreparedRunStorePayloadError(

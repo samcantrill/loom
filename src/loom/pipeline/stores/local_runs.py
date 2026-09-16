@@ -137,6 +137,8 @@ class LocalRunStore:
         metadata: Mapping[str, PlainData] | None = None,
         idempotency_key: str | None = None,
     ) -> None:
+        from loom.pipeline._project_contracts import reject_overrides
+        reject_overrides(metadata)
         if idempotency_key is not None and (
             not isinstance(idempotency_key, str) or not idempotency_key
         ):
@@ -164,6 +166,8 @@ class LocalRunStore:
         """Materialize an authority-admitted run without changing its identity."""
 
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        from loom.pipeline._project_contracts import reject_overrides
+        reject_overrides(metadata)
         normalized_metadata = ensure_plain_data(metadata or {}, path="metadata")
         if not isinstance(normalized_metadata, dict):
             raise RunProjectionError("run metadata must be a mapping")
@@ -340,6 +344,8 @@ class LocalRunStore:
         run_dir = self.local_run_dir(run_uri_text)
         if not run_dir.exists():
             raise RunNotFoundError(f"run not found: {run_uri_text}")
+        from loom.pipeline._project_contracts import reject_overrides
+        reject_overrides(metadata)
         normalized_metadata = ensure_plain_data(metadata, path="metadata")
         if not isinstance(normalized_metadata, dict):
             raise UnsafeStorePathError(

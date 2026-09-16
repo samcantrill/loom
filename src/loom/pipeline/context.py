@@ -27,6 +27,15 @@ class ProcessContainmentOwner(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class StageContext:
+    """Action-local inputs, configuration, artifacts and execution context.
+
+    Installed native execution may provide reserved ``loom.project_contract`` and
+    ``loom.execution_binding`` metadata. Checked payloads are opaque and retain
+    their original values independently of runtime configuration location binding.
+    The execution binding identifies the actual producer attempt; its state root
+    is null when no authorized agent-visible durable directory is available.
+    """
+
     run_uri: RunURI
     stage_name: StageID
     resolved_config: Mapping[str, PlainData]

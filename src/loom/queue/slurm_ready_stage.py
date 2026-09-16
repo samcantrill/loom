@@ -267,7 +267,10 @@ class SlurmStageDelivery:
     ) -> "SlurmStageDelivery":
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError("SLURM delivery requires a prepared worker request")
-        metadata: dict[str, PlainData] = {}
+        from ._execution_binding import execution_binding
+        metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
+            for key in ("loom.project_contract", "loom.project_contract_capture") if key in worker_request.metadata}
+        metadata["loom.execution_binding"] = execution_binding(worker_request, environment_fingerprint)
         if "stage_resources" in worker_request.metadata:
             metadata["stage_resources"] = worker_request.metadata["stage_resources"]
         if "resource_selection" in worker_request.metadata:

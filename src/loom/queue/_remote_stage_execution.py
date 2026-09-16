@@ -845,6 +845,10 @@ class _ResidentAssignmentBundle:
             raise QueueConflictError(
                 "resident stage fingerprint conflicts with its assignment"
             )
+        from loom.pipeline._project_contracts import EXECUTION, validate_worker_metadata
+        validate_worker_metadata(metadata, node=self.stage_name, attempt=self.attempt, fingerprint=fingerprint_record)
+        if EXECUTION in metadata and cast(Mapping[str, PlainData], metadata[EXECUTION])["environment_fingerprint"] != self.profile.environment_fingerprint:
+            raise QueueConflictError("execution binding installation conflicts")
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
@@ -958,7 +962,13 @@ class _ResidentAssignmentBundle:
             raise QueueServiceError(
                 "resident work must start from a prepared worker request"
             )
-        safe_metadata: dict[str, PlainData] = {}
+        safe_metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
+            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.execution_binding")
+            if key in worker_request.metadata}
+        from ._execution_binding import execution_binding
+        from loom.pipeline._project_contracts import EXECUTION
+        if EXECUTION not in safe_metadata:
+            safe_metadata[EXECUTION] = execution_binding(worker_request, profile.environment_fingerprint)
         if "stage_resources" in worker_request.metadata:
             safe_metadata["stage_resources"] = worker_request.metadata[
                 "stage_resources"
@@ -2448,7 +2458,10 @@ def _validate_remote_semantic_data(
     validate_references(fingerprint)
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
-    _reject_path_bearing_data(worker_metadata, "worker_metadata")
+    from loom.pipeline._project_contracts import CONTRACT, CAPTURE, EXECUTION
+    if EXECUTION in worker_metadata and cast(Mapping[str, PlainData], worker_metadata[EXECUTION])["run_state_root"] is not None:
+        raise QueueServiceError("remote execution cannot export a local state root")
+    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, EXECUTION}}, "worker_metadata")
 
 
 _PREPARATION_ARCHIVE_INPUT = "preparation_archive"

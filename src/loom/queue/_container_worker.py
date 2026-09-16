@@ -65,29 +65,14 @@ def container_binding(
     return cast(Mapping[str, PlainData], data)
 
 
-def build_container_worker(
-    profile: ResidentWorkerLaunchProfile,
-    *,
-    workspace: Path,
-    worker: Sequence[str],
-    environment: Mapping[str, str],
-    runtime: Mapping[str, PlainData] | None = None,
-    shared_scope: Mapping[str, PlainData] | None = None,
-    shared_snapshot: object = None,
-    agent_id: str | None = None,
-):
-    """Reuse container resource projection with assignment-owned path parity."""
-    from loom.pipeline.executors.containers import (
-        ContainerEnvironment,
-        ContainerMount,
-        ContainerMountMode,
-        ContainerResourceIntent,
-        parse_container_options,
-    )
+def _base_worker_mounts(profile: ResidentWorkerLaunchProfile, workspace: Path, *,
+                        runtime: Mapping[str, PlainData] | None = None,
+                        shared_scope: Mapping[str, PlainData] | None = None):
+    """The effective installed and required mounts before shared per-stage IO."""
+    from loom.pipeline.executors.containers import ContainerMount, ContainerMountMode, parse_container_options
 
-    binding = profile.container
-    assert binding is not None
-    container = parse_container_options(binding["container"])
+    assert profile.container is not None
+    container = parse_container_options(profile.container["container"])
     required = {
         **({str(profile.project_root): "ro"} if not profile.shared_roots else {}),
         str(workspace if profile.shared_roots else workspace.parent.parent): "rw",
@@ -118,6 +103,32 @@ def build_container_worker(
                 "installed container mount conflicts with worker path parity"
             )
         mounts[path] = ContainerMount(source=path, target=path, mode=mode)
+    return mounts
+
+
+def build_container_worker(
+    profile: ResidentWorkerLaunchProfile,
+    *,
+    workspace: Path,
+    worker: Sequence[str],
+    environment: Mapping[str, str],
+    runtime: Mapping[str, PlainData] | None = None,
+    shared_scope: Mapping[str, PlainData] | None = None,
+    shared_snapshot: object = None,
+    agent_id: str | None = None,
+):
+    """Reuse container resource projection with assignment-owned path parity."""
+    from loom.pipeline.executors.containers import (
+        ContainerEnvironment,
+        ContainerMount,
+        ContainerResourceIntent,
+        parse_container_options,
+    )
+
+    binding = profile.container
+    assert binding is not None
+    container = parse_container_options(binding["container"])
+    mounts = _base_worker_mounts(profile, workspace, runtime=runtime, shared_scope=shared_scope)
     if shared_scope is not None:
         from .shared_execution import require_bindings, resolve
         require_bindings(shared_scope, profile.shared_roots)

@@ -630,3 +630,19 @@ def test_authored_config_cannot_select_protected_shared_scope():
     }]}}
     with pytest.raises(QueueConflictError, match="protected preparation scope"):
         _bind_local_snapshot(snapshot, None)
+
+
+def test_v3_registration_exact_fields_and_finite_node_results():
+    from loom.pipeline._project_contracts import node_result
+
+    registration = {"schema_version": 3, "callable": "installed:inspect",
+        "evidence_namespace": "text-project", "target_prefix": "text-"}
+    assert inputs._project_processor(registration) == registration
+    for changed in ({**registration, "recovery_stage": "author"},
+                    {**registration, "schema_version": 99}):
+        with pytest.raises(QueueServiceError):
+            inputs._project_processor(changed)
+    assert node_result({"semantic_key": None, "payload": None}) == {"semantic_key": None, "payload": None}
+    for value in (float("nan"), float("inf"), object()):
+        with pytest.raises((ValueError, SerializationError)):
+            node_result({"semantic_key": None, "payload": {"value": value}})

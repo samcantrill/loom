@@ -3510,6 +3510,12 @@ def run_managed_local_assignment(
         input_paths[transfer_id] = source
         input_refs[transfer_id] = ref
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
+    from ._execution_binding import execution_binding
+    from loom.pipeline._project_contracts import EXECUTION
+    worker_request = replace(worker_request, metadata={**worker_request.metadata,
+        EXECUTION: execution_binding(worker_request, profile.environment_fingerprint,
+            store=run_store, launch=resident_launch_profile,
+            workspace=agent_root / "assignments" / assignment.assignment_id)})
     delivered = _ResidentAssignmentBundle.from_worker_request(
         assignment_id=assignment.assignment_id,
         stage_work_id=assignment.stage_work_id,

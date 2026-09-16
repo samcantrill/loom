@@ -51,6 +51,9 @@ def prepare_stage_attempt(
 ) -> StageWorkerRequest:
     """Prepare durable state for one stage attempt without running stage code."""
 
+    from loom.pipeline._project_contracts import reject_overrides, worker_contract_metadata
+
+    reject_overrides(metadata)
     if not isinstance(run_store, RunStore):
         raise PipelineExecutionError("prepare_stage_attempt requires RunStore")
     if not isinstance(run_store, LocalRunStorePaths):
@@ -106,7 +109,7 @@ def prepare_stage_attempt(
             resolved_runtime, stage_name=stage.name
         ),
         executor_metadata=redact_executor_metadata(executor_metadata),
-        metadata=metadata or {},
+        metadata={**dict(metadata or {}), **worker_contract_metadata(run_store, run_uri, stage)},
     )
 
     run_store.write_stage_inputs(run_uri, stage.name, inputs, attempt=attempt)

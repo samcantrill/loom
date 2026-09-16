@@ -858,3 +858,66 @@ companions, injects a lost publication acknowledgement, and makes relay/copy
 paths fail if invoked. Its kernel root alias exercises distinct local prefixes;
 it does not qualify physical NAS atomicity or a second machine. Deployment
 qualification must establish the selected filesystem's rename/fsync guarantees.
+
+### Installed per-node contracts (processor version 3)
+
+A protected `project_processor` version 3 has exactly `schema_version`,
+`callable`, `evidence_namespace`, and `target_prefix`. It omits the legacy
+`recovery_stage`. Versions 1 and 2 retain their existing evidence and recovery
+injection behavior. Version 3 receives `operation: prepare` with the captured
+composition, effective options, invocation, input manifest, installation descriptor,
+project binding and local/shared scope. Native preparation input/report envelope
+version 7 carries this capability; earlier envelope versions remain readable.
+
+The processor returns exactly `schema_version: 3`, `composition`, `evidence`,
+`reconciliation_key`, and `stage_contracts`. The composition must remain equal to
+the captured input, including its diagnostic view and provenance. Evidence and the
+whole-target reconciliation key keep their existing namespaced shapes.
+`stage_contracts` must cover exactly the captured node IDs. Each value has exactly
+`semantic_key` and `payload`. The key is null or `{version: 1, digest: <64 lowercase
+hex characters>}`; payload is any finite JSON-compatible plain value, including
+null. Null keys decline future action reuse. No processor means no attachment.
+
+The native wrapper stores a `project_contracts` mapping in the committed preparation
+report. Each node envelope contains `schema_version: 1`, the protected `namespace`,
+`semantic_key`, `payload`, and `binding_digest`. Native SHA-256 canonical JSON binds
+the capture identity, node ID, normalized original factory/config/input/output
+declaration and attachment fields. Capture identity includes operation, input
+manifest, invocation and qualified profile. Binding digests use Loom's native
+`sha256:<hex>` representation; they are distinct from project semantic keys.
+
+The prepared-run metadata entry `loom.project_contracts` has `kind:
+project_contracts` and `data` containing exactly `schema_version: 1`, `namespace`
+and the native `report_ref`. Opaque payloads remain in the retained original report,
+never in safe prepared-run metadata or application configuration. Existing
+preparation retention pins preserve that report. The native runtime record binds
+the typed reference digest (runtime record version 4 for these runs), so a missing
+or replaced prepared reference fails admission instead of opting out. Workers reload and check the
+reference and original declaration before assignment. A worker receives only its
+node under `StageWorkerRequest.metadata["loom.project_contract"]`; the context
+explicitly forwards that envelope. The private request capture digest permits
+binding verification at decoding and is not forwarded into the context. Runtime
+location resolution does not traverse the opaque attachment.
+
+Native context also supplies `loom.execution_binding` with exactly
+`schema_version: 1`, `origin_run_id`, `origin_node_id`, positive `attempt`,
+`environment_fingerprint`, and `run_state_root`. Original identity comes from the
+admitted producer and survives assignment-local `loom-agent:` URIs. Machine-local
+execution uses the contained durable run directory. Container execution requires
+an explicit protected writable source/target mount covering that directory;
+otherwise the root is null. Remote and Slurm roots are null. Applications decide
+whether the available binding meets their recovery policy; Loom supplies no
+checkpoint semantics or layout.
+
+The native run/stage admission metadata APIs reject reserved project/execution
+entries. Report namespaces, finite values, exact node coverage, versions and
+bindings are checked before action construction. Ordinary similarly named keys
+inside application configuration carry no native authority. Project exceptions
+retain the existing sanitized operational failure reporting.
+
+Version 3 supports whole-target `verify_candidate` with request version 3 and the
+existing verification response (`schema_version: 1`, native `candidate_digest`,
+`verdict: verified`). The read-only candidate projects `project_contracts` from its
+original report reference. Completed reuse, observing already-owned work and
+`one_observed_failure` retry retain their existing lifecycle. These node contracts
+do not themselves implement cross-target action-result lookup.

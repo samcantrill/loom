@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; U1 startup.
+- Status: in_progress; U1 implemented, final validation in progress.
 - Branch: `agent/stage-92-p1-installed-node-contracts`.
 - Base: `c8f23852af2018109c318d17d03186ba9e49893f`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 1: Installed Node Contracts`.
@@ -123,13 +123,42 @@ new failures. Do not claim physical SIF/fleet/SLURM qualification from local tes
 
 ## Execution Handoff And Record
 
-No implementation or tests yet. Manager owns manifest and cross-repository
-authorization metadata. An optional executor may own this phase's native source,
-tests, user documentation and this card's completion record, in the assigned
-worktree only. It must preserve others' work, cannot delegate, prepare a PR,
-merge, alter fixed public contracts or implement U2. Stop for an unresolved
-accepted-contract conflict; private helper choices remain discretionary.
+Implementation covers the native v3 vertical path, including registration,
+preparation input/report envelope 7, unchanged captured composition, exact node
+coverage and opaque finite data, committed report references, per-node worker
+transport, explicit context projection and authoritative execution binding.
+V1/v2 wire and legacy injection remain separate. Whole-target verification uses
+the selected processor version and projects the original report's attachments.
 
-Review/refinement budget: independent phase review unused; up to three scoped
-blocker corrections inclusive of any optional refiner. Runtime/physical evidence
-and the required independent implementation review remain pending.
+Changed owners: preparation and protected codecs; native prepared-run, local-run
+and SQLite admission metadata; stage-attempt/request/context construction;
+managed publication/runtime intent and local/remote/Slurm delivery; installed
+container mount projection. Private shared helpers live in
+`pipeline/_project_contracts.py` and `queue/_execution_binding.py`. Native runtime
+record version 4 binds the typed report-reference digest for v3 runs: removing or
+replacing that reference cannot silently become an ordinary no-processor run.
+Earlier runtime record version 3 remains unchanged. The worker's private capture
+digest is only a decoder witness; admitted report selection and native assignment
+authority remain the authorization owners.
+
+The standard-library installed text fixture has strict ordinary configurations,
+two distinct payloads, a location-like opaque value and a null-key option. Its
+actual resident workers produce `alpha\nbeta\n` and `2`, inspect their own native
+identity/root and exercise one observed failed-attempt retry. Native integration
+also covers retained-report reload, original candidate projection, completed reuse,
+running observation and removal/alteration rejection. Unit additions cover finite
+payload/version/registration boundaries, pre-construction worker binding,
+reserved admission overrides and protected writable/read-only/unavailable
+container state-root mapping. Existing preparation, worker, resident transport,
+prepared-store, authority and reconciliation suites preserve legacy behavior.
+
+Validation selection follows the approved cross-boundary impact: report codecs,
+metadata safety, native admission, request replay and resident publication affect
+multiple public/durable consumers. Focused new-path and affected tests are diagnostic
+checks; the required stable-tree final gate is `make validate-pr` plus
+`git diff --check`. Expand only for a concrete gate failure or affected consumer.
+Final exact tree/commit and gate receipt will be recorded here after completion.
+Physical SIF/fleet/Slurm qualification is not claimed by these local fixtures.
+
+Manager retains manifest, cross-repository authorization, PR/delivery and independent
+review ownership. Independent phase review and merge remain pending.
