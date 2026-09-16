@@ -3636,9 +3636,24 @@ class LocalDaemon:
                     "SELECT 1 FROM agent_sessions WHERE state = 'ACTIVE' LIMIT 1"
                 ).fetchone()
             if active is not None:
-                raise QueueConflictError(
-                    "scheduling reload cannot replace credentials for a live agent session"
+                current = self._agent_policy
+                candidate = replacement.agent_policy
+                current_agents = {rule.agent_id for rule in current.agents}
+                # Policy revisions fence sessions and retained proofs. Enrollment
+                # may add a distinct worker without changing that generation or
+                # any existing worker's credentials, pools or capabilities.
+                additive = (
+                    candidate.revision == current.revision
+                    and all(rule in candidate.agents for rule in current.agents)
+                    and all(
+                        rule in current.agents or rule.agent_id not in current_agents
+                        for rule in candidate.agents
+                    )
                 )
+                if not additive:
+                    raise QueueConflictError(
+                        "scheduling reload cannot replace credentials for a live agent session"
+                    )
 
     def _wait(
         self, queue_item_id: str, *, timeout_seconds: float | None
