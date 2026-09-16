@@ -813,9 +813,10 @@ def _default_run_store(run_uri: str | None = None) -> Any:
 
 
 def _authoritative_read(
-    run_uri: str, *, run_store: Any | None
+    run_uri: str, *, run_store: Any | None, authority_store: Any | None = None
 ) -> _AuthoritativeReadResult | None:
-    authority_store = getattr(run_store, "authority_store", None)
+    if authority_store is None:
+        authority_store = getattr(run_store, "authority_store", None)
     local_store = getattr(run_store, "local_store", None)
     authority_config = None
     force_authoritative = authority_store is not None

@@ -278,9 +278,21 @@ def load_coordinator_service_config(
             *((local_agent.profile.descriptor,) if local_agent is not None else ()),
         ),
     )
+    authority_factory = _coordinator_authority_factory(
+        _mapping(payload, "authority"), base, deployment_root=root
+    )
+    coordinator_identity = _coordinator_immutable_projection(payload)
+    if "state_root" in _mapping(payload, "authority"):
+        from loom.pipeline.stores.coordinator_authority import (
+            coordinator_authority_identity,
+        )
+
+        coordinator_identity["authority"] = coordinator_authority_identity(
+            authority_factory
+        )
     fingerprint = _canonical_fingerprint(
         {
-            "coordinator": _coordinator_immutable_projection(payload),
+            "coordinator": coordinator_identity,
             "local_agent": _local_agent_immutable_projection(local_agent),
         }
     )
@@ -293,9 +305,6 @@ def load_coordinator_service_config(
         }
     )
     policy = _agent_policy(_mapping(payload, "agent_policy"))
-    authority_factory = _coordinator_authority_factory(
-        _mapping(payload, "authority"), base
-    )
     scheduling_source = json.dumps(
         payload.get("scheduling"),
         sort_keys=True,
@@ -1164,6 +1173,8 @@ def _canonical_fingerprint(value: Mapping[str, object]) -> str:
 def _coordinator_authority_factory(
     value: Mapping[str, object],
     base: Path,
+    *,
+    deployment_root: Path,
 ) -> CoordinatorAuthorityFactory:
     """Construct one explicit trusted authority factory for this role.
 
@@ -1174,7 +1185,23 @@ def _coordinator_authority_factory(
 
     kind = _string(value, "kind")
     if kind == "embedded":
-        _exact(value, {"kind"}, "embedded authority")
+        _required_allowed(value, {"kind"}, {"state_root"}, "embedded authority")
+        if "state_root" in value:
+            from loom.pipeline.stores.coordinator_authority import (
+                EmbeddedCoordinatorAuthorityFactory,
+            )
+            from loom.pipeline.stores.authority import AuthorityStoreError
+
+            try:
+                return cast(
+                    CoordinatorAuthorityFactory,
+                    EmbeddedCoordinatorAuthorityFactory(
+                        state_root=_path(value, "state_root", base),
+                        deployment_root=deployment_root,
+                    ),
+                )
+            except AuthorityStoreError as exc:
+                raise QueueConfigError(str(exc)) from exc
         from loom.pipeline.stores.coordinator_authority import (
             embedded_coordinator_authority,
         )

@@ -751,3 +751,21 @@ class ReplayCpuPlanner(CpuResourcePlanner):
 
 class ProduceStage:
     pass
+
+
+def test_separate_embedded_authority_replay_never_recreates_lost_database(tmp_path: Path) -> None:
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    root = tmp_path / "local-authority"
+    root.mkdir(mode=0o700)
+    payload = json.loads(coordinator.read_text())
+    payload["authority"]["state_root"] = str(root)
+    coordinator.write_text(json.dumps(payload))
+    prepared = prepare_managed_local_run(coordinator, pipeline, "separate")
+    assert prepare_managed_local_run(coordinator, pipeline, "separate") == prepared
+    assert not list((tmp_path / "runs").rglob("*.sqlite*"))
+    database = next(root.rglob("authority.sqlite3"))
+    database.unlink()
+    with pytest.raises(QueueConflictError, match="partial, corrupt, or changed"):
+        prepare_managed_local_run(coordinator, pipeline, "separate")
+    assert not database.exists()

@@ -457,6 +457,46 @@ corrupt or changed target remains an inspectable conflict. Once local publicatio
 is complete, an unknown authority reply is reconciled idempotently using the same
 publication identity. Successful replay returns the original target receipt.
 
+### Separate local authority storage
+
+For a fresh managed deployment whose run files live on shared storage, select a
+local authority root in the protected coordinator role file:
+
+```yaml
+deployment_root: /local-persistent/loom/fleet/deployment
+run_store_root: /shared/loom/runs
+authority:
+  kind: embedded
+  state_root: /local-persistent/loom/fleet/run-authority
+```
+
+Before loading the role, create `state_root` on verified durable local storage,
+owned by the coordinator user with mode `0700`. Relative paths resolve against
+the role file's directory. Loom checks ownership and permissions; filesystem
+locality and durability require operator qualification. SQLite/WAL on NFS or
+other shared filesystems is unsupported. Keep the deployment's control and agent
+state on suitable local storage too.
+
+The selected factory places each canonical run's database, WAL and shared-memory
+file under this root, within a deployment-specific namespace. Run URIs continue
+to name the shared materializations: configurations, payloads and provenance.
+The existing deployment binding retains the resolved authority placement and
+owner identity; public run metadata carries only a binding digest. Workers do
+not receive authority database paths.
+
+Preparation children and target publication, coordinator inspection, execution,
+restart/recovery and explicit failed-admission retry use this same factory. Use
+the native coordinator inspection client for these runs; standalone commands
+that infer a database beside the materialization cannot discover protected local
+placement. A missing retained database fails as unavailable state, and replay
+never creates a replacement ledger. Restore consistent offline backups through
+operator recovery; changing or removing `state_root` on an initialized deployment
+is a binding conflict. Live-root migration is unsupported.
+
+Omitting `state_root` preserves the existing embedded layout beside each run.
+That layout remains suitable for local-only runs. The separate placement option
+does not itself add shared-agent execution or shared output publication.
+
 ## Protected local configuration
 
 The default `configuration_policy: portable` retains path-free stage configuration

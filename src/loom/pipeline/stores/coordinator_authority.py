@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import ssl
 import sqlite3
 from collections.abc import Callable, Mapping
@@ -160,6 +162,61 @@ class CoordinatorAuthorityTlsConfig:
             object.__setattr__(self, name, value)
 
 
+@dataclass(frozen=True, slots=True)
+class EmbeddedCoordinatorAuthorityFactory:
+    """Bind embedded authority to protected local storage and a deployment owner.
+
+    Both paths are resolved once from protected role configuration. The existing
+    deployment binding retains their digest; public run evidence contains only
+    that digest. The state root must already exist, be owned by this user, and
+    exclude group/other access. Operators qualify its durable local filesystem.
+    Reads never initialize a database; preparation owns explicit creation.
+    """
+
+    state_root: Path
+    deployment_root: Path
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "state_root", Path(self.state_root).resolve())
+        object.__setattr__(self, "deployment_root", Path(self.deployment_root).resolve())
+        self._validate_root()
+
+    def _validate_root(self) -> None:
+        try:
+            details = self.state_root.stat()
+        except OSError as exc:
+            raise AuthorityStoreError(
+                "embedded authority state root is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) & 0o077
+        ):
+            raise AuthorityStoreError(
+                "embedded authority state root must be owner-protected"
+            )
+
+    def _store(self, run_uri: str):
+        from .sqlite_authority import SQLitePerRunAuthorityStore
+
+        self._validate_root()
+        owner = hashlib.sha256(str(self.deployment_root).encode()).hexdigest()
+        return SQLitePerRunAuthorityStore(run_uri, state_root=self.state_root / owner)
+
+    def __call__(self, run_uri: str):
+        authority = self._store(run_uri)
+        authority.open_run(run_uri)
+        return authority
+
+
+def is_embedded_coordinator_authority(factory: object) -> bool:
+    """Whether the selected owner supports embedded publication and replay."""
+    return factory is embedded_coordinator_authority or isinstance(
+        factory, EmbeddedCoordinatorAuthorityFactory
+    )
+
+
 def embedded_coordinator_authority(run_uri: str):
     """Open the explicit trusted embedded authority owner for one run."""
 
@@ -172,6 +229,13 @@ def embedded_coordinator_authority(run_uri: str):
 
 def coordinator_authority_identity(factory: object) -> dict[str, PlainData]:
     """Return credential-free protected owner identity for preparation recovery."""
+    if isinstance(factory, EmbeddedCoordinatorAuthorityFactory):
+        return {
+            "family": "embedded",
+            "binding": hashlib.sha256(
+                json.dumps([str(factory.state_root), str(factory.deployment_root)]).encode()
+            ).hexdigest(),
+        }
     if factory is embedded_coordinator_authority:
         return {"family": "embedded"}
     if isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory):
@@ -190,10 +254,14 @@ def publish_prepared_run(
 ) -> None:
     """Reconcile exact idempotent creation and publication at the selected owner."""
     coordinator_authority_identity(factory)
-    if factory is embedded_coordinator_authority:
+    if is_embedded_coordinator_authority(factory):
         from .sqlite_authority import SQLitePerRunAuthorityStore
 
-        authority = SQLitePerRunAuthorityStore(run_uri)
+        authority = (
+            factory._store(run_uri)
+            if isinstance(factory, EmbeddedCoordinatorAuthorityFactory)
+            else SQLitePerRunAuthorityStore(run_uri)
+        )
         try:
             authority.create_run(run_uri, idempotency_key=publication_digest)
         except sqlite3.DatabaseError as exc:
@@ -996,6 +1064,8 @@ __all__ = [
     "CoordinatorAuthorityTlsConfig",
     "authenticated_coordinator_authority_factory",
     "embedded_coordinator_authority",
+    "EmbeddedCoordinatorAuthorityFactory",
+    "is_embedded_coordinator_authority",
     "coordinator_authority_identity",
     "publish_prepared_run",
     "https_coordinator_authority_factory",
