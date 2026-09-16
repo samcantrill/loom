@@ -2,7 +2,7 @@
 
 ## Metadata And Scope
 
-- Status: in_progress; predecessor gates passed, source-bound execution plan in preparation.
+- Status: in_progress; predecessor gates passed and source-bound execution plan finalized.
 - Base: `32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`.
 - U1: PR #331 merged at `a0d29b3fedac7495bbb994e630b07aa41f7cf579`; metadata published and shared synchronization passed at the base above.
 - Coordination branch: `agent/stage-92`; use the manifest's clean control and stage worktree paths.
@@ -220,5 +220,89 @@ The manager binds runnable selectors/environments while completing the rest of
 U2. Expand only for an affected public codec, authority transport, cancellation
 consumer, cleanup path or demonstrated race; preserve the approved final gate.
 
-Manager will complete remaining selectors/implementation steps after this
-named question is resolved. No product implementation or U2 validation has run.
+## Implementation Sequence And Validation Selection
+
+The manager verified the refinement against the actual singleton cancellation
+barrier and durable cleanup-pin owner. The named question is resolved; reuse
+existing approved protocol/readiness review. No new accepted decision or plan
+review is required. Private record/helper names remain implementation discretion.
+
+1. Extend native submission with optional `fresh_stages` at the existing
+   `queue/run.py:RunRequest` and `cli/run.py` projection. Preserve legacy decoding
+   and absent/empty behavior. Carry selection through idempotent native capture,
+   assign/store generation tokens before retryable preparation, validate the
+   captured node set before target action work, and include retained generation
+   mapping in target identity/publication and action identity. Do not mutate the
+   scientific key/seed or implement this as the old force selector.
+2. Add versioned causal action identity beside audit/resume fingerprints. Reuse
+   qualified resident project/environment/executor evidence from explicitly
+   declared installed code/asset roots, including the protected processor and
+   configured outer factory/init. Do not include whole captured configuration
+   again or heuristic-strip YAML. Insufficient installed qualification means
+   conservative non-reuse. Resolve actual inputs through original native
+   producer commit/ref/closure bindings and output-spec identity; aliases and
+   unrelated nodes stay out. Prerequisites still gate selection.
+3. Implement native atomic claim/demand/result selection, exact fenced owner
+   handoffs and current graph bindings through the resolved ownership sequence
+   above. Reuse authority adapters and original commits across placements;
+   migrate durable producers/readers/restart/cleanup together. Failed/interrupted
+   shared work cannot become a miss or a second default producer.
+4. Extend the one installed processor with `verify_result` and its approved
+   candidate-bound verified/rejected responses. Validate native successful commit,
+   authorized scope, generation/installation, outputs and complete closure first.
+   Pin/verify outside database transactions, then recheck mutable facts at bind.
+   Use an installed verification child, never coordinator project imports or a
+   second callback registry. Preserve bounded structured artifact-identifying
+   failure projection and opaque namespaced project codes. Rejection, corruption
+   and malformed/crashed verification must never trigger silent execution.
+5. Extend the existing installed text fixture with explicit source qualification,
+   graph-specific whole-target keys and the same per-node semantic contract.
+   Keep U1 assertions and independently check text/count products. Exercise the
+   accepted hit/miss, original input realization, shared demand, failed source
+   graph, scope, native integrity, project rejection and default/fresh/replay
+   cases through actual native dispatch; use existing boundary tests for each
+   changed codec, authority transport and placement cancellation consumer.
+6. Update existing public preparation/run/fingerprint/authority/cleanup docs as
+   affected, record exact local evidence, and deliver the coherent U2 lifecycle.
+   No partial publish-only cache or unsupported deployment narrowing may merge.
+
+Exact initial selectors (refine only for actual changed consumers):
+
+- Config-backed native journey: new
+  `tests/integration/queue/test_action_result_resolution.py`, existing
+  `test_installed_node_contracts.py`, `test_reconciled_runs.py`,
+  `test_run_operations.py`, and `tests/integration/config/test_cli_run.py`.
+  Run with `uv run --python 3.12 --isolated --locked --group dev --extra config
+  pytest <selected paths>`; do not deselect the required optional_dependency
+  cases. The installed fixture needs protected source roots for its project
+  implementation; imports-only readiness is insufficient evidence of code bytes.
+- Identity/codecs: `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`,
+  `test_resume.py`, `tests/unit/loom/queue/test_preparation.py`,
+  `test_resident_readiness.py` and affected new action-identity tests. Baseline
+  direct selection uses the same locked Python command without config extras.
+- Authority/ownership: exact test paths in the refinement above, plus
+  `tests/unit/loom/pipeline/test_orchestration.py`, affected materialization
+  read-model tests, and `tests/unit/loom/pipeline/cleanup/test_safety.py`.
+  Select the required config extra according to each fixture's current marker;
+  preserve embedded/authenticated and changed placement boundary obligations.
+- Submission projections: add a meaningful fresh selection/replay assertion to
+  the existing Python/CLI tests and MCP contract consumer if its run schema is
+  affected. MCP checks use `--extra config --extra mcp` in their isolated lane.
+
+The final required `make validate-pr` includes baseline/config-extra/MCP-extra,
+Ruff, Pyright and builds. Run it when the implementation tree is stable, retain
+its evidence and `git diff --check`, then reuse results across PR/review unless
+relevant changes invalidate them. No additional summary run is required.
+Skipped mandatory cases remain gaps. Expand for concrete new schema/transport,
+ownership race, retention, dependency or failure evidence; no additional
+physical deployment matrix is authorized or claimed by these native fixtures.
+
+## Execution Handoff And Record
+
+One optional executor is justified by the coherent changes across native
+identity, durable authority, installed verification, cancellation and read models.
+It owns U2 source/tests/public docs plus this card's completion receipt; the
+manager owns manifest, cross-repository integration and delivery. No source/test
+implementation, U2 validation, PR or merge is claimed yet. Stop for an
+incompatible approved contract or precisely identified missing product decision;
+resolve private wiring in scope. Do not alter U1's accepted public wire shapes.
