@@ -1,0 +1,135 @@
+# Phase 1: Installed Node Contracts
+
+## Metadata
+
+- Status: in_progress; U1 startup.
+- Branch: `agent/stage-92-p1-installed-node-contracts`.
+- Base: `c8f23852af2018109c318d17d03186ba9e49893f`.
+- PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 1: Installed Node Contracts`.
+- Target: develop. Paths and coordination branch: [manifest](../implementation-plan.md#execution-context).
+- Acceptance owner: approved native contract linked by the manifest, sections
+  Preparation Protocol, Delivery Packages And Source Ownership (U1), and Example
+  And Validation Contract (U1 rows and Genericity Fixture And Acceptance).
+
+## Boundary And Fixed Behavior
+
+Implement protected processor v3 without changing v1/v2. Accept exact captured
+node coverage, optional semantic keys and opaque finite payloads while preserving
+the submitted composition. Create and validate native per-node envelopes in
+the existing preparation report. Persist only its native committed ArtifactRef
+in typed prepared-run metadata. Forward exactly the selected node's validated
+contract through worker request to context, without application config injection,
+opaque location rewriting or arbitrary metadata forwarding.
+
+Provide the exact native execution-binding context from admitted producer/attempt/
+installation/storage authority. A machine-local supported binding names a durable
+agent-visible state root; unavailable remote roots remain null. Do not infer a
+path from resident `loom-agent:` run URIs or introduce checkpoint semantics.
+Reject reserved metadata overrides at the actual public admission boundaries.
+
+Preserve v3 whole-target verify_candidate, running observation, completed target
+reuse and one-observed-failure retry before U2 exists. Candidate descriptors
+project validated node contracts from the retained original preparation report.
+Normal no-processor stages receive no attachment. Null keys remain valid opt-out
+records; U1 does not implement cross-target result lookup.
+
+## Source And Ownership
+
+Primary current owners are `src/loom/preparation.py`, `queue/preparation.py`,
+`queue/_preparation_operations.py`, prepared-run models/stores, worker request
+models/context construction, coordinator assignments and resident remote-stage
+execution. Extend adjacent native admission/report/retention consumers only when
+necessary to carry this same contract end to end. Document at existing installed
+preparation/queue extension-point owners and add the generic fixture under
+`tests/support`.
+
+Current registration only admits versions 1/2; reconciliation and its verification
+request hardcode version 2. The wrapper currently injects scientific evidence and
+single-stage recovery configuration. Isolate that legacy path. Worker context
+currently reconstructs factory/runtime metadata and drops project attachments.
+Typed prepared metadata already has a safety boundary; do not embed opaque
+payloads there or weaken that validator. Reuse the existing native ArtifactRef
+and committed preparation report rather than adding a parallel evidence artifact.
+
+## Named Startup Source Question
+
+Trace the existing authoritative route from admitted run/attempt and protected
+machine-local storage to the resident worker. Identify where the worker request
+can obtain the durable run-state root and original run/node/attempt/environment
+identity without sending a coordinator-private path or trusting project data.
+Return concrete producer/codec/consumer paths and selected existing tests; this
+is source clarification under the accepted execution-binding contract, not a new
+public API decision. Read-only architectural assistance may answer this question.
+
+Source clarification completed: `local_daemon_execution.py` builds requests from
+authoritative stage-work run URI, node and attempt; `_managed_local.py` joins
+that request, protected local placement, LocalRunStore and launch profile before
+`_ResidentAssignmentBundle` serialization. The bundle and workspace currently
+drop original run identity and reconstruct `loom-agent:` request URIs. The
+binding must survive both explicit projections. Use the admitted native run name
+as origin_run_id within the retained authority/store, validated through the
+existing native run-name/containment owner. Never use the assignment ID instead.
+
+`ResidentProfileDescriptor.environment_fingerprint` supplies the environment.
+Host-local execution can use its authorized contained run directory. For a
+container, derive visibility from the protected installed container mounts (and
+their read/write mode and source/target mapping); a profile match alone is not
+proof of mount visibility. `_container_worker.build_container_worker` owns the
+effective mount construction. Return null where no authorized writable mapping
+exists, rather than relying on implicit home/host mounts. No new profile field
+or coordinator-private remote root is required by this contract.
+
+The bounded read-only architecture pass is complete; manager verified the
+container-mount owner and the selected current tests. No public contract change
+or additional plan review is required for these source-backed wiring choices.
+
+## Implementation And Validation
+
+1. Extend exact protected v3 registration/request/result/report codecs, keeping
+   old wire versions readable and separating legacy mutation rules.
+2. Build checked envelopes and bind the committed report reference at native
+   publication. Retain and reload it through existing prepared-run/ArtifactRef
+   owners, including whole-target candidate capture and retry.
+3. Extend native assignment/request/context paths with authenticated node
+   selection and execution binding; validate each actual trust boundary before
+   constructing an action. Keep opaque payload and application config distinct.
+4. Add the installed generate_text/count_lines fixture and meaningful regressions
+   for report reload, exact one-node transport, strict app config, location-like
+   payload preservation, null-key/no-processor behavior, and reachable override,
+   altered composition, wrong binding and unsupported version rejection.
+5. Prove v3 whole-target success resubmission, already-owned observation and
+   failed-run retry on the actual native path. Preserve v1/v2 consumers.
+6. Document protocol, metadata ownership, state-root availability and failure
+   behavior; collect final validation and independent actual-head review.
+
+Initial selected owners: `tests/unit/loom/queue/test_preparation.py`,
+`tests/integration/queue/test_preparation_operations.py`,
+`tests/unit/loom/pipeline/execution/test_stage_worker.py`, current prepared-run
+store tests, `tests/integration/queue/test_reconciled_runs.py`, and existing
+resident/shared publication tests affected by request transport. Add a focused
+native installed-project integration file when needed; reuse current harnesses.
+Include `tests/unit/loom/queue/test_remote_stage_execution.py` and
+`test_agent_process_supervisor.py` for original/local/remote binding, durable
+grant and container launch retention. The existing local graph and installed
+project recovery cases in `test_preparation_operations.py` cover admission
+through execution. Assert writable container mapping and null when unavailable.
+
+Use Python 3.12 locked baseline/config-extra environments per `tests/README.md`.
+Direct selection uses `uv run --python 3.12 --isolated --locked --group dev
+--extra config pytest <selected paths>` for the config-backed native journey.
+Final gate: `make validate-pr` and `git diff --check`; retain reports and skipped
+case dispositions. Expand selectors for actual codec/admission consumers or
+new failures. Do not claim physical SIF/fleet/SLURM qualification from local tests.
+
+## Execution Handoff And Record
+
+No implementation or tests yet. Manager owns manifest and cross-repository
+authorization metadata. An optional executor may own this phase's native source,
+tests, user documentation and this card's completion record, in the assigned
+worktree only. It must preserve others' work, cannot delegate, prepare a PR,
+merge, alter fixed public contracts or implement U2. Stop for an unresolved
+accepted-contract conflict; private helper choices remain discretionary.
+
+Review/refinement budget: independent phase review unused; up to three scoped
+blocker corrections inclusive of any optional refiner. Runtime/physical evidence
+and the required independent implementation review remain pending.
