@@ -274,6 +274,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
             )
             artifacts = LocalArtifactStore(store.local_artifact_root(target_uri))
             receipt = artifacts.load(consumer_result.outputs["receipt"])
+            assert isinstance(receipt, dict)
             assert receipt["size"] > 64 * 1024 * 1024
             assert receipt["producer_pid"] != receipt["consumer_pid"]
             reference = producer_result.outputs["manifest"]

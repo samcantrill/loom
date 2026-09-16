@@ -101,6 +101,7 @@ from ._remote_stage_execution import (
     _encode_chunk,
 )
 from ._agent_process_supervisor import (
+    AgentProcessSupervisor,
     AgentProcessSupervisorClient,
     AgentProcessSupervisorError,
     AgentProcessSupervisorService,
@@ -2305,6 +2306,54 @@ class LocalDaemonAgentHttpClient:
     def next_poll_sequence(self, session_id: str) -> int:
         return self._require_journal().next_poll_sequence(session_id)
 
+    @staticmethod
+    def recover_reboot(
+        config: AgentTlsClientConfig, operation_id: str
+    ) -> Mapping[str, PlainData]:
+        """Recover only an existing, exclusively owned local Linux agent root.
+
+        This local operation never contacts the coordinator, releases claims, or
+        starts a service. Retain the operation ID when replaying an uncertain reply.
+        """
+        if (
+            config.agent_root is None
+            or not config.resident_profiles
+            or config.slurm_profiles
+        ):
+            raise QueueServiceError("reboot recovery requires native resident profiles")
+        journal = _RemoteAgentJournal(
+            config.agent_root,
+            expected_configuration_fingerprint=config.deployment_configuration_fingerprint,
+            expected_active_configuration_fingerprint=_agent_active_fingerprint(config),
+        )
+        try:
+            execution = SQLiteAgentJournal(
+                Path(config.agent_root) / "journal.sqlite", _allow_initialize=False
+            )
+            execution._open_existing()
+            execution.retained_claim_commands()
+            root = Path(config.agent_root).resolve() / "supervisor"
+            if not (root / "supervisor.sqlite").is_file():
+                raise QueueServiceError("supervisor journal unavailable")
+            with (root / "service.lock").open("a+") as lock:
+                (root / "service.lock").chmod(0o600)
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise QueueConflictError("supervisor service is still owned") from exc
+                supervisor = AgentProcessSupervisor(
+                    root,
+                    agent_id=journal.root_id,
+                    profiles=tuple(
+                        item.launch_profile for item in config.resident_profiles
+                    ),
+                )
+                return supervisor.recover_reboot(operation_id)
+        except (AgentProcessSupervisorError, ManagedLocalError, sqlite3.Error) as exc:
+            raise QueueServiceError(str(exc)) from exc
+        finally:
+            journal.close()
+
     @classmethod
     def initialize_agent_root(cls, config: AgentTlsClientConfig) -> None:
         """Create the complete remote root and its continuous private owner.
@@ -2384,7 +2433,7 @@ class LocalDaemonAgentHttpClient:
                 )
                 configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
                 AgentProcessSupervisorService.initialize_process_free(
-                    staging, configuration=configuration
+                    staging, configuration=configuration, final_agent_root=target
                 )
             journal.close()
             journal = None
@@ -3590,6 +3639,16 @@ class LocalDaemonAgentHttpClient:
         journal = self._require_journal()
         session = journal.session(session_id)
         journal.contained_assignment_control(session_id, assignment_id, fence)
+        readiness = self._call(
+            "recovery_release_ready",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "fence": fence,
+            },
+        )
+        if readiness.get("ready") is not True:
+            raise QueueConflictError("contained assignment authority close is pending")
         workspace = _ResidentAssignmentWorkspace(
             cast(Path, self._config.agent_root), assignment_id
         )
@@ -3597,9 +3656,7 @@ class LocalDaemonAgentHttpClient:
         request.validate_remote_transport()
         profile = self._profile_for_descriptor(request.profile)
         if profile is None:
-            raise QueueConflictError(
-                "contained assignment has no exact resident profile"
-            )
+            raise QueueConflictError("contained assignment has no exact resident profile")
         providers, execution_journal = self._runtime_owners(session)
         commands = execution_journal.assignment_claim_commands(assignment_id)
         assignment = ManagedAssignment(
@@ -3621,13 +3678,31 @@ class LocalDaemonAgentHttpClient:
         ):
             raise QueueConflictError("contained assignment claim is stale")
         state = execution_journal.read_state(assignment_id)
-        if state is AssignmentState.PROCESS_STARTED:
+        if state in {AssignmentState.START_INTENT, AssignmentState.START_UNKNOWN}:
+            result = _cancelled_worker_result(workspace.worker_request())
+            execution_journal.record_recovered_start_result(
+                assignment_id,
+                fence=fence,
+                result=result.to_dict(),
+            )
+        elif state is AssignmentState.PROCESS_STARTED:
             result_path = workspace.root / "worker-result.json"
             if not result_path.is_file():
                 raise QueueConflictError("contained assignment result is unavailable")
             result = StageWorkerResult.from_dict(
                 json.loads(result_path.read_text(encoding="utf-8"))
             )
+            if result.status is StageStatus.SUCCEEDED:
+                encoded = workspace.supervisor_launch_json()
+                if encoded is None or self._supervisor is None:
+                    raise QueueConflictError("contained result has no supervisor evidence")
+                receipt = self._supervisor.query(_launch_from_value(json.loads(encoded)))
+                if not receipt.qualified_success:
+                    result = _managed_root_failed_worker_result(
+                        workspace.worker_request(),
+                        ManagedLocalError("worker backend success is unqualified"),
+                        process_exit_code=receipt.exit_code,
+                    )
             workspace.persist_worker_result(result)
             execution_journal.record_result(assignment_id, result.to_dict())
         elif state not in {
@@ -4285,6 +4360,40 @@ class LocalDaemonAgentHttpClient:
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = supervisor.query(launch)
+            if (
+                launch.continuity_epoch in supervisor.reboot_generations
+                and receipt.exit_code is None
+            ):
+                # A reboot proves containment, never a scientific terminal result.
+                # Keep capacity withheld until the operator's guarded close wins.
+                self._assignment_call(
+                    session_id,
+                    assignment_id,
+                    lambda: self.poll_assignment_control(session_id),
+                )
+                ready = self._assignment_call(
+                    session_id,
+                    assignment_id,
+                    lambda: self._call(
+                        "recovery_release_ready",
+                        {
+                            "session_id": session_id,
+                            "assignment_id": assignment_id,
+                            "fence": launch.execution_fence,
+                        },
+                    ),
+                )
+                if ready.get("ready") is True:
+                    self._assignment_call(
+                        session_id,
+                        assignment_id,
+                        lambda: self.release_contained_assignment(
+                            session_id,
+                            assignment_id,
+                            fence=launch.execution_fence,
+                        ),
+                    )
+                continue
             if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
                 # The complete exact operation was journaled before the service
                 # call. Submitting that operation is replay, never relaunch.
@@ -5296,6 +5405,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "output",
                     "result",
                     "release",
+                    "recovery_release_ready",
                     "control",
                     "control_ack",
                     "assignment_control",
@@ -5659,6 +5769,12 @@ def _dispatch(
         return view.commit_result(
             _string(value, "session_id"),
             _string(value, "assignment_id"),
+            fence=_string(value, "fence"),
+        )
+    if operation == "recovery_release_ready":
+        _exact(value, {"session_id", "assignment_id", "fence"})
+        return view.recovery_release_ready(
+            _string(value, "session_id"), _string(value, "assignment_id"),
             fence=_string(value, "fence"),
         )
     if operation == "release":

@@ -323,7 +323,7 @@ class AgentProcessSupervisor:
     ``UNKNOWN`` for a nonterminal launch: a PID is not adoption evidence.
     """
 
-    _SCHEMA_VERSION = 3
+    _SCHEMA_VERSION = 4
 
     def __init__(
         self,
@@ -366,6 +366,9 @@ class AgentProcessSupervisor:
         with self._connect() as conn:
             conn.executescript("""
             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE reboot_recoveries (
+              operation_id TEXT PRIMARY KEY, intent TEXT NOT NULL, result TEXT NOT NULL
+            );
             CREATE TABLE launches (
               operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
               launch_json TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL,
@@ -388,6 +391,8 @@ class AgentProcessSupervisor:
                     ("agent_id", self._agent_id),
                     ("configuration_fingerprint", self._configuration.fingerprint),
                     ("continuity_epoch", f"supervisor-epoch-{uuid4()}"),
+                    ("boot_evidence", json.dumps(_host_boot_evidence())),
+                    ("execution_root", str(self.root)),
                 ),
             )
             conn.commit()
@@ -406,6 +411,15 @@ class AgentProcessSupervisor:
                     for row in conn.execute("SELECT key, value FROM metadata")
                 }
                 if (
+                    values.get("schema_version") not in {"2", "3", "4"}
+                    or values.get("agent_id") != self._agent_id
+                    or values.get("configuration_fingerprint")
+                    != self._configuration.fingerprint
+                ):
+                    raise AgentProcessSupervisorError(
+                        "managed_supervisor_state_requires_reinitialization"
+                    )
+                if (
                     values.get("schema_version") == "2"
                     and values.get("agent_id") == self._agent_id
                     and values.get("configuration_fingerprint")
@@ -416,9 +430,26 @@ class AgentProcessSupervisor:
                     )
                     conn.execute(
                         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
-                        (str(self._SCHEMA_VERSION),),
+                        ("3",),
                     )
-                    values["schema_version"] = str(self._SCHEMA_VERSION)
+                    values["schema_version"] = "3"
+                if values.get("schema_version") == "3":
+                    # Legacy active generations have no retrospective boot proof.
+                    conn.execute(
+                        "UPDATE metadata SET value = '4' WHERE key = 'schema_version'"
+                    )
+                    values["schema_version"] = "4"
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS reboot_recoveries ("
+                        "operation_id TEXT PRIMARY KEY, intent TEXT NOT NULL, result TEXT NOT NULL)"
+                    )
+                conn.execute(
+                    "SELECT operation_id, intent, result FROM reboot_recoveries LIMIT 0"
+                )
+                conn.execute(
+                    "SELECT operation_id, digest, launch_json, state, revision, "
+                    "pid, exit_code, result_digest, successful_exit FROM launches LIMIT 0"
+                )
         except sqlite3.Error as exc:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
@@ -426,8 +457,7 @@ class AgentProcessSupervisor:
         if (
             values.get("schema_version") != str(self._SCHEMA_VERSION)
             or values.get("agent_id") != self._agent_id
-            or values.get("configuration_fingerprint")
-            != self._configuration.fingerprint
+            or values.get("configuration_fingerprint") != self._configuration.fingerprint
         ):
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
@@ -438,6 +468,134 @@ class AgentProcessSupervisor:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
             )
+
+    def bind_execution_host(self) -> None:
+        """Bind the final root and observed Linux boot before accepting a launch."""
+        observed = _host_boot_evidence()
+        with self._connect() as conn:
+            values = dict(conn.execute("SELECT key, value FROM metadata"))
+            count = conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
+            prior_root = values.get("execution_root")
+            prior = json.loads(values.get("boot_evidence", "null"))
+            if prior_root is not None and prior_root != str(self.root):
+                raise AgentProcessSupervisorError("reboot recovery root relocated")
+            if count and (prior != observed or prior_root is None):
+                raise AgentProcessSupervisorError(
+                    "supervisor boot evidence requires recovery"
+                )
+            for key, value in (
+                ("execution_root", str(self.root)),
+                ("boot_evidence", json.dumps(observed)),
+            ):
+                conn.execute(
+                    "INSERT INTO metadata VALUES (?, ?) ON CONFLICT(key) "
+                    "DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+
+    def recover_reboot(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Persist positive changed-boot containment without claiming success.
+
+        The caller holds both the agent root lock and the supervisor service lock.
+        Host identity and boot ID come from Linux, never operator arguments.
+        """
+        if not isinstance(operation_id, str) or not operation_id.strip():
+            raise AgentProcessSupervisorError("reboot operation ID is required")
+        observed = _host_boot_evidence()
+        intent = json.dumps(
+            {"root": str(self.root), "agent_id": self._agent_id, "observed": observed},
+            sort_keys=True,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior_operation = conn.execute(
+                "SELECT intent, result FROM reboot_recoveries WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if prior_operation is not None:
+                if prior_operation["intent"] != intent:
+                    raise AgentProcessSupervisorError("reboot operation conflicts")
+                return json.loads(prior_operation["result"])
+            values = dict(conn.execute("SELECT key, value FROM metadata"))
+            prior = json.loads(values.get("boot_evidence", "null"))
+            rows = tuple(conn.execute("SELECT * FROM launches"))
+            reason = None
+            if (
+                not isinstance(prior, dict)
+                or set(prior) != {"host", "boot"}
+                or any(not isinstance(value, str) or not value for value in prior.values())
+            ):
+                reason = "prelaunch_boot_evidence_unavailable"
+            elif prior.get("host") != observed["host"]:
+                reason = "execution_host_changed"
+            elif values.get("execution_root") != str(self.root):
+                reason = "execution_root_changed"
+            elif prior.get("boot") == observed["boot"]:
+                reason = "kernel_boot_unchanged"
+            launches = tuple(
+                _launch_from_value(json.loads(row["launch_json"])) for row in rows
+            )
+            if any(
+                launch.backend_kind not in {"native", "apptainer"} for launch in launches
+            ):
+                reason = "unsupported_execution_backend"
+            operations = []
+            if reason is None:
+                for row, launch in zip(rows, launches, strict=True):
+                    if (
+                        row["digest"] != launch.spec_digest
+                        or launch.agent_id != self._agent_id
+                    ):
+                        raise AgentProcessSupervisorError(
+                            "retained launch identity conflicts"
+                        )
+                    if row["state"] != SupervisorLaunchState.CONTAINED.value:
+                        operations.append(launch.launch_operation_id)
+                        conn.execute(
+                            "UPDATE launches SET state = 'contained', revision = revision + 1 "
+                            "WHERE operation_id = ?",
+                            (launch.launch_operation_id,),
+                        )
+                self.continuity_epoch = f"supervisor-epoch-{uuid4()}"
+                for key, value in (
+                    ("continuity_epoch", self.continuity_epoch),
+                    ("clean_shutdown_epoch", self.continuity_epoch),
+                    ("boot_evidence", json.dumps(observed)),
+                    ("execution_root", str(self.root)),
+                ):
+                    conn.execute(
+                        "INSERT INTO metadata VALUES (?, ?) ON CONFLICT(key) "
+                        "DO UPDATE SET value = excluded.value",
+                        (key, value),
+                    )
+            result: dict[str, PlainData] = {
+                "operation_id": operation_id,
+                "state": "blocked" if reason else "contained",
+                "reason": reason,
+                "launch_operations": operations,
+                "previous_generation": values["continuity_epoch"],
+                "generation": self.continuity_epoch,
+                "previous_boot": prior,
+                "observed_boot": {"host": observed["host"], "boot": observed["boot"]},
+            }
+            conn.execute(
+                "INSERT INTO reboot_recoveries VALUES (?, ?, ?)",
+                (operation_id, intent, json.dumps(result)),
+            )
+            return result
+
+    def reboot_generations(self) -> tuple[str, ...]:
+        with self._connect() as conn:
+            results = tuple(conn.execute("SELECT result FROM reboot_recoveries"))
+        return tuple(
+            sorted(
+                {
+                    str(value["previous_generation"])
+                    for row in results
+                    if (value := json.loads(row[0]))["state"] == "contained"
+                }
+            )
+        )
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
@@ -456,6 +614,7 @@ class AgentProcessSupervisor:
                         "launch operation conflicts with durable identity"
                     )
                 return self._receipt(launch, row)
+            self.bind_execution_host()
             conn.execute(
                 "INSERT INTO launches(operation_id, digest, launch_json, state, revision) VALUES (?, ?, ?, ?, 1)",
                 (
@@ -821,11 +980,10 @@ class AgentProcessSupervisor:
             ).fetchone()
             if marker is None:
                 if not launches:
-                    # A process-free root has no predecessor epoch to retire.
+                    # A process-free root has no accepted execution to contain.
+                    self.bind_execution_host()
                     return
-                retained = tuple(
-                    conn.execute("SELECT launch_json, state FROM launches")
-                )
+                retained = tuple(conn.execute("SELECT launch_json, state FROM launches"))
                 kinds = tuple(
                     _launch_from_value(json.loads(str(row["launch_json"]))).backend_kind
                     for row in retained
@@ -846,6 +1004,22 @@ class AgentProcessSupervisor:
                 raise AgentProcessSupervisorError(
                     "managed supervisor continuity requires clean shutdown"
                 )
+            observed = _host_boot_evidence()
+            values = dict(conn.execute("SELECT key, value FROM metadata"))
+            prior = json.loads(values.get("boot_evidence", "null"))
+            if (values.get("execution_root") not in {None, str(self.root)}) or (
+                isinstance(prior, dict) and prior.get("host") != observed["host"]
+            ):
+                raise AgentProcessSupervisorError("supervisor execution host/root changed")
+            for key, value in (
+                ("boot_evidence", json.dumps(observed)),
+                ("execution_root", str(self.root)),
+            ):
+                conn.execute(
+                    "INSERT INTO metadata VALUES (?, ?) ON CONFLICT(key) "
+                    "DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
             self.continuity_epoch = f"supervisor-epoch-{uuid4()}"
             conn.execute(
                 "UPDATE metadata SET value = ? WHERE key = 'continuity_epoch'",
@@ -857,7 +1031,6 @@ class AgentProcessSupervisor:
     def _validate_launch(self, launch: ResidentWorkerLaunch) -> None:
         if (
             launch.supervisor_id != self.supervisor_id
-            or launch.continuity_epoch != self.continuity_epoch
             or launch.agent_id != self._agent_id
             or not any(
                 item.profile_id == launch.profile.profile_id
@@ -866,6 +1039,37 @@ class AgentProcessSupervisor:
             )
         ):
             raise AgentProcessSupervisorError("supervisor launch identity mismatch")
+        if launch.continuity_epoch != self.continuity_epoch:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT digest, state FROM launches WHERE operation_id = ?",
+                    (launch.launch_operation_id,),
+                ).fetchone()
+            if (
+                row is None
+                and launch.backend_kind in {"native", "apptainer"}
+                and launch.continuity_epoch in self.reboot_generations()
+            ):
+                # A workspace can persist its exact launch before the service
+                # accepts it. The retired boot proves even this crash cut cannot
+                # execute; retain a tombstone so replay never creates a process.
+                with self._connect() as conn:
+                    conn.execute(
+                        "INSERT INTO launches(operation_id, digest, launch_json, state, revision) "
+                        "VALUES (?, ?, ?, 'contained', 1)",
+                        (
+                            launch.launch_operation_id,
+                            launch.spec_digest,
+                            _launch_json(launch),
+                        ),
+                    )
+                return
+            if (
+                row is None
+                or row["digest"] != launch.spec_digest
+                or row["state"] != "contained"
+            ):
+                raise AgentProcessSupervisorError("supervisor launch generation mismatch")
 
     @staticmethod
     def _receipt(launch: ResidentWorkerLaunch, row: sqlite3.Row) -> SupervisorReceipt:
@@ -1129,6 +1333,7 @@ class AgentProcessSupervisorClient:
         self.service_process_id = process_id
         self.supervisor_id = _required_string(status, "supervisor_id")
         self.continuity_epoch = _required_string(status, "continuity_epoch")
+        self.reboot_generations = tuple(cast(list[str], status.get("reboot_generations", [])))
 
     def status(self) -> Mapping[str, object]:
         value = self._call("status", None)
@@ -1235,7 +1440,11 @@ class AgentProcessSupervisorService:
 
     @classmethod
     def initialize_process_free(
-        cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
+        cls,
+        agent_root: Path,
+        *,
+        configuration: SupervisorLaunchConfiguration,
+        final_agent_root: Path | None = None,
     ) -> None:
         """Durably initialize a supervisor root without starting a process."""
 
@@ -1243,12 +1452,18 @@ class AgentProcessSupervisorService:
         if root.exists():
             raise AgentProcessSupervisorError("supervisor root already exists")
         root.mkdir(mode=0o700)
-        AgentProcessSupervisor(
+        supervisor = AgentProcessSupervisor(
             root,
             agent_id=configuration.agent_id,
             profiles=configuration.profiles,
             initialize=True,
         )
+        if final_agent_root is not None:
+            with supervisor._connect() as conn:
+                conn.execute(
+                    "UPDATE metadata SET value = ? WHERE key = 'execution_root'",
+                    (str(Path(final_agent_root).resolve() / "supervisor"),),
+                )
         config_path = root / cls._CONFIG_NAME
         config_path.write_text(
             json.dumps(
@@ -1334,6 +1549,21 @@ class AgentProcessSupervisorService:
                 sleep(0.02)
 
 
+def _host_boot_evidence() -> dict[str, str]:
+    try:
+        host = Path("/etc/machine-id").read_text(encoding="ascii").strip()
+        boot = (
+            Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        )
+    except (OSError, UnicodeError) as exc:
+        raise AgentProcessSupervisorError(
+            "Linux host/boot identity unavailable"
+        ) from exc
+    if not host or not boot:
+        raise AgentProcessSupervisorError("Linux host/boot identity unavailable")
+    return {"host": host, "boot": boot}
+
+
 def _required_string(value: Mapping[str, object], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item:
@@ -1417,6 +1647,7 @@ def _serve(root: Path) -> None:
                         "continuity_epoch": supervisor.continuity_epoch,
                         "configuration_fingerprint": configuration.fingerprint,
                         "service_process_id": os.getpid(),
+                        "reboot_generations": supervisor.reboot_generations(),
                     }
                 elif operation == "launch":
                     response = _receipt_value(

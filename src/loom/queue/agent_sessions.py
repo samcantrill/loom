@@ -1819,6 +1819,20 @@ class AgentSessionView:
             session_id, assignment_id, fence=fence
         )
 
+    def recovery_release_ready(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+    ) -> Mapping[str, PlainData]:
+        """Return whether exact guarded recovery authorizes provider cleanup."""
+        return AgentSessionService(self._daemon, self._principal).recovery_release_ready(
+            session_id,
+            assignment_id,
+            fence=fence,
+        )
+
     def release_assignment(
         self,
         session_id: str,
@@ -3893,6 +3907,90 @@ class AgentSessionService:
             path="remote result commit",
         )
 
+    def _same_session_recovery(
+        self,
+        conn: sqlite3.Connection,
+        session: AgentSession,
+        remote: sqlite3.Row,
+    ) -> "RecoverUnknownAssignment | None":
+        from .local_daemon import ManagedRecoveryTarget, RecoverUnknownAssignment
+
+        control_row = conn.execute(
+            "SELECT * FROM remote_assignment_controls WHERE assignment_id = ?",
+            (remote["assignment_id"],),
+        ).fetchone()
+        if control_row is None:
+            return None
+        control = AgentAssignmentControl.from_value(json.loads(control_row["request_json"]))
+        facts = self._remote_execution().session_replacement_assignment_facts(
+            session.session_id
+        )
+        execution = next(
+            (
+                item
+                for item in facts
+                if item.get("assignment_id") == remote["assignment_id"]
+            ),
+            None,
+        )
+        if execution is None:
+            return None
+        for row in conn.execute("SELECT * FROM recovery_operations WHERE state = 'closed'"):
+            recovery = RecoverUnknownAssignment.from_dict(json.loads(row["request_json"]))
+            if not isinstance(recovery.target, ManagedRecoveryTarget):
+                continue
+            qualified = _qualifying_replacement_recovery(
+                row,
+                recovery,
+                session=session,
+                execution=execution,
+                remote=remote,
+                control_row=control_row,
+                control=control,
+            )
+            if qualified is not None:
+                self._remote_execution().validate_session_replacement_recovery(recovery)
+                return recovery
+        return None
+
+    @_serialized_session_operation
+    def recovery_release_ready(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+    ) -> Mapping[str, PlainData]:
+        """Authorize provider cleanup only after exact guarded authority closure."""
+        rule, revision = self._authorize("release")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            session = self._require_remote_cleanup_session(
+                conn,
+                rule,
+                revision,
+                session_id,
+                self._daemon._epoch or "",  # type: ignore[attr-defined]
+            )
+            remote = self._require_remote_assignment(conn, session_id, assignment_id)
+            if remote["fence"] != fence:
+                raise QueueConflictError("recovery release fence is stale")
+            if (
+                remote["state"] == "RELEASED"
+                and remote["provider_release_proof_json"] is not None
+            ):
+                # The exact release was committed; let a lost reply settle the
+                # old root's retained reference using that immutable proof.
+                return {"ready": True}
+            if session.state is AgentSessionState.REPLACED:
+                recovery, _ = _replacement_cleanup_recovery(
+                    conn, session_id=session_id, assignment_id=assignment_id, fence=fence
+                )
+                self._remote_execution().validate_session_replacement_recovery(recovery)
+                ready = True
+            else:
+                ready = self._same_session_recovery(conn, session, remote) is not None
+            return {"ready": ready}
+
     @_serialized_session_operation
     def release_assignment(
         self,
@@ -3973,11 +4071,28 @@ class AgentSessionService:
                     != str(control["operation_id"])
                     or provider_release_proof.claim_id != released_claim_id
                 ):
-                    raise QueueConflictError(
-                        "replacement provider release proof is stale"
-                    )
+                    raise QueueConflictError("replacement provider release proof is stale")
             elif str(row["state"]) != "TERMINAL":
-                raise QueueConflictError("remote release fence is stale")
+                recovery = self._same_session_recovery(conn, session, row)
+                if recovery is None:
+                    raise QueueConflictError("remote release fence is stale")
+                control = conn.execute(
+                    "SELECT operation_id FROM remote_assignment_controls WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()
+                facts = self._remote_execution().session_replacement_assignment_facts(
+                    session_id
+                )
+                fact = next(
+                    item for item in facts if item.get("assignment_id") == assignment_id
+                )
+                if (
+                    control is None
+                    or provider_release_proof.recovery_control_operation_id
+                    != control["operation_id"]
+                    or provider_release_proof.claim_id != fact.get("claim_id")
+                ):
+                    raise QueueConflictError("recovery provider release proof is stale")
             if retained_proof is None:
                 conn.execute(
                     "UPDATE remote_assignments SET provider_release_proof_json = ? "
@@ -4014,8 +4129,7 @@ class AgentSessionService:
             if updated != 1:
                 raise QueueConflictError("remote provider release proof is unavailable")
             conn.execute(
-                "UPDATE agent_sessions SET availability_revision = ? "
-                "WHERE session_id = ?",
+                "UPDATE agent_sessions SET availability_revision = ? WHERE session_id = ?",
                 (availability_revision, session_id),
             )
             conn.execute(
@@ -4040,9 +4154,7 @@ class AgentSessionService:
                     (session_id,),
                 ).fetchone()
                 if replacement is None:
-                    raise QueueConflictError(
-                        "replacement cleanup decision is unavailable"
-                    )
+                    raise QueueConflictError("replacement cleanup decision is unavailable")
                 try:
                     observed = json.loads(str(replacement["observed_claim_ids_json"]))
                 except json.JSONDecodeError as exc:

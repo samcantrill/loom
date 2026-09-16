@@ -32,7 +32,9 @@ def test_publication_budgets_are_positive_finite_integers(key, value):
 
 def test_publication_root_selection_requires_one_writable_binding(tmp_path):
     _, profile, _, _ = _shared_publication_workspace(tmp_path)
-    root = dict(profile.shared_roots["outputs"])
+    binding = profile.shared_roots["outputs"]
+    assert isinstance(binding, dict)
+    root = dict(binding)
     with pytest.raises(QueueServiceError, match="writable"):
         root_bindings({"outputs": {**root, "access": "ro"}})
     with pytest.raises(QueueServiceError, match="exactly one"):

@@ -768,8 +768,9 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         _root: Path,
         *,
         configuration: object,
+        final_agent_root: Path | None = None,
     ) -> object:
-        del cls, configuration
+        del cls, configuration, final_agent_root
         raise AgentProcessSupervisorError("injected supervisor failure")
 
     with monkeypatch.context() as context:

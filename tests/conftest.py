@@ -33,8 +33,11 @@ def _cleanup_test_owned_supervisors(
         agent_root: Path,
         *,
         configuration: SupervisorLaunchConfiguration,
+        final_agent_root: Path | None = None,
     ) -> None:
-        initialize(cls, agent_root, configuration=configuration)
+        initialize(
+            cls, agent_root, configuration=configuration, final_agent_root=final_agent_root
+        )
         roots[Path(agent_root).resolve()] = configuration
 
     def tracked_start(

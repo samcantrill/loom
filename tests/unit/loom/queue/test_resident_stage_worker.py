@@ -22,7 +22,8 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         def request(self):
             return SimpleNamespace(fingerprint={"payload": {"factory_target": "pkg.Stage", "fingerprint_fields": {}}}, preparation_input=None)
 
-        def worker_request(self) -> object:
+        def worker_request(self, *, resolve_shared: bool = False) -> object:
+            assert resolve_shared
             return object()
 
         def preparation_context(self) -> None:

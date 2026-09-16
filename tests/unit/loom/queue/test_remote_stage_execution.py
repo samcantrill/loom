@@ -1327,7 +1327,9 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     tree = Path(refs["result"].uri.removeprefix("file://")).parent
     assert (tree / "values.bin").read_bytes() == b"companion-bytes"
     assert (tree / "catalog" / "checkpoint").read_bytes() == b"checkpoint"
-    assert binding(refs["result"].metadata)["primary"] == "primary.json"
+    publication = binding(refs["result"].metadata)
+    assert publication is not None
+    assert publication["primary"] == "primary.json"
     assert not (workspace.root / "retained-outputs").exists()
     with pytest.raises(QueueConflictError, match="identity"):
         publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="obsolete-fence")

@@ -1701,6 +1701,34 @@ class SQLiteAgentJournal:
             )
             return AssignmentState.RESULT_DURABLE
 
+    def record_recovered_start_result(
+        self,
+        assignment_id: str,
+        *,
+        fence: str,
+        result: Mapping[str, PlainData],
+    ) -> AssignmentState:
+        """Settle an uncertain start after guarded containment/authority closure.
+
+        The remote release owner verifies both proofs before calling this method.
+        Keep the uncertain process identity; do not fabricate a confirmed start.
+        """
+        parsed = StageWorkerResult.from_dict(result)
+        if parsed.status not in {StageStatus.CANCELLED, StageStatus.FAILED}:
+            raise ManagedLocalError("recovered start cannot establish success")
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            if row["grant_fence"] != fence or row["state"] not in {
+                AssignmentState.START_INTENT.value,
+                AssignmentState.START_UNKNOWN.value,
+            }:
+                raise ManagedLocalError("recovered start identity is stale")
+            conn.execute(
+                "UPDATE assignments SET state = ?, result_json = ? WHERE assignment_id = ?",
+                (AssignmentState.RESULT_DURABLE.value, _json(result), assignment_id),
+            )
+            return AssignmentState.RESULT_DURABLE
+
     def record_cancelled_before_start(
         self, assignment_id: str, result: Mapping[str, PlainData]
     ) -> AssignmentState:
