@@ -890,6 +890,16 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 inputs_summary=fingerprint.inputs_summary,
             ).to_dict(),
         )
+        from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
+        shared = replace(request, fingerprint=StageFingerprintRecord.create(
+            algorithm=fingerprint.algorithm,
+            payload=replace(fingerprint.payload, fingerprint_fields={SHARED_EXECUTION_SCOPE: {
+                "capability": "shared-execution-v1", "roots": {}, "locations": []}}),
+            inputs_summary=fingerprint.inputs_summary,
+        ).to_dict())
+        with pytest.raises(QueueServiceError, match="lacks shared-execution-v1"):
+            _target_remote_delivery(daemon, session_id=session.session_id, availability_revision="availability-1",
+                request=shared, run_uri="file:///coordinator/run", input_paths={"input-1": input_path})
         with pytest.raises(QueueServiceError, match="lacks preparation-input-v2"):
             _target_remote_delivery(
                 daemon,
@@ -1219,3 +1229,35 @@ def test_local_container_launch_reopens_without_recursive_worker_materialization
     changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
     with pytest.raises(QueueConflictError, match="binding identity"):
         reopened.persist_request(request, changed)
+
+
+def test_shared_assignment_requires_versioned_scope_and_live_root_binding(tmp_path):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
+    from loom.queue.agent_session_transport import _decode
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"shared")
+    (root / "selected").write_bytes(b"content")
+    roots = {"data": {"host_path": str(root), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}}
+    profile = replace(_profile(tmp_path), shared_roots=roots)
+    base = _request(profile)
+    config = {"input": {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected"}}
+    scope = stage_scope(config, {}, {"roots": qualifications(roots)})
+    payload = replace(StageFingerprintRecord.from_dict(base.fingerprint).payload,
+                      stage_config=config, fingerprint_fields={SHARED_EXECUTION_SCOPE: scope})
+    fingerprint = StageFingerprintRecord.create(algorithm="sha256", payload=payload, inputs_summary={"stage_name": "build"})
+    request = replace(base, fingerprint=fingerprint.to_dict())
+    assert request.schema_version == 5
+    assert _ResidentAssignmentBundle.from_remote_dict(request.to_dict()) == request
+    with pytest.raises(QueueServiceError, match="schema capability"):
+        _ResidentAssignmentBundle.from_remote_dict({**request.to_dict(), "schema_version": 4})
+    with pytest.raises(QueueServiceError, match="schema is unsupported"):
+        _ResidentAssignmentBundle.from_remote_dict({**request.to_dict(), "schema_version": 99})
+    response = {"ok": True, "result": {"result": "assignment", "request": request.to_dict()}}
+    assert _decode(json.dumps(response).encode()) == response
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    (root / "challenge").write_bytes(b"wrong")
+    with pytest.raises(QueueServiceError, match="bytes mismatch"):
+        workspace.persist_request(request, profile)

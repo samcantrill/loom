@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 import hashlib
 import json
+from pathlib import Path
 import re
 import time
 from typing import TYPE_CHECKING, cast
@@ -51,6 +52,13 @@ if request.get("preparation_staged", False):
         result["preparation_staged_available"] = callable(resolve_staged_input)
     except Exception:
         result["preparation_staged_available"] = False
+if request.get("shared_execution", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.queue.shared_execution import SHARED_EXECUTION_CAPABILITY
+        result["shared_execution_available"] = SHARED_EXECUTION_CAPABILITY == "shared-execution-v1"
+    except Exception:
+        result["shared_execution_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -92,8 +100,9 @@ for root_name in request["source_roots"]:
         result["sources"].append(None)
         continue
     digest = hashlib.sha256()
-    # Bind contents to their project-relative location before combining roots.
-    location = pathlib.Path(os.path.relpath(root.resolve(), pathlib.Path.cwd())).as_posix().encode()
+    # Shared images use fixed installed paths; native profiles retain their
+    # project-relative identity independently of private project prefixes.
+    location = (root.resolve().as_posix() if request.get("shared_container", False) else pathlib.Path(os.path.relpath(root.resolve(), pathlib.Path.cwd())).as_posix()).encode()
     digest.update(len(location).to_bytes(8, "big") + location)
     excluded = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "datasets", "caches", "runs", "build", "dist"}
     for directory, names, files in members:
@@ -301,6 +310,35 @@ def _digest(value: object) -> str:
     ).hexdigest()
 
 
+def _container_software_identity(profile: ResidentExecutionProfile, *, deadline: float | None = None) -> object:
+    binding = profile.container
+    if binding is None or not profile.shared_roots:
+        return binding
+    container = dict(cast(Mapping[str, PlainData], binding["container"]))
+    image = cast(Mapping[str, PlainData], container["image"])
+    identity = image["reference"]
+    if binding["kind"] == "apptainer":
+        digest = hashlib.sha256()
+        with Path(str(identity)).open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("resident readiness caller deadline elapsed")
+                digest.update(chunk)
+        identity = "sha256:" + digest.hexdigest()
+    container["image"] = {"reference": identity}
+    # Shared mounts and executable/image host prefixes belong to the protected
+    # launch binding. The installed image and container-visible contract define
+    # portable software identity; selected data has its own qualification.
+    container["mounts"] = [
+        {"target": mount["target"], "mode": mount.get("mode", "ro")}
+        for mount in cast(list[Mapping[str, PlainData]], container.get("mounts", []))
+    ]
+    options = dict(cast(Mapping[str, PlainData], binding["options"]))
+    options.pop("command", None)
+    return {"kind": binding["kind"], "container": container, "options": options,
+            "python_executable": binding["python_executable"]}
+
+
 def qualify_resident_profile(
     profile: ResidentExecutionProfile, *, _deadline: float | None = None,
 ) -> ResidentReadinessResult:
@@ -452,6 +490,10 @@ def qualify_resident_profile(
     }
     if preparation:
         request["preparation"] = True
+    if profile.shared_roots:
+        request["shared_execution"] = True
+        if profile.container is not None:
+            request["shared_container"] = True
     if requirements.preparation_staged:
         request["preparation_staged"] = True
     response = run_resident_probe(
@@ -535,6 +577,11 @@ def qualify_resident_profile(
             "distributions": len(requirements.distributions),
         },
     )
+    if profile.shared_roots:
+        add("packages.shared_execution", PreflightGroup.PACKAGES,
+            observed.get("shared_execution_available") is True,
+            "Selected installation supports shared-execution-v1." if observed.get("shared_execution_available") is True else "Selected installation lacks shared-execution-v1.",
+            "Install a compatible Loom in the selected interpreter or image.")
     environment_ok = observed["environment"] == {
         name: True for name in requirements.required_environment
     } and observed["programs"] == {
@@ -576,7 +623,7 @@ def qualify_resident_profile(
             {
                 "worker": "loom.queue._resident_stage_worker",
                 "protocol": "resident-v3",
-                **({"container": profile.container} if profile.container is not None else {}),
+                **({"container": _container_software_identity(profile, deadline=_deadline)} if profile.container is not None else {}),
                 "python": python,
             }
         ),

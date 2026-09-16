@@ -42,6 +42,7 @@ class PreparationProfile:
     runtime_options: RunOptions
     local_scope: Mapping[str, PlainData] | None = None
     project_processor: Mapping[str, PlainData] | None = None
+    shared_scope: Mapping[str, PlainData] | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -49,6 +50,7 @@ class PreparationProfile:
             "allowed_source_roots": list(self.allowed_source_roots),
             "source_modes": list(self.source_modes),
             "runtime_options": self.runtime_options.to_dict(),
+            **({"shared_scope": dict(self.shared_scope)} if self.shared_scope is not None else {}),
             **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
             **({"project_processor": dict(self.project_processor)} if self.project_processor is not None else {}),
         }
@@ -100,6 +102,7 @@ class PreparationPolicy:
                 "allowed_source_roots": list(profile.allowed_source_roots),
                 "source_modes": list(profile.source_modes),
                 "runtime_options_digest": hash_mapping(profile.runtime_options.to_dict()),
+                **({"shared_scope": dict(profile.shared_scope)} if profile.shared_scope is not None else {}),
                 **({"local_scope": dict(profile.local_scope)} if profile.local_scope is not None else {}),
                 **({"project_processor": dict(profile.project_processor)} if profile.project_processor is not None else {}),
             } for alias, profile in sorted(self.profiles.items())],
@@ -135,7 +138,7 @@ def load_preparation_policy(
     profiles: dict[str, PreparationProfile] = {}
     for alias, raw in raw_profiles.items():
         _alias(alias, "preparation profile")
-        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy", "project_processor"})
+        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy", "project_processor", "shared_locations"})
         profile_id = _alias(data["resident_profile_id"], "resident_profile_id")
         matches = {descriptor for descriptor in descriptors if descriptor.profile_id == profile_id}
         if len(matches) != 1:
@@ -155,9 +158,19 @@ def load_preparation_policy(
         if options.executor != "local":
             raise QueueConfigError("preparation runtime_options must explicitly select the local managed executor")
         mode = data.get("configuration_policy", "portable")
-        if mode not in ("portable", "local"):
-            raise QueueConfigError("preparation configuration_policy must be portable or local")
+        if mode not in ("portable", "local", "shared"):
+            raise QueueConfigError("preparation configuration_policy must be portable, local or shared")
         scope = None
+        shared = None
+        if mode == "shared":
+            from .shared_execution import SHARED_EXECUTION_CAPABILITY, scope as shared_scope
+            if modes != ("shared",):
+                raise QueueConfigError("shared configuration requires shared capture only")
+            descriptor = next(iter(matches))
+            if not descriptor.shared_roots:
+                raise QueueConfigError("shared configuration requires qualified shared roots")
+            shared = shared_scope({"capability": SHARED_EXECUTION_CAPABILITY,
+                "roots": dict(descriptor.shared_roots), "locations": data.get("shared_locations", [])})
         if mode == "local":
             from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
@@ -170,9 +183,9 @@ def load_preparation_policy(
             processor = _project_processor(data.get("project_processor"))
         except QueueServiceError as exc:
             raise QueueConfigError(str(exc)) from exc
-        if processor is not None and scope is None:
-            raise QueueConfigError("project preparation requires protected local policy")
-        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope, processor)
+        if processor is not None and scope is None and shared is None:
+            raise QueueConfigError("project preparation requires protected local or shared policy")
+        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope, processor, shared)
     return PreparationPolicy(MappingProxyType(roots), MappingProxyType(profiles))
 
 

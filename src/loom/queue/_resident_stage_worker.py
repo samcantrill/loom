@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -38,8 +39,18 @@ def main(argv: list[str] | None = None) -> int:
     preparation = workspace.preparation_context()
     if preparation is not None:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(preparation, sort_keys=True, separators=(",", ":"))
+    resolver: Callable[[object], object] | None = None
+    from .shared_execution import assignment_scope, materialize, execution_roots
+    shared = assignment_scope(workspace.request().fingerprint)
+    if shared is not None and workspace.request().preparation_input is None:
+        profile = workspace.shared_launch_profile()
+        roots = execution_roots(profile.shared_roots, container=profile.container is not None)
+        def resolve_locations(value: object) -> object:
+            return materialize(value, roots, container=profile.container is not None)
+        resolver = resolve_locations
     result = execute_resident_stage_worker_request(
         worker_request=request,
+        location_resolver=resolver,
         workspace_root=workspace_root,
         process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
     )

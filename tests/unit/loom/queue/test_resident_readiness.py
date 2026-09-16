@@ -391,3 +391,58 @@ def test_availability_deadline_bounds_qualification_probes(tmp_path, monkeypatch
         qualify_resident_profile(_profile(tmp_path), _deadline=deadline)
     assert len(observed) == 1
     assert 0 < observed[0] <= 0.1
+
+
+def test_shared_qualification_checks_selected_installation_capability(tmp_path):
+    import hashlib
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"fixture")
+    roots = {"data": {"host_path": str(root), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"fixture").hexdigest()}}}
+    supported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots))
+    assert supported.ok
+    (tmp_path / "sitecustomize.py").write_text(
+        "import loom.queue.shared_execution as shared\ndel shared.SHARED_EXECUTION_CAPABILITY\n"
+    )
+    unsupported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots,
+                                                  environment={"PYTHONPATH": str(tmp_path)}))
+    assert not unsupported.ok
+    assert next(check for check in unsupported.checks if check.check_id == "packages.shared_execution").status == "FAIL"
+
+
+def test_shared_image_identity_tracks_bytes_not_host_prefix(tmp_path):
+    from loom.queue.resident_readiness import _container_software_identity
+    def profile(path):
+        import hashlib
+        return replace(_profile(tmp_path), shared_roots={"data": {"host_path": str(path.parent), "container_path": "/loom/data", "access": "ro", "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"root").hexdigest()}}}, container={"kind": "apptainer",
+            "container": {"image": {"reference": str(path)}}, "options": {"command": "/bin/true"},
+            "python_executable": "/usr/bin/python3", "daemon_endpoint": None})
+    first = tmp_path / "nas" / "image.sif"
+    second = tmp_path / "mnt" / "image.sif"
+    for path in (first, second):
+        path.parent.mkdir()
+        path.write_bytes(b"identical installed image")
+        (path.parent / "challenge").write_bytes(b"root")
+    assert _container_software_identity(profile(first)) == _container_software_identity(profile(second))
+    second.write_bytes(b"changed installation")
+    assert _container_software_identity(profile(first)) != _container_software_identity(profile(second))
+
+
+def test_shared_installed_source_identity_ignores_private_workspace_prefix(tmp_path):
+    from loom.queue.resident_readiness import _INSTALLATION
+    from loom.queue._resident_probe import run_resident_probe
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    (installed / "module.py").write_text("VALUE = 1\n")
+    from loom.serialization import PlainData
+    request: dict[str, PlainData] = {"imports": [], "distributions": [], "import_roots": {}, "source_roots": [str(installed)],
+        "required_environment": [], "required_programs": [], "lockfile": str(installed / "absent.lock"), "shared_container": True}
+    results = []
+    for name in ("nas/work", "mnt/lab/work"):
+        work = tmp_path / name
+        work.mkdir(parents=True)
+        result = run_resident_probe(_profile(work).launch_profile, _INSTALLATION, request, timeout_seconds=10)
+        assert result.failure is None and result.payload is not None
+        results.append(result.payload["sources"])
+    assert results[0] == results[1]

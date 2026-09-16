@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
+
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -4599,6 +4601,11 @@ class LocalDaemonExecution:
         profile = self.config.resident_worker_launch_profile
         attributes: dict[str, PlainData] = {}
         if profile is not None:
+            if profile.shared_roots:
+                try:
+                    attributes.update(shared_attributes({"roots": qualifications(profile.shared_roots)}))
+                except QueueServiceError:
+                    pass  # Changed mounts withdraw shared eligibility.
             attributes["resident_profile_fingerprint"] = (
                 ResidentProfileDescriptor.from_dict(profile.descriptor).fingerprint
             )
@@ -4849,6 +4856,8 @@ class LocalDaemonExecution:
                         "resident_environment_fingerprint": profile.environment_fingerprint,
                         "resident_executor_fingerprint": profile.executor_fingerprint,
                         "artifact_capability": "regular-file-relay-v1",
+                        **(shared_attributes({"roots": dict(profile.shared_roots)})
+                           if profile.shared_roots and SHARED_EXECUTION_CAPABILITY in json.loads(str(row["capabilities_json"])) else {}),
                         **(
                             {
                                 "preparation_input_capability": PREPARATION_INPUT_CAPABILITY

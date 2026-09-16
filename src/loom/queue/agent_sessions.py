@@ -5495,6 +5495,9 @@ def _target_remote_delivery(
             StagedInputReceipt,
         )
 
+        from .shared_execution import SHARED_EXECUTION_CAPABILITY, assignment_scope
+        if assignment_scope(request.fingerprint) is not None and SHARED_EXECUTION_CAPABILITY not in session.capabilities:
+            raise QueueServiceError("agent session lacks shared-execution-v1")
         preparation = request.preparation_input
         if preparation is not None:
             supported = (

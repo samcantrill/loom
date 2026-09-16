@@ -469,6 +469,7 @@ def load_outbound_agent_service_config(
                     if profile.preparation_shared_roots
                     else {}
                 ),
+                **({"shared_roots": dict(profile.shared_roots)} if profile.shared_roots else {}),
             }
             for value, profile in zip(authored_profiles, profiles, strict=True)
         ],
@@ -1509,6 +1510,7 @@ def _local_agent_active_projection(
             for item in profile.gpu_devices
         ],
         "providers": local_agent.provider_configuration,
+        **({"shared_roots_digest": hashlib.sha256(json.dumps(dict(profile.shared_roots), sort_keys=True).encode()).hexdigest()} if profile.shared_roots else {}),
         **(
             {
                 "preparation_shared_roots": _preparation_mapping_identity(
@@ -1534,13 +1536,16 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
         {
             key: item
             for key, item in _mapping_value(value, "resident profile").items()
-            if key not in {"readiness", "preparation_shared_roots", "container"}
+            if key not in {"readiness", "preparation_shared_roots", "container", "shared_roots"}
         }
         for value in _sequence(payload, "resident_profiles")
     ]
     for profile, value in zip(
         profiles, _sequence(payload, "resident_profiles"), strict=True
     ):
+        shared = _mapping_value(value, "resident profile").get("shared_roots")
+        if shared:
+            profile["shared_roots_digest"] = hashlib.sha256(json.dumps(shared, sort_keys=True).encode()).hexdigest()
         roots = _mapping_value(value, "resident profile").get(
             "preparation_shared_roots"
         )
@@ -1629,7 +1634,7 @@ def _resident_profile(
             "gpu_devices",
             "environment",
         },
-        {"readiness", "preparation_shared_roots", "container"},
+        {"readiness", "preparation_shared_roots", "container", "shared_roots"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -1664,6 +1669,7 @@ def _resident_profile(
         cast(Mapping[str, str], environment),
         requirements,
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
+        shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
         preparation_shared_roots={
             alias: _path({"root": path}, "root", base)
             for alias, path in _mapping_value(
@@ -1739,7 +1745,7 @@ def _resident_descriptor_declaration(
     _required_allowed(
         value,
         {"profile_id", "revision"},
-        {"project_fingerprint", "environment_fingerprint", "executor_fingerprint"},
+        {"project_fingerprint", "environment_fingerprint", "executor_fingerprint", "shared_roots"},
         "resident descriptor",
     )
     # Software fingerprints are derived from the selected installation. Existing

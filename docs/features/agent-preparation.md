@@ -644,3 +644,128 @@ inputs/reports use version 4 and private worker context version 3 for this
 capability. Unsupported versions, stale processor/installation/invocation evidence,
 redirected recovery and unrelated mutations fail before publication. Existing
 portable version 2 and local version 3 reports without an integration still work.
+
+## Shared Configuration And Workload Inputs
+
+`configuration_policy: shared` permits an installed project processor and typed
+shared inputs without pinning execution to the preparation agent. This differs
+from `source.mode: shared`: that existing source mode selects immutable snapshot
+capture; the new policy also qualifies workload locations and execution.
+Portable and local policies keep their existing behavior.
+
+Each protected resident profile declares `shared_roots`. The coordinator's
+selected profile and each eligible agent retain the same logical root facts,
+with that host's own absolute `host_path`. For example:
+
+```yaml
+shared_roots:
+  data:
+    host_path: /nas/datasets
+    container_path: /loom/data
+    access: ro
+    challenge:
+      path: qualification/shared-fixture.bin
+      sha256: REPLACE_WITH_64_LOWERCASE_HEX_DIGITS
+  snapshots:
+    host_path: /nas/config-snapshots
+    container_path: /loom/snapshots
+    access: ro
+    challenge:
+      path: qualification/shared-fixture.bin
+      sha256: REPLACE_WITH_64_LOWERCASE_HEX_DIGITS
+preparation_shared_roots:
+  projects: /nas/config-snapshots
+```
+
+The corresponding worker may use `/mnt/lab/datasets` and
+`/mnt/lab/config-snapshots`. Challenges are operator-provided immutable regular
+files of at most 64 KiB. Both mappings must read the expected bytes. The
+qualification records root IDs, challenge path/digest, access and container
+target, separately from software fingerprints. Host prefixes remain private.
+Missing roots, changed challenge bytes, traversal, symbolic links and special
+input files fail at qualification or use. Existing dataset manifests and project
+integrity checks still own scientific content validation; a root challenge is
+not a dataset checksum. Mount changes alter protected binding identity and need
+requalification. Shared SIF software identity includes the image bytes rather
+than its host filename. Container readiness source/import paths must name the
+installed image namespace; source identity does not depend on the private
+assignment workspace prefix.
+
+The preparation profile selects `source_modes: [shared]`,
+`configuration_policy: shared` and `shared_locations`: the explicit union of
+locations its installed processor needs to inspect. Its descriptor must contain
+qualified shared roots. The processor receives `shared_scope` in place of
+`local_scope`; the remaining processor request/result contract is unchanged.
+Loom treats `project_preparation.target_run_uri` as identity when transporting it;
+a worker must not open that coordinator URI's host prefix. A project processor
+can inspect typed locations in its declared fixed container namespace.
+
+A workload configuration selects only its own inputs:
+
+```yaml
+pipeline:
+  name: shared-example
+  stages:
+    - name: inspect
+      factory:
+        _target_: installed_example.shared.InputDigest
+      config:
+        source:
+          kind: loom.shared-location
+          schema_version: 1
+          root_id: data
+          path: selected-product/sample.bin
+      outputs:
+        receipt:
+          artifact_type: json
+          codec_key: json.v1
+runtime:
+  executor: local
+```
+
+Install this synthetic stage in the selected interpreter/image:
+
+```python
+from hashlib import sha256
+from pathlib import Path
+
+class InputDigest:
+    def run(self, context, inputs):
+        data = Path(context.stage_config["source"]).read_bytes()
+        return {"receipt": context.save_artifact(
+            "receipt", {"sha256": sha256(data).hexdigest()},
+            artifact_type="json", codec_key="json.v1",
+        )}
+```
+
+Typed locations are resolved only in stage configuration and factory arguments
+at the worker boundary. Their logical values remain in the semantic fingerprint.
+Ordinary strings are preserved: Loom does not replace host prefixes in user
+text. Absolute workload strings are permitted only inside the selected canonical
+container locations. Host execution should use typed locations. Native assignment
+workspace/output paths remain owned by the worker.
+
+Container execution mounts only the selected relative products and bounded
+challenge files, read-only, plus its own assignment workspace. Preparation also
+mounts exactly its immutable captured snapshot. Container targets must be under
+`/loom/`; snapshot bindings must resolve below exactly one protected shared root.
+Unselected dataset roots are not mounted. Do not add shared roots again as broad
+container mounts. Shared container jobs use installed Python packages, clear
+ambient `PYTHONPATH`, and avoid importing source from the working directory.
+The Apptainer route also disables implicit host filesystems, administrator bind
+paths and the host working directory; only its explicit bindings are selected.
+
+Prepare and submit with the same `loom queue daemon-prepare`/native coordinator request
+workflow above. Advertise `shared-execution-v1` in both the outbound agent
+registration and protected agent policy. Installation qualification checks that
+the selected interpreter/image supports that capability. Scheduling retains
+per-stage root requirements; equal software with missing roots or capability
+cannot receive the stage. Preparation child/report version 6 and resident
+assignment version 5 explicitly identify this scope. Older formats remain valid
+for their original scopes, and unsupported versions are rejected.
+
+Configuration capture happens once; the shared route has no staged input archive
+or per-agent configuration copy. Declared artifact inputs and outputs retain the
+existing relay behavior in this capability. The small synthetic receipt above
+uses that output relay; shared artifact publication is a separate capability.
+Physical NAS/container qualification must still be performed on the deployment.

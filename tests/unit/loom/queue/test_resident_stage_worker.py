@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import loom.queue._resident_stage_worker as resident_stage_worker
 from loom.pipeline import ProcessContainmentOwner
@@ -18,6 +19,9 @@ def test_resident_main_passes_outer_boundary_containment_owner(
     captured: dict[str, object] = {}
 
     class FakeWorkspace:
+        def request(self):
+            return SimpleNamespace(fingerprint={"payload": {"factory_target": "pkg.Stage", "fingerprint_fields": {}}}, preparation_input=None)
+
         def worker_request(self) -> object:
             return object()
 

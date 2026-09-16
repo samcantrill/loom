@@ -2445,3 +2445,30 @@ def test_embedded_state_root_is_private_resolved_and_retained(tmp_path: Path) ->
     assert factory is not None
     with pytest.raises(AuthorityStoreError, match="state root is unavailable"):
         factory("file:///unused")
+
+
+def test_protected_shared_mount_changes_retain_software_but_change_binding(tmp_path):
+    source = _coordinator_config(tmp_path)
+    payload = _local_agent_payload(source)
+    root = tmp_path / "nas" / "data"
+    other = tmp_path / "mnt" / "lab" / "data"
+    for path in (root, other):
+        path.mkdir(parents=True)
+        (path / "challenge").write_bytes(b"same")
+    from typing import Any, cast
+    profile = cast(list[dict[str, Any]], payload["resident_profiles"])[0]
+    profile["shared_roots"] = {"data": {"host_path": str(root), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"same").hexdigest()}}}
+    _write_local_agent(source, payload)
+    first = load_coordinator_service_config(source)
+    profile["shared_roots"]["data"]["host_path"] = str(other)
+    _write_local_agent(source, payload)
+    second = load_coordinator_service_config(source)
+    assert first.daemon.resident_worker_launch_profile is not None
+    assert second.daemon.resident_worker_launch_profile is not None
+    assert first.daemon.resident_worker_launch_profile.descriptor == second.daemon.resident_worker_launch_profile.descriptor
+    assert first.daemon.resident_worker_launch_profile.fingerprint != second.daemon.resident_worker_launch_profile.fingerprint
+    assert first.daemon.active_configuration_fingerprint != second.daemon.active_configuration_fingerprint
+    (other / "challenge").write_bytes(b"wrong filesystem")
+    with pytest.raises(QueueServiceError, match="bytes mismatch"):
+        load_coordinator_service_config(source)

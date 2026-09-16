@@ -72,6 +72,8 @@ def build_container_worker(
     worker: Sequence[str],
     environment: Mapping[str, str],
     runtime: Mapping[str, PlainData] | None = None,
+    shared_scope: Mapping[str, PlainData] | None = None,
+    shared_snapshot: object = None,
 ):
     """Reuse container resource projection with assignment-owned path parity."""
     from loom.pipeline.executors.containers import (
@@ -86,18 +88,25 @@ def build_container_worker(
     assert binding is not None
     container = parse_container_options(binding["container"])
     required = {
-        str(profile.project_root): "ro",
-        str(workspace.parent.parent): "rw",
+        **({str(profile.project_root): "ro"} if not profile.shared_roots else {}),
+        str(workspace if profile.shared_roots else workspace.parent.parent): "rw",
         **{
             str(path): "ro"
             for path in profile.preparation_shared_roots.values()
-            if runtime is not None or path.exists()
+            if shared_scope is None and (runtime is not None or path.exists())
         },
     }
     mounts = {
         mount.target: mount
         for mount in cast(tuple[ContainerMount, ...], container.mounts)
     }
+    if profile.shared_roots:
+        for mount in mounts.values():
+            for raw in profile.shared_roots.values():
+                host = Path(str(cast(Mapping[str, PlainData], raw)["host_path"]))
+                source = Path(mount.source)
+                if source.is_relative_to(host) or host.is_relative_to(source):
+                    raise ValueError("shared roots must be mounted through per-stage selection")
     for path, mode in required.items():
         existing = mounts.get(path)
         if existing is not None and (
@@ -108,8 +117,33 @@ def build_container_worker(
                 "installed container mount conflicts with worker path parity"
             )
         mounts[path] = ContainerMount(source=path, target=path, mode=mode)
+    if shared_scope is not None:
+        from .shared_execution import require_bindings, resolve
+        require_bindings(shared_scope, profile.shared_roots)
+        for item in cast(Sequence[Mapping[str, PlainData]], shared_scope["locations"]):
+            root = cast(Mapping[str, PlainData], profile.shared_roots[str(item["root_id"])])
+            if root["container_path"] is None:
+                raise ValueError("shared container target is missing")
+            source = str(resolve(root, str(item["path"])))
+            target = str(Path(str(root["container_path"])) / str(item["path"]))
+            mounts[target] = ContainerMount(source=source, target=target, mode="ro")
+        # Root challenge files permit the child to recheck its actual namespace.
+        for alias in cast(Mapping[str, PlainData], shared_scope["roots"]):
+            root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
+            challenge = cast(Mapping[str, PlainData], root["challenge"])
+            target = str(Path(str(root["container_path"])) / str(challenge["path"]))
+            mounts[target] = ContainerMount(source=str(resolve(root, str(challenge["path"]))), target=target, mode="ro")
+        if shared_snapshot is not None:
+            from .preparation import SharedInputReceipt
+            assert isinstance(shared_snapshot, SharedInputReceipt)
+            from .shared_execution import snapshot_mount
+            source, target = snapshot_mount(profile, shared_snapshot)
+            mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
     declared = cast(ContainerEnvironment, container.environment)
     merged = {**declared.variables, **environment}
+    if profile.shared_roots:
+        merged.pop("PYTHONPATH", None)
+        merged["PYTHONSAFEPATH"] = "1"
     # Host virtualenv PATH must not select Python outside the configured image.
     if "PATH" not in profile.environment:
         if "PATH" in declared.variables:
@@ -128,7 +162,7 @@ def build_container_worker(
             merged.pop("CUDA_VISIBLE_DEVICES", None)
     container = replace(
         container,
-        workdir=str(profile.project_root),
+        workdir=str(workspace) if profile.shared_roots else str(profile.project_root),
         mounts=tuple(mounts.values()),
         environment=ContainerEnvironment(
             variables=merged, required_host_variables=declared.required_host_variables
@@ -177,8 +211,15 @@ def build_container_worker(
         resource_policy=policy,
         resource_selection=selection,
     )
+    def namespaced(argv: Sequence[str]) -> tuple[str, ...]:
+        if profile.shared_roots:
+            # Disable implicit host/home/tmp/cwd and administrator bind exposure;
+            # the explicit selected mounts remain the workload's filesystem set.
+            argv = (argv[0], "exec", "--contain", "--no-mount", "hostfs,bind-paths,cwd", *argv[2:])
+        return namespace_argv(argv)
+
     return replace(
         command,
-        argv=namespace_argv(command.argv),
-        redacted_argv=namespace_argv(cast(Sequence[str], command.redacted_argv)),
+        argv=namespaced(command.argv),
+        redacted_argv=namespaced(cast(Sequence[str], command.redacted_argv)),
     )

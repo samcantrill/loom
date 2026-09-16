@@ -89,3 +89,62 @@ def test_installed_project_mount_cannot_be_replaced(tmp_path: Path):
             worker=("python3",),
             environment={},
         )
+
+
+@pytest.mark.parametrize("runtime", ["docker", "apptainer"])
+def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_path, runtime):
+    import hashlib
+    from loom.queue.shared_execution import qualifications, stage_scope
+    data = tmp_path / "nas" / "data"
+    other = tmp_path / "nas" / "other"
+    for path in (data, other):
+        path.mkdir(parents=True)
+        (path / "challenge").write_bytes(b"shared")
+        (path / "selected").write_bytes(b"data")
+    roots = {alias: {"host_path": str(path), "container_path": "/loom/" + alias, "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}
+        for alias, path in (("data", data), ("other", other))}
+    binding = _binding()
+    if runtime == "apptainer":
+        binding.update(kind="apptainer", daemon_endpoint=None)
+        binding["container"]["image"]["reference"] = str(tmp_path / "installed.sif")
+        binding["options"]["command"] = "/usr/bin/singularity"
+    profile = ResidentWorkerLaunchProfile(tmp_path, Path(sys.executable), {"profile_id": "installed"},
+        container=binding, shared_roots=roots)
+    config = {"input": {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected"}}
+    scope = stage_scope(config, {}, {"roots": qualifications(roots)})
+    workspace = tmp_path / "agent" / "assignments" / "selected-attempt"
+    workspace.mkdir(parents=True)
+    command = build_container_worker(profile, workspace=workspace, worker=("python3", "-m", "loom.queue._resident_stage_worker"),
+        environment={"PYTHONPATH": str(tmp_path / "editable")}, shared_scope=scope)
+    argv = " ".join(command.argv)
+    assert "/loom/data/selected" in argv and str(data / "selected") in argv
+    assert str(other) not in argv and "/loom/other" not in argv
+    assert "PYTHONPATH" not in argv and "PYTHONSAFEPATH=1" in argv
+    if runtime == "apptainer":
+        assert "--contain" in command.argv and "hostfs,bind-paths,cwd" in command.argv
+    assert all("target=" + str(workspace.parent.parent) not in arg.split(",") for arg in command.argv)
+    empty = stage_scope({}, {}, {"roots": qualifications(roots)})
+    command = build_container_worker(profile, workspace=workspace, worker=("python3",), environment={}, shared_scope=empty)
+    assert "/loom/data" not in " ".join(command.argv)
+
+
+def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_path):
+    import hashlib
+    from loom.queue.preparation import SharedInputReceipt
+    from loom.queue.shared_execution import qualifications
+    root = tmp_path / "private-mount" / "snapshots"
+    capture = root / "capture-one"
+    capture.mkdir(parents=True)
+    (root / "challenge").write_bytes(b"shared")
+    roots = {"snapshots": {"host_path": str(root), "container_path": "/loom/snapshots", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}}
+    profile = ResidentWorkerLaunchProfile(tmp_path, Path(sys.executable), {"profile_id": "installed"},
+        container=_binding(), shared_roots=roots, preparation_shared_roots={"projects": root})
+    scope = {"capability": "shared-execution-v1", "roots": qualifications(roots), "locations": []}
+    workspace = tmp_path / "agent" / "assignments" / "prepare"
+    workspace.mkdir(parents=True)
+    command = build_container_worker(profile, workspace=workspace, worker=("python3",), environment={}, shared_scope=scope,
+        shared_snapshot=SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-one"))
+    assert any("source=" + str(capture) in arg and "target=/loom/snapshots/capture-one" in arg for arg in command.argv)
+    assert all("source=" + str(root) not in arg.split(",") for arg in command.argv)

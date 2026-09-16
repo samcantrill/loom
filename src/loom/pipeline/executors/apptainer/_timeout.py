@@ -39,8 +39,8 @@ def namespace_argv(argv: Sequence[str]) -> tuple[str, ...]:
     """Select the init shim without changing caller or enclosing group ownership."""
     if len(argv) < 3 or argv[1] != "exec":
         raise UnsupportedTimeoutError("timeout supervision requires foreground exec")
-    flags = {"--cleanenv", "--nv", "--rocm", "--fakeroot", "--no-home", "--pid"}
-    values = {"--cpus", "--memory", "--pwd", "--bind", "--env"}
+    flags = {"--cleanenv", "--nv", "--rocm", "--fakeroot", "--no-home", "--pid", "--contain"}
+    values = {"--cpus", "--memory", "--pwd", "--bind", "--env", "--no-mount"}
     index = 2
     options: list[str] = []
     while index < len(argv) and argv[index].startswith("-"):

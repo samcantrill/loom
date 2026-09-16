@@ -57,14 +57,18 @@ class ResidentWorkerLaunchProfile:
     readiness_identity: str | None = None
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
     container: Mapping[str, PlainData] | None = None
+    shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        from .shared_execution import root_bindings
+        object.__setattr__(self, "shared_roots", root_bindings(self.shared_roots))
         from ._container_worker import container_binding
 
         object.__setattr__(self, "container", container_binding(self.container))
         root = Path(self.project_root).resolve()
         executable = Path(os.path.abspath(self.python_executable))
-        if not root.is_dir() or (self.container is None and not executable.is_file()):
+        if ((not root.is_dir() and not (self.container is not None and self.shared_roots))
+            or (self.container is None and not executable.is_file())):
             raise AgentProcessSupervisorError(
                 "resident worker launch profile is unavailable"
             )
@@ -180,12 +184,14 @@ class ResidentWorkerLaunch:
     def container_command(self):
         from ._container_worker import build_container_worker
         from ._remote_stage_execution import _ResidentAssignmentWorkspace
+        from .shared_execution import assignment_scope
 
         binding = self.profile.container
         assert binding is not None
         workspace = _ResidentAssignmentWorkspace(
             self.workspace_root.parent.parent, self.assignment_id
         )
+        preparation = workspace.request().preparation_input
         return build_container_worker(
             self.profile,
             workspace=self.workspace_root,
@@ -200,6 +206,8 @@ class ResidentWorkerLaunch:
             # Worker materialization validates this retained launch; reading only
             # the assignment runtime avoids recursively decoding it here.
             runtime=workspace.request().resolved_runtime,
+            shared_scope=assignment_scope(workspace.request().fingerprint),
+            shared_snapshot=None if preparation is None else preparation.input_receipt,
         )
 
     @property
@@ -890,6 +898,7 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "descriptor": profile.descriptor,
         "environment": dict(profile.environment),
         "readiness_identity": profile.readiness_identity,
+        **({"shared_roots": dict(profile.shared_roots)} if profile.shared_roots else {}),
         **({"container": profile.container} if profile.container is not None else {}),
         **(
             {
@@ -915,7 +924,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     if (
         not isinstance(value, Mapping)
         or not required.issubset(value)
-        or not set(value).issubset(required | {"preparation_shared_roots", "container"})
+        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots"})
     ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
@@ -925,6 +934,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         environment=cast(Mapping[str, str], value["environment"]),
         readiness_identity=cast(str | None, value["readiness_identity"]),
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
+        shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
         preparation_shared_roots=cast(
             Mapping[str, Path], value.get("preparation_shared_roots", {})
         ),
