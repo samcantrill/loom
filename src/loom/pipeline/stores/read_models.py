@@ -939,6 +939,71 @@ class ReliabilityPolicyFact:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionResultBinding:
+    """A consumer's verified reference to an unchanged original producer commit.
+
+    The binding creates no consumer attempt or output commit. Its artifact facts
+    retain the original commit and revision, including across authority stores.
+    """
+
+    claim_id: str
+    execution_key: str
+    commit: OutputCommitRecord
+    artifact_facts: tuple[ArtifactFactRecord, ...]
+    verification: Mapping[str, PlainData]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "claim_id", _non_empty_string(self.claim_id, "claim_id"))
+        from loom.fingerprints import validate_digest
+
+        validate_digest(self.execution_key, algorithms={"sha256"})
+        if not isinstance(self.commit, OutputCommitRecord):
+            raise AuthorityModelError("result binding requires an original commit")
+        facts = _tuple_of(self.artifact_facts, ArtifactFactRecord, "artifact_facts")
+        object.__setattr__(self, "artifact_facts", facts)
+        if {fact.artifact_name for fact in facts} != set(self.commit.output_names) or len(facts) != len(self.commit.output_names):
+            raise AuthorityModelError("result binding must cover original commit outputs")
+        if any(fact.commit_id != self.commit.commit_id for fact in facts):
+            raise AuthorityModelError("result binding artifact commit differs")
+        verified = _plain_mapping(self.verification, "verification")
+        digest = verified.get("candidate_digest")
+        if set(verified) != {"schema_version", "candidate_digest", "verdict"} or type(verified.get("schema_version")) is not int or verified["schema_version"] != 1 or verified.get("verdict") != "verified":
+            raise AuthorityModelError("result binding requires candidate-bound verification")
+        validate_digest(digest, algorithms={"sha256"})
+        object.__setattr__(self, "verification", verified)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": 1, "claim_id": self.claim_id,
+            "execution_key": self.execution_key,
+            "origin_run_uri": self.commit.run_uri,
+            "origin_node_id": self.commit.stage_name,
+            "result": {"commit": self.commit.to_dict(),
+                       "artifact_facts": [fact.to_dict() for fact in self.artifact_facts]},
+            "verification": dict(self.verification),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ActionResultBinding":
+        mapping = _mapping(data, "ActionResultBinding")
+        if set(mapping) != {"schema_version", "claim_id", "execution_key", "origin_run_uri", "origin_node_id", "result", "verification"} or type(mapping.get("schema_version")) is not int or mapping["schema_version"] != 1:
+            raise AuthorityModelError("unsupported action result binding")
+        result = _mapping(mapping["result"], "result")
+        if set(result) != {"commit", "artifact_facts"}:
+            raise AuthorityModelError("invalid action result fields")
+        commit = OutputCommitRecord.from_dict(result["commit"])
+        if (mapping["origin_run_uri"], mapping["origin_node_id"]) != (commit.run_uri, commit.stage_name):
+            raise AuthorityModelError("result binding original producer differs")
+        return cls(
+            claim_id=_non_empty_string(mapping["claim_id"], "claim_id"),
+            execution_key=_non_empty_string(mapping["execution_key"], "execution_key"),
+            commit=commit,
+            artifact_facts=tuple(ArtifactFactRecord.from_dict(fact) for fact in _sequence(result["artifact_facts"], "artifact_facts")),
+            verification=_plain_mapping(mapping["verification"], "verification"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class StageLifecycleSnapshot:
     stage_name: str
     status: StageStatus
@@ -954,11 +1019,17 @@ class StageLifecycleSnapshot:
     retry_decisions: tuple[RetryDecisionRecord, ...] = ()
     timeout_outcomes: tuple[TimeoutOutcomeRecord, ...] = ()
     reason: LifecycleReason | None = None
+    result_binding: ActionResultBinding | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "stage_name", _non_empty_string(self.stage_name, "stage_name")
         )
+        if self.result_binding is not None:
+            if not isinstance(self.result_binding, ActionResultBinding):
+                raise AuthorityModelError("result_binding must be an ActionResultBinding")
+            if self.status != StageStatus.SUCCEEDED or self.latest_commit != self.result_binding.commit or self.artifact_facts != self.result_binding.artifact_facts:
+                raise AuthorityModelError("result binding snapshot must expose the original successful result")
         object.__setattr__(self, "status", _stage_status(self.status))
         _revision(self.revision)
         object.__setattr__(
@@ -1032,6 +1103,7 @@ class StageLifecycleSnapshot:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "stage_name": self.stage_name,
+            **({"result_binding": self.result_binding.to_dict()} if self.result_binding is not None else {}),
             "status": self.status.value,
             "revision": self.revision.to_dict(),
             "attempts": [attempt.to_dict() for attempt in self.attempts],
@@ -1070,6 +1142,7 @@ class StageLifecycleSnapshot:
             mapping,
             {
                 "stage_name",
+                "result_binding",
                 "status",
                 "revision",
                 "attempts",
@@ -1093,6 +1166,7 @@ class StageLifecycleSnapshot:
             stage_name=_non_empty_string(
                 _required(mapping, "stage_name"), "stage_name"
             ),
+            result_binding=None if mapping.get("result_binding") is None else ActionResultBinding.from_dict(mapping["result_binding"]),
             status=_stage_status(_required(mapping, "status")),
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
             attempts=tuple(

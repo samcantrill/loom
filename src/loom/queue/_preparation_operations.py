@@ -78,6 +78,7 @@ class PreparationReport:
     prospective_receipt: ManagedLocalPreparationReceipt | None
     publication_data: object
     reconciliation_key: PlainData = None
+    action_verification: Mapping[str, PlainData] | None = None
 
 
 class PreparationCallbacks(Protocol):
@@ -244,6 +245,64 @@ class CoordinatorPreparations:
                 ).fetchone()
                 is not None
             )
+
+    def verify_action_result(
+        self, *, source_operation_id: str, node_id: str,
+        contract: Mapping[str, PlainData], candidate: Mapping[str, PlainData],
+    ) -> dict[str, PlainData] | None:
+        """Join a replayable installed verifier child to a retained preparation.
+
+        Native action resolution is the sole caller. Reuse the captured input,
+        protected installation, dispatch fencing and committed-report owner;
+        no public callback endpoint or alternative executor is introduced.
+        """
+        from dataclasses import replace
+        from loom.fingerprints import hash_mapping
+        from loom.pipeline._action_verification import action_verification_request
+        from loom.pipeline.stores import LocalArtifactStore
+
+        requested = action_verification_request({"node_id": node_id, "contract": dict(contract), "candidate": dict(candidate)})
+        intent = hash_mapping({"source_operation_id": source_operation_id, "request": requested})
+        operation_id = "action-verify-" + intent.split(":", 1)[1]
+        with self.daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+            if row is None:
+                source = conn.execute("SELECT * FROM preparation_operations WHERE operation_id = ?", (source_operation_id,)).fetchone()
+                if source is None:
+                    raise QueueConflictError("action verification preparation is unavailable")
+                source_result = _mapping(json.loads(str(source["result_json"])))
+                if source_result["input_receipt"] is None or source_result["prepared_run"] is None:
+                    raise QueueConflictError("action verification requires a published preparation")
+                selected = _mapping(json.loads(str(source["selected_json"])))
+                selected.pop("reconciliation", None)
+                selected["action_verification"] = requested
+                request = replace(PrepareRunRequest.from_dict(_mapping(json.loads(str(source["request_json"])))), operation_id=operation_id)
+                child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
+                result: dict[str, PlainData] = {
+                    "schema_version": 1, "coordinator_id": source_result["coordinator_id"],
+                    "input_receipt": source_result["input_receipt"], "preparation_admission_id": None,
+                    "preflight_status": None, "preflight": None, "report_ref": None,
+                    "prepared_run": None, "evidence_refs": [],
+                }
+                conn.execute("INSERT INTO preparation_operations(operation_id, principal_id, kind, intent_digest, request_json, selected_json, target_name, child_name, state, result_json) VALUES (?, ?, 'prepare_run', ?, ?, ?, NULL, ?, 'pending', ?)",
+                             (operation_id, source["principal_id"], intent, _json(request.to_dict()), _json(selected), child_name, _json(result)))
+                conn.commit()
+                self.daemon._wake.set()
+                return None
+            if row["intent_digest"] != intent:
+                raise QueueConflictError("action verification operation conflicts")
+            conn.commit()
+        if row["state"] not in _TERMINAL:
+            return None
+        if row["state"] != "applied":
+            raise QueueConflictError("installed action verification child failed")
+        result = _mapping(json.loads(str(row["result_json"])))
+        reference = ArtifactRef.from_dict(result["report_ref"])
+        report = _mapping(LocalArtifactStore(self.daemon.config.run_store_root).load(reference))
+        if report["action_verification"] != requested or report["operation_id"] != operation_id:
+            raise QueueConflictError("action verification retained report conflicts")
+        return report
 
     def accept_run(
         self, request: RunRequest, principal_id: str
@@ -783,6 +842,7 @@ class CoordinatorPreparations:
             None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
             generations=cast(Mapping[str, str] | None, selected.get("generations")),
+            action_verification=cast(Mapping[str, PlainData] | None, selected.get("action_verification")),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:
@@ -918,6 +978,11 @@ class CoordinatorPreparations:
                 if isinstance(exc, PreparationInstallationMismatch)
                 else "invalid_preparation_report",
             )
+            return
+        if report.action_verification is not None:
+            # The committed verifier report is the terminal output of this
+            # internal preparation child; it never publishes another target.
+            self._store_result(_with_report(operation_id, "applied", None, result, report.preflight))
             return
         if not report.publishable:
             self._store_result(

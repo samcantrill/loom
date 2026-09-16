@@ -11,6 +11,17 @@ def inspect(request):
     from loom.pipeline.stores import LocalArtifactStore
 
     assert request["schema_version"] == 3
+    if request["operation"] == "verify_result":
+        candidate = request["candidate"]
+        assert request["contract"]["semantic_key"] == candidate["semantic_key"]
+        assert request["contract"]["namespace"] == candidate["namespace"] == "text-project"
+        store = LocalArtifactStore(Path(candidate["access"]["artifact_root"]))
+        for fact in candidate["result"]["artifact_facts"]:
+            product = store.load(ArtifactRef.from_dict(fact["artifact"]))
+            if product not in ("alpha\nbeta\n", 2):
+                return {"schema_version": 1, "candidate_digest": candidate["candidate_digest"],
+                        "verdict": "rejected", "reason": {"code": "line_count_mismatch", "output_port": fact["artifact_name"]}}
+        return {"schema_version": 1, "candidate_digest": candidate["candidate_digest"], "verdict": "verified"}
     if request["operation"] == "verify_candidate":
         candidate = request["candidate"]
         desired = request["project_result"]["stage_contracts"]
@@ -43,6 +54,7 @@ def inspect(request):
                 "digest": hash_mapping(stage["config"]).split(":", 1)[1],
             },
             "payload": {
+                "ordered_outputs": [{"ports": list(stage["outputs"])}],
                 "declaration": stage["config"],
                 "node": stage["name"],
                 "opaque_location": {
@@ -62,7 +74,7 @@ def inspect(request):
         "reconciliation_key": {
             "namespace": "text-project",
             "version": 1,
-            "digest": "a" * 64,
+            "digest": hash_mapping(composition["resolved"]["pipeline"]).split(":", 1)[1],
         },
         "stage_contracts": contracts,
     }

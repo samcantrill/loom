@@ -142,8 +142,11 @@ class ResidentProfileDescriptor:
     environment_fingerprint: str
     executor_fingerprint: str
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict, compare=True, hash=False)
+    action_reuse_qualified: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.action_reuse_qualified) is not bool:
+            raise QueueServiceError("action reuse qualification must be boolean")
         from .shared_execution import qualified_roots
         object.__setattr__(self, "shared_roots", qualified_roots(self.shared_roots))
         for name in (
@@ -163,6 +166,7 @@ class ResidentProfileDescriptor:
             "environment_fingerprint": self.environment_fingerprint,
             "executor_fingerprint": self.executor_fingerprint,
             **({"shared_roots": thaw_plain_data(self.shared_roots)} if self.shared_roots else {}),
+            **({"action_reuse_qualified": True} if self.action_reuse_qualified else {}),
         }
 
     @property
@@ -173,7 +177,7 @@ class ResidentProfileDescriptor:
 
     @classmethod
     def from_dict(cls, value: object) -> "ResidentProfileDescriptor":
-        if not isinstance(value, Mapping) or set(value) - {"shared_roots"} != {
+        if not isinstance(value, Mapping) or set(value) - {"shared_roots", "action_reuse_qualified"} != {
             "profile_id",
             "revision",
             "project_fingerprint",
@@ -188,6 +192,7 @@ class ResidentProfileDescriptor:
             cast(str, value["environment_fingerprint"]),
             cast(str, value["executor_fingerprint"]),
             cast(Mapping[str, PlainData], value.get("shared_roots", {})),
+            cast(bool, value.get("action_reuse_qualified", False)),
         )
 
 

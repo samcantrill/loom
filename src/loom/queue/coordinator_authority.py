@@ -28,6 +28,7 @@ from loom.pipeline.stores.authority import (
     StatusTransition,
 )
 from loom.pipeline.stores.read_models import (
+    ActionResultBinding,
     AuthoritativeRunSnapshot,
     BackendRevision,
     LifecycleReason,
@@ -71,6 +72,11 @@ class CoordinatorAuthorityStore(
     ) -> tuple[EventObserverLinkRecord, ...]: ...
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision: ...
 
     def transition_run(
         self,

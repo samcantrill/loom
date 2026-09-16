@@ -855,11 +855,13 @@ class _ScopedCoordinatorAuthority:
         run_uri: str,
         coordinator_id: str,
         ordinary_mutation_frozen: Callable[[str], bool] | None = None,
+        on_grant: Callable[[str, ExecutionFence], None] | None = None,
     ) -> None:
         self._store = store
         self._run_uri = run_uri
         self._coordinator_id = coordinator_id
         self._ordinary_mutation_frozen = ordinary_mutation_frozen
+        self._on_grant = on_grant
 
     def _require_ordinary_mutation(self, assignment_id: str) -> None:
         frozen = self._ordinary_mutation_frozen
@@ -890,6 +892,10 @@ class _ScopedCoordinatorAuthority:
         self._run(run_uri)
         return self._store.ensure_prepared_attempt(run_uri, request)
 
+    def bind_action_result(self, run_uri: str, stage_name: str, binding, *, expected_revision=None):
+        self._run(run_uri)
+        return self._store.bind_action_result(run_uri, stage_name, binding, expected_revision=expected_revision)
+
     def bind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
@@ -910,9 +916,12 @@ class _ScopedCoordinatorAuthority:
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ):
         self._run(run_uri)
-        return self._store.grant_prepared_attempt(
+        fence = self._store.grant_prepared_attempt(
             run_uri, assignment_id=assignment_id, attempt_id=attempt_id
         )
+        if self._on_grant is not None:
+            self._on_grant(run_uri, fence)
+        return fence
 
     def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
         self._run(run_uri)
@@ -1294,6 +1303,9 @@ class LocalDaemonExecution:
         self.cancellation_operation = cancellation_operation
         self.admission_activated = admission_activated
         self.daemon = daemon
+        from ._action_result_resolution import ActionResultResolution
+
+        self._action_resolution = None if daemon is None else ActionResultResolution(self)
         self.run_store = LocalRunStore(config.run_store_root)
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
@@ -1632,6 +1644,7 @@ class LocalDaemonExecution:
             run_uri=assignment.run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+            on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
         try:
             run_managed_local_assignment(
@@ -1845,6 +1858,7 @@ class LocalDaemonExecution:
             run_uri=admission.run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+            on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
         return intent, scoped_authority
 
@@ -1964,12 +1978,14 @@ class LocalDaemonExecution:
         )
         if terminal is not None:
             return terminal
+        action_resolver = self._action_resolution
         orchestrator.reconcile(
             admission_id=admission.admission_id,
             plan=intent.plan,
             authority_snapshot=snapshot,
             placements=placements,
             execution_requirements=intent.execution_requirements,
+            ready_action=None if action_resolver is None else lambda stage_plan, readiness, revision: action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision),
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
@@ -6151,6 +6167,7 @@ class LocalDaemonExecution:
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+            on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
 
     def _authority_store(self, run_uri: str) -> CoordinatorAuthorityStore:

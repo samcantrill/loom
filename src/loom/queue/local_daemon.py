@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 16
+_COORDINATOR_SCHEMA_VERSION = 17
 _AGENT_SCHEMA_VERSION = 12
 # Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
@@ -4431,7 +4431,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
 
 
 def _initialize_coordinator_schema(
-    conn: sqlite3.Connection, *, preparation: bool = True
+    conn: sqlite3.Connection, *, preparation: bool = True, action_results: bool = True
 ) -> None:
     conn.execute(
         "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -4500,6 +4500,10 @@ def _initialize_coordinator_schema(
     )
     if preparation:
         _initialize_preparation_schema(conn)
+    if action_results:
+        from ._action_results import initialize_action_results
+
+        initialize_action_results(conn)
 
 
 def _initialize_preparation_schema(
@@ -4534,7 +4538,8 @@ def _initialize_preparation_schema(
 
 
 def _validate_coordinator_schema(
-    conn: sqlite3.Connection, *, preparation: bool, legacy_preparation: bool = False
+    conn: sqlite3.Connection, *, preparation: bool, legacy_preparation: bool = False,
+    action_results: bool = True,
 ) -> None:
     """Validate durable table/identity constraints against the initialization owner."""
 
@@ -4561,7 +4566,8 @@ def _validate_coordinator_schema(
     try:
         with sqlite3.connect(":memory:") as expected:
             _initialize_coordinator_schema(
-                expected, preparation=preparation and not legacy_preparation
+                expected, preparation=preparation and not legacy_preparation,
+                action_results=action_results,
             )
             if legacy_preparation:
                 _initialize_preparation_schema(expected, legacy=True)
@@ -4609,7 +4615,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
             )
         )
         if version != expected_version:
-            if role == "coordinator" and version in (12, 15):
+            if role == "coordinator" and version in (12, 15, 16):
                 raise QueueStorageError(
                     f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
                 )
@@ -4620,8 +4626,9 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
         if role == "coordinator":
             _validate_coordinator_schema(
                 conn,
-                preparation=version in (15, _COORDINATOR_SCHEMA_VERSION),
+                preparation=version in (15, 16, _COORDINATOR_SCHEMA_VERSION),
                 legacy_preparation=version == 15,
+                action_results=version >= 17,
             )
         values = {
             str(row[0]): str(row[1])

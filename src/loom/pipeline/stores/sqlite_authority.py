@@ -56,6 +56,7 @@ from .capabilities import (
     CapabilitySupport,
 )
 from .read_models import (
+    ActionResultBinding,
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
     BackendRevision,
@@ -134,6 +135,7 @@ _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
 )
 
 _REQUIRED_SCHEMA_COLUMNS = {
+    "action_result_bindings": frozenset({"stage_name", "binding_json", "revision_sequence"}),
     "metadata": frozenset({"key", "value"}),
     "revisions": frozenset({"sequence", "token", "created_at"}),
     "run_state": frozenset(
@@ -586,6 +588,36 @@ class SQLitePerRunAuthorityStore:
                 revision=revision,
                 reason=reason,
             )
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision:
+        """Satisfy a ready consumer without allocating an attempt or copying a commit."""
+        self._bind_run_uri(run_uri)
+        _non_empty(stage_name, "stage_name")
+        if not isinstance(binding, ActionResultBinding):
+            raise AuthorityStoreError("binding must be an ActionResultBinding")
+        encoded = _json_dumps(binding.to_dict())
+        with self._transaction(run_uri) as conn:
+            retained = conn.execute("SELECT * FROM action_result_bindings WHERE stage_name = ?", (stage_name,)).fetchone()
+            if retained is not None:
+                if retained["binding_json"] != encoded:
+                    raise AuthorityStoreError("immutable action result binding conflicts")
+                return _revision_for(conn, int(retained["revision_sequence"]))
+            _require_no_cancellation_epoch(conn)
+            _require_expected_revision(_current_run_revision(conn), expected_revision)
+            if _require_run_status(conn) not in {RunStatus.CREATED, RunStatus.PLANNED, RunStatus.SUBMITTED, RunStatus.RUNNING}:
+                raise AuthorityStoreError("terminal run cannot bind an action result")
+            row = conn.execute("SELECT status FROM stages WHERE stage_name = ?", (stage_name,)).fetchone()
+            if (row is not None and row["status"] != StageStatus.PENDING.value) or conn.execute("SELECT 1 FROM attempts WHERE stage_name = ?", (stage_name,)).fetchone() is not None:
+                raise AuthorityStoreError("action result consumer already owns execution")
+            revision = self._next_revision(conn)
+            conn.execute("INSERT INTO action_result_bindings VALUES (?, ?, ?)", (stage_name, encoded, revision.sequence))
+            _upsert_stage(conn, stage_name=stage_name, status=StageStatus.SUCCEEDED,
+                          revision=revision, reason=LifecycleReason(code="action.result_reused", detail={"claim_id": binding.claim_id}))
+            _touch_run(conn, revision)
+            return revision
 
     def allocate_stage_attempt(
         self,
@@ -3198,6 +3230,13 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS action_result_bindings (
+            stage_name TEXT PRIMARY KEY,
+            binding_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS leases (
             lease_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -3425,9 +3464,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5}:
+    if version not in {1, 2, 3, 4, 5, 6}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
+    historical_columns.pop("action_result_bindings")
     if version < 3:
         historical_columns.pop("prepared_attempt_receipts")
     if version < 4:
@@ -3552,6 +3592,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             receipt_json TEXT NOT NULL
         )
     """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS action_result_bindings (
+        stage_name TEXT PRIMARY KEY, binding_json TEXT NOT NULL,
+        revision_sequence INTEGER NOT NULL)""")
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -3873,6 +3916,10 @@ def _stage_snapshot(
             (None if commit_row is None else commit_row["commit_id"],),
         )
     )
+    binding_row = conn.execute("SELECT binding_json FROM action_result_bindings WHERE stage_name = ?", (stage_name,)).fetchone()
+    binding = None if binding_row is None else ActionResultBinding.from_dict(_json_loads(str(binding_row["binding_json"])))
+    if binding is not None:
+        latest_commit, facts = binding.commit, binding.artifact_facts
     return StageLifecycleSnapshot(
         stage_name=stage_name,
         status=status,
@@ -3881,6 +3928,7 @@ def _stage_snapshot(
         active_lease=active_lease,
         latest_commit=latest_commit,
         artifact_facts=facts,
+        result_binding=binding,
         reliability_policy_facts=_reliability_policy_facts(
             conn,
             stage_name=stage_name,

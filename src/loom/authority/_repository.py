@@ -55,6 +55,7 @@ from loom.pipeline.stores.coordination import (
 )
 from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
 from loom.pipeline.stores.read_models import (
+    ActionResultBinding,
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
     BackendRevision,
@@ -90,13 +91,14 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 7
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 8
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _ADMISSION_IDEMPOTENCY_METADATA_KEY = "_loom_admission_idempotency_key"
 _METADATA_TABLE = "repository_metadata"
 _REQUIRED_SCHEMA_COLUMNS = {
+    "action_result_bindings": frozenset({"run_uri", "stage_name", "binding_json", "revision_sequence"}),
     _METADATA_TABLE: frozenset({"key", "value"}),
     "repository_revisions": frozenset({"sequence", "token", "created_at"}),
     "authority_runs": frozenset(
@@ -495,6 +497,7 @@ class AuthorityRepository:
                     _migrate_v5_coordinator_principals(
                         conn, current_version=self.schema_version
                     )
+                    _migrate_v7_action_bindings(conn, current_version=self.schema_version)
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -1129,6 +1132,36 @@ class AuthorityRepository:
             raise AuthorityRepositoryError(
                 "coordinator authority principal conflicts with admission"
             )
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision:
+        """Bind an original verified result through the scoped coordinator route."""
+        run_uri, stage_name = _non_empty(run_uri, "run_uri"), _non_empty(stage_name, "stage_name")
+        if not isinstance(binding, ActionResultBinding):
+            raise AuthorityRepositoryError("binding must be an ActionResultBinding")
+        encoded = _json_dumps(binding.to_dict())
+        with self.transaction() as conn:
+            run = _require_run_row(conn, run_uri)
+            retained = conn.execute("SELECT * FROM action_result_bindings WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+            if retained is not None:
+                if retained["binding_json"] != encoded:
+                    raise AuthorityRepositoryError("immutable action result binding conflicts")
+                return _revision_for(conn, int(retained["revision_sequence"]))
+            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_expected_revision(_current_run_revision(conn, run_uri), expected_revision)
+            if RunStatus(run["status"]) not in {RunStatus.CREATED, RunStatus.PLANNED, RunStatus.SUBMITTED, RunStatus.RUNNING}:
+                raise AuthorityRepositoryError("terminal run cannot bind an action result")
+            row = conn.execute("SELECT status FROM authority_stages WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+            if (row is not None and row["status"] != StageStatus.PENDING.value) or conn.execute("SELECT 1 FROM stage_attempts WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone() is not None:
+                raise AuthorityRepositoryError("action result consumer already owns execution")
+            revision = self._next_revision(conn)
+            conn.execute("INSERT INTO action_result_bindings VALUES (?, ?, ?, ?)", (run_uri, stage_name, encoded, revision.sequence))
+            _upsert_stage(conn, run_uri=run_uri, stage_name=stage_name, status=StageStatus.SUCCEEDED,
+                          revision=revision, reason=LifecycleReason(code="action.result_reused", detail={"claim_id": binding.claim_id}))
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return revision
 
     def install_cancellation_epoch(
         self, run_uri: str, request: CancellationEpochRequest
@@ -4264,7 +4297,7 @@ def _migrate_v3_output_commits(
     if version != 3:
         return
 
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4273,6 +4306,8 @@ def _migrate_v3_output_commits(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name == "action_result_bindings":
+            continue
         v3_columns = (
             expected_columns - {"supersedes_commit_id"}
             if table_name == "output_commits"
@@ -4368,7 +4403,7 @@ def _migrate_v5_coordinator_principals(
         return
     if version != 5:
         return
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4377,6 +4412,8 @@ def _migrate_v5_coordinator_principals(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name == "action_result_bindings":
+            continue
         v5_columns = (
             expected_columns - {"service_principal"}
             if table_name == "coordinator_admission_receipts"
@@ -4411,6 +4448,28 @@ def _migrate_v5_coordinator_principals(
         f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
         (str(current_version),),
     )
+
+
+def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
+    if current_version != 8:
+        return
+    tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
+    if _METADATA_TABLE not in tables:
+        return
+    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'").fetchone()
+    if row is None or row["value"] != "7":
+        return
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "action_result_bindings":
+            continue
+        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns.issubset(actual):
+            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v7 schema is incomplete", current_version=current_version))
+    conn.execute("""CREATE TABLE action_result_bindings (
+        run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
+        binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
+        PRIMARY KEY (run_uri, stage_name))""")
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'", (str(current_version),))
 
 
 def _initialize_schema(
@@ -4546,6 +4605,13 @@ def _initialize_schema(
             status TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
+            PRIMARY KEY (run_uri, stage_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS action_result_bindings (
+            run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
+            binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
             PRIMARY KEY (run_uri, stage_name)
         )
         """,
@@ -5586,6 +5652,10 @@ def _stage_snapshot(
             (None if commit_row is None else commit_row["commit_id"],),
         )
     )
+    binding_row = conn.execute("SELECT binding_json FROM action_result_bindings WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+    binding = None if binding_row is None else ActionResultBinding.from_dict(_json_loads(str(binding_row["binding_json"])))
+    if binding is not None:
+        latest_commit, artifact_facts = binding.commit, binding.artifact_facts
     return StageLifecycleSnapshot(
         stage_name=stage_name,
         status=status,
@@ -5594,6 +5664,7 @@ def _stage_snapshot(
         active_lease=active_lease,
         latest_commit=latest_commit,
         artifact_facts=artifact_facts,
+        result_binding=binding,
         reason=reason,
     )
 

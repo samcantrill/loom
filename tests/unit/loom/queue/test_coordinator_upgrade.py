@@ -29,6 +29,9 @@ def _predecessor(tmp_path: Path) -> LocalDaemonConfig:
     with sqlite3.connect(config.coordinator_root / "control.sqlite") as conn:
         conn.execute("DROP TABLE preparation_cancellations")
         conn.execute("DROP TABLE preparation_operations")
+        conn.execute("DROP TABLE action_demands")
+        conn.execute("DROP TABLE action_claims")
+        conn.execute("DROP TABLE action_graph_cancellations")
         conn.execute("PRAGMA user_version = 12")
     return config
 
@@ -62,7 +65,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     worker_database = worker / "control.sqlite"
     worker_before = worker_database.read_bytes()
 
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 16)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 17)
     after = _contents(database)
     assert {name: after[name] for name in before} == before
     assert after["preparation_operations"] == ()
@@ -76,7 +79,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     with sqlite3.connect(backups[0]) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     published = database.read_bytes(), database.stat().st_mtime_ns
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 16)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 17)
     assert (database.read_bytes(), database.stat().st_mtime_ns) == published
     assert tuple(config.coordinator_root.glob("*.schema-12.*.backup")) == backups
 
@@ -116,12 +119,12 @@ def test_upgrade_rolls_back_both_schema_and_marker_and_retries_without_overwriti
     backup, = config.coordinator_root.glob("*.backup")
     original_backup = backup.read_bytes(), backup.stat().st_mtime_ns
     monkeypatch.setattr(upgrade, "_apply_upgrade", original)
-    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 16
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 17
     assert (backup.read_bytes(), backup.stat().st_mtime_ns) == original_backup
     assert len(tuple(config.coordinator_root.glob("*.backup"))) == 2
 
 
-@pytest.mark.parametrize("version", [11, 13, 14, 17])
+@pytest.mark.parametrize("version", [11, 13, 14, 18])
 def test_upgrade_rejects_unsupported_versions_without_repair(
     tmp_path: Path, version: int
 ) -> None:
@@ -146,3 +149,21 @@ def test_current_marker_without_complete_schema_is_rejected(tmp_path: Path) -> N
         LocalDaemon.upgrade_coordinator_root(config)
     assert database.read_bytes() == before
     assert not tuple(config.coordinator_root.glob("*.backup"))
+
+
+def test_upgrade_schema_16_keeps_preparation_owner_and_adds_action_owners(tmp_path: Path) -> None:
+    from loom.queue.local_daemon import _initialize_preparation_schema
+
+    config = _predecessor(tmp_path)
+    database = config.coordinator_root / "control.sqlite"
+    with sqlite3.connect(database) as conn:
+        _initialize_preparation_schema(conn)
+        conn.execute("PRAGMA user_version = 16")
+    before = _contents(database)
+    with pytest.raises(QueueStorageError, match="offline upgrade"):
+        _open_root(config.coordinator_root, role="coordinator")
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 17
+    after = _contents(database)
+    assert {name: after[name] for name in before} == before
+    assert after["action_claims"] == after["action_demands"] == ()
+    assert after["action_graph_cancellations"] == ()

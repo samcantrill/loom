@@ -462,10 +462,19 @@ class PreparationChildInput:
     candidate: Mapping[str, PlainData] | None = None
     shared_scope: Mapping[str, PlainData] | None = None
     generations: Mapping[str, str] | None = None
+    action_verification: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
+
+        if self.action_verification is not None:
+            from loom.pipeline._action_verification import action_verification_request
+
+            object.__setattr__(self, "action_verification", freeze_plain_data(action_verification_request(self.action_verification)))
+            project = _project_binding(self.project_preparation)
+            if project is None or cast(Mapping[str, PlainData], project["processor"])["schema_version"] != 3 or self.candidate is not None:
+                raise QueueServiceError("action verification requires installed v3 without a whole-target candidate")
 
         if self.generations is not None:
             if not isinstance(self.generations, Mapping) or not self.generations:
@@ -505,7 +514,8 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 8 if self.generations is not None else 7 if self.project_preparation is not None and cast(Mapping[str, PlainData], self.project_preparation["processor"])["schema_version"] == 3 else 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            "schema_version": 9 if self.action_verification is not None else 8 if self.generations is not None else 7 if self.project_preparation is not None and cast(Mapping[str, PlainData], self.project_preparation["processor"])["schema_version"] == 3 else 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            **({"action_verification": thaw_plain_data(self.action_verification)} if self.action_verification is not None else {}),
             **({"generations": dict(self.generations)} if self.generations is not None else {}),
             **({"shared_scope": dict(self.shared_scope)} if self.shared_scope is not None else {}),
             **({"candidate": thaw_plain_data(self.candidate)} if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else {}),
@@ -521,7 +531,7 @@ class PreparationChildInput:
 
     @classmethod
     def from_dict(cls, value: object) -> "PreparationChildInput":
-        if isinstance(value, Mapping) and value.get("schema_version") in (6, 7, 8):
+        if isinstance(value, Mapping) and value.get("schema_version") in (6, 7, 8, 9):
             result = cls(
                 cast(str, value.get("operation_id")), cast(str, value.get("preparation_profile")),
                 cast(str, value.get("config_path")), input_receipt_from_dict(cast(Mapping[str, object], value.get("input_receipt"))),
@@ -533,6 +543,7 @@ class PreparationChildInput:
                 candidate=cast(Mapping[str, PlainData] | None, value.get("candidate")),
                 shared_scope=cast(Mapping[str, PlainData] | None, value.get("shared_scope")),
                 generations=cast(Mapping[str, str] | None, value.get("generations")),
+                action_verification=cast(Mapping[str, PlainData] | None, value.get("action_verification")),
             )
             if result.to_dict() != thaw_plain_data(value):
                 raise QueueServiceError("shared preparation child fields are invalid")

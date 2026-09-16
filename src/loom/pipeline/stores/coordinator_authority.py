@@ -49,6 +49,7 @@ from .authority_protocol import (
     AuthorityProtocolResult,
 )
 from .read_models import (
+    ActionResultBinding,
     AuthoritativeRunSnapshot,
     BackendRevision,
     LifecycleReason,
@@ -60,6 +61,7 @@ COORDINATOR_AUTHORITY_ROUTE_PREFIX = "/v1/authority/coordinator"
 COORDINATOR_AUTHORITY_SERVICE_HEADER = "X-Loom-Authority-Service"
 COORDINATOR_PUBLISH_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/publish"
 COORDINATOR_OPEN_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/open"
+COORDINATOR_BIND_RESULT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/stages/bind-result"
 COORDINATOR_TRANSITION_RUN_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/transition"
 )
@@ -503,6 +505,15 @@ class AuthenticatedCoordinatorAuthority:
             body={"request": request_value.to_dict()},
         )
         return CoordinatorAdmissionReceipt.from_dict(_body_required(result, "receipt"))
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision:
+        result = self._call(COORDINATOR_BIND_RESULT_PATH, run_uri,
+                            stage_name=stage_name, expected_revision=expected_revision,
+                            body={"binding": binding.to_dict()})
+        return BackendRevision.from_dict(_body_required(result, "revision"))
 
     def install_cancellation_epoch(
         self, run_uri: str, request_value: CancellationEpochRequest

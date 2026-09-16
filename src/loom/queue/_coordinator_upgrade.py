@@ -37,7 +37,7 @@ def upgrade_coordinator_root(config: LocalDaemonConfig) -> tuple[str, int]:
         try:
             with sqlite3.connect(database) as conn:
                 version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-                if version not in {12, 15, _COORDINATOR_SCHEMA_VERSION}:
+                if version not in {12, 15, 16, _COORDINATOR_SCHEMA_VERSION}:
                     raise QueueStorageError("coordinator root schema cannot be upgraded")
                 coordinator_id = _open_root(root, role="coordinator", schema_version=version)
                 _validate_deployment_binding(config, coordinator_id=coordinator_id)
@@ -64,10 +64,12 @@ def upgrade_coordinator_root(config: LocalDaemonConfig) -> tuple[str, int]:
 
 
 def _apply_upgrade(conn: sqlite3.Connection) -> None:
-    """Install the preparation schema and marker in the caller's transaction."""
+    """Install the missing owners and marker in the caller's transaction."""
+    from ._action_results import initialize_action_results
     from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _initialize_preparation_schema
 
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 15:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version == 15:
         # Copy both owners in one offline transaction, retaining all exact intent
         # and cancellation receipts before replacing the old uniqueness layout.
         conn.execute("ALTER TABLE preparation_cancellations RENAME TO old_cancellations")
@@ -77,8 +79,9 @@ def _apply_upgrade(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO preparation_cancellations SELECT * FROM old_cancellations")
         conn.execute("DROP TABLE old_cancellations")
         conn.execute("DROP TABLE old_operations")
-    else:
+    elif version == 12:
         _initialize_preparation_schema(conn)
+    initialize_action_results(conn)
     conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
 
 

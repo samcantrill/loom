@@ -664,7 +664,10 @@ def qualified_resident_profile(
     result = qualify_resident_profile(profile, _deadline=_deadline)
     descriptor = profile.descriptor
     if result.ok:
-        descriptor = replace(descriptor, **dict(result.fingerprints))
+        descriptor = replace(
+            descriptor, **dict(result.fingerprints),
+            action_reuse_qualified=bool(profile.readiness_requirements.source_roots),
+        )
     return replace(
         profile,
         descriptor=descriptor,

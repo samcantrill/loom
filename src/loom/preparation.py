@@ -112,6 +112,10 @@ class PreparationStage:
             raise QueueConflictError("preparation project processor identity conflicts")
         if profile.to_dict() != dict(binding.profile_descriptor):
             raise QueueConflictError("preparation installation_mismatch")
+        if binding.action_verification is not None:
+            return {"report": context.save_artifact(
+                "report", _run_action_verification(binding), artifact_type="json", codec_key="json.v1"
+            )}
         if isinstance(binding.input_receipt, SharedInputReceipt):
             roots = cast(Mapping[str, str], private["shared_roots"])
             captured = resolve_shared_input(
@@ -224,6 +228,51 @@ class PreparationStage:
                 "report", report, artifact_type="json", codec_key="json.v1"
             )
         }
+
+
+def _run_action_verification(binding: PreparationChildInput) -> dict[str, PlainData]:
+    from loom.pipeline._action_verification import action_verification_request, action_verification_response
+
+    assert binding.project_preparation is not None
+    requested = action_verification_request(binding.action_verification)
+    selected = _plain_mapping(binding.project_preparation["processor"])
+    response, failure = None, None
+    try:
+        module, attribute = cast(str, selected["callable"]).split(":")
+        processor = importlib.import_module(module)
+        for part in attribute.split("."):
+            processor = getattr(processor, part)
+        value = cast(Any, processor)({
+            "schema_version": 3, "operation": "verify_result",
+            "project_preparation": dict(binding.project_preparation),
+            **requested,
+        })
+        response = action_verification_response(value, _plain_mapping(requested["candidate"]))
+    except Exception:
+        # Crashes and malformed callback replies are explicit native failures;
+        # unchecked project exception messages never cross this boundary.
+        failure = "action_verification_invalid"
+    return {
+        "schema_version": 9, "operation_id": binding.operation_id,
+        "profile_descriptor": dict(binding.profile_descriptor),
+        "action_verification": requested, "verification": response, "failure_code": failure,
+    }
+
+
+def _decode_action_verification_report(value: object, binding: PreparationChildInput) -> dict[str, PlainData]:
+    from loom.pipeline._action_verification import action_verification_response
+    from loom.serialization import thaw_plain_data
+
+    report = _plain_mapping(value)
+    if set(report) != {"schema_version", "operation_id", "profile_descriptor", "action_verification", "verification", "failure_code"} or type(report["schema_version"]) is not int or report["schema_version"] != 9:
+        raise QueueConflictError("action verification report fields are invalid")
+    if report["operation_id"] != binding.operation_id or report["profile_descriptor"] != dict(binding.profile_descriptor) or report["action_verification"] != thaw_plain_data(binding.action_verification):
+        raise QueueConflictError("action verification report binding conflicts")
+    if report["failure_code"] is None:
+        action_verification_response(report["verification"], _plain_mapping(_plain_mapping(report["action_verification"])["candidate"]))
+    elif report["failure_code"] != "action_verification_invalid" or report["verification"] is not None:
+        raise QueueConflictError("action verification report failure is invalid")
+    return report
 
 
 def _is_v3(binding: PreparationChildInput) -> bool:
@@ -904,6 +953,11 @@ class CoordinatorPreparation:
                     "preparation committed report cannot be decoded"
                 ) from exc
             raise
+        if binding.action_verification is not None:
+            checked = _decode_action_verification_report(value, binding)
+            preflight = PreflightResult((), ())
+            return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
+                                     False, None, None, action_verification=checked)
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
