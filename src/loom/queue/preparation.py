@@ -454,11 +454,16 @@ class PreparationChildInput:
     local_scope: Mapping[str, PlainData] | None = None
     project_preparation: Mapping[str, PlainData] | None = None
     candidate: Mapping[str, PlainData] | None = None
+    shared_scope: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
+        from .shared_execution import scope
+        object.__setattr__(self, "shared_scope", scope(self.shared_scope))
+        if self.shared_scope is not None and (self.local_scope is not None or not isinstance(self.input_receipt, SharedInputReceipt)):
+            raise QueueServiceError("shared configuration requires shared capture and no local pin")
         object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
         if self.candidate is not None:
             if not isinstance(self.candidate, Mapping):
@@ -467,7 +472,7 @@ class PreparationChildInput:
                 raise QueueServiceError("candidate verification requires installed project preparation")
             object.__setattr__(self, "candidate", freeze_plain_data(self.candidate))
         project = _project_binding(self.project_preparation)
-        if project is not None and self.local_scope is None:
+        if project is not None and self.local_scope is None and self.shared_scope is None:
             raise QueueServiceError("project preparation requires protected local policy")
         object.__setattr__(self, "project_preparation", project)
         _invocation(self)
@@ -485,7 +490,8 @@ class PreparationChildInput:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "schema_version": 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            "schema_version": 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
+            **({"shared_scope": dict(self.shared_scope)} if self.shared_scope is not None else {}),
             **({"candidate": thaw_plain_data(self.candidate)} if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else {}),
             **({"project_preparation": dict(self.project_preparation)} if self.project_preparation is not None else {}),
             **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
@@ -499,6 +505,20 @@ class PreparationChildInput:
 
     @classmethod
     def from_dict(cls, value: object) -> "PreparationChildInput":
+        if isinstance(value, Mapping) and value.get("schema_version") == 6:
+            result = cls(
+                cast(str, value.get("operation_id")), cast(str, value.get("preparation_profile")),
+                cast(str, value.get("config_path")), input_receipt_from_dict(cast(Mapping[str, object], value.get("input_receipt"))),
+                cast(Mapping[str, PlainData], value.get("profile_descriptor")),
+                cast(tuple[str, ...], value.get("overlays")), cast(tuple[str, ...], value.get("overrides")),
+                cast(Mapping[str, PlainData], value.get("run_options")),
+                project_preparation=cast(Mapping[str, PlainData] | None, value.get("project_preparation")),
+                candidate=cast(Mapping[str, PlainData] | None, value.get("candidate")),
+                shared_scope=cast(Mapping[str, PlainData] | None, value.get("shared_scope")),
+            )
+            if result.to_dict() != thaw_plain_data(value):
+                raise QueueServiceError("shared preparation child fields are invalid")
+            return result
         if (
             not isinstance(value, Mapping)
             or set(value)

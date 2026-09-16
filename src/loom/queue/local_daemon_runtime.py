@@ -265,8 +265,17 @@ def _preparation_constraints(
     )
     from ._remote_stage_execution import ResidentProfileDescriptor
 
+    from .shared_execution import SHARED_EXECUTION_SCOPE, scope, attributes
+    shared = scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+    constraints = ()
+    if shared is not None:
+        evaluator = evaluators.get("attribute")
+        if evaluator is None:
+            raise QueueServiceError("shared execution requires the attribute evaluator")
+        constraints = (HardConstraintSpec("shared-execution", "attribute",
+            {"attributes": attributes(shared)}, evaluator.descriptor),)
     if stage.factory.target_path != PREPARATION_STAGE_TARGET:
-        return ()
+        return constraints
     binding = PreparationChildInput.from_dict(stage.stage_config)
     profile = ResidentProfileDescriptor.from_dict(binding.profile_descriptor)
     evaluator = evaluators.get("attribute")
@@ -274,7 +283,7 @@ def _preparation_constraints(
         raise QueueServiceError(
             "preparation requires the attribute constraint evaluator"
         )
-    return (
+    return constraints + (
         HardConstraintSpec(
             "preparation-input",
             "attribute",

@@ -9,6 +9,8 @@ not make worker-local diagnostic files a dependency of coordinator inspection.
 
 from __future__ import annotations
 
+from .shared_execution import assignment_scope, require_bindings, validate_workload, SHARED_EXECUTION_SCOPE
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 import base64
@@ -128,8 +130,11 @@ class ResidentProfileDescriptor:
     project_fingerprint: str
     environment_fingerprint: str
     executor_fingerprint: str
+    shared_roots: Mapping[str, PlainData] = field(default_factory=dict, compare=True, hash=False)
 
     def __post_init__(self) -> None:
+        from .shared_execution import qualified_roots
+        object.__setattr__(self, "shared_roots", qualified_roots(self.shared_roots))
         for name in (
             "profile_id",
             "revision",
@@ -146,6 +151,7 @@ class ResidentProfileDescriptor:
             "project_fingerprint": self.project_fingerprint,
             "environment_fingerprint": self.environment_fingerprint,
             "executor_fingerprint": self.executor_fingerprint,
+            **({"shared_roots": thaw_plain_data(self.shared_roots)} if self.shared_roots else {}),
         }
 
     @property
@@ -156,7 +162,7 @@ class ResidentProfileDescriptor:
 
     @classmethod
     def from_dict(cls, value: object) -> "ResidentProfileDescriptor":
-        if not isinstance(value, Mapping) or set(value) != {
+        if not isinstance(value, Mapping) or set(value) - {"shared_roots"} != {
             "profile_id",
             "revision",
             "project_fingerprint",
@@ -170,6 +176,7 @@ class ResidentProfileDescriptor:
             cast(str, value["project_fingerprint"]),
             cast(str, value["environment_fingerprint"]),
             cast(str, value["executor_fingerprint"]),
+            cast(Mapping[str, PlainData], value.get("shared_roots", {})),
         )
 
 
@@ -446,8 +453,15 @@ class ResidentExecutionProfile:
     readiness_result: "ResidentReadinessResult | None" = None
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
     container: Mapping[str, PlainData] | None = None
+    shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, ResidentProfileDescriptor):
+            raise QueueServiceError("resident execution descriptor is invalid")
+        from .shared_execution import root_bindings, qualifications
+        roots = root_bindings(self.shared_roots)
+        object.__setattr__(self, "shared_roots", roots)
+        object.__setattr__(self, "descriptor", replace(self.descriptor, shared_roots=qualifications(roots)))
         from ._container_worker import container_binding
         object.__setattr__(self, "container", container_binding(self.container))
         if self.container is not None:
@@ -460,8 +474,6 @@ class ResidentExecutionProfile:
                 if not Path(str(image["reference"])).is_file():
                     raise QueueServiceError("resident container image is unavailable")
 
-        if not isinstance(self.descriptor, ResidentProfileDescriptor):
-            raise QueueServiceError("resident execution descriptor is invalid")
         project_root = Path(self.project_root).resolve()
         # Preserve the executable entry path: virtual-environment Python
         # launchers are commonly symlinks whose spelling selects the venv.
@@ -532,6 +544,7 @@ class ResidentExecutionProfile:
             environment=self.environment,
             readiness_identity=self.readiness_identity,
             preparation_shared_roots=self.preparation_shared_roots,
+            shared_roots=self.shared_roots,
         )
 
 
@@ -768,7 +781,7 @@ class _ResidentAssignmentBundle:
     schema_version: int = RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+        if self.schema_version not in (RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION, 5):
             raise QueueServiceError("resident assignment bundle schema is unsupported")
         for name in (
             "assignment_id",
@@ -812,6 +825,11 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
+        shared = assignment_scope(fingerprint)
+        if shared is not None:
+            object.__setattr__(self, "schema_version", 5)
+        elif self.schema_version == 5:
+            raise QueueServiceError("shared assignment requires explicit scope")
         preparation = _preparation_input_from_fingerprint(fingerprint)
         if (
             preparation is not None
@@ -1000,7 +1018,7 @@ class _ResidentAssignmentBundle:
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("resident assignment bundle is invalid")
-        if value.get("schema_version") != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+        if value.get("schema_version") not in (RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION, 5):
             raise QueueServiceError(
                 "resident assignment bundle schema is unsupported; finish or cancel "
                 "the saved work in its pinned environment and prepare a fresh identity"
@@ -1016,6 +1034,8 @@ class _ResidentAssignmentBundle:
                 field_value, (str, bytes)
             ):
                 raise QueueServiceError("resident assignment bundle is invalid")
+        if (value["schema_version"] == 5) != (assignment_scope(cast(Mapping[str, PlainData], value["fingerprint"])) is not None):
+            raise QueueServiceError("shared assignment schema capability conflicts")
         return cls(
             assignment_id=cast(str, value["assignment_id"]),
             stage_work_id=cast(str, value["stage_work_id"]),
@@ -1490,6 +1510,9 @@ class _ResidentAssignmentWorkspace:
 
         launch_profile = profile.launch_profile if isinstance(profile, ResidentExecutionProfile) else profile
         _require_local_binding(_assignment_local_scope(request), launch_profile)
+        shared = assignment_scope(request.fingerprint)
+        if shared is not None:
+            require_bindings(shared, launch_profile.shared_roots)
         encoded = _canonical_json(request.to_dict())
         with self._connect() as conn:
             row = conn.execute(
@@ -1684,6 +1707,9 @@ class _ResidentAssignmentWorkspace:
         if scope is not None:
             launch = _launch_from_value(decoded)
             _require_local_binding(scope, launch.profile)
+        shared = assignment_scope(self.request().fingerprint)
+        if shared is not None:
+            require_bindings(shared, _launch_from_value(decoded).profile.shared_roots)
         canonical = _canonical_json(decoded)
         with self._connect() as conn:
             row = conn.execute(
@@ -1748,6 +1774,32 @@ class _ResidentAssignmentWorkspace:
             metadata=request.worker_metadata,
         )
 
+    def shared_launch_profile(self) -> ResidentWorkerLaunchProfile:
+        """Read a retained private binding inside the worker's namespace.
+
+        The supervisor already validated its command on the host. Rebuilding a
+        host container command inside that container would dereference private
+        host prefixes and require unrelated mounts.
+        """
+        from ._agent_process_supervisor import _profile_from_value
+        from .shared_execution import execution_roots
+        retained = self.supervisor_launch_json()
+        if retained is None:
+            raise QueueConflictError("shared execution requires a retained supervisor launch")
+        value = json.loads(retained)
+        request = self.request()
+        profile = _profile_from_value(value.get("profile"))
+        if (value.get("assignment_id") != request.assignment_id
+            or value.get("workspace_root") != str(self.root)
+            or value.get("bundle_digest") != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+            or dict(profile.descriptor) != request.profile.to_dict()):
+            raise QueueConflictError("shared execution conflicts with retained launch")
+        required = assignment_scope(request.fingerprint)
+        if required is None:
+            raise QueueConflictError("shared execution requires retained scope")
+        require_bindings(required, execution_roots(profile.shared_roots, container=profile.container is not None))
+        return profile
+
     def preparation_context(self) -> Mapping[str, PlainData] | None:
         """Bind only the fixed child's selected alias to its retained launch profile."""
         request = self.request()
@@ -1756,43 +1808,54 @@ class _ResidentAssignmentWorkspace:
             return None
         retained = self.supervisor_launch_json()
         if retained is None:
-            raise QueueConflictError(
-                "preparation input requires a retained supervisor launch"
-            )
-        launch = _launch_from_value(json.loads(retained))
-        if (
-            launch.assignment_id != request.assignment_id
-            or launch.workspace_root != self.root
-            or launch.bundle_digest
-            != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
-            or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)
-        ):
-            raise QueueConflictError(
-                "preparation input conflicts with the retained launch"
-            )
+            raise QueueConflictError("preparation input requires a retained supervisor launch")
+        if preparation.shared_scope is not None:
+            launch_profile = self.shared_launch_profile()
+        else:
+            launch = _launch_from_value(json.loads(retained))
+            if (
+                launch.assignment_id != request.assignment_id
+                or launch.workspace_root != self.root
+                or launch.bundle_digest != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+                or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)
+            ):
+                raise QueueConflictError("preparation input conflicts with the retained launch")
+            launch_profile = launch.profile
         from .preparation import SharedInputReceipt, _require_local_binding
 
-        _require_local_binding(preparation.local_scope, launch.profile)
+        _require_local_binding(preparation.local_scope, launch_profile)
         local_context: dict[str, PlainData] = (
             {} if preparation.local_scope is None else {"local_scope": dict(preparation.local_scope)}
         )
+        if preparation.shared_scope is not None:
+            local_context["shared_scope"] = dict(preparation.shared_scope)
         if preparation.project_preparation is not None:
             local_context["project_preparation"] = dict(preparation.project_preparation)
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
             return {
-                "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+                "schema_version": 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
-                "profile_descriptor": dict(launch.profile.descriptor),
+                "profile_descriptor": dict(launch_profile.descriptor),
                 "staged_directory": str(directory),
             }
         alias = preparation.input_receipt.root
-        path = launch.profile.preparation_shared_roots.get(alias)
+        path = launch_profile.preparation_shared_roots.get(alias)
+        if preparation.shared_scope is not None and launch_profile.container is not None:
+            # Parent launch validated the physical mapping; the child reads the
+            # same retained capture in its stable container namespace.
+            source = launch_profile.preparation_shared_roots.get(alias)
+            matches = [cast(Mapping[str, PlainData], root) for root in launch_profile.shared_roots.values()
+                       if source is not None and source.is_relative_to(Path(str(cast(Mapping[str, PlainData], root)["host_path"])))]
+            if len(matches) != 1 or matches[0]["container_path"] is None:
+                raise QueueServiceError("shared snapshot container binding is unavailable")
+            assert source is not None
+            path = Path(str(matches[0]["container_path"])) / source.relative_to(Path(str(matches[0]["host_path"])))
         return {
-            "schema_version": 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+            "schema_version": 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
-            "profile_descriptor": dict(launch.profile.descriptor),
+            "profile_descriptor": dict(launch_profile.descriptor),
             "shared_roots": {} if path is None else {alias: str(path)},
         }
 
@@ -2295,6 +2358,18 @@ def _validate_remote_semantic_data(
                 },
             },
         }
+    shared = assignment_scope(fingerprint) if preparation is None else preparation.shared_scope
+    if shared is not None:
+        payload = dict(cast(Mapping[str, PlainData], fingerprint["payload"]))
+        fields = dict(cast(Mapping[str, PlainData], payload["fingerprint_fields"]))
+        fields.pop(SHARED_EXECUTION_SCOPE, None)
+        if preparation is None:
+            validate_workload(payload["stage_config"], shared)
+            validate_workload(payload["factory_init"], shared)
+            payload["stage_config"] = {}
+            payload["factory_init"] = {}
+        payload["fingerprint_fields"] = fields
+        fingerprint = {**fingerprint, "payload": payload}
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
     _reject_path_bearing_data(worker_metadata, "worker_metadata")

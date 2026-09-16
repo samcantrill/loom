@@ -71,6 +71,7 @@ from loom.queue.preparation import (
     _invocation_data,
 )
 from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes
+from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, bind_snapshot, scope as shared_scope, stage_scope, validate_workload
 
 
 _PREPARATION_GROUPS = (
@@ -103,6 +104,8 @@ class PreparationStage:
         binding = PreparationChildInput.from_dict(context.stage_config)
         private = _worker_context()
         profile = ResidentProfileDescriptor.from_dict(private["profile_descriptor"])
+        if shared_scope(private.get("shared_scope")) != binding.shared_scope:
+            raise QueueConflictError("preparation shared policy identity conflicts")
         if _local_scope(private.get("local_scope")) != binding.local_scope:
             raise QueueConflictError("preparation local policy identity conflicts")
         if _project_binding(private.get("project_preparation")) != binding.project_preparation:
@@ -156,6 +159,9 @@ class PreparationStage:
                 binding.local_scope,
                 redacted=cast(dict[str, PlainData], composition["redacted"]),
             )
+        if binding.shared_scope is not None and preflight.status != PreflightStatus.FAIL:
+            bind_snapshot(cast(dict[str, PlainData], composition["resolved"]), binding.shared_scope,
+                          redacted=cast(dict[str, PlainData], composition["redacted"]))
         provenance = cast(dict[str, PlainData], composition["provenance"])
         metadata = cast(dict[str, PlainData], provenance["metadata"])
         metadata["loom_invocation"] = _invocation_data(binding)
@@ -188,10 +194,11 @@ class PreparationStage:
         report: dict[str, PlainData] = {
             "schema_version": binding.to_dict()["schema_version"],
             **({"candidate": dict(binding.candidate) if binding.candidate is not None else None,
-                "verification": verification} if binding.to_dict()["schema_version"] == 5 else {}),
+                "verification": verification} if "candidate" in binding.to_dict() else {}),
             **({"project_preparation": dict(binding.project_preparation),
                 "requested_composition": requested_composition,
                 "project_result": project_result} if binding.project_preparation is not None else {}),
+            **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {}),
             **({"local_scope": dict(binding.local_scope)} if binding.local_scope is not None else {}),
             "operation_id": binding.operation_id,
             "input_manifest_digest": binding.input_receipt.manifest_digest,
@@ -233,7 +240,7 @@ def _inspect_project(
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "preparation_profile": binding.preparation_profile,
             "profile_descriptor": dict(binding.profile_descriptor),
-            "local_scope": dict(binding.local_scope or {}),
+            **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
             "project_preparation": dict(binding.project_preparation),
         }
         result = _plain_mapping(cast(Any, processor)(request))
@@ -290,7 +297,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "profile_descriptor": dict(binding.profile_descriptor),
             "project_preparation": dict(binding.project_preparation),
-            "local_scope": dict(binding.local_scope or {}),
+            **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
         }))
         if response != expected:
             raise QueueConflictError("candidate verification result conflicts")
@@ -381,8 +388,8 @@ def _bind_local_snapshot(
     """Validate resolved locality and annotate executable and diagnostic views."""
     pipeline = _pipeline_from_resolved(snapshot)
     for stage in pipeline.stages:
-        if LOCAL_PREPARATION_SCOPE in stage.fingerprint_fields:
-            raise QueueConflictError("captured configuration cannot select local preparation scope")
+        if LOCAL_PREPARATION_SCOPE in stage.fingerprint_fields or SHARED_EXECUTION_SCOPE in stage.fingerprint_fields:
+            raise QueueConflictError("captured configuration cannot select protected preparation scope")
         if scope is not None:
             target = stage.placement.get("target")
             if target is not None and target != scope["agent_id"]:
@@ -435,14 +442,15 @@ def _worker_context() -> Mapping[str, PlainData]:
         value = json.loads(encoded)
         if (
             not isinstance(value, dict)
-            or (set(value) - {"local_scope", "project_preparation"}) not in (
+            or (set(value) - {"local_scope", "project_preparation", "shared_scope"}) not in (
                 {"schema_version", "profile_descriptor", "shared_roots"},
                 {"schema_version", "profile_descriptor", "staged_directory"},
             )
             or type(value["schema_version"]) is not int
-            or value["schema_version"] not in (1, 2, 3)
+            or value["schema_version"] not in (1, 2, 3, 4)
             or (value["schema_version"] in (2, 3)) != ("local_scope" in value)
-            or (value["schema_version"] == 3) != ("project_preparation" in value)
+            or (value["schema_version"] != 4 and (value["schema_version"] == 3) != ("project_preparation" in value))
+            or (value["schema_version"] == 4) != ("shared_scope" in value)
             or not isinstance(value.get("shared_roots", {}), dict)
             or any(
                 not isinstance(alias, str)
@@ -519,14 +527,14 @@ def _decode_preparation_report(
 ) -> tuple[object, dict[str, ExecutionRequirement], PreflightResult]:
     report = _plain_mapping(value)
     if (
-        set(report) != (_REPORT_FIELDS | ({"local_scope"} if expected.local_scope is not None else set())
+        set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
-                        | ({"candidate", "verification"} if expected.to_dict()["schema_version"] == 5 else set()))
+                        | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set()))
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
-    if expected.to_dict()["schema_version"] == 5:
+    if "candidate" in expected.to_dict():
         from loom.fingerprints import hash_mapping
         from loom.serialization import thaw_plain_data
 
@@ -539,6 +547,8 @@ def _decode_preparation_report(
             raise QueueConflictError("unexpected candidate verification")
     if _project_binding(report.get("project_preparation")) != expected.project_preparation:
         raise QueueConflictError("preparation report project processor identity conflicts")
+    if shared_scope(report.get("shared_scope")) != expected.shared_scope:
+        raise QueueConflictError("preparation report shared policy conflicts")
     if _local_scope(report.get("local_scope")) != expected.local_scope:
         raise QueueConflictError("preparation report local policy identity conflicts")
     if (
@@ -633,7 +643,15 @@ def _decode_preparation_report(
             scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
             if scope != expected.local_scope or (scope is not None and stage.placement.get("target") != scope["agent_id"]):
                 raise QueueConflictError("preparation report local placement conflicts")
-            if scope is None:
+            if expected.shared_scope is not None:
+                selected = stage_scope(stage.stage_config, stage.factory.init, expected.shared_scope)
+                if shared_scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE)) != selected:
+                    raise QueueConflictError("prepared stage shared selection conflicts")
+                validate_workload(stage.stage_config, selected)
+                validate_workload(stage.factory.init, selected)
+            elif shared_scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE)) is not None:
+                raise QueueConflictError("preparation report shared scope conflicts with policy")
+            elif scope is None:
                 _reject_path_bearing_data(stage.stage_config, "prepared stage config")
                 _reject_path_bearing_data(stage.factory.init, "prepared factory arguments")
     return received, requirements, preflight
@@ -679,6 +697,9 @@ def prepare_child_run(
     }
     _require_local_binding(binding.local_scope, service.daemon.resident_worker_launch_profile, agent_id=service.daemon.machine_id)
     _bind_local_snapshot(resolved, binding.local_scope)
+    if binding.shared_scope is not None:
+        stage = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
+        stage["fingerprint"] = {SHARED_EXECUTION_SCOPE: dict(binding.shared_scope)}
     # The fixed child has no authored composition/recipe provenance. Its native
     # plan fingerprint includes the complete validated input and profile binding.
     composed = _ReceivedComposition(

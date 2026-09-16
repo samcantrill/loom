@@ -61,12 +61,15 @@ def execute_resident_stage_worker_request(
     worker_request: StageWorkerRequest,
     workspace_root: Path,
     process_containment_owner: ProcessContainmentOwner,
+    location_resolver: Callable[[object], object] | None = None,
 ) -> StageWorkerResult:
     """Execute one path-free resident request in an agent-owned workspace.
 
     This restricted worker boundary has no run-store parameter. The coordinator already prepared and fingerprinted the
     exact stage, while the agent owns only an assignment-local artifact and
     workspace layout. Lifecycle and output authority remain with the caller.
+    An optional trusted location resolver materializes typed config/factory
+    locations without changing the retained semantic fingerprint.
     """
 
     if not isinstance(worker_request, StageWorkerRequest):
@@ -77,6 +80,9 @@ def execute_resident_stage_worker_request(
     root.mkdir(parents=True, exist_ok=True)
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
     stage = _stage_spec_from_request(worker_request)
+    if location_resolver is not None:
+        stage = replace(stage, stage_config=cast(Mapping[str, PlainData], location_resolver(stage.stage_config)),
+                        factory=replace(stage.factory, init=cast(Mapping[str, PlainData], location_resolver(stage.factory.init))))
     stage_plan = StagePlan(
         stage_name=worker_request.stage_name,
         action=PlanAction.RUN,

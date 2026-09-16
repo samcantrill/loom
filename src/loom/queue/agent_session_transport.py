@@ -2495,6 +2495,17 @@ class LocalDaemonAgentHttpClient:
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
 
+        from .shared_execution import SHARED_EXECUTION_CAPABILITY, qualifications
+        if SHARED_EXECUTION_CAPABILITY in request.declared_capabilities:
+            if not any(profile.shared_roots for profile in self._profiles.values()):
+                raise QueueServiceError("shared execution capability requires qualified roots")
+            for profile in self._profiles.values():
+                if not profile.shared_roots:
+                    continue
+                if profile.readiness_result is None or not profile.readiness_result.ok or not any(check.check_id == "packages.shared_execution" and check.status.value == "PASS" for check in profile.readiness_result.checks):
+                    raise QueueServiceError("selected installation lacks shared execution qualification")
+                if qualifications(profile.shared_roots) != profile.descriptor.shared_roots:
+                    raise QueueServiceError("shared execution root qualification changed")
         staged = PREPARATION_STAGED_INPUT_CAPABILITY in request.declared_capabilities
         if (
             PREPARATION_INPUT_CAPABILITY in request.declared_capabilities or staged
@@ -6149,6 +6160,15 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
+    result = value.get("result")
+    if isinstance(result, Mapping) and result.get("result") == "assignment":
+        request = result.get("request")
+        if isinstance(request, Mapping) and request.get("schema_version") == 5:
+            # Shared assignments add a versioned location/scope envelope. Keep
+            # their finite body budget independent of the polling response.
+            _bounded_json(request, depth=0)
+            _bounded_json({**value, "result": {**result, "request": None}}, depth=0)
+            return value
     evidence = value.get("evidence")
     if (
         failure_report

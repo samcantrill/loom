@@ -567,3 +567,66 @@ def test_project_target_derivation_rechecks_protected_root(tmp_path: Path) -> No
     (root / "target").symlink_to(outside, target_is_directory=True)
     with pytest.raises(QueueConflictError, match="protected run root"):
         _project_target_uri(root, "target")
+
+
+def test_shared_root_qualification_rejects_wrong_missing_and_escaping_locations(tmp_path):
+    import hashlib
+    from loom.queue.shared_execution import location, root_bindings, qualifications, require_bindings
+
+    root = tmp_path / "mapped"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"same-root")
+    (root / "selected").write_bytes(b"immutable-input")
+    bindings = root_bindings({"data": {"host_path": str(root), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"same-root").hexdigest()}}})
+    selected = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected"}
+    required = {"capability": "shared-execution-v1", "roots": qualifications(bindings), "locations": [selected]}
+    require_bindings(required, bindings)
+    with pytest.raises(QueueServiceError, match="not mapped"):
+        require_bindings(required, {})
+    for path in ("../outside", "/outside", "a/../selected", "a//b"):
+        with pytest.raises(QueueServiceError, match="relative"):
+            location({**selected, "path": path})
+    (root / "selected").unlink()
+    with pytest.raises(QueueServiceError, match="unavailable"):
+        require_bindings(required, bindings)
+    (tmp_path / "outside").write_bytes(b"wrong")
+    (root / "selected").symlink_to(tmp_path / "outside")
+    with pytest.raises(QueueServiceError, match="escaping|symbolic"):
+        require_bindings(required, bindings)
+    (root / "challenge").write_bytes(b"another-filesystem")
+    with pytest.raises(QueueServiceError, match="bytes mismatch"):
+        qualifications(bindings)
+
+
+def test_shared_scope_is_explicit_and_preserves_portable_policy(tmp_path):
+    from loom.queue.shared_execution import SHARED_EXECUTION_CAPABILITY
+    descriptor = ResidentProfileDescriptor("shared", "v1", "project", "environment", "executor",
+        {"data": {"container_path": "/loom/data", "access": "ro", "challenge": {"path": "challenge", "sha256": "a" * 64}}})
+    data = {"source_roots": {"project": {"path": str(tmp_path), "shared_snapshot_root": str(tmp_path / "snapshots")}},
+        "profiles": {"shared": {"resident_profile_id": "shared", "allowed_source_roots": ["project"],
+            "source_modes": ["shared"], "runtime_options": {"executor": "local"}, "configuration_policy": "shared",
+            "project_processor": {"schema_version": 1, "callable": "installed:inspect", "evidence_namespace": "project", "recovery_stage": None}}}}
+    policy = load_preparation_policy(data, base=tmp_path, descriptors=(descriptor,))
+    assert policy is not None
+    profile = policy.profiles["shared"]
+    assert profile.shared_scope is not None
+    assert profile.shared_scope["capability"] == SHARED_EXECUTION_CAPABILITY
+    assert profile.local_scope is None and profile.project_processor is not None
+    data["profiles"]["shared"]["configuration_policy"] = "portable"
+    from loom.queue.errors import QueueConfigError
+    with pytest.raises(QueueConfigError, match="local or shared"):
+        load_preparation_policy(data, base=tmp_path, descriptors=(descriptor,))
+
+
+def test_authored_config_cannot_select_protected_shared_scope():
+    from loom.preparation import _bind_local_snapshot
+    from loom.queue.errors import QueueConflictError
+    from loom.serialization import PlainData
+    snapshot: dict[str, PlainData] = {"pipeline": {"name": "attempted-scope", "stages": [{
+        "name": "inspect", "factory": {"_target_": "installed.Stage"},
+        "outputs": {"receipt": {"artifact_type": "json", "codec_key": "json.v1"}},
+        "fingerprint": {"loom.shared_execution": {"capability": "shared-execution-v1", "roots": {}, "locations": []}},
+    }]}}
+    with pytest.raises(QueueConflictError, match="protected preparation scope"):
+        _bind_local_snapshot(snapshot, None)

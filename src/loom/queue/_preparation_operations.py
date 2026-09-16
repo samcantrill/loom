@@ -770,6 +770,7 @@ class CoordinatorPreparations:
             cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
             project_binding,
             None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
+            shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:
