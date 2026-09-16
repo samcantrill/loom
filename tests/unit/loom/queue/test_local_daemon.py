@@ -1240,6 +1240,55 @@ def test_scheduling_reload_rejects_before_persistence_when_role_prepare_fails(
     restarted.stop()
 
 
+def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        agent_policy=replace(
+            config.agent_policy,
+            agents=(
+                *config.agent_policy.agents,
+                AgentPrincipalPolicy(
+                    "new-worker", "new-worker", "new-worker", ("default",), ("python",)
+                ),
+            ),
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    old_providers = dict(execution.providers)
+    old_capacity = tuple(execution.capacity)
+    old_coordinator = execution.coordinator
+    # Same retained-provider-claim condition as the capacity-change rejection
+    # regression below. The cross-repository tmux fixture exercises a real job.
+    monkeypatch.setattr(
+        execution.journal, "retained_claim_commands", lambda: (object(),)
+    )
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "add-worker-capacity",
+                before.scheduling_epoch,
+                "enroll a distinct worker",
+            )
+        )
+        assert receipt["state"] == "applied"
+        assert all(execution.providers[k] is v for k, v in old_providers.items())
+        assert all(atom in execution.capacity for atom in old_capacity)
+        assert {atom.key for atom in execution.capacity} - {
+            atom.key for atom in old_capacity
+        } == {("cpu", "new-worker:cpu"), ("memory", "new-worker:memory")}
+        assert execution.coordinator.path == old_coordinator.path
+    finally:
+        daemon.stop()
+
+
 def test_scheduling_reload_rejects_capacity_change_while_claims_are_retained(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

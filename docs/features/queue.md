@@ -329,7 +329,9 @@ an added agent rule, its mTLS fingerprint and observed execution profile. Keep
 `agent_policy.revision` and every existing agent rule unchanged, and use a new
 agent identity. The reload advances the coordinator's scheduling epoch and
 configuration revision; these are separate from the credential-policy revision
-that fences live sessions. Changing that policy revision, removing/changing an
+that fences live sessions. New worker capacity namespaces can be added while
+existing reservations remain held: every existing capacity atom must remain
+unchanged, and the local provider configuration must be unchanged. Changing that policy revision, removing/changing an
 existing worker rule, or adding another credential for an existing worker is
 rejected while any agent session is active. Client/operator scopes still apply
 from the current protected policy on each operation. A rejected reload preserves

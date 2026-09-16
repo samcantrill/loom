@@ -3772,14 +3772,22 @@ class LocalDaemonExecution:
         )
         replacement_local_capacity = replacement.agent_resource_capacity
         replacement_capacity = _coordinator_capacity(replacement)
-        provider_changed = (
+        local_provider_changed = (
             replacement.gpu_occupancy_policy != self.config.gpu_occupancy_policy
             or replacement_local_capacity != self.local_capacity
-            or replacement_capacity != self.capacity
             or _provider_composition_fingerprint(replacement_providers)
             != _provider_composition_fingerprint(self.providers)
         )
-        if provider_changed:
+        provider_changed = (
+            local_provider_changed or replacement_capacity != self.capacity
+        )
+        # Enrollment adds distinct agent namespaces. Keeping every existing atom
+        # unchanged preserves all retained reservations without requiring idle
+        # workers. Local provider changes still require quiescence.
+        additive_capacity = not local_provider_changed and all(
+            atom in replacement_capacity for atom in self.capacity
+        )
+        if provider_changed and not additive_capacity:
             try:
                 retained_claims = (
                     ()
@@ -3799,6 +3807,7 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "scheduling reload cannot replace capacity with retained work"
                 )
+        if provider_changed:
             replacement_coordinator = SQLiteCoordinatorAssignments(
                 replacement.execution_database,
                 replacement_capacity,
