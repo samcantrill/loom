@@ -446,3 +446,22 @@ def test_shared_installed_source_identity_ignores_private_workspace_prefix(tmp_p
         assert result.failure is None and result.payload is not None
         results.append(result.payload["sources"])
     assert results[0] == results[1]
+
+
+def test_publication_qualification_rejects_an_installation_with_only_shared_inputs(tmp_path):
+    import hashlib
+    root = tmp_path / "outputs"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"fixture")
+    roots = {"outputs": {"host_path": str(root), "container_path": "/loom/outputs", "access": "rw",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"fixture").hexdigest()},
+        "publication": {"max_members": 1024, "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576}}}
+    supported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots))
+    assert supported.ok
+    (tmp_path / "sitecustomize.py").write_text(
+        "import loom.queue._shared_publication as publication\ndel publication.CAPABILITY\n"
+    )
+    unsupported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots,
+                                                  environment={"PYTHONPATH": str(tmp_path)}))
+    assert not unsupported.ok
+    assert next(check for check in unsupported.checks if check.check_id == "packages.shared_publication").status == "FAIL"

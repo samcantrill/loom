@@ -7293,3 +7293,14 @@ def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
     request["evidence"]["report"] = _failure_report({"items": items}).to_dict()
     with pytest.raises(QueueServiceError, match="maximum 256"):
         _decode(json.dumps(request).encode(), failure_report=True)
+
+
+def test_shared_result_schema_preserves_existing_failure_envelope_bounds():
+    from dataclasses import replace
+    report = replace(_failure_report({"metric": 0.5, "nested": _nested_report_detail(20)}),
+                     schema_version=4, executor_metadata={})
+    value = {"report": report.to_dict()}
+    decoded = _decode(json.dumps(value).encode(), failure_report=True)
+    assert _RemoteExecutionReport.from_dict(decoded["report"]) == report
+    with pytest.raises(QueueServiceError):
+        _decode(json.dumps({**value, "authorization_revision": 0.5}).encode(), failure_report=True)

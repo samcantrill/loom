@@ -74,6 +74,7 @@ def build_container_worker(
     runtime: Mapping[str, PlainData] | None = None,
     shared_scope: Mapping[str, PlainData] | None = None,
     shared_snapshot: object = None,
+    agent_id: str | None = None,
 ):
     """Reuse container resource projection with assignment-owned path parity."""
     from loom.pipeline.executors.containers import (
@@ -133,6 +134,28 @@ def build_container_worker(
             challenge = cast(Mapping[str, PlainData], root["challenge"])
             target = str(Path(str(root["container_path"])) / str(challenge["path"]))
             mounts[target] = ContainerMount(source=str(resolve(root, str(challenge["path"]))), target=target, mode="ro")
+        from ._remote_stage_execution import _ResidentAssignmentWorkspace
+        from ._shared_publication import selected, staging_tree, resolve_input
+        from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+        assignment = _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).request()
+        selection = selected(assignment)
+        if selection is not None:
+            if agent_id is None:
+                raise ValueError("shared output mount requires the assignment machine identity")
+            alias, _ = selection
+            root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
+            source = staging_tree(assignment, profile.shared_roots, agent_id, create=True)
+            target = Path(str(root["container_path"])) / source.relative_to(str(root["host_path"]))
+            mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
+        for item in assignment.inputs:
+            reference = shared_binding(item.metadata)
+            if reference is None:
+                continue
+            resolve_input(item, profile.shared_roots)
+            root = cast(Mapping[str, PlainData], profile.shared_roots[str(reference["root_id"])])
+            source = resolve(root, str(reference["tree"]))
+            target = Path(str(root["container_path"])) / str(reference["tree"])
+            mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
         if shared_snapshot is not None:
             from .preparation import SharedInputReceipt
             assert isinstance(shared_snapshot, SharedInputReceipt)

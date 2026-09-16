@@ -1261,3 +1261,124 @@ def test_shared_assignment_requires_versioned_scope_and_live_root_binding(tmp_pa
     (root / "challenge").write_bytes(b"wrong")
     with pytest.raises(QueueServiceError, match="bytes mismatch"):
         workspace.persist_request(request, profile)
+
+
+def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
+    from loom.queue._shared_publication import worker_artifact_root
+    root = tmp_path / "shared"
+    root.mkdir(exist_ok=True)
+    (root / "challenge").write_bytes(b"shared")
+    roots = {"outputs": {"host_path": str(root), "container_path": "/loom/outputs", "access": "rw",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()},
+        "publication": limits or {"max_members": 1024, "max_payload_bytes": 256 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024}}}
+    profile = replace(_profile(tmp_path), shared_roots=roots)
+    if container:
+        image = tmp_path / "worker.sif"
+        image.write_bytes(b"command-only fixture")
+        profile = replace(profile, container={"kind": "apptainer", "container": {"image": {"reference": str(image)}},
+            "options": {"command": sys.executable}, "python_executable": "/opt/python", "daemon_endpoint": None})
+    request = _request(profile)
+    scoped = stage_scope({}, {}, {"roots": qualifications(roots)})
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    request = replace(request, assignment_id=assignment_id, fingerprint=StageFingerprintRecord.create(
+        algorithm=fingerprint.algorithm, payload=replace(fingerprint.payload, fingerprint_fields={SHARED_EXECUTION_SCOPE: scoped}),
+        inputs_summary=fingerprint.inputs_summary).to_dict())
+    request = replace(request, resolved_runtime={**request.resolved_runtime,
+        "resources": {"schema_version": 2, "entries": {}}})
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    launch = ResidentWorkerLaunch(supervisor_id="supervisor-1", continuity_epoch="epoch-1", agent_id="agent-1",
+        session_id="session-1", assignment_id=request.assignment_id, process_execution_id="execution-1",
+        execution_fence="fence-1", launch_operation_id="launch-1",
+        bundle_digest=hashlib.sha256(remote_stage_execution._canonical_json(request.to_dict()).encode()).hexdigest(),
+        workspace_root=workspace.root, profile=profile.launch_profile, environment={})
+    workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
+    workspace.mark_process_started("execution-1", 101)
+    artifacts = worker_artifact_root(workspace)
+    assert artifacts is not None
+    output = artifacts / request.stage_name / "primary.json"
+    output.write_bytes(b'{"companion":"values.bin"}')
+    (output.parent / "values.bin").write_bytes(b"companion-bytes")
+    (output.parent / "catalog").mkdir()
+    (output.parent / "catalog" / "checkpoint").write_bytes(b"checkpoint")
+    result = StageWorkerResult(schema_version=1, run_uri=f"loom-agent:{request.assignment_id}", stage_name=request.stage_name,
+        attempt=request.attempt, status=StageStatus.SUCCEEDED, started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z", executor_name="local",
+        outputs={"result": ArtifactRef("build/result", output.as_uri(), "bytes", checksum="sha256:" + hashlib.sha256(output.read_bytes()).hexdigest())},
+        executor_metadata={})
+    workspace.persist_worker_result(result)
+    return workspace, profile, launch, result
+
+
+def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tmp_path):
+    from loom.queue._shared_publication import publish
+    from loom.pipeline.stores.shared_artifacts import binding
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    report = workspace.retain_outputs()
+    assert report.schema_version == 4
+    assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
+    refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    assert workspace.retain_outputs() == report
+    assert publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1") == refs
+    tree = Path(refs["result"].uri.removeprefix("file://")).parent
+    assert (tree / "values.bin").read_bytes() == b"companion-bytes"
+    assert (tree / "catalog" / "checkpoint").read_bytes() == b"checkpoint"
+    assert binding(refs["result"].metadata)["primary"] == "primary.json"
+    assert not (workspace.root / "retained-outputs").exists()
+    with pytest.raises(QueueConflictError, match="identity"):
+        publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="obsolete-fence")
+    assert (tree / "values.bin").is_file()
+
+
+@pytest.mark.parametrize("limit,value,error", [
+    ("max_members", 2, "member or payload budget"),
+    ("max_payload_bytes", 1, "member or payload budget"),
+    ("max_manifest_bytes", 64, "manifest budget"),
+])
+def test_shared_publication_budget_excess_never_publishes(tmp_path, limit, value, error):
+    limits = {"max_members": 1024, "max_payload_bytes": 256 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024}
+    limits[limit] = value
+    workspace, _, _, _ = _shared_publication_workspace(tmp_path, limits=limits)
+    with pytest.raises((QueueConflictError, QueueServiceError), match=error):
+        workspace.retain_outputs()
+    assert not (tmp_path / "shared" / "loom-artifacts").exists()
+
+
+@pytest.mark.parametrize("change", ["missing", "changed", "unlisted", "symlink", "fifo"])
+def test_shared_publication_rejects_interrupted_or_changed_closure(tmp_path, change):
+    from loom.queue._shared_publication import publish
+    import os
+    workspace, profile, _, result = _shared_publication_workspace(tmp_path)
+    report = workspace.retain_outputs()
+    tree = Path(result.outputs["result"].uri.removeprefix("file://")).parent
+    companion = tree / "values.bin"
+    if change == "changed":
+        companion.write_bytes(b"different")
+    elif change == "unlisted":
+        (tree / "late-member").write_bytes(b"late writer")
+    else:
+        companion.unlink()
+        if change == "symlink":
+            companion.symlink_to(tree / "primary.json")
+        elif change == "fifo":
+            os.mkfifo(companion)
+    with pytest.raises(QueueConflictError):
+        publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    assert not (tmp_path / "shared" / "loom-artifacts").exists()
+
+
+def test_shared_attempts_and_container_mounts_are_disjoint_and_narrow(tmp_path):
+    from loom.queue._shared_publication import staging_tree
+    first, profile, launch, _ = _shared_publication_workspace(tmp_path, container=True)
+    second, _, _, _ = _shared_publication_workspace(tmp_path, assignment_id="assignment-2", container=True)
+    first_tree = staging_tree(first.request(), profile.shared_roots, "agent-1")
+    second_tree = staging_tree(second.request(), profile.shared_roots, "agent-1")
+    assert first_tree != second_tree and first_tree.is_dir() and second_tree.is_dir()
+    argv = launch.container_command.argv
+    assert any(str(first_tree) in arg and ":rw" in arg for arg in argv)
+    assert not any(str(second_tree) in arg for arg in argv)
+    assert not any(arg.startswith(str(tmp_path / "shared") + ":") for arg in argv)
