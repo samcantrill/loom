@@ -44,6 +44,13 @@ from loom.queue import (
     TimeRecoveryRequest,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue._managed_local import (
+    AssignmentState,
+    ClaimCommand,
+    ClaimOutcome,
+    ManagedAssignment,
+    ObserveRequest,
+)
 from loom.queue.agent_sessions import (
     AgentControlKind,
     AgentOffer,
@@ -79,6 +86,7 @@ from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     FifoSchedulingPolicy,
     ResourceClaimContractDescriptor,
+    ResourceClaim,
     TargetConstraintEvaluator,
 )
 
@@ -1241,11 +1249,12 @@ def test_scheduling_reload_rejects_before_persistence_when_role_prepare_fails(
 
 
 def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
     replacement = replace(
         config,
+        agent_resource_providers=None,
         agent_policy=replace(
             config.agent_policy,
             agents=(
@@ -1263,11 +1272,46 @@ def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
     old_providers = dict(execution.providers)
     old_capacity = tuple(execution.capacity)
     old_coordinator = execution.coordinator
-    # Same retained-provider-claim condition as the capacity-change rejection
-    # regression below. The cross-repository tmux fixture exercises a real job.
-    monkeypatch.setattr(
-        execution.journal, "retained_claim_commands", lambda: (object(),)
+    provider = execution.providers["cpu"]
+    assert replacement.agent_resource_providers is not None
+    fresh_provider = next(
+        item
+        for item in replacement.agent_resource_providers
+        if item.descriptor.kind == "cpu"
     )
+    assert fresh_provider is not provider
+    assert fresh_provider.descriptor == provider.descriptor
+    assignment = ManagedAssignment(
+        "held-assignment",
+        "file:///held-run",
+        "held-work",
+        "work",
+        1,
+        "held-attempt",
+        "local-agent",
+        "local-session",
+        "held-offer",
+        "held-claim",
+    )
+    observed = provider.observe(
+        ObserveRequest("local-agent", "local-session", "before")
+    )
+    command = ClaimCommand(
+        assignment,
+        "prepare-held-claim",
+        ResourceClaim("cpu", provider.claim_contracts[0], observed.atoms, 1),
+        provider.descriptor,
+    )
+    execution.journal.persist_request(assignment, {})
+    assert (
+        execution.journal.prepare_composite(
+            assignment,
+            (command,),
+            execution.providers,
+        )
+        is AssignmentState.PREPARED
+    )
+    assert execution.journal.retained_claim_commands()
     try:
         receipt = daemon.operator_view(
             LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
@@ -1285,6 +1329,13 @@ def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
             atom.key for atom in old_capacity
         } == {("cpu", "new-worker:cpu"), ("memory", "new-worker:memory")}
         assert execution.coordinator.path == old_coordinator.path
+        current_provider = execution.providers["cpu"]
+        held = current_provider.observe(
+            ObserveRequest("local-agent", "local-session", "after")
+        )
+        assert held.atoms == ()
+        assert held.live_claim_ids == (assignment.claim_id,)
+        assert current_provider.reconcile(command).outcome is ClaimOutcome.PREPARED
     finally:
         daemon.stop()
 

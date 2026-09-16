@@ -3807,6 +3807,11 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "scheduling reload cannot replace capacity with retained work"
                 )
+        if not local_provider_changed:
+            # Equivalent configuration may construct fresh provider objects;
+            # retain the current instances that own live in-memory claims.
+            replacement_providers = self.providers
+            replacement_local_capacity = self.local_capacity
         if provider_changed:
             replacement_coordinator = SQLiteCoordinatorAssignments(
                 replacement.execution_database,
@@ -3820,8 +3825,6 @@ class LocalDaemonExecution:
                     "replacement coordinator capacity is unavailable"
                 ) from exc
         else:
-            replacement_providers = self.providers
-            replacement_local_capacity = self.local_capacity
             replacement_capacity = self.capacity
             replacement_coordinator = self.coordinator
         runtime_placements = self._referenced_runtime_placements()
