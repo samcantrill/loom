@@ -671,6 +671,15 @@ class LocalDaemonConfig:
     preparation_policy: PreparationPolicy | None = None
     resident_preparation_ready: bool = False
     resident_preparation_staged_ready: bool = False
+    shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
+
+    @property
+    def coordinator_shared_roots(self) -> Mapping[str, PlainData]:
+        """Private coordinator mappings; older colocated roles use their profile."""
+        if self.shared_roots:
+            return self.shared_roots
+        profile = self.resident_worker_launch_profile
+        return {} if profile is None else profile.shared_roots
 
     @property
     def preparation_enabled(self) -> bool:
@@ -679,6 +688,11 @@ class LocalDaemonConfig:
         )
 
     def __post_init__(self) -> None:
+        from .shared_execution import root_bindings, qualifications
+
+        roots = root_bindings(self.shared_roots)
+        qualifications(roots)
+        object.__setattr__(self, "shared_roots", freeze_plain_data(roots, path="coordinator shared roots"))
         coordinator = Path(self.coordinator_root)
         if type(self.resident_preparation_ready) is not bool:
             raise QueueServiceError("resident preparation readiness must be boolean")
@@ -3630,6 +3644,12 @@ class LocalDaemon:
             raise QueueConflictError(
                 "scheduling reload cannot replace process or agent-owned configuration"
             )
+        current_roots = self.config.coordinator_shared_roots
+        replacement_roots = replacement.coordinator_shared_roots
+        if any(replacement_roots.get(alias) != root for alias, root in current_roots.items()):
+            raise QueueConflictError(
+                "scheduling reload cannot replace retained coordinator shared mappings"
+            )
         if replacement.agent_policy != self._agent_policy:
             with self._connection() as conn:
                 active = conn.execute(
@@ -4982,6 +5002,7 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
     if config.active_configuration_fingerprint is not None:
         return config.active_configuration_fingerprint
     payload = {
+        **({"shared_roots": thaw_plain_data(config.shared_roots)} if config.shared_roots else {}),
         **(
             {"resident_preparation_staged_ready": True}
             if config.resident_preparation_staged_ready

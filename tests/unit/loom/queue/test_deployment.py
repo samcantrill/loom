@@ -622,6 +622,69 @@ def test_coordinator_publication_binds_startup_to_same_config(tmp_path: Path) ->
         LocalDaemon(service.daemon).start()
 
 
+def test_pure_coordinator_shared_roots_reload_and_restart(tmp_path: Path) -> None:
+    from copy import deepcopy
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonPrincipal, LocalDaemonRole
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload"], "agent_ids": [], "pools": []
+    }
+    _write_protected(source, payload)
+    original = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(original.daemon)
+    daemon = LocalDaemon(original.daemon, trusted_scheduling_loader=lambda:
+        load_coordinator_service_config(source, current=original).daemon)
+    started = daemon.start()
+    operator = daemon.operator_view(LocalDaemonPrincipal(
+        f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR))
+    root = tmp_path / "shared"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"same shared bytes")
+    binding = {"host_path": str(root), "container_path": "/loom/runs", "access": "rw",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"same shared bytes").hexdigest()},
+        "publication": {"max_members": 10, "max_payload_bytes": 100000, "max_manifest_bytes": 10000}}
+    payload["shared_roots"] = {"runs": binding}
+    _write_protected(source, payload)
+    try:
+        qualified = load_coordinator_service_config(source)
+        assert qualified.immutable_fingerprint == original.immutable_fingerprint
+        assert qualified.active_fingerprint != original.active_fingerprint
+        applied = operator.reload_scheduling(CoordinatorSchedulingReload(
+            "add-shared-roots", started.scheduling_epoch, "enable shared fleet publication"))
+        assert applied["state"] == "applied", applied
+        assert daemon.config.coordinator_shared_roots["runs"] == binding
+        assert daemon.config.resident_worker_launch_profile is None
+        assert daemon.config.agent_root is None
+        retained_epoch = daemon.status().scheduling_epoch
+        for index, replacement in enumerate(({}, {"runs": {**binding, "host_path": "/proc/self/root" + str(root)}})):
+            payload["shared_roots"] = replacement
+            _write_protected(source, payload)
+            rejected = operator.reload_scheduling(CoordinatorSchedulingReload(
+                f"replace-shared-roots-{index}", retained_epoch, "changed mount"))
+            assert rejected["code"] == "reload_rejected", rejected
+            assert daemon.status().scheduling_epoch == retained_epoch
+            assert daemon.config.coordinator_shared_roots == qualified.daemon.coordinator_shared_roots
+        payload["shared_roots"] = {"runs": deepcopy(binding)}
+        payload["shared_roots"]["runs"]["challenge"]["sha256"] = "0" * 64
+        _write_protected(source, payload)
+        with pytest.raises(QueueServiceError, match="challenge bytes mismatch"):
+            load_coordinator_service_config(source)
+        payload["shared_roots"] = {"runs": binding}
+        _write_protected(source, payload)
+    finally:
+        daemon.stop()
+    restarted = LocalDaemon(load_coordinator_service_config(source).daemon)
+    try:
+        assert restarted.start().coordinator_id == started.coordinator_id
+        assert restarted.config.coordinator_shared_roots["runs"] == binding
+        assert not (tmp_path / "deployment/agent").exists()
+    finally:
+        restarted.stop()
+
+
 def test_pure_coordinator_initializes_and_waits_without_local_agent(
     tmp_path: Path,
 ) -> None:

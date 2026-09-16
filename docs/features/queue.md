@@ -425,6 +425,19 @@ either `null` for a pure coordinator or an explicit reference to a
 read a `loom.outbound-agent-service` document. Worker installation and resource
 settings belong to the agent. A pure coordinator requires no local worker or GPU.
 
+A coordinator using shared execution declares optional top-level `shared_roots`
+in its protected role file, using the same host-path, access, bounded challenge
+and publication-budget fields as agent profiles. These are the coordinator's
+own mount paths. Remote output publication and downstream input resolution use
+this mapping without creating a local worker or exposing coordinator paths in
+assignments. Existing colocated deployments that omit it retain their local
+profile's mapping. Root challenges are checked when loading the configuration.
+Native scheduling reload can add qualified root aliases while preserving the
+coordinator identity, but cannot remove or rewrite retained aliases. A changed
+mount requires an explicit replacement deployment after retained work settles;
+restarting with edited files does not bypass the native configuration binding.
+
+
 Every command accepts an explicit `--env-file`. Weave composes the protected
 YAML against that file's values without inheriting missing values from the
 service process. There is no automatic dotenv search or shell execution. A local
