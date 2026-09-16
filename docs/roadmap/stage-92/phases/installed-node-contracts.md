@@ -2,11 +2,12 @@
 
 ## Metadata
 
-- Status: in_progress; U1 implementation and local validation passed; independent review pending.
+- Status: merged; implementation, local validation and independent review passed.
 - Branch: `agent/stage-92-p1-installed-node-contracts`.
 - Base: `c8f23852af2018109c318d17d03186ba9e49893f`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 1: Installed Node Contracts`.
-- PR: [#331](https://github.com/samcantrill/loom/pull/331), open for independent review.
+- PR: [#331](https://github.com/samcantrill/loom/pull/331), merged into develop.
+- Merge: `a0d29b3fedac7495bbb994e630b07aa41f7cf579`.
 - Target: develop. Paths and coordination branch: [manifest](../implementation-plan.md#execution-context).
 - Acceptance owner: approved native contract linked by the manifest, sections
   Preparation Protocol, Delivery Packages And Source Ownership (U1), and Example
@@ -189,3 +190,15 @@ Physical SIF/fleet/Slurm qualification is not claimed by these local fixtures.
 
 Manager retains manifest, cross-repository authorization, PR/delivery and independent
 review ownership. Independent phase review and merge remain pending.
+
+## Independent Review And Delivery
+
+Independent actual-PR-head review passed at
+`eb8d6144d81676f741de628ab53ce98b83a1e839` with no findings. The reviewer
+accepted the recorded local evidence and its prose-only reconciliation. Manager
+preflight/delivery verified the same reviewed and validated head, exact PR
+identity, and remote merge `a0d29b3fedac7495bbb994e630b07aa41f7cf579`.
+The remote phase branch was retired with a head lease. The shared transition
+gate fast-forwarded stage coordination and local develop to the merge. This
+receipt is published on coordination before the required synchronization gate
+and U2 startup. Retain the persistent stage worktree for U2.

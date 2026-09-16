@@ -41,7 +41,7 @@ yet authorized. It does not relax any protocol, qualification or review gate.
 
 | Phase | Package | Card | Branch | Status | Dependency / bounded outcome |
 | --- | --- | --- | --- | --- | --- |
-| 1 | U1 | [Installed Node Contracts](phases/installed-node-contracts.md) | `agent/stage-92-p1-installed-node-contracts` | in_progress | Approved protocol; persist checked opaque node contracts, forward authoritative context, preserve v1/v2 and v3 whole-target lifecycle |
+| 1 | U1 | [Installed Node Contracts](phases/installed-node-contracts.md) | `agent/stage-92-p1-installed-node-contracts` | merged | Approved protocol; persist checked opaque node contracts, forward authoritative context, preserve v1/v2 and v3 whole-target lifecycle |
 | 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | pending | U1 merged, metadata published and synchronized; native verified result selection, demand ownership and idempotent fresh generation |
 
 U1 may merge independently without cross-graph reuse. U2 is one coherent result
@@ -83,8 +83,8 @@ Keep current completion evidence in the phase cards; no lifecycle sidecars.
 
 ## Current Delivery State
 
-U1 implementation and required local validation passed; its current evidence and
-skip dispositions are in the Phase 1 card. [PR #331](https://github.com/samcantrill/loom/pull/331)
-is open against develop and awaits required independent review. No merge or
-physical qualification is claimed. U2 and rphys integration remain pending their
-predecessor gates.
+U1 [PR #331](https://github.com/samcantrill/loom/pull/331) merged into develop at
+`a0d29b3fedac7495bbb994e630b07aa41f7cf579` after the required local gate and
+independent actual-head review passed. The Phase 1 card owns the validation,
+skip and delivery receipts. Shared transition passed; publish this metadata and
+synchronize before U2 startup. U2 and rphys integration remain outstanding.
