@@ -212,11 +212,32 @@ class PreparationStage:
             if effective_options is None
             else effective_options.to_dict(),
         }
+        if _is_v3(binding):
+            report["project_contracts"] = _report_contracts(report) if project_result is not None else None
         return {
             "report": context.save_artifact(
                 "report", report, artifact_type="json", codec_key="json.v1"
             )
         }
+
+
+def _is_v3(binding: PreparationChildInput) -> bool:
+    return binding.project_preparation is not None and _plain_mapping(binding.project_preparation["processor"])["schema_version"] == 3
+
+
+def _report_contracts(report: Mapping[str, PlainData]) -> dict[str, PlainData]:
+    from loom.pipeline._project_contracts import capture_digest, declaration, envelope
+
+    project = _plain_mapping(report["project_preparation"])
+    selected = _plain_mapping(project["processor"])
+    result = _plain_mapping(report["project_result"])
+    composition = _plain_mapping(report["composition"])
+    pipeline = _pipeline_from_resolved(cast(Mapping[str, object], composition["resolved"]))
+    contracts = _plain_mapping(result["stage_contracts"])
+    if set(contracts) != set(pipeline.stage_names):
+        raise QueueConflictError("native project contract coverage conflicts")
+    return {stage.name: envelope(cast(str, selected["evidence_namespace"]), contracts[stage.name],
+        capture=capture_digest(report), node=stage.name, original=declaration(stage)) for stage in pipeline.stages}
 
 
 def _inspect_project(
@@ -232,7 +253,7 @@ def _inspect_project(
             processor = getattr(processor, part)
         request: dict[str, PlainData] = {
             "schema_version": selected["schema_version"],
-            **({"operation": "prepare"} if selected["schema_version"] == 2 else {}),
+            **({"operation": "prepare"} if selected["schema_version"] in (2, 3) else {}),
             "composition": deepcopy(composition),
             "effective_run_options": options.to_dict(),
             "invocation": _invocation_data(binding),
@@ -244,7 +265,7 @@ def _inspect_project(
             "project_preparation": dict(binding.project_preparation),
         }
         result = _plain_mapping(cast(Any, processor)(request))
-        if set(result) != {"schema_version", "composition", "evidence", "reconciliation_key"}:
+        if set(result) != ({"schema_version", "composition", "evidence", "reconciliation_key"} | ({"stage_contracts"} if selected["schema_version"] == 3 else set())):
             raise QueueConflictError("project preparation result fields are invalid")
         checked = _plain_mapping(result.pop("composition"))
         _validate_project_result(composition, checked, result, binding)
@@ -290,7 +311,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
     expected = {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}
     try:
         response = _plain_mapping(cast(Any, processor)({
-            "schema_version": 2, "operation": "verify_candidate", "candidate": candidate,
+            "schema_version": selected["schema_version"], "operation": "verify_candidate", "candidate": candidate,
             "composition": deepcopy(composition), "project_result": project_result,
             "effective_run_options": None if options is None else options.to_dict(),
             "operation_id": binding.operation_id, "invocation": _invocation_data(binding),
@@ -326,7 +347,7 @@ def _validate_project_result(
 ) -> None:
     assert binding.project_preparation is not None
     selected = _plain_mapping(binding.project_preparation["processor"])
-    if (set(result) != {"schema_version", "evidence", "reconciliation_key"}
+    if (set(result) != ({"schema_version", "evidence", "reconciliation_key"} | ({"stage_contracts"} if selected["schema_version"] == 3 else set()))
         or type(result["schema_version"]) is not int or result["schema_version"] != selected["schema_version"]):
         raise QueueConflictError("unsupported project preparation result capability")
     evidence = _plain_mapping(result["evidence"])
@@ -345,6 +366,18 @@ def _validate_project_result(
             raise QueueConflictError("project preparation reconciliation key is invalid")
     if binding.project_preparation["target_run_uri"] is None and key is None:
         raise QueueConflictError("reconciled preparation requires a complete key")
+    if selected["schema_version"] == 3:
+        from loom.pipeline._project_contracts import node_result
+
+        if stable_json_bytes(original) != stable_json_bytes(checked):
+            raise QueueConflictError("project preparation changed the captured composition")
+        pipeline = _pipeline_from_resolved(cast(Mapping[str, object], original["resolved"]))
+        contracts = _plain_mapping(result["stage_contracts"])
+        if set(contracts) != set(pipeline.stage_names):
+            raise QueueConflictError("project contracts must cover exactly the captured nodes")
+        for item in contracts.values():
+            node_result(item)
+        return
     before, after = deepcopy(original), deepcopy(checked)
     for view in ("resolved", "redacted"):
         requested = cast(dict[str, PlainData], before.get(view))
@@ -500,6 +533,7 @@ class _ReceivedComposition:
     effective_run_options: RunOptions | None = None
     project_preparation: Mapping[str, PlainData] | None = None
     project_result: Mapping[str, PlainData] | None = None
+    project_contracts_entry: Mapping[str, PlainData] | None = None
 
 
 def decode_preparation_report(
@@ -529,7 +563,8 @@ def _decode_preparation_report(
     if (
         set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
-                        | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set()))
+                        | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
+                        | ({"project_contracts"} if _is_v3(expected) else set()))
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
@@ -588,6 +623,9 @@ def _decode_preparation_report(
         expected.project_preparation,
         None if report.get("project_result") is None else _plain_mapping(report["project_result"]),
     )
+    if _is_v3(expected):
+        if report["project_contracts"] != (_report_contracts(report) if received.project_result is not None else None):
+            raise QueueConflictError("native project contract binding conflicts")
     preflight = PreflightResult.from_dict(report["preflight"])
     if preflight.groups != _PREPARATION_GROUPS:
         raise QueueServiceError(
@@ -855,6 +893,11 @@ class CoordinatorPreparation:
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
+        if _is_v3(binding):
+            selected = _plain_mapping(cast(Mapping[str, PlainData], binding.project_preparation)["processor"])
+            composed = replace(cast(_ReceivedComposition, composed), project_contracts_entry={
+                "kind": "project_contracts", "data": {"schema_version": 1,
+                "namespace": selected["evidence_namespace"], "report_ref": reference.to_dict()}})
         allowed = preparation_checks_allow_publication(preflight)
         prospective = None
         if allowed:
@@ -913,7 +956,10 @@ class CoordinatorPreparation:
         if resolved is None:
             raise QueueConflictError("candidate configuration is unavailable")
         record = load_managed_local_runtime_record(store, run_uri)
+        from loom.pipeline._project_contracts import load_contract_report
+        contract_report = load_contract_report(store, run_uri)
         return {
+            **({"project_contracts": contract_report["project_contracts"]} if contract_report is not None else {}),
             "schema_version": 1, "run_uri": run_uri,
             "admission": None if admission is None else admission.to_dict(),
             "authority": snapshot.to_dict(), "configuration": json.loads(resolved),

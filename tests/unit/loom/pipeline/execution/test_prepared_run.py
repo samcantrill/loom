@@ -139,3 +139,31 @@ def test_prepared_run_rejects_non_plain_payloads() -> None:
         _record(plan={"plan_path": object()})  # type: ignore[dict-item]
 
     assert exc_info.value.category == "plain_data"
+
+
+def test_prepared_project_metadata_accepts_only_a_typed_committed_report_ref():
+    from copy import deepcopy
+    from typing import Any, cast
+    from loom.artifacts import ArtifactRef
+
+    entry: dict[str, Any] = {"kind": "project_contracts", "data": {
+        "schema_version": 1, "namespace": "text-project", "report_ref": ArtifactRef(
+            artifact_id="prepare/report", uri="file:///retained/artifacts/prepare/report.json",
+            artifact_type="json", codec_key="json.v1", producer_stage="prepare",
+            checksum="sha256:" + "a" * 64,
+        ).to_dict()}}
+    record = _record(metadata={"loom.project_contracts": entry})
+    assert PreparedRunRecord.from_dict(record.to_dict()) == record
+    for fault in ("payload", "version", "checksum", "reference"):
+        invalid = deepcopy(entry)
+        if fault == "payload":
+            invalid["data"]["payload"] = {"secret": "must stay in the report"}
+        elif fault == "version":
+            invalid["data"]["schema_version"] = 99
+        elif fault == "checksum":
+            invalid["data"]["report_ref"]["checksum"] = None
+        else:
+            invalid["data"]["report_ref"] = "file:///unchecked.json"
+        with pytest.raises(PreparedRunPayloadError):
+            _record(metadata={"loom.project_contracts": invalid})
+    assert "payload" not in cast(dict, record.metadata["loom.project_contracts"])['data']

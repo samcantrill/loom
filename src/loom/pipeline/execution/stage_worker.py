@@ -122,6 +122,7 @@ def execute_resident_stage_worker_request(
             local_workspace_dir=root / "workspace",
             provenance={},
             metadata={
+                **{key: worker_request.metadata[key] for key in ("loom.project_contract", "loom.execution_binding") if key in worker_request.metadata},
                 "factory_target": stage.factory.target_path,
                 "resolved_runtime": dict(worker_request.resolved_runtime),
                 "resident_worker_request": True,

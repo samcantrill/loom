@@ -3463,6 +3463,8 @@ class LocalDaemonExecution:
                 or worker_request.executor_name != profile.executor_name
             ):
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
+            from loom.pipeline._project_contracts import validate_admitted_worker
+            validate_admitted_worker(self.run_store, worker_request, stage)
             _require_retained_resource_handoff_match(
                 worker_request.resolved_runtime,
                 _worker_runtime(intent, record.stage_name),
@@ -5212,6 +5214,8 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "managed worker preparation identity differs from authority attempt"
             )
+        from loom.pipeline._project_contracts import validate_admitted_worker
+        validate_admitted_worker(self.run_store, worker_request, stage)
         _require_retained_resource_handoff_match(
             worker_request.resolved_runtime, runtime
         )

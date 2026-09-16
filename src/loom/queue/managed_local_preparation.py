@@ -213,6 +213,15 @@ def prepare_managed_run(
                     options, stage_ids=pipeline.stage_names
                 ).to_dict(),
             )
+            entry = getattr(composed, "project_contracts_entry", None)
+            if entry is not None:
+                from loom.pipeline.execution.prepared_run import PreparedRunRecord
+                from loom.timestamps import utc_timestamp
+                store.write_prepared_run(run_uri, PreparedRunRecord(
+                    schema_version=1, run_uri=run_uri, prepared_at=utc_timestamp(),
+                    executor_name="managed", continuation_type="whole_run",
+                    metadata={"loom.project_contracts": entry},
+                ).to_dict())
             runtime_digest = prepare_managed_local_runtime_record(
                 store=store,
                 run_uri=run_uri,

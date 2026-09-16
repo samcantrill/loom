@@ -8,6 +8,7 @@ from pathlib import Path
 import pickle
 import sqlite3
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -1394,3 +1395,41 @@ def test_shared_input_descriptor_preserves_primary_checksum_contract(tmp_path):
     retained = ArtifactRef.from_dict({**ref.to_dict(), "checksum": "sha256:" + "0" * 64})
     with pytest.raises(QueueServiceError, match="integrity"):
         _RemoteArtifact.from_local_ref(transfer_id="candidate-input", logical_name="result", ref=retained)
+
+
+def test_execution_binding_preserves_original_identity_and_container_visibility(tmp_path):
+    from loom.queue._execution_binding import execution_binding, _container_state_root
+    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+    from loom.pipeline.execution.models import StageWorkerRequest
+    from loom.pipeline.execution.errors import RunRequestError
+
+    profile = _profile(tmp_path)
+    launch = profile.launch_profile
+    bundle = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent-binding", bundle.assignment_id)
+    workspace.persist_request(bundle, profile)
+    worker = workspace.worker_request()
+    original = replace(worker, run_uri=path_to_run_uri(tmp_path / "runs" / "original-run"))
+    store = LocalRunStore(tmp_path / "runs")
+    local = execution_binding(original, profile.descriptor.environment_fingerprint, store=store, launch=launch)
+    assert local["origin_run_id"] == "original-run"
+    assert local["origin_node_id"] == original.stage_name
+    assert local["run_state_root"] == str(tmp_path / "runs" / "original-run")
+    remote = execution_binding(original, profile.descriptor.environment_fingerprint)
+    assert remote["run_state_root"] is None
+    assert cast(Any, bundle.worker_metadata["loom.execution_binding"])["origin_run_id"] == "run-opaque-1"
+    bad = cast(Any, original.to_dict())
+    bad["metadata"]["loom.execution_binding"] = {**local, "origin_node_id": "other"}
+    with pytest.raises(RunRequestError):
+        StageWorkerRequest.from_dict(bad)
+    binding = {
+        "kind": "apptainer", "container": {"image": {"reference": str(tmp_path / "image.sif")},
+        "mounts": [{"source": str(tmp_path / "runs"), "target": "/durable", "mode": "rw"}]},
+        "options": {"command": "/usr/bin/apptainer"}, "python_executable": "python", "daemon_endpoint": None,
+    }
+    container = replace(launch, container=binding)
+    assert _container_state_root(tmp_path / "runs" / "original-run", container) == "/durable/original-run"
+    binding["container"]["mounts"][0]["mode"] = "ro"
+    assert _container_state_root(tmp_path / "runs" / "original-run", replace(launch, container=binding)) is None
+    binding["container"]["mounts"] = []
+    assert _container_state_root(tmp_path / "runs" / "original-run", replace(launch, container=binding)) is None

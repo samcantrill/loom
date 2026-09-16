@@ -227,6 +227,14 @@ class ExecutionFailure:
 
 @dataclass(frozen=True, slots=True)
 class StageWorkerRequest:
+    """One native prepared attempt, including explicitly bound project metadata.
+
+    ``loom.project_contract`` carries only this node's opaque checked envelope;
+    native decoding checks its capture/declaration binding. ``loom.execution_binding``
+    retains the producer identity and optional authorized durable state root.
+    Application config and unrelated request metadata are not context attachments.
+    """
+
     schema_version: int
     run_uri: str
     stage_name: str
@@ -295,6 +303,11 @@ class StageWorkerRequest:
             )
         metadata = _plain_mapping(self.metadata, "metadata")
         _validate_worker_resource_selection(runtime, metadata)
+        from loom.pipeline._project_contracts import validate_worker_metadata
+        try:
+            validate_worker_metadata(metadata, node=self.stage_name, attempt=self.attempt, fingerprint=self.fingerprint)
+        except ValueError as exc:
+            raise RunRequestError(str(exc)) from exc
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(
             self,

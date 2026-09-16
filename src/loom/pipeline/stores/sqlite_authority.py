@@ -433,6 +433,8 @@ class SQLitePerRunAuthorityStore:
         metadata: Mapping[str, PlainData] | None = None,
         idempotency_key: str | None = None,
     ) -> BackendRevision:
+        from loom.pipeline._project_contracts import reject_overrides
+        reject_overrides(metadata)
         self._bind_run_uri(run_uri)
         run_metadata = _plain_mapping(metadata or {}, "metadata")
         persisted_metadata = _admission_metadata(run_metadata, idempotency_key)

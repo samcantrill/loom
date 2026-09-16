@@ -196,8 +196,11 @@ def _runtime_payload(
             planners=planners,
             resource_policy=exact.resource_policy,
         ).to_dict()
+    from loom.pipeline._project_contracts import prepared_contracts_digest
+    contracts_digest = prepared_contracts_digest(store, run_uri)
     return {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": 4 if contracts_digest is not None else _SCHEMA_VERSION,
+        **({"project_contracts_digest": contracts_digest} if contracts_digest is not None else {}),
         "run_uri": run_uri,
         "plan": plan.to_dict(),
         "plan_digest": _digest(plan.to_dict()),
@@ -492,7 +495,7 @@ def load_managed_local_runtime_record(
         data = json_loads(path.read_text(encoding="utf-8"), path=str(path))
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is corrupt") from exc
-    if not isinstance(data, Mapping) or set(data) != {
+    if not isinstance(data, Mapping) or set(data) != ({
         "schema_version",
         "run_uri",
         "plan",
@@ -503,7 +506,7 @@ def load_managed_local_runtime_record(
         "execution_requirements",
         "max_parallel_stages",
         "digest",
-    }:
+    } | ({"project_contracts_digest"} if data.get("schema_version") == 4 else set())):
         raise QueueServiceError("managed-local runtime record is unsupported")
     try:
         payload = ensure_plain_data(dict(data), path="managed_local_runtime")
@@ -511,7 +514,7 @@ def load_managed_local_runtime_record(
         raise QueueServiceError("managed-local runtime record is invalid") from exc
     if (
         not isinstance(payload, dict)
-        or payload.get("schema_version") != _SCHEMA_VERSION
+        or payload.get("schema_version") not in (_SCHEMA_VERSION, 4)
     ):
         raise QueueServiceError(
             "managed-local runtime record schema is unsupported; finish or cancel "
@@ -522,6 +525,11 @@ def load_managed_local_runtime_record(
     digest = payload.pop("digest", None)
     if not isinstance(digest, str) or digest != _digest(payload):
         raise QueueServiceError("managed-local runtime record digest conflicts")
+    if payload["schema_version"] == 4:
+        from loom.pipeline._project_contracts import prepared_contracts_digest
+        actual = prepared_contracts_digest(store, run_uri)
+        if actual is None or actual != payload["project_contracts_digest"]:
+            raise QueueServiceError("managed project report reference is missing or changed")
     plan = payload.get("plan")
     if not isinstance(plan, Mapping) or payload.get("plan_digest") != _digest(plan):
         raise QueueServiceError("managed-local runtime record plan identity conflicts")

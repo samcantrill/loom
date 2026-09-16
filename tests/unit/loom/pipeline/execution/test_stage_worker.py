@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -171,3 +171,63 @@ def test_resident_stage_worker_passes_containment_owner_to_stage_context(
         cast("StageContext", captured["context"]).process_containment_owner
         is ProcessContainmentOwner.OUTER_BOUNDARY
     )
+
+
+def test_native_attachment_roundtrip_is_bound_before_construction(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from loom.fingerprints import hash_mapping
+    from loom.pipeline._project_contracts import CONTRACT, CAPTURE, declaration, envelope
+
+    store, uri = _prepared_run(tmp_path)
+    wire = cast(Any, store.read_stage_worker_request(uri, "build", attempt=1))
+    capture = hash_mapping({"captured": "native"})
+    attachment = envelope("text-project", {"semantic_key": None,
+        "payload": {"path": "/opaque/path", "location": {"root": "not-resolved"}}},
+        capture=capture, node="build", original=declaration(_spec().get_stage("build")))
+    wire["metadata"] = {CONTRACT: attachment, CAPTURE: capture, "arbitrary": {"untrusted": True}}
+    worker = StageWorkerRequest.from_dict(wire)
+    assert cast(Any, worker.to_dict()["metadata"])[CONTRACT] == attachment
+    seen = []
+
+    class Stage:
+        def run(self, context, inputs):
+            seen.append(context)
+            return {"data": context.save_artifact("data", 7, artifact_type="json", codec_key="json.v1")}
+
+    monkeypatch.setattr(stage_worker, "construct_stage", lambda **kwargs: Stage())
+    result = stage_worker.execute_resident_stage_worker_request(
+        worker_request=worker, workspace_root=tmp_path / "worker",
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+        location_resolver=lambda value: value,
+    )
+    assert result.status == StageStatus.SUCCEEDED
+    assert seen[0].metadata[CONTRACT] == worker.metadata[CONTRACT]
+    assert CAPTURE not in seen[0].metadata and "arbitrary" not in seen[0].metadata
+    for fault in ("payload", "node", "version", "missing"):
+        changed = deepcopy(wire)
+        if fault == "payload":
+            changed["metadata"][CONTRACT]["payload"]["path"] = "/other"
+        elif fault == "node":
+            changed["stage_name"] = "other"
+            changed["resolved_runtime"]["stage_id"] = "other"
+        elif fault == "version":
+            changed["metadata"][CONTRACT]["schema_version"] = 99
+        else:
+            changed["metadata"].pop(CONTRACT)
+        with pytest.raises(RunRequestError):
+            StageWorkerRequest.from_dict(changed)
+
+
+@pytest.mark.parametrize("key", ["loom.project_contract", "loom.project_contracts", "loom.execution_binding"])
+def test_public_admission_rejects_reserved_metadata_before_writes(tmp_path, key):
+    store = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(tmp_path / "runs" / "forged")
+    with pytest.raises(ValueError, match="reserved"):
+        store.create_run(uri, metadata={key: {}})
+    assert not store.run_uri_exists(uri)
+    spec = _spec()
+    plan = plan_pipeline(spec, run_uri=uri, run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(uri)), persist=False)
+    with pytest.raises(ValueError, match="reserved"):
+        prepare_stage_attempt(run_store=store, run_uri=uri, stage=spec.get_stage("build"),
+            stage_plan=plan.ordered_stage_plans[0], metadata={key: {}})

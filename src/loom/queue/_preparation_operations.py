@@ -333,7 +333,7 @@ class CoordinatorPreparations:
             selected = policy.select(request)
             if run_mode == "reconcile":
                 processor = _mapping(selected["profile"]).get("project_processor")
-                if not isinstance(processor, Mapping) or processor.get("schema_version") != 2:
+                if not isinstance(processor, Mapping) or processor.get("schema_version") not in (2, 3):
                     raise QueueServiceError("reconciliation requires installed project capability v2")
                 selected["reconciliation"] = {"retry_policy": retry_policy, "publication_owner": None,
                     "candidate": None, "failed_revision": None, "verification_generation": 0}
