@@ -301,8 +301,28 @@ physical deployment matrix is authorized or claimed by these native fixtures.
 
 One optional executor is justified by the coherent changes across native
 identity, durable authority, installed verification, cancellation and read models.
-It owns U2 source/tests/public docs plus this card's completion receipt; the
-manager owns manifest, cross-repository integration and delivery. No source/test
-implementation, U2 validation, PR or merge is claimed yet. Stop for an
+The optional executor returned without edits after source discovery; the manager
+is implementing U2 locally and owns source/tests/docs, this receipt and delivery.
+This execution shortfall is not a missing product decision. No U2 PR, full
+qualification or merge is claimed yet. Stop for an
 incompatible approved contract or precisely identified missing product decision;
 resolve private wiring in scope. Do not alter U1's accepted public wire shapes.
+
+### Current Implementation Progress
+
+Causal action identity is separate from the existing audit fingerprint. Native
+RunRequest/CLI fresh selection is captured into durable generation tokens before
+retryable preparation; preparation envelope 8 carries nonempty generation maps
+while prior envelopes retain their encodings. Unknown selected nodes fail before
+target admission; whole-target identity includes generation without changing the
+project key. Cross-graph resolution, verified bindings, ownership/cancellation
+and full qualification remain unfinished; these private implementation commits
+are not a separately deliverable fresh shortcut.
+
+Focused diagnostic selection (locked Python 3.12, config extra):
+`tests/unit/loom/queue/test_preparation.py`,
+`tests/unit/loom/pipeline/planning/test_action_identity.py`, and
+`tests/integration/queue/test_action_result_resolution.py`: 47 passed, no skips.
+The native cases prove retained-token replay/conflicting intent, distinct fresh
+and default target identity, preserved default target, and unknown-node failure.
+This is partial implementation evidence, not the required final U2 gate.

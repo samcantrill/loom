@@ -153,6 +153,10 @@ class PreparationStage:
             ),
         )
         composition = _composition_data(composed)
+        if binding.generations is not None:
+            graph = _pipeline_from_resolved(cast(Mapping[str, object], composition["resolved"]))
+            if set(binding.generations) - set(graph.stage_names):
+                raise QueueServiceError("fresh_stages contains an unknown captured node")
         if preflight.status != PreflightStatus.FAIL:
             _bind_local_snapshot(
                 cast(dict[str, PlainData], composition["resolved"]),
@@ -193,6 +197,7 @@ class PreparationStage:
             }
         report: dict[str, PlainData] = {
             "schema_version": binding.to_dict()["schema_version"],
+            **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"candidate": dict(binding.candidate) if binding.candidate is not None else None,
                 "verification": verification} if "candidate" in binding.to_dict() else {}),
             **({"project_preparation": dict(binding.project_preparation),
@@ -293,7 +298,8 @@ def _checked_project_uri(binding: PreparationChildInput, result: Mapping[str, Pl
     assert binding.project_preparation is not None
     if binding.project_preparation["target_run_uri"] is not None:
         return cast(str, binding.project_preparation["target_run_uri"])
-    return project_target_from_key(binding.project_preparation, _plain_mapping(result["reconciliation_key"]))
+    return project_target_from_key(binding.project_preparation, _plain_mapping(result["reconciliation_key"]),
+                                   generations=binding.generations)
 
 
 def _verify_project_candidate(binding: PreparationChildInput, composition: Mapping[str, PlainData],
@@ -318,6 +324,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "profile_descriptor": dict(binding.profile_descriptor),
             "project_preparation": dict(binding.project_preparation),
+            **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
         }))
         if response != expected:
@@ -564,11 +571,18 @@ def _decode_preparation_report(
         set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
                         | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
-                        | ({"project_contracts"} if _is_v3(expected) else set()))
+                        | ({"project_contracts"} if _is_v3(expected) else set())
+                        | ({"generations"} if expected.generations is not None else set()))
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
+    if expected.generations is not None:
+        if report["generations"] != dict(expected.generations):
+            raise QueueConflictError("preparation generation binding conflicts")
+        graph = _pipeline_from_resolved(cast(Mapping[str, object], _plain_mapping(report["composition"])["resolved"]))
+        if set(expected.generations) - set(graph.stage_names):
+            raise QueueConflictError("fresh_stages contains an unknown captured node")
     if "candidate" in expected.to_dict():
         from loom.fingerprints import hash_mapping
         from loom.serialization import thaw_plain_data
@@ -980,9 +994,9 @@ class CoordinatorPreparation:
         )
         received = cast(_ReceivedComposition, composed)
         if received.project_preparation is not None and received.project_preparation["target_run_uri"] is None:
-            from loom.queue.preparation import project_target_from_key
+            from loom.queue.preparation import _project_target_uri
             received = replace(received, project_preparation={"processor": received.project_preparation["processor"],
-                "target_run_uri": project_target_from_key(received.project_preparation, _plain_mapping(cast(Mapping[str, PlainData], received.project_result)["reconciliation_key"]))})
+                "target_run_uri": _project_target_uri(config.run_store_root, cast(str, request.run_name))})
         try:
             return prepare_managed_run(
                 self._service(config),

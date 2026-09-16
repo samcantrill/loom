@@ -253,7 +253,8 @@ class CoordinatorPreparations:
         try:
             return self._accept(
                 request.preparation, principal_id, queue_item_id=request.queue_item_id,
-                run_mode=request.mode, retry_policy=request.retry_policy
+                run_mode=request.mode, retry_policy=request.retry_policy,
+                fresh_stages=request.fresh_stages,
             )
         except ServiceRetiring:
             raise
@@ -288,6 +289,7 @@ class CoordinatorPreparations:
         queue_item_id: str | None = None,
         run_mode: str | None = None,
         retry_policy: str = "never",
+        fresh_stages: tuple[str, ...] = (),
     ) -> LocalDaemonOperation:
         from .local_daemon import _operation_projection
 
@@ -298,6 +300,8 @@ class CoordinatorPreparations:
         if request.run_name is None and run_mode != "reconcile":
             raise QueueServiceError("exact preparation requires a target")
         intent = request.intent_digest(principal_id)
+        if fresh_stages:
+            intent = hashlib.sha256(stable_json_bytes([intent, list(fresh_stages)])).hexdigest()
         if queue_item_id is not None:
             if queue_item_id.startswith(PREPARATION_RUN_PREFIX):
                 raise QueueServiceError("run queue identity is reserved")
@@ -331,6 +335,13 @@ class CoordinatorPreparations:
             policy = self.daemon.config.preparation_policy
             assert policy is not None
             selected = policy.select(request)
+            if fresh_stages:
+                from uuid import uuid4
+
+                processor = _mapping(selected["profile"]).get("project_processor")
+                if not isinstance(processor, Mapping) or processor.get("schema_version") != 3:
+                    raise QueueServiceError("fresh action generation requires installed project capability v3")
+                selected["generations"] = {name: uuid4().hex for name in fresh_stages}
             if run_mode == "reconcile":
                 processor = _mapping(selected["profile"]).get("project_processor")
                 if not isinstance(processor, Mapping) or processor.get("schema_version") not in (2, 3):
@@ -771,6 +782,7 @@ class CoordinatorPreparations:
             project_binding,
             None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
+            generations=cast(Mapping[str, str] | None, selected.get("generations")),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:

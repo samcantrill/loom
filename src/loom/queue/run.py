@@ -28,8 +28,18 @@ class RunRequest:
     queue_item_id: str | None = None
     mode: str = "exact"
     retry_policy: str = "never"
+    fresh_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        from .models import validate_queue_id
+
+        if not isinstance(self.fresh_stages, (tuple, list)):
+            raise QueueServiceError("fresh_stages must be a list of node IDs")
+        for name in self.fresh_stages:
+            validate_queue_id(name, "fresh stage")
+        if len(set(self.fresh_stages)) != len(self.fresh_stages):
+            raise QueueServiceError("fresh_stages contains duplicate node IDs")
+        object.__setattr__(self, "fresh_stages", tuple(sorted(self.fresh_stages)))
         if not isinstance(self.preparation, PrepareRunRequest):
             raise QueueServiceError("run preparation is invalid")
         if (
@@ -55,16 +65,18 @@ class RunRequest:
                 "preparation": self.preparation.to_dict(),
                 "queue_item_id": None,
                 "retry_policy": self.retry_policy,
+                **({"fresh_stages": list(self.fresh_stages)} if self.fresh_stages else {}),
             }
         return {
             "preparation": self.preparation.to_dict(),
             "queue_item_id": self.queue_item_id,
+            **({"fresh_stages": list(self.fresh_stages)} if self.fresh_stages else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> RunRequest:
         if data.get("mode") == "reconcile":
-            if set(data) != {
+            if set(data) - {"fresh_stages"} != {
                 "mode",
                 "preparation",
                 "queue_item_id",
@@ -76,13 +88,17 @@ class RunRequest:
                 cast(str | None, data["queue_item_id"]),
                 "reconcile",
                 cast(str, data["retry_policy"]),
+                cast(tuple[str, ...], data.get("fresh_stages", ())),
             )
-        if set(data) != {"preparation", "queue_item_id"}:
+        if set(data) - {"fresh_stages"} != {"preparation", "queue_item_id"}:
             raise QueueServiceError("run request fields are invalid")
         preparation, queue_id = data["preparation"], data["queue_item_id"]
         if not isinstance(preparation, Mapping) or not isinstance(queue_id, str):
             raise QueueServiceError("run request is invalid")
-        return cls(PrepareRunRequest.from_dict(preparation), queue_id)
+        return cls(
+            PrepareRunRequest.from_dict(preparation), queue_id,
+            fresh_stages=cast(tuple[str, ...], data.get("fresh_stages", ())),
+        )
 
 
 def _public_operation_id(operation_id: str) -> None:
