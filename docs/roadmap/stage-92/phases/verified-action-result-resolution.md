@@ -75,16 +75,150 @@ Existing source owners at the selected base:
 - `queue/_shared_publication.py` owns immutable shared closure retention,
   publication and receipt validation. Preserve original facts and bytes.
 
-One bounded planning refinement is needed before implementation: trace the
-smallest native authority/coordinator ownership change that allows a graph to
-cancel its demands while an original action producer remains fenced and running
-for another graph, and then cancels/settles only at the final demand. Identify
-concrete run-epoch, assignment, commit, restart, read-model and retention owners
-and the required causal tests. Resolve implementation wiring under the approved
-logical claim/result/binding contract; do not add a second scheduler, rewrite
-producer identities, narrow supported deployments, or change the fixed protocol.
-The refinement may edit only this card and must return a source-backed approach
-or a precisely evidenced missing accepted decision.
+### Resolved Native Demand And Producer Ownership
+
+The startup question is resolved against source `207b065`: extend native
+coordination ownership and make cancellation applicability depend on the exact
+retained action claim. Keep the original run/node/attempt/assignment/fence and
+commit; a consumer demand never becomes the producer. No missing accepted
+product decision was found. This is implementation direction under the approved
+logical records, not a new wire contract or a requirement for private helper names.
+
+Concrete owners and constraints:
+
+- `pipeline/stores/sqlite_authority.py` stores authority **per run**, including
+  when `state_root` is external (`_authority_database_path`). Its singleton
+  `cancellation_epochs` row is not stage-scoped: passing fewer `stage_names` to
+  `install_cancellation_epoch` does not exempt other attempts. Prepare, bind,
+  grant and start call `_require_no_cancellation_epoch`. Existing receipts have
+  immutable replay/scope checks. Extend the authority's applicability checks for
+  an explicitly retained claim/attempt; do not weaken the legacy singleton
+  barrier or infer permission from a caller-supplied list of exceptions.
+- `queue/local_daemon.py` owns durable admissions/cancellation operations in
+  `control.sqlite`; `queue/_managed_local.py:SQLiteCoordinatorAssignments` owns
+  durable assignment/resource occupancy; `pipeline/orchestration.py` owns
+  `RunOrchestrator`, preparation intents and rebuildable `StageWorkRecord`s.
+  Put the new store/principal/installation-scoped claim, demand and result facts
+  with native durable coordination ownership, with atomic key selection and
+  demand attachment/detachment. A per-run authority scan or a stage-work index
+  cannot supply cross-run mutual exclusion. The new lifecycle facts are
+  authoritative; the lookup and ready-work projections remain rebuildable.
+- `queue/coordinator_authority.py`,
+  `pipeline/stores/{authority,coordinator_authority}.py`,
+  `authority/{mutation_service,routes/coordinator}.py` own the capability and
+  authenticated transport boundary. Extend their narrow mutations/read models
+  together with the SQLite authority implementation. Preserve embedded,
+  coordinator-only and authenticated service deployments; do not access a remote
+  authority's files from queue code. Native coordination and per-run authority
+  have separate transactions today: use replayable fenced handoffs/reconciliation
+  for their effects, never assume one transaction spans them or hold a database
+  transaction across an authority RPC.
+- `local_daemon_execution.py:_cancel`, `_install_run_cancellation_if_requested`,
+  `_fan_out_{local,remote,slurm}_cancellation`, `remote_start_permit`, SLURM
+  grant/start/publication paths and retained-local cancellation callbacks all
+  consume the barrier. `queue/agent_sessions.py:next_control` and
+  `queue/agent_session_transport.py` also propagate process control. Apply the
+  durable demand decision before these run-based paths can stop a retained
+  producer; changing `_cancel` alone is insufficient. Keep administrative
+  agent/process containment distinct from a graph-demand detach.
+- `sqlite_authority.py:record_output_commit` already atomically records original
+  output facts, stage/attempt success and terminal managed binding under its
+  current fence. It deliberately admits the ordinary terminal winner during
+  cancellation settlement; cancellation is not proof of physical containment.
+  Publish a selectable result only from this successful commit, preserving
+  replay and `close_managed_attempt_fence` stale-result rejection. A crash after
+  commit but before result publication reconstructs the same result from the
+  original fact, never another producer or copied commit.
+- `local_daemon_execution.py:resume_retained_local_work`,
+  `_reconcile_retained_local_assignment`, remote retained delivery, SLURM
+  reconciliation and recovery-close paths own restart/unknown-work recovery.
+  Reconstruct live demand and claim disposition before replaying cancellation
+  callbacks, granting work or rebuilding ready projections. Keep a retained
+  producer in these paths even when its creating graph has detached. Unknown
+  physical ownership continues to hold capacity under existing recovery policy.
+- `pipeline/stores/read_models.py` owns original `OutputCommitRecord` and
+  `ArtifactFactRecord` and authoritative stage/run snapshots. Extend the binding
+  projection and its orchestration/read consumers to satisfy a consumer node
+  from the original outputs without a worker or consumer commit. Graph demand
+  status and the retained physical producer status must remain distinguishable.
+  `_terminal_outcome`, `_failure_policy_allows_new_work` and
+  `queue/_preparation_operations.py:_reconcile_cancellations` must not mistake a
+  detached graph for permission to discard or stop shared work.
+- `queue/_shared_publication.py` owns immutable closure inventory, publication
+  identity and receipt validation. `pipeline/cleanup/preparation_pins.py` already
+  provides durable retention references, checked by `cleanup/safety.py` at
+  deletion (including ancestor deletion); it has no expiration/unpin policy.
+  Extend those cleanup references to retain the original authority/commit and
+  complete output closure for live claims, verification and bindings. Preserve
+  shared receipts and bytes; a consumer alias does not create a publication.
+
+Smallest compatible sequence:
+
+1. After prerequisites, acquire/attach in the native claim transaction. Bind an
+   owner to its original prepared attempt and subsequent assignment/fence through
+   the existing authority path. Waiters create demands, not ready attempts.
+2. A graph cancellation atomically detaches its demands and prevents new demands
+   from that graph. Serialize this with concurrent attachment and final-demand
+   selection. Persist which exact claims remain live and which need settlement
+   before authority/process effects; retries of cancellation replay that decision.
+   A claim already committed to final-demand settlement cannot be revived by a
+   racing attachment as permission for another default producer.
+3. Keep the run cancellation barrier for ordinary work, but authorize continuing
+   shared work only through its durable current claim/attempt ownership. Filter
+   containment to assignments whose demand has ended. Retain original assignment
+   identity and capacity; never move it to the waiter or manufacture a producer
+   run. The existing graph `CANCELLING` state can remain while retained physical
+   work settles: finalization still must not pretend a live/unknown binding is
+   released. Its graph demands are already detached and cannot schedule more
+   graph work. This avoids changing terminal-state meaning merely to report
+   immediate cancellation.
+4. At final demand, revoke continuation and use existing exact pregrant abort,
+   local/remote/SLURM containment, terminal winner and fence-close/release rules.
+   Reconcile interrupted handoffs before permitting further effects. Shared
+   failure is projected to waiters using existing retry/same-realization recovery;
+   it is not a miss. A successful original stage remains selectable if another
+   stage later fails or the original graph completes cancellation.
+5. Retain the original result before verification, verify outside transactions,
+   then atomically publish the consumer binding only after current authorization,
+   candidate and retention rechecks. Rebuild the same bindings on restart.
+
+Causal coverage for this refinement (selected using the repository's
+`loom-targeted-validation` guidance; no runtime tests run by this prose task):
+
+- New `tests/integration/queue/test_action_result_resolution.py`: pause the
+  installed text producer after ownership, attach a differently named graph,
+  cancel the original demand and assert one unchanged running assignment/fence,
+  then original-commit success and waiter binding. Use a separate final-demand
+  cancellation case to prove containment/settlement and stale publication
+  rejection, not merely a cancelled queue row. Include attachment versus final
+  detach and restart between durable detach and its authority/process effects;
+  assert no duplicate producer and no resurrection of a settling claim. Reuse
+  the same fixture for successful action in a failed source graph, shared failure
+  without silent replacement, and original commit recovery after a lost reply.
+- Extend `tests/unit/loom/pipeline/stores/test_sqlite_authority.py` cancellation
+  and current-fence tests, `tests/contracts/test_managed_authority_contract.py`
+  and `tests/integration/authority/test_coordinator_authority_api.py`: legacy
+  epoch fencing stays intact; retained ownership permits only the exact producer;
+  final-demand settlement preserves terminal-winner/idempotent-fence semantics;
+  embedded and authenticated mutations agree. Exercise the supported in-memory
+  authority contract if its shared protocol changes.
+- Extend affected existing owners
+  `tests/integration/queue/test_{local_daemon_production,agent_session_transport,slurm_ready_stage,reboot_recovery}.py`
+  for the local, remote and SLURM cancellation/start/restart paths actually changed.
+  These are causal boundary checks using existing fixtures, not a new physical
+  deployment matrix. Existing run-wide cancellation must still contain unrelated
+  work; a surviving claim must not inherit original-graph cancellation on replay.
+- Extend `tests/integration/queue/test_shared_publication.py` and affected cleanup
+  tests to attempt deletion while verification/bindings retain the original
+  authority and primary/companion closure; assert intact original receipt/bytes
+  and inspectable consumer references. Reuse read-model tests for consumer
+  satisfaction with no copied commit, including authority reload. Retain the
+  existing reconciled-run cancellation tests: whole-target contender ownership
+  is adjacent behavior, not evidence for cross-graph action demands.
+
+The manager binds runnable selectors/environments while completing the rest of
+U2. Expand only for an affected public codec, authority transport, cancellation
+consumer, cleanup path or demonstrated race; preserve the approved final gate.
 
 Manager will complete remaining selectors/implementation steps after this
 named question is resolved. No product implementation or U2 validation has run.
