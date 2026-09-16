@@ -1382,3 +1382,13 @@ def test_shared_attempts_and_container_mounts_are_disjoint_and_narrow(tmp_path):
     assert any(str(first_tree) in arg and ":rw" in arg for arg in argv)
     assert not any(str(second_tree) in arg for arg in argv)
     assert not any(arg.startswith(str(tmp_path / "shared") + ":") for arg in argv)
+
+
+def test_shared_input_descriptor_preserves_primary_checksum_contract(tmp_path):
+    from loom.queue._shared_publication import publish
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    ref = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots,
+                  agent_id="agent-1", fence="fence-1")["result"]
+    retained = ArtifactRef.from_dict({**ref.to_dict(), "checksum": "sha256:" + "0" * 64})
+    with pytest.raises(QueueServiceError, match="integrity"):
+        _RemoteArtifact.from_local_ref(transfer_id="candidate-input", logical_name="result", ref=retained)

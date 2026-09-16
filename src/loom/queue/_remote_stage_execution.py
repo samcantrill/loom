@@ -627,6 +627,8 @@ class _RemoteArtifact:
             if shared_binding(ref.metadata) is not None:
                 verify_ref(ref, path)
                 size, digest = file_identity(path)
+                if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
+                    raise QueueConflictError("shared input checksum conflicts with its bytes")
                 return (cls(transfer_id=transfer_id, logical_name=logical_name, digest=digest, size_bytes=size,
                     artifact_id=ref.artifact_id, artifact_type=ref.artifact_type, codec_key=ref.codec_key,
                     artifact_schema_version=ref.schema_version, fingerprint=ref.fingerprint,
