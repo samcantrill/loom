@@ -409,6 +409,83 @@ def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) ->
         client.shutdown_for_test()
 
 
+def test_separate_service_accepts_shared_container_preparation(tmp_path: Path) -> None:
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+    from loom.pipeline.planning import StageFingerprintRecord
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.queue.preparation import (
+        PREPARATION_STAGE_TARGET,
+        PreparationChildInput,
+        SharedInputReceipt,
+    )
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile as resident_profile
+    from tests.unit.loom.queue.test_remote_stage_execution import _request
+
+    snapshots = tmp_path / "snapshots"
+    (snapshots / "capture").mkdir(parents=True)
+    (snapshots / "challenge").write_bytes(b"shared")
+    roots = {"snapshots": {
+        "host_path": str(snapshots), "container_path": "/loom/snapshots",
+        "access": "ro", "challenge": {
+            "path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest(),
+        },
+    }}
+    scope = {"capability": "shared-execution-v1", "roots": qualifications(roots), "locations": []}
+    with fake_apptainer() as container:
+        # Exercise the real supervisor process and command construction. The
+        # foreground stand-in only keeps its owned child alive; it is not a SIF.
+        Path(container["options"]["command"]).write_text(
+            f"#!{sys.executable}\nimport time\ntime.sleep(30)\n"
+        )
+        resident = replace(
+            resident_profile(tmp_path), container=container, shared_roots=roots,
+            preparation_shared_roots={"projects": snapshots},
+        )
+        request = _request(resident)
+        binding = PreparationChildInput(
+            "prepare-1", "existing", "pipeline.yaml",
+            SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+            resident.descriptor.to_dict(), shared_scope=scope,
+        )
+        fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+        request = replace(request, resolved_runtime={**request.resolved_runtime, "resources": {"schema_version": 2, "entries": {}}}, fingerprint=StageFingerprintRecord.create(
+            algorithm=fingerprint.algorithm,
+            payload=replace(
+                fingerprint.payload, factory_target=PREPARATION_STAGE_TARGET,
+                stage_config=binding.to_dict(),
+                fingerprint_fields={SHARED_EXECUTION_SCOPE: scope},
+            ),
+            inputs_summary=fingerprint.inputs_summary,
+        ).to_dict())
+        agent = tmp_path / "agent"
+        agent.mkdir()
+        workspace = _ResidentAssignmentWorkspace(agent, request.assignment_id)
+        workspace.persist_request(request, resident)
+        profile = resident.launch_profile
+        configuration = SupervisorLaunchConfiguration("agent-A", (profile,))
+        client = AgentProcessSupervisorService.initialize(agent, configuration=configuration)
+        launch = None
+        try:
+            launch = replace(
+                _launch(client, agent / "assignments" / request.assignment_id),
+                assignment_id=request.assignment_id, profile=profile,
+            )
+            started = client.launch(launch)
+            assert started.state is SupervisorLaunchState.RUNNING
+            reopened = AgentProcessSupervisorClient(agent, configuration)
+            assert reopened.service_process_id == client.service_process_id
+            assert reopened.launch(launch).process_id == started.process_id
+            assert reopened.query(launch).state is SupervisorLaunchState.RUNNING
+            with sqlite3.connect(agent / "supervisor/supervisor.sqlite") as connection:
+                assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+        finally:
+            if client._endpoint.exists():
+                if launch is not None:
+                    client.contain(launch)
+                client.shutdown_for_test()
+
+
 @pytest.mark.parametrize("before_request", [True, False])
 def test_client_disconnect_preserves_supervisor_and_its_running_worker(
     tmp_path: Path, before_request: bool

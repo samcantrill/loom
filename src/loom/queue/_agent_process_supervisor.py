@@ -1758,4 +1758,8 @@ __all__ = [
 
 
 if __name__ == "__main__":  # pragma: no cover - independently process-owned.
-    raise SystemExit(_main())
+    # Shared launch helpers import these classes by their canonical module name.
+    # Run that module's service so deserialized profiles retain the same types.
+    from loom.queue._agent_process_supervisor import _main as supervisor_main
+
+    raise SystemExit(supervisor_main())
