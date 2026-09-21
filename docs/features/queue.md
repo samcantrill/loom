@@ -704,6 +704,9 @@ physical provider release, including when cancellation arrives after a terminal
 stage result. Explicit guarded recovery is the exception: its recorded decision
 can retain uncertain capacity for operator recovery. A terminal run alone is not
 permission to reuse such a retained claim.
+After a guarded failure close with no authorized retry, the run and admission
+become `FAILED` even while that exact recovered assignment retains its capacity.
+Pending recovery or unrelated unsettled assignments still delay terminal failure.
 
 The [local starter](../../examples/operations/managed-local-basic/README.md)
 demonstrates controlled cancellation followed by reuse of its sole CPU slot.

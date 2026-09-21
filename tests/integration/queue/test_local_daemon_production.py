@@ -2192,15 +2192,16 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             )
         else:
             assert closed_stage.status is expected_status
-            if requested_outcome == "cancelled":
-                assert (
-                    client.wait("recovery-item", timeout_seconds=10).state
-                    is LocalDaemonAdmissionState.CANCELLED
-                )
-                assert (
-                    SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).status
-                    is RunStatus.CANCELLED
-                )
+            expected_admission = (
+                LocalDaemonAdmissionState.CANCELLED
+                if requested_outcome == "cancelled"
+                else LocalDaemonAdmissionState.FAILED
+            )
+            expected_run = (
+                RunStatus.CANCELLED if requested_outcome == "cancelled" else RunStatus.FAILED
+            )
+            assert client.wait("recovery-item", timeout_seconds=10).state is expected_admission
+            assert SQLitePerRunAuthorityStore(run_uri).open_run(run_uri).status is expected_run
         assert len(closed_stage.retry_decisions) == 1
         detail = client.admission_for_queue_item("recovery-item")
         assert detail.run_uri == assignment.run_uri

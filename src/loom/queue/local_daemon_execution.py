@@ -4244,7 +4244,13 @@ class LocalDaemonExecution:
         if terminal_failures:
             if any(
                 state not in {"terminal", "logical_released"}
-                for _, state in self.coordinator.list_run_live_states(admission.run_uri)
+                and (
+                    not self._recovery_retains_assignment(assignment_id)
+                    or self._daemon_owner()._recovery_is_settling(assignment_id)
+                )
+                for assignment_id, state in self.coordinator.list_run_live_states(
+                    admission.run_uri
+                )
             ):
                 return LocalDaemonExecutionOutcome(
                     LocalDaemonAdmissionState.ACTIVE,
