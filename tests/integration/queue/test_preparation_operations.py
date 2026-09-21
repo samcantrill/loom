@@ -1280,6 +1280,9 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             conn.execute("SELECT COUNT(*) FROM preparation_operations").fetchone()[0]
             == 0
         )
+        conn.execute("DROP TABLE action_demands")
+        conn.execute("DROP TABLE action_claims")
+        conn.execute("DROP TABLE action_graph_cancellations")
         conn.execute("DROP TABLE preparation_cancellations")
         conn.execute("DROP TABLE preparation_operations")
         conn.execute("PRAGMA user_version = 12")
@@ -1290,7 +1293,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 16}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 17}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1302,7 +1305,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 16)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 17)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1504,7 +1507,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12

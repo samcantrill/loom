@@ -42,7 +42,7 @@ yet authorized. It does not relax any protocol, qualification or review gate.
 | Phase | Package | Card | Branch | Status | Dependency / bounded outcome |
 | --- | --- | --- | --- | --- | --- |
 | 1 | U1 | [Installed Node Contracts](phases/installed-node-contracts.md) | `agent/stage-92-p1-installed-node-contracts` | merged | Approved protocol; persist checked opaque node contracts, forward authoritative context, preserve v1/v2 and v3 whole-target lifecycle |
-| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | pr_open | Draft [PR #332](https://github.com/samcantrill/loom/pull/332); implementation committed, full validation and independent review pending |
+| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | pr_open | Draft [PR #332](https://github.com/samcantrill/loom/pull/332); required validation reconciled, independent product review passed; final head verification and delivery pending |
 
 U1 may merge independently without cross-graph reuse. U2 is one coherent result
 lifecycle: identity, claims, verification, binding, retention, cancellation and

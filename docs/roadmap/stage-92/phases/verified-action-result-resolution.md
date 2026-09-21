@@ -2,7 +2,7 @@
 
 ## Metadata And Scope
 
-- Status: pr_open; draft PR #332, full local validation and required independent review pending.
+- Status: pr_open; PR #332, required local validation reconciled; independent product review passed, final head verification and delivery pending.
 - Base: `32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`.
 - U1: PR #331 merged at `a0d29b3fedac7495bbb994e630b07aa41f7cf579`; metadata published and shared synchronization passed at the base above.
 - Coordination branch: `agent/stage-92`; use the manifest's clean control and stage worktree paths.
@@ -300,143 +300,82 @@ physical deployment matrix is authorized or claimed by these native fixtures.
 
 ## Execution Handoff And Record
 
-One optional executor is justified by the coherent changes across native
-identity, durable authority, installed verification, cancellation and read models.
-The optional executor returned without edits after source discovery; the manager
-is implementing U2 locally and owns source/tests/docs, this receipt and delivery.
-This execution shortfall is not a missing product decision. Draft U2 PR #332 is open for actual-head review while the required full gate
-runs. No full qualification or merge is claimed yet. Stop for an
-incompatible approved contract or precisely identified missing product decision;
-resolve private wiring in scope. Do not alter U1's accepted public wire shapes.
+The manager implemented U2 after the optional executor returned discovery without
+edits. The complete native lifecycle is on PR #332; no partial U2 delivery is
+claimed. The implementation uses coordinator schema 17, per-run authority schema
+7, authenticated repository schema 8 and preparation envelopes 8/9. Legacy
+readers and whole-target reconciliation remain supported.
 
-### Current Implementation Progress
+Native causal identity separates project semantics, installed implementation,
+actual original committed inputs, output contracts and fresh generation from
+captured graph authorship. Qualified claims and graph demands own one producer;
+consumer bindings preserve original commits/facts without consumer attempts or
+copied commits. Installed `verify_result` runs in the existing preparation child.
+Native integrity/retention checks precede and follow project verification.
 
-Causal identity and native fresh intent are implemented. Coordinator schema 17
-adds atomic claims/demands and offline migration from 12/15/16. Per-run authority
-schema 7 and authenticated repository schema 8 add immutable consumer bindings;
-read models expose original commits/facts without consumer attempts or copied
-commit rows. Native preparation envelope 9 reuses the managed child for installed
-`verify_result`; envelope 8 retains fresh generation transport. Reuse opts out
-unless protected resident readiness qualifies explicit nonempty source roots.
+Exact producer permissions preserve work for surviving graph demand across
+cancellation and restart. Final-demand cancellation cannot revive ownership.
+Administrative `cancel_active` settles its exact active producer even when another
+graph wants its result. Original-owner and failed-waiter retries remain explicit.
+Remote/SLURM grant/start publication joins the current coordinator transaction.
 
-Current implementation checkpoint:
-`4db7181f14924d18ab694333c5668a0c2a47d755`, tree
-`2d4c3ddcc0229f738c154ca225ec357fa3dcd652`.
-`build/validation/action-result-foundations/{pytest,ruff,pyright}.log` retains
-123 focused passes (no skips, 168.73 s), Ruff pass and Pyright zero errors/warnings.
-The selection covers preparation codecs, claims/migration, verifier rejection
-boundaries, both authority adapters, renamed-graph reuse, fresh/default behavior
-with identical output bytes, existing U1 native cases, and authority repositories.
-`git diff --check` passed. This is partial evidence, not the final U2 gate.
+The verifier receives materialized read references separately from immutable
+candidate identity. Existing shared-publication receipts protect complete portable
+closures. Local project companions require the protected original-root binding;
+a copied primary alone does not establish companion access. No domain-aware copy,
+scientific failure enum, extra registry or project scheduler was added to Loom.
 
-P7 exposed an existing U1 admission defect: worker metadata freezes nested JSON
-lists to tuples, while the retained report remains lists. Native
-`validate_admitted_worker` now compares normalized plain data; the installed text
-fixture carries nested sequence payloads and the native tests pass. rphys remains
-on merged U1 until the corrected U2 implementation is reviewed and merged.
+P7 exposed U1's list/tuple attachment comparison defect. Native validation now
+normalizes plain metadata, covered by nested sequence payloads in the installed
+fixture. rphys must consume the merged corrected revision and qualify its image.
 
-Native producer continuation, final-demand settlement and restart are now
-implemented across embedded/authenticated authority and local/remote/SLURM
-launch boundaries. Producer permissions name the exact original claim/attempt;
-remote and SLURM fence publication joins the existing coordinator transaction.
-Public graph cancellation detaches demands in its admission transaction before
-any restart can replay work. An authorized original-owner retry retains its
-claim; a failed waiter can resume without allocating a consumer attempt. Current
-status is preserved when failing a resumed consumer with unavailable input.
+### Validation And Evidence Reconciliation
 
-The installed verifier receives separately materialized read references; immutable
-candidate refs retain original producer identity. Existing shared-publication
-verification covers the full receipt and companion closure, and existing native
-retention protects original run authority and publications. Projects with local
-companions must read them through their protected original-root binding; a copied
-primary alone does not establish access to a project-defined closure. Portable
-closures use existing shared publication rather than project-aware Loom copying.
+Final production revision: `28cde46b27fcb53ca903bf5941e0ad871e41c6a5`, tree
+`71072cd05f52e4c087dfaff5dbc75326c62e6b51`. Later changes are two schema-test
+fixtures and this delivery receipt; production code is unchanged. All evidence
+below is under `build/validation/action-result-foundations/`.
 
-Current targeted evidence (development receipts, final gate pending):
+The required `make validate-pr` components are satisfied by the broad runs and
+bounded reruns below. The initial aggregate command did not exit successfully;
+its fixture failures and intervening production corrections are explicitly
+reconciled instead of repeating unaffected long suites.
 
-- `build/validation/action-result-foundations/cancellation-rejections-development.log`:
-  5 passes for local shared cancellation/restart and native corruption,
-  project rejection and producer failure.
-- `retry-failed-graph-development.log`: 8 passes for authorized producer retry
-  and reuse of successful work from a failed source graph with new downstream work.
-- `retry-public-cancellation-development.log`: readiness, explicit waiter retry
-  and whole-target cancellation checks passed (9); two new cancellation assertions
-  had a test-only column typo, corrected before the exact rerun below.
-- `public-cancellation-restart-development.log`: 2 passes through public
-  cancellation acceptance, atomic demand detach, coordinator restart, surviving
-  versus final-demand producer and untouched original commit identity.
-- Embedded/authenticated producer continuation: 4 passes; remote/SLURM exact
-  grant/start boundaries: 3 passes; artifact-access regression selection: 50 passes.
-- CLI fresh forwarding and complete shared-closure retention/integrity passed.
-  The initial waiter-retry failure was corrected and its selector passed above.
+| Gate / evidence | Result and applicability |
+| --- | --- |
+| `validate-pr.log` baseline | 3,069 passed, two skipped, two stale fixture failures, 343 deselected; 1,322.73 s. Repository schema expectation and synthetic SLURM database corrected. |
+| `baseline-fixture-corrections.log` | Seven affected repository/SLURM checks passed; no production delta. |
+| `validate-pr-remaining.log` config-extra | 289 passed, 15 skipped, eight failures, 3,123 deselected; 2,391.46 s. Seven failures were predecessor-schema fixtures; one qualified retry timed out on the production revision loaded before the review correction. |
+| `config-gate-corrections.log` | Nine passed, 104.33 s: all seven schema cases and both qualified/unqualified retry variants. Predecessor fixtures remove tables absent from schemas 12/15 and expect coordinator schema 17; data/journal/restart assertions remain. The reviewed terminal-producer reconciliation closes the retry failure without another production edit. |
+| `mcp-build-gate.log` | 45 MCP tests passed, 3,375 deselected; 98.88 s. Source distribution and wheel built successfully. |
+| `administrative-cancellation-suite.log`, `final-static.log` | 57 agent-session/claim checks passed after the administrative containment correction; Ruff pass, Pyright zero errors/warnings. |
+| `review-correction-regressions.log`, `review-correction-static.log` | 26 native action-resolution, rejection/retry, failure-policy and both-authority regressions passed, 328.22 s; Ruff pass, Pyright zero errors. |
+| `fail-fast-action-regression.log` | Seven focused authority/native fail-fast and explicit retry checks passed. |
 
-Exact placement coverage refines the initial fixture paths: native local restart
-is in `tests/integration/queue/test_action_result_resolution.py`, authority epoch
-and original-input binding in `tests/integration/authority/test_action_{producer_cancellation,result_binding}.py`,
-remote grant/start in `tests/unit/loom/queue/test_agent_sessions.py`, and SLURM's
-existing transaction owner in `test_action_slurm_grant.py`. Shared primary and
-companion corruption/retention uses `tests/unit/loom/pipeline/cleanup/test_safety.py`
-with the real shared-publication fixture. The final gate also runs existing
-placement, run cancellation, shared-publication and read-model regressions.
-These tests exercise the affected native boundaries; no physical deployment
-qualification is inferred.
+Changed schema fixtures pass Ruff; `git diff --check` passes. Earlier 123-test
+foundation evidence and subsequent selected lifecycle/closure checks remain
+supporting development receipts, not substitutes for the reconciled final gate.
+Two baseline skips require optional `python-dotenv` in the isolated environment;
+15 configuration skips are explicitly gated physical container acceptance. The
+native U1/U2 journeys executed. These runs do not qualify physical fleets,
+SLURM installations or the changed rphys container.
 
-An additional administrative-cancellation regression reproduced that shared
-continuation could delay an operator's explicit `cancel_active` control. The
-control transaction now moves its exact active claims into settlement before
-native containment; graph-demand cancellation remains distinct. The regression
-and claim selection tests pass (8), followed by all agent-session and claim tests
-(57) in `administrative-cancellation-suite.log`. `final-static.log` records Ruff
-pass and Pyright zero errors/warnings after this correction. This source delta
-was made while the broader gate ran; its affected tests and static checks were
-rerun separately and must be reconciled with that gate's receipt.
+### Independent Review And Delivery
 
-The final `make validate-pr` is in progress. An initial gate stopped in Pyright
-on new test-fixture typing before suite execution; fixture narrowing/annotations
-were corrected. Required suites, diff checks, actual PR-head independent review,
-merge and synchronization remain pending. No partial U2 merge is permitted.
-
-Current implementation commit: `49d404518d03bd0414c29055e3cbbff78d898b6c`,
-tree `fa5b57c12065cadf48ba04112ef0cf177a24ac89`. Subsequent changes in this
-receipt are documentation-only. The draft allows independent review to overlap
-the healthy full gate; review and all validation remain mandatory before delivery.
-
-### Broad Gate Reconciliation
-
-The broad gate's baseline completed with 3,069 passes, two skips and two failures
-(343 deselected, 1,322.73 s). Both failures were stale fixtures: the authenticated
-repository schema assertion still expected 7 instead of 8, and the synthetic
-SLURM cancellation database omitted the native action tables. Corrected fixtures
-use the current schema and its real initializer. The affected repository suite
-plus exact SLURM regression passed (7) in `baseline-fixture-corrections.log`.
-No production change resulted. Unaffected baseline evidence is retained rather
-than repeating the 22-minute suite. Remaining required gate targets are running
-with `make test-config-extra test-mcp-extra build`, retained in
-`validate-pr-remaining.log`; these are not yet claimed passed. Final gate status
-will reconcile the baseline, the affected corrections and remaining targets.
-
-### Independent Review Correction
-
-The required independent reviewer examined PR #332 at
+The required independent reviewer reviewed PR #332 at
 `c6258ea3bec2193d5e91aa575ce6f765bbc4058c` and found one product blocker:
-fail-fast source termination could leave an owned claim whose prepared producer
-remained pending and could never launch. A later equivalent graph waited forever.
-No other concrete blocker was found; full validation remained pending.
+fail-fast termination could strand an owned prepared producer that could no
+longer launch, making a later equivalent graph wait forever.
 
-The bounded correction reconciles producer claims when a run becomes terminal
-and when a consumer observes the original producer. Native authority settles the
-exact unstarted attempt and stage of a failed/interrupted source together with
-its continuation permission, refusing to treat a live execution binding as
-abandoned. Claims then fail explicitly; existing authorized retry can create a
-successor with consistent attempt and worker-projection history. Successful
-original commits remain eligible. Both embedded and authenticated owners use
-this existing mutation; no new wire shape or project hook is introduced.
+The correction at `28cde46b27fcb53ca903bf5941e0ad871e41c6a5` reconciles claims
+at terminal run settlement and consumer observation. Native authority settles the
+exact pending stage and attempt together with its continuation permission,
+refusing abandonment with a live execution binding. Waiters fail explicitly;
+authorized original-owner and waiter retry retain consistent native history.
+The one-CPU native regression proves this sequence and original-result reuse.
 
-`fail-fast-action-regression.log` records 7 passes: authority continuation and
-settlement through both backends, plus a native two-independent-action graph
-with one CPU, failed waiting graph, explicit owner retry and verified waiter
-reuse. `review-correction-static.log` records Ruff pass and Pyright zero errors.
-Affected action-resolution, rejection/retry, native failure-policy and authority
-regressions passed: 26 tests in 328.22 s, recorded in
-`review-correction-regressions.log`. This correction
-still requires the same reviewer's bounded confirmation on the final PR head.
+The same reviewer confirmed that exact head: blocker resolved, no remaining
+concrete blocker. The initial review and correction confirmation remain valid
+for unchanged production code. Final verification accounts for the two later
+schema fixtures and completed validation receipt before delivery. Remote merge,
+metadata publication, synchronization and exact branch cleanup remain pending.
