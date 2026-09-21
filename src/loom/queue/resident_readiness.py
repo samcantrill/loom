@@ -26,7 +26,7 @@ from loom.serialization import PlainData
 from ._resident_probe import MAX_RESIDENT_PROBE_TIMEOUT_SECONDS, run_resident_probe
 
 if TYPE_CHECKING:
-    from ._remote_stage_execution import ResidentExecutionProfile
+    from ._remote_stage_execution import ResidentExecutionProfile, ResidentProfileDescriptor
 
 
 _HANDSHAKE = r"""
@@ -650,10 +650,19 @@ def qualify_resident_profile(
         "Requalify a new profile/deployment after retained work settles if this identity changes.",
         {
             "identity": identity,
-            "descriptor": {**profile.descriptor.to_dict(), **fingerprints},
+            "descriptor": _qualified_descriptor(profile, fingerprints).to_dict(),
         },
     )
     return ResidentReadinessResult(tuple(checks), identity, fingerprints)
+
+
+def _qualified_descriptor(
+    profile: ResidentExecutionProfile, fingerprints: Mapping[str, str],
+) -> ResidentProfileDescriptor:
+    return replace(
+        profile.descriptor, **dict(fingerprints),
+        action_reuse_qualified=bool(profile.readiness_requirements.source_roots),
+    )
 
 
 def qualified_resident_profile(
@@ -664,10 +673,7 @@ def qualified_resident_profile(
     result = qualify_resident_profile(profile, _deadline=_deadline)
     descriptor = profile.descriptor
     if result.ok:
-        descriptor = replace(
-            descriptor, **dict(result.fingerprints),
-            action_reuse_qualified=bool(profile.readiness_requirements.source_roots),
-        )
+        descriptor = _qualified_descriptor(profile, result.fingerprints)
     return replace(
         profile,
         descriptor=descriptor,
