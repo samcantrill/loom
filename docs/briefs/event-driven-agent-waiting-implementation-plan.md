@@ -44,6 +44,12 @@ the default. Each iteration opens database connections, checks state, and uses
 validation also executes the accepted-time metadata update. In the ordinary
 inner-loop validation connection that update is not committed before close.
 
+There are two separate loops here. Across the network, an idle agent renews its
+HTTP work request after the five-second wait response. Inside the coordinator,
+that one request currently causes repeated 50 ms checks. The approximately 100
+checks are local checking cycles, not 100 HTTP requests. This proposal changes
+the inner loop; agents continue speaking the same long-polling protocol.
+
 Distinguish SQL statements, write transactions, committed row changes, and
 physical disk writes. They are different measurements. This change should reduce
 idle queries, connection churn, write attempts, and writer-lock acquisitions.
@@ -140,6 +146,11 @@ Use a condition variable plus an in-memory change number for each session with
 an active handler. The number means only that something changed since a handler
 looked. It is not the durable poll sequence, an assignment number, or an epoch.
 
+For example, a handler observes `7`. An assignment notification increments the
+number to `8`. The handler only needs to notice that the number differs; it does
+not need to reconstruct an event for every increment. Several notifications can
+be covered by one fresh database check.
+
 ```python
 from threading import Condition
 
@@ -219,6 +230,21 @@ This order covers the three useful cases:
 | After the state check but before sleeping | The publisher increments the number; the handler's comparison prevents sleeping. |
 | After sleeping begins | The notification wakes the condition variable. |
 
+A concrete instance of the middle case is:
+
+```text
+handler:      records generation 7, then finds no assignment
+coordinator:  commits assignment A, then changes generation to 8 and notifies
+handler:      asks to wait only while the generation still equals 7
+condition:    sees 8, so returns without sleeping
+handler:      checks the database again and finds assignment A
+```
+
+The condition lock makes comparing the number and entering the wait one
+synchronized operation. While blocked, the condition releases its lock so the
+publisher can acquire it and notify. The handler rechecks durable state after
+waking because the notification is a hint, not an assignment or execution grant.
+
 Publish only after a successful commit:
 
 ```python
@@ -288,6 +314,23 @@ Do not decorate the entire blocking poll. Audit the direct and HTTP callers and
 ensure policy installation participates in the same ordering. Preserve the
 existing lock order with scheduling reload and SQLite.
 
+The short guarded decision is conceptually:
+
+```python
+with daemon._cycle_lock:
+    reject_if_owner_is_stopping()
+    validate_current_authorization_session_and_offer(request)
+    decision = perform_existing_delivery_transition_if_available(request)
+
+# The guard is released before signal.wait_for_change(...).
+```
+
+These operations reuse the authoritative checks and atomic receipt transition
+described above. If invalidation wins the guard first, the request is rejected.
+If delivery commits first, its receipt remains durable and later control follows
+the existing lifecycle. The guard cannot retract an already committed response.
+The notification itself never establishes which operation won.
+
 The cycle lock also protects broader reconciliation. Measure lock waiting in the
 integration evidence; do not claim the request is a hard real-time deadline or
 introduce a new global lock solely to optimize a hypothetical large fleet.
@@ -327,6 +370,18 @@ them to finish their existing receipt/fence cleanup while the root is still owne
 Coordinate server-stop and daemon-stop ordering at their current owners; do not
 release the root and leave old handlers mutating it during a new start.
 
+```text
+mark the owner as stopping, ordered against delivery
+    -> reject new waiting subscriptions
+    -> close signals and wake existing handlers
+    -> handlers detect stopping and finish exact receipt/fence cleanup
+    -> release coordinator/root ownership
+```
+
+The cleanup may access the database while the root is still owned. The prohibited
+behavior is repeatedly returning to the ordinary checking loop after closure.
+Do not hold the lifecycle guard while waiting for those handlers to finish.
+
 **8. Deadlines, clocks, and missing notifications**
 
 Keep the current five-second maximum poll duration. Use monotonic time for the
@@ -356,6 +411,19 @@ the assignment or preserves it for the next valid poll. After a coordinator
 restart, the waiter collection starts empty and the existing session reconciliation
 and durable poll recovery determine what can be replayed or delivered. No durable
 notification cursor, migration, or event-replay log is required.
+
+Distinguish a lost internal notification from a lost HTTP response:
+
+| Failure point | Recovery behavior |
+| --- | --- |
+| Assignment A commits, but its internal notification is missed | A remains durable; a deadline check or a later valid request discovers it. |
+| Assignment A and its poll receipt commit, but the HTTP response is lost | The agent retries the exact existing poll identity; the recorded response refers to A again. |
+| The coordinator restarts during either case | Existing poll/session reconciliation determines replay or delivery; the temporary notification collection can start empty. |
+
+Neither recovery path creates a new assignment just because the agent did not
+observe the original response. Existing grant and launch checks still govern
+physical execution. The guarantee concerns one logical operation with safe
+replay, rather than exactly one transmission over the network.
 
 Do not use this change to alter the accepted-time helper's persistence policy.
 Record actual SQL and transaction changes in validation, including any deliberate
@@ -397,6 +465,13 @@ Use supported producers and deterministic synchronization. Arrange race ordering
 with `Event`/barrier fixtures or a narrow monkeypatch around an existing boundary.
 Use test timeouts to prevent hangs; avoid hoping a short sleep happens to hit the
 race. Do not expose new production test-control endpoints.
+
+For the missed-wakeup case, pause the real handler immediately after its empty
+database check and before its wait. Commit an assignment through the normal
+publisher while the handler is paused, then release it. Assert that this same
+pending request returns the assignment before its fallback deadline, and that
+the existing assignment/claim identity remains unchanged. This tests the race
+directly rather than merely testing that the condition variable can wake.
 
 | Scenario | Material assertion |
 | --- | --- |
