@@ -369,6 +369,10 @@ class AgentPollActiveError(QueueConflictError):
     """An exact poll retry reached the still-held original poll."""
 
 
+class AgentPollFencedError(QueueConflictError):
+    """An exact poll has been fenced without a committed delivery result."""
+
+
 class AgentStalePollError(QueueConflictError):
     """A poll sequence is older than the session's replayable state."""
 
@@ -3018,7 +3022,7 @@ class AgentSessionService:
                 if bool(existing["active"]):
                     raise AgentPollActiveError("work poll is already active")
                 if sequence == stored_sequence:
-                    raise QueueConflictError("work poll was fenced and is not reusable")
+                    raise AgentPollFencedError("work poll was fenced and is not reusable")
             elif sequence != 1:
                 raise AgentPollSequenceGapError("work poll sequence has a gap")
             self._require_current_offer(conn, session_id, availability_revision)
@@ -6395,6 +6399,7 @@ __all__ = [
     "AgentOffer",
     "AgentOfferRenewal",
     "AgentPollActiveError",
+    "AgentPollFencedError",
     "AgentPollSequenceGapError",
     "AgentProviderDescriptor",
     "AgentPolicyConfig",
