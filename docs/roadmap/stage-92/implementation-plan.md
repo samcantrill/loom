@@ -1,6 +1,6 @@
 # Native Project Contracts And Result Resolution
 
-Status: in_progress
+Status: merged
 Stage descriptor: Native Project Contracts And Result Resolution
 Target: develop
 
@@ -42,7 +42,7 @@ yet authorized. It does not relax any protocol, qualification or review gate.
 | Phase | Package | Card | Branch | Status | Dependency / bounded outcome |
 | --- | --- | --- | --- | --- | --- |
 | 1 | U1 | [Installed Node Contracts](phases/installed-node-contracts.md) | `agent/stage-92-p1-installed-node-contracts` | merged | Approved protocol; persist checked opaque node contracts, forward authoritative context, preserve v1/v2 and v3 whole-target lifecycle |
-| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | pr_open | Draft [PR #332](https://github.com/samcantrill/loom/pull/332); required validation reconciled, independent product review passed; final head verification and delivery pending |
+| 2 | U2 | [Verified Action Result Resolution And Fresh Execution](phases/verified-action-result-resolution.md) | `agent/stage-92-p2-verified-action-result-resolution` | merged | [PR #332](https://github.com/samcantrill/loom/pull/332), merge `14d8715e42e24405e86d4bcdc1ec31e0f479f6ad`; required validation and independent review passed |
 
 U1 may merge independently without cross-graph reuse. U2 is one coherent result
 lifecycle: identity, claims, verification, binding, retention, cancellation and
@@ -87,6 +87,16 @@ U1 [PR #331](https://github.com/samcantrill/loom/pull/331) merged into develop a
 `a0d29b3fedac7495bbb994e630b07aa41f7cf579` after the required local gate and
 independent actual-head review passed. The Phase 1 card owns the validation,
 skip and delivery receipts. Shared transition, metadata publication and synchronization passed at
-`32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`. U2 startup is active on its fresh
-phase branch; its card records the bounded ownership refinement. U2 delivery and
-rphys integration remain outstanding.
+`32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`. U2 PR #332 merged at `14d8715e42e24405e86d4bcdc1ec31e0f479f6ad` after the
+reconciled local gate and independent review of actual head
+`4bc2e351eedcd4d62e7b77b35c3fb450b819f176` passed. The Phase 2 card owns exact
+results, skips, review correction and archived raw evidence. Both approved Loom
+packages are delivered. No technical blocker remains in Loom; rphys phases 7–9
+still own reference integration and physical qualification.
+
+Final transition passed; the remote U2 phase branch was retired using its exact
+reviewed head. Publish this closeout on the coordination branch, synchronize all
+four revisions, and remove only the verified local U2 branch, clean stage
+worktree and published coordination ref. Preserve the original dirty checkout
+and all other worktrees. No new reusable improvement-log item is warranted by
+the bounded product/fixture corrections; their evidence remains with this phase.

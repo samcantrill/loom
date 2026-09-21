@@ -2,13 +2,13 @@
 
 ## Metadata And Scope
 
-- Status: pr_open; PR #332, required local validation reconciled; independent product review passed, final head verification and delivery pending.
+- Status: merged; PR #332, required local validation and independent actual-head review passed.
 - Base: `32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`.
 - U1: PR #331 merged at `a0d29b3fedac7495bbb994e630b07aa41f7cf579`; metadata published and shared synchronization passed at the base above.
 - Coordination branch: `agent/stage-92`; use the manifest's clean control and stage worktree paths.
 - Branch: `agent/stage-92-p2-verified-action-result-resolution`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 2: Verified Action Result Resolution And Fresh Execution`.
-- PR: https://github.com/samcantrill/loom/pull/332 (draft until all gates pass).
+- PR: https://github.com/samcantrill/loom/pull/332 (merged).
 - Target: develop; execution context and approved protocol are in the [manifest](../implementation-plan.md).
 - Fixed contract owner: native contract sections Native Execution Identity And
   Selection, Delivery Packages And Source Ownership (U2), and Example And
@@ -377,5 +377,11 @@ The one-CPU native regression proves this sequence and original-result reuse.
 The same reviewer confirmed that exact head: blocker resolved, no remaining
 concrete blocker. The initial review and correction confirmation remain valid
 for unchanged production code. Final verification accounts for the two later
-schema fixtures and completed validation receipt before delivery. Remote merge,
-metadata publication, synchronization and exact branch cleanup remain pending.
+schema fixtures and completed validation receipt before delivery. PR #332 merged at `14d8715e42e24405e86d4bcdc1ec31e0f479f6ad` after final
+independent head verification approved `4bc2e351eedcd4d62e7b77b35c3fb450b819f176`.
+The delivery helper verified the remote merge and leased deletion of that exact
+remote phase branch. Shared transition passed. Metadata publication, final sync
+and exact local cleanup follow on the coordination branch.
+
+Retained U1/U2 raw validation archive before stage cleanup:
+`/nas/home/can134/scratch/rphys/loom-native-action-validation-ltlfjzrb/validation`. No unknown or unrelated work is included.
