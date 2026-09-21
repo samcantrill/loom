@@ -2,12 +2,13 @@
 
 ## Metadata And Scope
 
-- Status: in_progress; predecessor gates passed and source-bound execution plan finalized.
+- Status: pr_open; draft PR #332, full local validation and required independent review pending.
 - Base: `32f8d90d4af6ea8f0e4ccb78a024b5dc7de67ed2`.
 - U1: PR #331 merged at `a0d29b3fedac7495bbb994e630b07aa41f7cf579`; metadata published and shared synchronization passed at the base above.
 - Coordination branch: `agent/stage-92`; use the manifest's clean control and stage worktree paths.
 - Branch: `agent/stage-92-p2-verified-action-result-resolution`.
 - PR title: `Stage 92 Native Project Contracts And Result Resolution - Phase 2: Verified Action Result Resolution And Fresh Execution`.
+- PR: https://github.com/samcantrill/loom/pull/332 (draft until all gates pass).
 - Target: develop; execution context and approved protocol are in the [manifest](../implementation-plan.md).
 - Fixed contract owner: native contract sections Native Execution Identity And
   Selection, Delivery Packages And Source Ownership (U2), and Example And
@@ -303,8 +304,8 @@ One optional executor is justified by the coherent changes across native
 identity, durable authority, installed verification, cancellation and read models.
 The optional executor returned without edits after source discovery; the manager
 is implementing U2 locally and owns source/tests/docs, this receipt and delivery.
-This execution shortfall is not a missing product decision. No U2 PR, full
-qualification or merge is claimed yet. Stop for an
+This execution shortfall is not a missing product decision. Draft U2 PR #332 is open for actual-head review while the required full gate
+runs. No full qualification or merge is claimed yet. Stop for an
 incompatible approved contract or precisely identified missing product decision;
 resolve private wiring in scope. Do not alter U1's accepted public wire shapes.
 
@@ -394,3 +395,8 @@ The final `make validate-pr` is in progress. An initial gate stopped in Pyright
 on new test-fixture typing before suite execution; fixture narrowing/annotations
 were corrected. Required suites, diff checks, actual PR-head independent review,
 merge and synchronization remain pending. No partial U2 merge is permitted.
+
+Current implementation commit: `49d404518d03bd0414c29055e3cbbff78d898b6c`,
+tree `fa5b57c12065cadf48ba04112ef0cf177a24ac89`. Subsequent changes in this
+receipt are documentation-only. The draft allows independent review to overlap
+the healthy full gate; review and all validation remain mandatory before delivery.
