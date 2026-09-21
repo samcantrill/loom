@@ -644,6 +644,10 @@ An agent-check report's `execution.identity` finding includes the portable
 `descriptor` under `details.evidence`. The coordinator's `remote_profiles` uses
 that complete observed descriptor; the coordinator does not inspect a remote
 agent's filesystem. The managed remote example demonstrates this handoff.
+The reported descriptor is the same one the qualified agent offers, including
+`action_reuse_qualified: true` when declared source roots pass qualification.
+Without declared source roots that flag is false and omitted from the portable
+JSON. Copy the complete observed descriptor; do not author this flag separately.
 
 Declare source files or directories narrowly. Digests include each root's resolved
 project-relative location, relative member names and contents, including untracked

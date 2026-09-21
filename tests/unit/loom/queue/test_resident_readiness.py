@@ -51,6 +51,35 @@ def test_profile_probe_uses_selected_python_and_reports_missing_import(
     assert check.status == "FAIL"
 
 
+@pytest.mark.parametrize("with_source", [False, True])
+def test_observed_descriptor_matches_qualified_runtime_profile(
+    tmp_path: Path, with_source: bool,
+) -> None:
+    (tmp_path / "source").mkdir()
+    (tmp_path / "source" / "module.py").write_text("value = 1\n")
+    profile = _profile(
+        tmp_path,
+        ResidentReadinessRequirements(source_roots=("source",) if with_source else ()),
+    )
+
+    observed = qualify_resident_profile(profile)
+    runtime = qualified_resident_profile(profile)
+
+    assert observed.ok
+    assert runtime.readiness_result is not None and runtime.readiness_result.ok
+    identity = next(
+        check.to_dict() for check in observed.checks
+        if check.check_id == "execution.identity"
+    )
+    # Operators copy this public JSON evidence into coordinator remote_profiles.
+    encoded = json.loads(json.dumps(identity))
+    descriptor = ResidentProfileDescriptor.from_dict(
+        encoded["details"]["evidence"]["descriptor"]
+    )
+    assert descriptor == runtime.descriptor
+    assert descriptor.action_reuse_qualified is with_source
+
+
 def test_explicit_readiness_timeout_allows_cold_import_beyond_thirty_seconds(
     tmp_path: Path,
 ) -> None:
