@@ -400,3 +400,17 @@ Current implementation commit: `49d404518d03bd0414c29055e3cbbff78d898b6c`,
 tree `fa5b57c12065cadf48ba04112ef0cf177a24ac89`. Subsequent changes in this
 receipt are documentation-only. The draft allows independent review to overlap
 the healthy full gate; review and all validation remain mandatory before delivery.
+
+### Broad Gate Reconciliation
+
+The broad gate's baseline completed with 3,069 passes, two skips and two failures
+(343 deselected, 1,322.73 s). Both failures were stale fixtures: the authenticated
+repository schema assertion still expected 7 instead of 8, and the synthetic
+SLURM cancellation database omitted the native action tables. Corrected fixtures
+use the current schema and its real initializer. The affected repository suite
+plus exact SLURM regression passed (7) in `baseline-fixture-corrections.log`.
+No production change resulted. Unaffected baseline evidence is retained rather
+than repeating the 22-minute suite. Remaining required gate targets are running
+with `make test-config-extra test-mcp-extra build`, retained in
+`validate-pr-remaining.log`; these are not yet claimed passed. Final gate status
+will reconcile the baseline, the affected corrections and remaining targets.
