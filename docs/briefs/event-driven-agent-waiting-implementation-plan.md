@@ -172,8 +172,13 @@ class _PollSignal:
             self._condition.notify_all()
 ```
 
-The handler's normal owner-state check handles closure after waking. The helper
-does not invent a new wire response for shutdown. Python documents this
+Add an explicit stopping/closure check to the handler's guarded decision before
+database work and delivery. The existing `_require_started()` and session checks
+do not observe `_stop`; installed identity remains present while handlers drain.
+The new check must exit through the existing service-error and exact poll-fence
+cleanup path. Otherwise a closed condition would return immediately and make the
+handler query repeatedly until its deadline. No new wire response is needed.
+Python documents this
 lock-and-condition waiting pattern in its
 [condition-variable reference](https://docs.python.org/3.12/library/threading.html#condition-objects).
 
@@ -186,7 +191,8 @@ ownership so one rejected retry cannot remove another handler's signal.
 Remove an entry when its last handler leaves. A notification with no subscriber
 can be discarded because the next handler reads durable state before sleeping.
 Do not retain entries for every historical session. Close and drain the collection
-on stop; a later daemon start gets a fresh collection.
+on stop, rejecting new subscriptions once draining starts. A later daemon start
+gets a fresh collection.
 
 Keep the collection lock limited to attaching, detaching, and locating signals.
 Never acquire the daemon cycle lock or access SQLite while holding a signal or
@@ -245,6 +251,7 @@ with daemon._poll_waiters.subscribe(session_id) as signal:
     try:
         while True:
             observed = signal.snapshot()
+            # Includes the new stopping check before any database work.
             decision = check_current_poll_and_delivery(request)
             if decision.has_reply:
                 return decision.reply
@@ -312,10 +319,13 @@ forbidden. Do not expand their protocol to justify another event type. Signals
 from control changes allow the existing control/reconnect loop to proceed; this
 feature does not add control messages to the assignment response.
 
-Shutdown must release waiters without holding the cycle lock while joining them.
-Allow them to finish their existing receipt/fence cleanup while the root is still
-owned. Coordinate server-stop and daemon-stop ordering at their current owners;
-do not release the root and leave old handlers mutating it during a new start.
+Order the transition to stopping against the short guarded delivery decision.
+Reject new subscriptions, close existing signals, and let each awakened handler
+detect stopping and exit without another ordinary checking iteration. Shutdown
+must release waiters without holding the cycle lock while joining them. Allow
+them to finish their existing receipt/fence cleanup while the root is still owned.
+Coordinate server-stop and daemon-stop ordering at their current owners; do not
+release the root and leave old handlers mutating it during a new start.
 
 **8. Deadlines, clocks, and missing notifications**
 
@@ -403,7 +413,7 @@ race. Do not expose new production test-control endpoints.
 | Assignment response is lost | Exact poll replay returns the same assignment; existing launch-count assertions remain one. |
 | Coordinator restarts after targeting but before notifying | Retained delivery/session reconciliation preserves the same assignment and issuer evidence. |
 | Agent restarts with a fenced poll in the same coordinator epoch | Baseline recovery still advances safely; no permanently pending local poll. |
-| Shutdown during an empty wait or delivery race | Handlers stop/settle under the existing owner before root ownership is released; retained jobs/claims remain intact. |
+| Shutdown during an empty wait or delivery race | New subscriptions are rejected; awakened handlers explicitly exit without repeated checks after closure and settle under the existing owner before root ownership is released; retained jobs/claims remain intact. |
 | Retry handler exits while original handler waits | Subscription cleanup does not discard the original handler's notification object. |
 
 Start from these existing test owners and their fixtures:
