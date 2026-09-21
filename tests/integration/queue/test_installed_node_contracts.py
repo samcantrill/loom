@@ -23,7 +23,7 @@ from tests.integration.queue.test_reconciled_runs import _reconciled_request
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False):
+def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False, qualify_actions=False):
     _service(tmp_path, local=True)
     installation = tmp_path / "installed-project"
     installation.mkdir()
@@ -33,6 +33,8 @@ def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False):
     agent = json.loads(agent_path.read_text())
     agent["resident_profiles"][0]["environment"]["PYTHONPATH"] = str(installation)
     agent["resident_profiles"][0]["cpu_capacity"] = 2
+    if qualify_actions:
+        agent["resident_profiles"][0]["readiness"]["source_roots"] = [str(installation)]
     agent_path.write_text(json.dumps(agent))
     coordinator_path = tmp_path / "coordinator.json"
     coordinator = json.loads(coordinator_path.read_text())
@@ -175,8 +177,9 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
         daemon.stop()
 
 
-def test_v3_failed_run_retry_uses_original_run_and_new_attempt(tmp_path):
-    service = _text_service(tmp_path, fail_once=True)
+@pytest.mark.parametrize("qualify_actions", [False, True])
+def test_v3_failed_run_retry_uses_original_run_and_new_attempt(tmp_path, qualify_actions):
+    service = _text_service(tmp_path, fail_once=True, qualify_actions=qualify_actions)
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()

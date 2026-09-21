@@ -44,6 +44,48 @@ def _request(*, mode: str = "shared") -> PrepareRunRequest:
     )
 
 
+def test_fresh_run_intent_preserves_legacy_wire_and_rejects_duplicates():
+    from loom.queue.run import RunRequest
+
+    original = RunRequest(_request(), "queue")
+    assert "fresh_stages" not in original.to_dict()
+    assert RunRequest.from_dict(original.to_dict()) == original
+    fresh = replace(original, fresh_stages=("reader", "author"))
+    assert fresh.to_dict()["fresh_stages"] == ["author", "reader"]
+    assert RunRequest.from_dict(fresh.to_dict()) == fresh
+    assert fresh.to_dict() != original.to_dict()
+    with pytest.raises(QueueServiceError, match="duplicate"):
+        replace(original, fresh_stages=("author", "author"))
+    with pytest.raises(QueueServiceError, match="list"):
+        RunRequest.from_dict({**original.to_dict(), "fresh_stages": "author"})
+
+
+def test_fresh_generation_roundtrip_and_target_identity(tmp_path):
+    from loom.queue.preparation import PreparationChildInput, project_target_from_key
+
+    descriptor = ResidentProfileDescriptor("local", "v1", "project", "env", "executor")
+    binding = PreparationChildInput(
+        "operation", "profile", "pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+        descriptor.to_dict(), generations={"author": "opaque-generation"},
+    )
+    encoded = binding.to_dict()
+    assert encoded["schema_version"] == 8
+    assert PreparationChildInput.from_dict(encoded) == binding
+    legacy = replace(binding, generations=None)
+    assert legacy.to_dict()["schema_version"] == 2
+    assert "generations" not in legacy.to_dict()
+    project = {"processor": {"target_prefix": "text-"},
+               "target_run_uri": None, "run_store_root_uri": tmp_path.as_uri()}
+    key = {"version": 1, "namespace": "text-project", "digest": "a" * 64}
+    default = project_target_from_key(project, key)
+    fresh = project_target_from_key(project, key, generations=binding.generations)
+    assert default != fresh
+    assert project_target_from_key(project, key, generations={"author": "opaque-generation"}) == fresh
+    assert project_target_from_key(project, key, generations={"author": "next-generation"}) != fresh
+    assert project_target_from_key(project, key) == default
+
+
 def test_shared_capture_is_finite_and_immutable(tmp_path: Path) -> None:
     root = tmp_path / "projects"
     config = root / "example-project" / "configs" / "experiment.yaml"

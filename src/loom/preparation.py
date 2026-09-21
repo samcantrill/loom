@@ -112,6 +112,10 @@ class PreparationStage:
             raise QueueConflictError("preparation project processor identity conflicts")
         if profile.to_dict() != dict(binding.profile_descriptor):
             raise QueueConflictError("preparation installation_mismatch")
+        if binding.action_verification is not None:
+            return {"report": context.save_artifact(
+                "report", _run_action_verification(binding, private.get("action_artifacts")), artifact_type="json", codec_key="json.v1"
+            )}
         if isinstance(binding.input_receipt, SharedInputReceipt):
             roots = cast(Mapping[str, str], private["shared_roots"])
             captured = resolve_shared_input(
@@ -153,6 +157,10 @@ class PreparationStage:
             ),
         )
         composition = _composition_data(composed)
+        if binding.generations is not None:
+            graph = _pipeline_from_resolved(cast(Mapping[str, object], composition["resolved"]))
+            if set(binding.generations) - set(graph.stage_names):
+                raise QueueServiceError("fresh_stages contains an unknown captured node")
         if preflight.status != PreflightStatus.FAIL:
             _bind_local_snapshot(
                 cast(dict[str, PlainData], composition["resolved"]),
@@ -193,6 +201,7 @@ class PreparationStage:
             }
         report: dict[str, PlainData] = {
             "schema_version": binding.to_dict()["schema_version"],
+            **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"candidate": dict(binding.candidate) if binding.candidate is not None else None,
                 "verification": verification} if "candidate" in binding.to_dict() else {}),
             **({"project_preparation": dict(binding.project_preparation),
@@ -219,6 +228,66 @@ class PreparationStage:
                 "report", report, artifact_type="json", codec_key="json.v1"
             )
         }
+
+
+def _run_action_verification(binding: PreparationChildInput, artifact_access: object = None) -> dict[str, PlainData]:
+    from loom.pipeline._action_verification import action_verification_request, action_verification_response
+
+    assert binding.project_preparation is not None
+    requested = action_verification_request(binding.action_verification)
+    from dataclasses import replace
+    from loom.io.uris import uri_to_path
+
+    candidate = _plain_mapping(requested["candidate"])
+    outputs = _plain_mapping(artifact_access or {})
+    facts = cast(list[Mapping[str, PlainData]], _plain_mapping(candidate["result"])["artifact_facts"])
+    if set(outputs) != {str(fact["artifact_name"]) for fact in facts}:
+        raise QueueConflictError("action verifier input materialization is incomplete")
+    for fact in facts:
+        original = ArtifactRef.from_dict(fact["artifact"])
+        materialized = ArtifactRef.from_dict(outputs[cast(str, fact["artifact_name"])])
+        if replace(materialized, uri=original.uri) != original:
+            raise QueueConflictError("action verifier materialized identity conflicts")
+        LocalArtifactStore(Path(uri_to_path(materialized.uri)).parent).validate(materialized)
+    selected = _plain_mapping(binding.project_preparation["processor"])
+    response, failure = None, None
+    try:
+        module, attribute = cast(str, selected["callable"]).split(":")
+        processor = importlib.import_module(module)
+        for part in attribute.split("."):
+            processor = getattr(processor, part)
+        value = cast(Any, processor)({
+            "schema_version": 3, "operation": "verify_result",
+            "project_preparation": dict(binding.project_preparation),
+            "artifact_access": {"mode": "read_only", "outputs": outputs},
+            **requested,
+        })
+        response = action_verification_response(value, _plain_mapping(requested["candidate"]))
+    except Exception:
+        # Crashes and malformed callback replies are explicit native failures;
+        # unchecked project exception messages never cross this boundary.
+        failure = "action_verification_invalid"
+    return {
+        "schema_version": 9, "operation_id": binding.operation_id,
+        "profile_descriptor": dict(binding.profile_descriptor),
+        "action_verification": requested, "verification": response, "failure_code": failure,
+    }
+
+
+def _decode_action_verification_report(value: object, binding: PreparationChildInput) -> dict[str, PlainData]:
+    from loom.pipeline._action_verification import action_verification_response
+    from loom.serialization import thaw_plain_data
+
+    report = _plain_mapping(value)
+    if set(report) != {"schema_version", "operation_id", "profile_descriptor", "action_verification", "verification", "failure_code"} or type(report["schema_version"]) is not int or report["schema_version"] != 9:
+        raise QueueConflictError("action verification report fields are invalid")
+    if report["operation_id"] != binding.operation_id or report["profile_descriptor"] != dict(binding.profile_descriptor) or report["action_verification"] != thaw_plain_data(binding.action_verification):
+        raise QueueConflictError("action verification report binding conflicts")
+    if report["failure_code"] is None:
+        action_verification_response(report["verification"], _plain_mapping(_plain_mapping(report["action_verification"])["candidate"]))
+    elif report["failure_code"] != "action_verification_invalid" or report["verification"] is not None:
+        raise QueueConflictError("action verification report failure is invalid")
+    return report
 
 
 def _is_v3(binding: PreparationChildInput) -> bool:
@@ -293,7 +362,8 @@ def _checked_project_uri(binding: PreparationChildInput, result: Mapping[str, Pl
     assert binding.project_preparation is not None
     if binding.project_preparation["target_run_uri"] is not None:
         return cast(str, binding.project_preparation["target_run_uri"])
-    return project_target_from_key(binding.project_preparation, _plain_mapping(result["reconciliation_key"]))
+    return project_target_from_key(binding.project_preparation, _plain_mapping(result["reconciliation_key"]),
+                                   generations=binding.generations)
 
 
 def _verify_project_candidate(binding: PreparationChildInput, composition: Mapping[str, PlainData],
@@ -318,6 +388,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "profile_descriptor": dict(binding.profile_descriptor),
             "project_preparation": dict(binding.project_preparation),
+            **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
         }))
         if response != expected:
@@ -473,17 +544,25 @@ def _worker_context() -> Mapping[str, PlainData]:
         raise QueueServiceError("preparation requires its managed worker input binding")
     try:
         value = json.loads(encoded)
+        version = value.get("schema_version") if isinstance(value, dict) else None
+        action_context = version == 5
+        if action_context:
+            if not isinstance(value.get("action_artifacts"), dict):
+                raise ValueError
+            for artifact in value["action_artifacts"].values():
+                ArtifactRef.from_dict(artifact)
+            version = 4 if "shared_scope" in value else 3
         if (
             not isinstance(value, dict)
-            or (set(value) - {"local_scope", "project_preparation", "shared_scope"}) not in (
+            or (set(value) - {"local_scope", "project_preparation", "shared_scope"} - ({"action_artifacts"} if action_context else set())) not in (
                 {"schema_version", "profile_descriptor", "shared_roots"},
                 {"schema_version", "profile_descriptor", "staged_directory"},
             )
             or type(value["schema_version"]) is not int
-            or value["schema_version"] not in (1, 2, 3, 4)
-            or (value["schema_version"] in (2, 3)) != ("local_scope" in value)
-            or (value["schema_version"] != 4 and (value["schema_version"] == 3) != ("project_preparation" in value))
-            or (value["schema_version"] == 4) != ("shared_scope" in value)
+            or version not in (1, 2, 3, 4)
+            or (version in (2, 3)) != ("local_scope" in value)
+            or (version != 4 and (version == 3) != ("project_preparation" in value))
+            or (version == 4) != ("shared_scope" in value)
             or not isinstance(value.get("shared_roots", {}), dict)
             or any(
                 not isinstance(alias, str)
@@ -564,11 +643,18 @@ def _decode_preparation_report(
         set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
                         | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
-                        | ({"project_contracts"} if _is_v3(expected) else set()))
+                        | ({"project_contracts"} if _is_v3(expected) else set())
+                        | ({"generations"} if expected.generations is not None else set()))
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
+    if expected.generations is not None:
+        if report["generations"] != dict(expected.generations):
+            raise QueueConflictError("preparation generation binding conflicts")
+        graph = _pipeline_from_resolved(cast(Mapping[str, object], _plain_mapping(report["composition"])["resolved"]))
+        if set(expected.generations) - set(graph.stage_names):
+            raise QueueConflictError("fresh_stages contains an unknown captured node")
     if "candidate" in expected.to_dict():
         from loom.fingerprints import hash_mapping
         from loom.serialization import thaw_plain_data
@@ -890,6 +976,11 @@ class CoordinatorPreparation:
                     "preparation committed report cannot be decoded"
                 ) from exc
             raise
+        if binding.action_verification is not None:
+            checked = _decode_action_verification_report(value, binding)
+            preflight = PreflightResult((), ())
+            return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
+                                     False, None, None, action_verification=checked)
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
@@ -980,9 +1071,9 @@ class CoordinatorPreparation:
         )
         received = cast(_ReceivedComposition, composed)
         if received.project_preparation is not None and received.project_preparation["target_run_uri"] is None:
-            from loom.queue.preparation import project_target_from_key
+            from loom.queue.preparation import _project_target_uri
             received = replace(received, project_preparation={"processor": received.project_preparation["processor"],
-                "target_run_uri": project_target_from_key(received.project_preparation, _plain_mapping(cast(Mapping[str, PlainData], received.project_result)["reconciliation_key"]))})
+                "target_run_uri": _project_target_uri(config.run_store_root, cast(str, request.run_name))})
         try:
             return prepare_managed_run(
                 self._service(config),

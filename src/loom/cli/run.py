@@ -34,6 +34,8 @@ def register_subparser(
     parser.add_argument("--run-name", help="new prepared run name")
     parser.add_argument("--reconcile", action="store_true", help="resolve the canonical target using the installed project")
     parser.add_argument("--retry-failed", action="store_true", help="with --reconcile, retry one observed eligible failed revision")
+    parser.add_argument("--fresh-stage", action="append", default=None,
+                        help="request a fresh realization of this node without changing its settings")
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--timeout-seconds", type=float)
     parser.add_argument("--profile")
@@ -92,6 +94,7 @@ def handle(namespace: argparse.Namespace) -> int:
             None if reconcile else namespace.queue_item_id or identity,
             mode="reconcile" if reconcile else "exact",
             retry_policy="one_observed_failure" if retry else "never",
+            fresh_stages=tuple(getattr(namespace, "fresh_stage", None) or ()),
         )
         result = run(
             request,

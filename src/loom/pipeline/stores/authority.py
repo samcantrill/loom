@@ -524,6 +524,29 @@ class CancellationEpochRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionProducerBinding:
+    """Exact native producer allowed to serve retained graph demands."""
+
+    claim_id: str
+    stage_name: str
+    attempt_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("claim_id", "stage_name", "attempt_id"):
+            _non_empty(getattr(self, name), name)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"claim_id": self.claim_id, "stage_name": self.stage_name, "attempt_id": self.attempt_id}
+
+    @classmethod
+    def from_dict(cls, value: object) -> "ActionProducerBinding":
+        data = _mapping(value, "ActionProducerBinding")
+        if set(data) != {"claim_id", "stage_name", "attempt_id"}:
+            raise AuthorityStoreError("invalid action producer binding")
+        return cls(*(_non_empty(data[name], name) for name in ("claim_id", "stage_name", "attempt_id")))
+
+
+@dataclass(frozen=True, slots=True)
 class CancellationEpochReceipt:
     """Authority-owned durable cancellation epoch and its operation receipt."""
 

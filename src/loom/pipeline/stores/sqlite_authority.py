@@ -36,6 +36,7 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 from .authority import (
+    ActionProducerBinding,
     AttemptAllocation,
     AuthorityStoreError,
     CancellationEpochReceipt,
@@ -56,6 +57,7 @@ from .capabilities import (
     CapabilitySupport,
 )
 from .read_models import (
+    ActionResultBinding,
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
     BackendRevision,
@@ -134,6 +136,8 @@ _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
 )
 
 _REQUIRED_SCHEMA_COLUMNS = {
+    "action_producers": frozenset({"claim_id", "stage_name", "attempt_id", "active"}),
+    "action_result_bindings": frozenset({"stage_name", "binding_json", "revision_sequence"}),
     "metadata": frozenset({"key", "value"}),
     "revisions": frozenset({"sequence", "token", "created_at"}),
     "run_state": frozenset(
@@ -587,6 +591,75 @@ class SQLitePerRunAuthorityStore:
                 reason=reason,
             )
 
+    def bind_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute("SELECT * FROM action_producers WHERE claim_id = ?", (binding.claim_id,)).fetchone()
+            if row is not None and (row["stage_name"], row["attempt_id"]) == (binding.stage_name, binding.attempt_id):
+                if not row["active"]:
+                    raise AuthorityStoreError("settled action producer cannot be revived")
+                return
+            _require_no_cancellation_epoch(conn)
+            if row is not None:
+                stage = conn.execute("SELECT status FROM stages WHERE stage_name = ?", (binding.stage_name,)).fetchone()
+                if row["stage_name"] != binding.stage_name or stage is None or stage["status"] not in {StageStatus.FAILED.value, StageStatus.STALE.value}:
+                    raise AuthorityStoreError("action producer replacement conflicts")
+            conn.execute("INSERT INTO action_producers VALUES (?, ?, ?, 1) ON CONFLICT(claim_id) DO UPDATE SET attempt_id = excluded.attempt_id, active = 1", (binding.claim_id, binding.stage_name, binding.attempt_id))
+
+    def release_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        """Retire continuation and settle an unstarted producer abandoned by its run."""
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute("SELECT * FROM action_producers WHERE claim_id = ?", (binding.claim_id,)).fetchone()
+            if row is None:
+                return
+            if (row["stage_name"], row["attempt_id"]) != (binding.stage_name, binding.attempt_id):
+                raise AuthorityStoreError("action producer settlement conflicts")
+            if _require_run_status(conn) in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+                stage = conn.execute('SELECT status FROM stages WHERE stage_name = ?', (binding.stage_name,)).fetchone()
+                attempt = conn.execute('SELECT attempt_id, status FROM attempts WHERE stage_name = ? ORDER BY attempt_number DESC LIMIT 1', (binding.stage_name,)).fetchone()
+                if (stage is not None and stage["status"] == StageStatus.PENDING.value
+                    and attempt is not None and attempt["attempt_id"] == binding.attempt_id
+                    and attempt["status"] == StageStatus.PENDING.value):
+                    if conn.execute("SELECT 1 FROM managed_attempt_bindings WHERE attempt_id = ? AND state != 'terminal' LIMIT 1", (binding.attempt_id,)).fetchone() is not None:
+                        raise AuthorityStoreError("abandoned action still has a live execution binding")
+                    revision = self._next_revision(conn)
+                    reason = LifecycleReason(code="action.producer_abandoned", detail={"claim_id": binding.claim_id})
+                    conn.execute('UPDATE attempts SET status = ?, revision_sequence = ?, reason_json = ? WHERE attempt_id = ?', (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), binding.attempt_id))
+                    _upsert_stage(conn, stage_name=binding.stage_name, status=StageStatus.FAILED, revision=revision, reason=reason)
+                    _touch_run(conn, revision)
+            conn.execute("UPDATE action_producers SET active = 0 WHERE claim_id = ?", (binding.claim_id,))
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision:
+        """Satisfy a ready consumer without allocating an attempt or copying a commit."""
+        self._bind_run_uri(run_uri)
+        _non_empty(stage_name, "stage_name")
+        if not isinstance(binding, ActionResultBinding):
+            raise AuthorityStoreError("binding must be an ActionResultBinding")
+        encoded = _json_dumps(binding.to_dict())
+        with self._transaction(run_uri) as conn:
+            retained = conn.execute("SELECT * FROM action_result_bindings WHERE stage_name = ?", (stage_name,)).fetchone()
+            if retained is not None:
+                if retained["binding_json"] != encoded:
+                    raise AuthorityStoreError("immutable action result binding conflicts")
+                return _revision_for(conn, int(retained["revision_sequence"]))
+            _require_no_cancellation_epoch(conn)
+            _require_expected_revision(_current_run_revision(conn), expected_revision)
+            if _require_run_status(conn) not in {RunStatus.CREATED, RunStatus.PLANNED, RunStatus.SUBMITTED, RunStatus.RUNNING}:
+                raise AuthorityStoreError("terminal run cannot bind an action result")
+            row = conn.execute("SELECT status FROM stages WHERE stage_name = ?", (stage_name,)).fetchone()
+            if (row is not None and row["status"] not in {StageStatus.PENDING.value, StageStatus.STALE.value}) or conn.execute("SELECT 1 FROM attempts WHERE stage_name = ?", (stage_name,)).fetchone() is not None:
+                raise AuthorityStoreError("action result consumer already owns execution")
+            revision = self._next_revision(conn)
+            conn.execute("INSERT INTO action_result_bindings VALUES (?, ?, ?)", (stage_name, encoded, revision.sequence))
+            _upsert_stage(conn, stage_name=stage_name, status=StageStatus.SUCCEEDED,
+                          revision=revision, reason=LifecycleReason(code="action.result_reused", detail={"claim_id": binding.claim_id}))
+            _touch_run(conn, revision)
+            return revision
+
     def allocate_stage_attempt(
         self,
         run_uri: str,
@@ -715,7 +788,7 @@ class SQLitePerRunAuthorityStore:
                         "prepared attempt operation conflicts with its receipt"
                     )
                 return receipt
-            _require_no_cancellation_epoch(conn)
+            _require_no_cancellation_epoch(conn, attempt_id=f"{request.stage_name}-{request.next_attempt}")
             existing = conn.execute(
                 """
                 SELECT 1 FROM prepared_attempt_receipts
@@ -774,19 +847,7 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("prepared attempt number is stale")
 
             for upstream_stage, commit_id in request.upstream_commits.items():
-                commit_row = conn.execute(
-                    """
-                    SELECT commit_id FROM commits
-                    WHERE stage_name = ?
-                    ORDER BY revision_sequence DESC
-                    LIMIT 1
-                    """,
-                    (upstream_stage,),
-                ).fetchone()
-                if (
-                    commit_row is None
-                    or cast(str, commit_row["commit_id"]) != commit_id
-                ):
+                if _latest_stage_commit_id(conn, upstream_stage) != commit_id:
                     raise AuthorityStoreError("upstream commit evidence is stale")
 
             if request.expected_stage_status is StageStatus.FAILED:
@@ -1217,6 +1278,8 @@ class SQLitePerRunAuthorityStore:
                 RunStatus.INTERRUPTED,
             }:
                 return status
+            if conn.execute("SELECT 1 FROM action_producers WHERE active = 1 LIMIT 1").fetchone():
+                raise AuthorityStoreError("retained action producer remains live")
             live_binding = conn.execute(
                 "SELECT 1 FROM managed_attempt_bindings "
                 "WHERE state != 'terminal' LIMIT 1"
@@ -1332,7 +1395,7 @@ class SQLitePerRunAuthorityStore:
                 if row["attempt_id"] != attempt_id:
                     raise AuthorityStoreError("assignment binding conflicts")
                 return
-            _require_no_cancellation_epoch(conn)
+            _require_no_cancellation_epoch(conn, attempt_id=attempt_id)
             run_status = RunStatus(
                 cast(
                     str,
@@ -1370,14 +1433,8 @@ class SQLitePerRunAuthorityStore:
                 _json_loads(cast(str, receipt_row["request_json"]))
             )
             for upstream_stage, commit_id in request.upstream_commits.items():
-                commit = conn.execute(
-                    "SELECT commit_id FROM commits WHERE stage_name = ? ORDER BY revision_sequence DESC LIMIT 1",
-                    (upstream_stage,),
-                ).fetchone()
-                if commit is None or commit["commit_id"] != commit_id:
-                    raise AuthorityStoreError(
-                        "prepared attempt upstream commit evidence is stale"
-                    )
+                if _latest_stage_commit_id(conn, upstream_stage) != commit_id:
+                    raise AuthorityStoreError("prepared attempt upstream commit evidence is stale")
             if (
                 conn.execute(
                     "SELECT 1 FROM managed_attempt_bindings WHERE attempt_id = ?",
@@ -1442,7 +1499,7 @@ class SQLitePerRunAuthorityStore:
                 return ExecutionFence(
                     assignment_id, attempt_id, cast(str, row["fence"])
                 )
-            _require_no_cancellation_epoch(conn)
+            _require_no_cancellation_epoch(conn, attempt_id=attempt_id)
             if row["state"] != "bound":
                 raise AuthorityStoreError("prepared attempt binding is not grantable")
             attempt = conn.execute(
@@ -1498,7 +1555,7 @@ class SQLitePerRunAuthorityStore:
                     ):
                         raise AuthorityStoreError("stale execution fence")
                 return
-            _require_no_cancellation_epoch(conn)
+            _require_no_cancellation_epoch(conn, attempt_id=fence.attempt_id)
             if row["state"] != "granted":
                 raise AuthorityStoreError("execution fence is not granted")
             attempt = conn.execute(
@@ -3198,6 +3255,19 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS action_result_bindings (
+            stage_name TEXT PRIMARY KEY,
+            binding_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS action_producers (
+            claim_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL UNIQUE, active INTEGER NOT NULL CHECK(active IN (0, 1))
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS leases (
             lease_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -3425,9 +3495,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5}:
+    if version not in {1, 2, 3, 4, 5, 6}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
+    historical_columns.pop("action_result_bindings")
+    historical_columns.pop("action_producers")
     if version < 3:
         historical_columns.pop("prepared_attempt_receipts")
     if version < 4:
@@ -3552,6 +3624,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             receipt_json TEXT NOT NULL
         )
     """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS action_result_bindings (
+        stage_name TEXT PRIMARY KEY, binding_json TEXT NOT NULL,
+        revision_sequence INTEGER NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS action_producers (
+        claim_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE,
+        active INTEGER NOT NULL CHECK(active IN (0, 1)))""")
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -3873,6 +3951,10 @@ def _stage_snapshot(
             (None if commit_row is None else commit_row["commit_id"],),
         )
     )
+    binding_row = conn.execute("SELECT binding_json FROM action_result_bindings WHERE stage_name = ?", (stage_name,)).fetchone()
+    binding = None if binding_row is None else ActionResultBinding.from_dict(_json_loads(str(binding_row["binding_json"])))
+    if binding is not None:
+        latest_commit, facts = binding.commit, binding.artifact_facts
     return StageLifecycleSnapshot(
         stage_name=stage_name,
         status=status,
@@ -3881,6 +3963,7 @@ def _stage_snapshot(
         active_lease=active_lease,
         latest_commit=latest_commit,
         artifact_facts=facts,
+        result_binding=binding,
         reliability_policy_facts=_reliability_policy_facts(
             conn,
             stage_name=stage_name,
@@ -4215,10 +4298,12 @@ def _require_run_status(conn: sqlite3.Connection) -> RunStatus:
     return RunStatus(cast(str, row["status"]))
 
 
-def _require_no_cancellation_epoch(conn: sqlite3.Connection) -> None:
+def _require_no_cancellation_epoch(conn: sqlite3.Connection, *, attempt_id: str | None = None) -> None:
     """Fence lifecycle creation while the effective cancellation settles."""
 
     if conn.execute("SELECT 1 FROM cancellation_epochs WHERE id = 1").fetchone():
+        if attempt_id is not None and conn.execute("SELECT 1 FROM action_producers WHERE attempt_id = ? AND active = 1", (attempt_id,)).fetchone():
+            return
         raise AuthorityStoreError("run cancellation epoch is effective")
 
 
@@ -4471,3 +4556,12 @@ def _positive_seconds(value: object) -> int:
 
 
 __all__ = ["SQLitePerRunAuthorityStore"]
+
+
+def _latest_stage_commit_id(conn: sqlite3.Connection, stage_name: str) -> str | None:
+    """Resolve the stage's original commit through its native result binding."""
+    binding = conn.execute("SELECT binding_json FROM action_result_bindings WHERE stage_name = ?", (stage_name,)).fetchone()
+    if binding is not None:
+        return ActionResultBinding.from_dict(_json_loads(str(binding["binding_json"]))).commit.commit_id
+    row = conn.execute("SELECT commit_id FROM commits WHERE stage_name = ? ORDER BY revision_sequence DESC LIMIT 1", (stage_name,)).fetchone()
+    return None if row is None else str(row["commit_id"])

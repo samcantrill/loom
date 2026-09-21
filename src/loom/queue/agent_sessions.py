@@ -33,6 +33,8 @@ from loom.scheduling import (
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
+from ._action_results import action_attempt_cancelled, attach_action_fence
+
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 from ._managed_local import (
     GPU_DECLINE_REASONS,
@@ -3379,14 +3381,10 @@ class AgentSessionService:
                     },
                     path="remote assignment grant",
                 )
-            cancellation = conn.execute(
-                "SELECT cancellation_operation_id FROM managed_admissions "
-                "WHERE run_uri = ?",
-                (str(row["run_uri"]),),
-            ).fetchone()
-            if cancellation is not None and cancellation[0] is not None:
+            if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
                 raise QueueConflictError("remote assignment run is cancelling")
             fence = self._remote_execution().remote_accept(assignment_id)
+            attach_action_fence(conn, str(row["run_uri"]), str(row["attempt_id"]), assignment_id, fence)
             conn.execute(
                 "UPDATE remote_assignments SET state = 'GRANTED', fence = ? "
                 "WHERE assignment_id = ?",
@@ -3414,12 +3412,7 @@ class AgentSessionService:
                 "RUNNING",
             }:
                 raise QueueConflictError("remote start permit fence is stale")
-            cancellation = conn.execute(
-                "SELECT cancellation_operation_id FROM managed_admissions "
-                "WHERE run_uri = ?",
-                (str(row["run_uri"]),),
-            ).fetchone()
-            if cancellation is not None and cancellation[0] is not None:
+            if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
                 conn.commit()
                 return False
             permitted = self._remote_execution().remote_start_permit(

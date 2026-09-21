@@ -55,7 +55,8 @@ from loom.pipeline.stores import (
 )
 from loom.pipeline.stores.service_authority import _pipeline_event_from_wire
 from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
-from loom.pipeline.stores.authority import ExecutionFence
+from loom.pipeline.stores.authority import ActionProducerBinding, ExecutionFence
+from loom.pipeline.stores.read_models import ActionResultBinding
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
@@ -129,6 +130,9 @@ class AuthorityMutationOperation(StrEnum):
     COORDINATOR_TRANSITION_STAGE = "coordinator_transition_stage"
     BIND_COORDINATOR_ADMISSION = "bind_coordinator_admission"
     INSTALL_CANCELLATION_EPOCH = "install_cancellation_epoch"
+    BIND_ACTION_RESULT = "bind_action_result"
+    BIND_ACTION_PRODUCER = "bind_action_producer"
+    RELEASE_ACTION_PRODUCER = "release_action_producer"
     READ_CANCELLATION_EPOCH = "read_cancellation_epoch"
     FINALIZE_CANCELLATION = "finalize_cancellation"
     ENSURE_PREPARED_ATTEMPT = "ensure_prepared_attempt"
@@ -174,6 +178,9 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
         AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
         AuthorityMutationOperation.INSTALL_CANCELLATION_EPOCH,
+        AuthorityMutationOperation.BIND_ACTION_RESULT,
+        AuthorityMutationOperation.BIND_ACTION_PRODUCER,
+        AuthorityMutationOperation.RELEASE_ACTION_PRODUCER,
         AuthorityMutationOperation.READ_CANCELLATION_EPOCH,
         AuthorityMutationOperation.FINALIZE_CANCELLATION,
         AuthorityMutationOperation.ENSURE_PREPARED_ATTEMPT,
@@ -598,6 +605,21 @@ class AuthorityMutationService:
                 return self._coordinator_transition_stage(request)
             case AuthorityMutationOperation.INSTALL_CANCELLATION_EPOCH:
                 return self._install_cancellation_epoch(request)
+            case AuthorityMutationOperation.BIND_ACTION_RESULT:
+                revision = self._repository.bind_action_result(
+                    _required_run_uri(request), _required_stage_name(request),
+                    ActionResultBinding.from_dict(_required_body_value(request, "binding")),
+                    expected_revision=request.expected_revision,
+                )
+                return _result(revision=revision, service_generation=self._service_generation,
+                               body={"revision": revision.to_dict()})
+            case AuthorityMutationOperation.BIND_ACTION_PRODUCER | AuthorityMutationOperation.RELEASE_ACTION_PRODUCER:
+                binding = ActionProducerBinding.from_dict(_required_body_value(request, "binding"))
+                if operation is AuthorityMutationOperation.BIND_ACTION_PRODUCER:
+                    self._repository.bind_action_producer(_required_run_uri(request), binding)
+                else:
+                    self._repository.release_action_producer(_required_run_uri(request), binding)
+                return _result(service_generation=self._service_generation)
             case AuthorityMutationOperation.READ_CANCELLATION_EPOCH:
                 return self._read_cancellation_epoch(request)
             case AuthorityMutationOperation.FINALIZE_CANCELLATION:

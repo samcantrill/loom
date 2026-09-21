@@ -33,6 +33,7 @@ from loom.pipeline.transition_policy import (
     ensure_stage_transition,
 )
 from loom.pipeline.stores.authority import (
+    ActionProducerBinding,
     AttemptAllocation,
     CancellationEpochReceipt,
     CancellationEpochRequest,
@@ -55,6 +56,7 @@ from loom.pipeline.stores.coordination import (
 )
 from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
 from loom.pipeline.stores.read_models import (
+    ActionResultBinding,
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
     BackendRevision,
@@ -90,13 +92,15 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 7
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 8
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _ADMISSION_IDEMPOTENCY_METADATA_KEY = "_loom_admission_idempotency_key"
 _METADATA_TABLE = "repository_metadata"
 _REQUIRED_SCHEMA_COLUMNS = {
+    "action_producers": frozenset({"run_uri", "claim_id", "stage_name", "attempt_id", "active"}),
+    "action_result_bindings": frozenset({"run_uri", "stage_name", "binding_json", "revision_sequence"}),
     _METADATA_TABLE: frozenset({"key", "value"}),
     "repository_revisions": frozenset({"sequence", "token", "created_at"}),
     "authority_runs": frozenset(
@@ -495,6 +499,7 @@ class AuthorityRepository:
                     _migrate_v5_coordinator_principals(
                         conn, current_version=self.schema_version
                     )
+                    _migrate_v7_action_bindings(conn, current_version=self.schema_version)
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -843,7 +848,7 @@ class AuthorityRepository:
                         "prepared attempt operation conflicts with its receipt"
                     )
                 return receipt
-            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=f"{request.stage_name}-{request.next_attempt}")
             existing = conn.execute(
                 """
                 SELECT 1 FROM prepared_attempt_receipts
@@ -904,19 +909,7 @@ class AuthorityRepository:
                 raise AuthorityRepositoryError("prepared attempt number is stale")
 
             for upstream_stage, commit_id in request.upstream_commits.items():
-                commit_row = conn.execute(
-                    """
-                    SELECT commit_id FROM output_commits
-                    WHERE run_uri = ? AND stage_name = ?
-                    ORDER BY revision_sequence DESC
-                    LIMIT 1
-                    """,
-                    (run_uri, upstream_stage),
-                ).fetchone()
-                if (
-                    commit_row is None
-                    or cast(str, commit_row["commit_id"]) != commit_id
-                ):
+                if _latest_stage_commit_id(conn, run_uri, upstream_stage) != commit_id:
                     raise AuthorityRepositoryError("upstream commit evidence is stale")
 
             if request.expected_stage_status is StageStatus.FAILED:
@@ -1130,6 +1123,74 @@ class AuthorityRepository:
                 "coordinator authority principal conflicts with admission"
             )
 
+    def bind_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        with self.transaction() as conn:
+            _require_run_row(conn, run_uri)
+            row = conn.execute("SELECT * FROM action_producers WHERE run_uri = ? AND claim_id = ?", (run_uri, binding.claim_id)).fetchone()
+            if row is not None and (row["stage_name"], row["attempt_id"]) == (binding.stage_name, binding.attempt_id):
+                if not row["active"]:
+                    raise AuthorityRepositoryError("settled action producer cannot be revived")
+                return
+            _require_no_repository_cancellation_epoch(conn, run_uri)
+            if row is not None:
+                stage = conn.execute("SELECT status FROM authority_stages WHERE run_uri = ? AND stage_name = ?", (run_uri, binding.stage_name)).fetchone()
+                if row["stage_name"] != binding.stage_name or stage is None or stage["status"] not in {StageStatus.FAILED.value, StageStatus.STALE.value}:
+                    raise AuthorityRepositoryError("action producer replacement conflicts")
+            conn.execute("INSERT INTO action_producers VALUES (?, ?, ?, ?, 1) ON CONFLICT(run_uri, claim_id) DO UPDATE SET attempt_id = excluded.attempt_id, active = 1", (run_uri, binding.claim_id, binding.stage_name, binding.attempt_id))
+
+    def release_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        """Retire continuation and settle an unstarted producer abandoned by its run."""
+        with self.transaction() as conn:
+            row = conn.execute("SELECT * FROM action_producers WHERE run_uri = ? AND claim_id = ?", (run_uri, binding.claim_id)).fetchone()
+            if row is None:
+                return
+            if (row["stage_name"], row["attempt_id"]) != (binding.stage_name, binding.attempt_id):
+                raise AuthorityRepositoryError("action producer settlement conflicts")
+            if RunStatus(str(_require_run_row(conn, run_uri)["status"])) in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+                stage = conn.execute('SELECT status FROM authority_stages WHERE run_uri = ? AND stage_name = ?', (run_uri, binding.stage_name)).fetchone()
+                attempt = conn.execute('SELECT attempt_id, status FROM stage_attempts WHERE run_uri = ? AND stage_name = ? ORDER BY attempt_number DESC LIMIT 1', (run_uri, binding.stage_name)).fetchone()
+                if (stage is not None and stage["status"] == StageStatus.PENDING.value
+                    and attempt is not None and attempt["attempt_id"] == binding.attempt_id
+                    and attempt["status"] == StageStatus.PENDING.value):
+                    if conn.execute("SELECT 1 FROM managed_attempt_bindings WHERE run_uri = ? AND attempt_id = ? AND state != 'terminal' LIMIT 1", (run_uri, binding.attempt_id)).fetchone() is not None:
+                        raise AuthorityRepositoryError("abandoned action still has a live execution binding")
+                    revision = self._next_revision(conn)
+                    reason = LifecycleReason(code="action.producer_abandoned", detail={"claim_id": binding.claim_id})
+                    conn.execute('UPDATE stage_attempts SET status = ?, revision_sequence = ?, reason_json = ? WHERE run_uri = ? AND attempt_id = ?', (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), run_uri, binding.attempt_id))
+                    _upsert_stage(conn, run_uri=run_uri, stage_name=binding.stage_name, status=StageStatus.FAILED, revision=revision, reason=reason)
+                    _touch_run(conn, run_uri=run_uri, revision=revision)
+            conn.execute("UPDATE action_producers SET active = 0 WHERE run_uri = ? AND claim_id = ?", (run_uri, binding.claim_id))
+
+    def bind_action_result(
+        self, run_uri: str, stage_name: str, binding: ActionResultBinding,
+        *, expected_revision: BackendRevision | None = None,
+    ) -> BackendRevision:
+        """Bind an original verified result through the scoped coordinator route."""
+        run_uri, stage_name = _non_empty(run_uri, "run_uri"), _non_empty(stage_name, "stage_name")
+        if not isinstance(binding, ActionResultBinding):
+            raise AuthorityRepositoryError("binding must be an ActionResultBinding")
+        encoded = _json_dumps(binding.to_dict())
+        with self.transaction() as conn:
+            run = _require_run_row(conn, run_uri)
+            retained = conn.execute("SELECT * FROM action_result_bindings WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+            if retained is not None:
+                if retained["binding_json"] != encoded:
+                    raise AuthorityRepositoryError("immutable action result binding conflicts")
+                return _revision_for(conn, int(retained["revision_sequence"]))
+            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_expected_revision(_current_run_revision(conn, run_uri), expected_revision)
+            if RunStatus(run["status"]) not in {RunStatus.CREATED, RunStatus.PLANNED, RunStatus.SUBMITTED, RunStatus.RUNNING}:
+                raise AuthorityRepositoryError("terminal run cannot bind an action result")
+            row = conn.execute("SELECT status FROM authority_stages WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+            if (row is not None and row["status"] not in {StageStatus.PENDING.value, StageStatus.STALE.value}) or conn.execute("SELECT 1 FROM stage_attempts WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone() is not None:
+                raise AuthorityRepositoryError("action result consumer already owns execution")
+            revision = self._next_revision(conn)
+            conn.execute("INSERT INTO action_result_bindings VALUES (?, ?, ?, ?)", (run_uri, stage_name, encoded, revision.sequence))
+            _upsert_stage(conn, run_uri=run_uri, stage_name=stage_name, status=StageStatus.SUCCEEDED,
+                          revision=revision, reason=LifecycleReason(code="action.result_reused", detail={"claim_id": binding.claim_id}))
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return revision
+
     def install_cancellation_epoch(
         self, run_uri: str, request: CancellationEpochRequest
     ) -> CancellationEpochReceipt:
@@ -1294,6 +1355,8 @@ class AuthorityRepository:
                 RunStatus.INTERRUPTED,
             }:
                 return status
+            if conn.execute("SELECT 1 FROM action_producers WHERE run_uri = ? AND active = 1 LIMIT 1", (run_uri,)).fetchone():
+                raise AuthorityRepositoryError("retained action producer remains live")
             live_binding = conn.execute(
                 "SELECT 1 FROM managed_attempt_bindings "
                 "WHERE run_uri = ? AND state != 'terminal' LIMIT 1",
@@ -1436,7 +1499,7 @@ class AuthorityRepository:
                 if row["attempt_id"] != attempt_id:
                     raise AuthorityRepositoryError("assignment binding conflicts")
                 return
-            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=attempt_id)
             run_status = RunStatus(cast(str, _require_run_row(conn, run_uri)["status"]))
             if run_status in {
                 RunStatus.SUCCEEDED,
@@ -1468,16 +1531,8 @@ class AuthorityRepository:
                 _json_loads(cast(str, receipt_row["request_json"]))
             )
             for upstream_stage, commit_id in request.upstream_commits.items():
-                commit = conn.execute(
-                    "SELECT commit_id FROM output_commits "
-                    "WHERE run_uri = ? AND stage_name = ? "
-                    "ORDER BY revision_sequence DESC LIMIT 1",
-                    (run_uri, upstream_stage),
-                ).fetchone()
-                if commit is None or commit["commit_id"] != commit_id:
-                    raise AuthorityRepositoryError(
-                        "prepared attempt upstream commit evidence is stale"
-                    )
+                if _latest_stage_commit_id(conn, run_uri, upstream_stage) != commit_id:
+                    raise AuthorityRepositoryError("prepared attempt upstream commit evidence is stale")
             if (
                 conn.execute(
                     "SELECT 1 FROM managed_attempt_bindings "
@@ -1556,7 +1611,7 @@ class AuthorityRepository:
                 return ExecutionFence(
                     assignment_id, attempt_id, cast(str, row["fence"])
                 )
-            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=attempt_id)
             if row["state"] != "bound":
                 raise AuthorityRepositoryError(
                     "prepared attempt binding is not grantable"
@@ -1634,7 +1689,7 @@ class AuthorityRepository:
                     ):
                         raise AuthorityRepositoryError("stale execution fence")
                 return
-            _require_no_repository_cancellation_epoch(conn, run_uri)
+            _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=fence.attempt_id)
             if row["state"] != "granted":
                 raise AuthorityRepositoryError("execution fence is not granted")
             attempt = conn.execute(
@@ -4264,7 +4319,7 @@ def _migrate_v3_output_commits(
     if version != 3:
         return
 
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4273,6 +4328,8 @@ def _migrate_v3_output_commits(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name in {"action_result_bindings", "action_producers"}:
+            continue
         v3_columns = (
             expected_columns - {"supersedes_commit_id"}
             if table_name == "output_commits"
@@ -4368,7 +4425,7 @@ def _migrate_v5_coordinator_principals(
         return
     if version != 5:
         return
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4377,6 +4434,8 @@ def _migrate_v5_coordinator_principals(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name in {"action_result_bindings", "action_producers"}:
+            continue
         v5_columns = (
             expected_columns - {"service_principal"}
             if table_name == "coordinator_admission_receipts"
@@ -4411,6 +4470,28 @@ def _migrate_v5_coordinator_principals(
         f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
         (str(current_version),),
     )
+
+
+def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
+    if current_version != 8:
+        return
+    tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
+    if _METADATA_TABLE not in tables:
+        return
+    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'").fetchone()
+    if row is None or row["value"] != "7":
+        return
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table in {"action_result_bindings", "action_producers"}:
+            continue
+        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns.issubset(actual):
+            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v7 schema is incomplete", current_version=current_version))
+    conn.execute("""CREATE TABLE action_result_bindings (
+        run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
+        binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
+        PRIMARY KEY (run_uri, stage_name))""")
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'", (str(current_version),))
 
 
 def _initialize_schema(
@@ -4547,6 +4628,21 @@ def _initialize_schema(
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
             PRIMARY KEY (run_uri, stage_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS action_result_bindings (
+            run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
+            binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY (run_uri, stage_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS action_producers (
+            run_uri TEXT NOT NULL, claim_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL, attempt_id TEXT NOT NULL,
+            active INTEGER NOT NULL CHECK(active IN (0, 1)),
+            PRIMARY KEY(run_uri, claim_id), UNIQUE(run_uri, attempt_id)
         )
         """,
         """
@@ -5586,6 +5682,10 @@ def _stage_snapshot(
             (None if commit_row is None else commit_row["commit_id"],),
         )
     )
+    binding_row = conn.execute("SELECT binding_json FROM action_result_bindings WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+    binding = None if binding_row is None else ActionResultBinding.from_dict(_json_loads(str(binding_row["binding_json"])))
+    if binding is not None:
+        latest_commit, artifact_facts = binding.commit, binding.artifact_facts
     return StageLifecycleSnapshot(
         stage_name=stage_name,
         status=status,
@@ -5594,6 +5694,7 @@ def _stage_snapshot(
         active_lease=active_lease,
         latest_commit=latest_commit,
         artifact_facts=artifact_facts,
+        result_binding=binding,
         reason=reason,
     )
 
@@ -5984,13 +6085,15 @@ def _migrate_audit_events_to_per_run_primary_key(conn: sqlite3.Connection) -> No
 
 
 def _require_no_repository_cancellation_epoch(
-    conn: sqlite3.Connection, run_uri: str
+    conn: sqlite3.Connection, run_uri: str, *, attempt_id: str | None = None,
 ) -> None:
     """Fence lifecycle creation while effective cancellation settles."""
 
     if conn.execute(
         "SELECT 1 FROM cancellation_epochs WHERE run_uri = ?", (run_uri,)
     ).fetchone():
+        if attempt_id is not None and conn.execute("SELECT 1 FROM action_producers WHERE run_uri = ? AND attempt_id = ? AND active = 1", (run_uri, attempt_id)).fetchone():
+            return
         raise AuthorityRepositoryError("run cancellation epoch is effective")
 
 
@@ -6127,3 +6230,12 @@ __all__ = [
     "generate_service_generation",
     "initialize_authority_repository",
 ]
+
+
+def _latest_stage_commit_id(conn: sqlite3.Connection, run_uri: str, stage_name: str) -> str | None:
+    """Resolve the stage's original commit through its native result binding."""
+    binding = conn.execute("SELECT binding_json FROM action_result_bindings WHERE run_uri = ? AND stage_name = ?", (run_uri, stage_name)).fetchone()
+    if binding is not None:
+        return ActionResultBinding.from_dict(_json_loads(str(binding["binding_json"]))).commit.commit_id
+    row = conn.execute("SELECT commit_id FROM output_commits WHERE run_uri = ? AND stage_name = ? ORDER BY revision_sequence DESC LIMIT 1", (run_uri, stage_name)).fetchone()
+    return None if row is None else str(row["commit_id"])

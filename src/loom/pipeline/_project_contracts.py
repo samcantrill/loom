@@ -289,7 +289,7 @@ def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
         for key in (CONTRACT, CAPTURE)
         if key in request.metadata
     }
-    if actual != expected:
+    if plain_mapping(actual) != expected:
         raise ValueError("worker attachment differs from admitted report")
     if EXECUTION in request.metadata:
         raise ValueError(

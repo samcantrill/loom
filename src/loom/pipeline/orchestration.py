@@ -698,6 +698,13 @@ class SQLiteStageWorkStore:
             yield conn
 
 
+class ReadyActionHandler(Protocol):
+    def __call__(self, stage_plan: StagePlan, readiness: AttemptReadiness,
+                 revision: BackendRevision) -> BackendRevision | None:
+        """Return the retained revision when native selection handled readiness."""
+        ...
+
+
 class ControllerActionHandler(Protocol):
     def __call__(
         self, stage_plan: StagePlan, readiness: AttemptReadiness, /
@@ -731,6 +738,7 @@ class RunOrchestrator:
         enqueue_sequence: int = 0,
         max_work_items: int = 256,
         controller_action: ControllerActionHandler | None = None,
+        ready_action: ReadyActionHandler | None = None,
     ) -> tuple[StageWorkRecord, ...]:
         admission_id = _non_empty(admission_id, "admission_id")
         _integer(ready_at, "ready_at", minimum=0)
@@ -776,6 +784,8 @@ class RunOrchestrator:
         projected: list[StageWorkRecord] = []
         for ready_order, stage_plan in enumerate(plan.ordered_stage_plans):
             stage = stage_facts.get(stage_plan.stage_name)
+            if stage is not None and stage.result_binding is not None:
+                continue
             current_attempt = (
                 None
                 if stage is None or not stage.attempts
@@ -806,6 +816,7 @@ class RunOrchestrator:
                     if upstream in commits
                 },
                 current_attempt=current_attempt,
+                current_stage_status=None if stage is None else stage.status,
                 run_cancelled=cancelled,
                 retry_authorization=retry,
                 prepared_generation=(
@@ -824,6 +835,11 @@ class RunOrchestrator:
                 if controller_action is not None:
                     controller_action(stage_plan, readiness)
                 continue
+            if ready_action is not None:
+                resolved_revision = ready_action(stage_plan, readiness, current_revision)
+                if resolved_revision is not None:
+                    current_revision = _advance_revision_cursor(current_revision, resolved_revision)
+                    continue
             placement = placements.get(stage_plan.stage_name)
             if placement is None:
                 raise CoordinatorStoreError(
@@ -909,6 +925,7 @@ class RunOrchestrator:
                         if upstream in committed_outputs
                     },
                     current_attempt=current_attempt,
+                    current_stage_status=None if stage is None else stage.status,
                     run_cancelled=run_cancelled,
                     retry_authorization=_retry_authorization(stage),
                     prepared_generation=(

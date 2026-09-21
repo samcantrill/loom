@@ -128,6 +128,26 @@ domain tooling.
 
 ---
 
+### Original action result bindings
+
+A native action consumer may be `SUCCEEDED` with no local attempt or new commit.
+Its `StageLifecycleSnapshot.result_binding` records the original producer commit,
+artifact facts, claim/execution identities and candidate-bound verification. The
+snapshot's `latest_commit` and `artifact_facts` project those original facts.
+Downstream readiness and prepared-attempt binding accept that original commit;
+run/node aliases do not become producer identities. Binding is immutable and
+idempotent, and a fresh binding cannot cross a cancellation epoch.
+
+The coordinator authority also retains exact producer continuation permission
+for a shared claim. This permission is distinct from graph demand and physical
+assignment ownership. Revoking it does not prove process containment; normal
+fencing, terminal-winner behavior and release checks still apply. Only trusted
+coordinator mutations bind/release this permission. Per-run SQLite schema 7 and
+authority-service repository schema 8 migrate the result bindings and producer
+permissions together. Coordinator control schema 17 retains claims, demands and
+detachments and has the normal offline upgrade path from supported predecessor
+roots. See [action lifecycle](agent-preparation.md#verified-action-results-across-graphs).
+
 ## 2. Core Position
 
 Use this architecture:
@@ -1888,3 +1908,8 @@ domain-specific assumptions
 
 This gives `loom.pipeline` a durable operational foundation without turning the
 runtime into a heavyweight orchestration service.
+
+When a failed or interrupted graph abandons a prepared action, producer settlement
+marks the exact unstarted attempt and stage failed in the authority transaction.
+It requires no live execution binding, preserves the abandoned attempt's history,
+and permits the existing explicit retry path to create a successor.

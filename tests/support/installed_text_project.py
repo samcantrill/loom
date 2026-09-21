@@ -11,6 +11,20 @@ def inspect(request):
     from loom.pipeline.stores import LocalArtifactStore
 
     assert request["schema_version"] == 3
+    if request["operation"] == "verify_result":
+        candidate = request["candidate"]
+        assert request["contract"]["semantic_key"] == candidate["semantic_key"]
+        assert request["contract"]["namespace"] == candidate["namespace"] == "text-project"
+        store = LocalArtifactStore(Path.cwd())
+        assert request["artifact_access"]["mode"] == "read_only"
+        for fact in candidate["result"]["artifact_facts"]:
+            materialized = request["artifact_access"]["outputs"][fact["artifact_name"]]
+            assert materialized["artifact_id"] == fact["artifact"]["artifact_id"]
+            product = store.load(ArtifactRef.from_dict(materialized))
+            if product not in ("alpha\nbeta\n", 2):
+                return {"schema_version": 1, "candidate_digest": candidate["candidate_digest"],
+                        "verdict": "rejected", "reason": {"code": "line_count_mismatch", "output_port": fact["artifact_name"]}}
+        return {"schema_version": 1, "candidate_digest": candidate["candidate_digest"], "verdict": "verified"}
     if request["operation"] == "verify_candidate":
         candidate = request["candidate"]
         desired = request["project_result"]["stage_contracts"]
@@ -43,6 +57,7 @@ def inspect(request):
                 "digest": hash_mapping(stage["config"]).split(":", 1)[1],
             },
             "payload": {
+                "ordered_outputs": [{"ports": list(stage["outputs"])}],
                 "declaration": stage["config"],
                 "node": stage["name"],
                 "opaque_location": {
@@ -62,7 +77,7 @@ def inspect(request):
         "reconciliation_key": {
             "namespace": "text-project",
             "version": 1,
-            "digest": "a" * 64,
+            "digest": hash_mapping(composition["resolved"]["pipeline"]).split(":", 1)[1],
         },
         "stage_contracts": contracts,
     }
@@ -89,7 +104,7 @@ def _checked(context, allowed):
 
 class GenerateText:
     def run(self, context, inputs):
-        binding = _checked(context, {"delay", "fail_once"})
+        binding = _checked(context, {"delay", "fail_once", "value"})
         directory = (
             Path(binding["run_state_root"]) / "actions" / binding["origin_node_id"]
         )
@@ -99,7 +114,7 @@ class GenerateText:
         if context.stage_config.get("fail_once") and binding["attempt"] == 1:
             raise RuntimeError("fixture first attempt failure")
         time.sleep(context.stage_config.get("delay", 0))
-        value = "alpha\nbeta\n"
+        value = context.stage_config.get("value", "alpha\nbeta\n")
         return {
             "text": context.save_artifact(
                 "text", value, artifact_type="json", codec_key="json.v1"
@@ -109,7 +124,9 @@ class GenerateText:
 
 class CountLines:
     def run(self, context, inputs):
-        _checked(context, {"opt_out"})
+        _checked(context, {"opt_out", "fail"})
+        if context.stage_config.get("fail"):
+            raise RuntimeError("fixture count failure")
         text = context.load_artifact(inputs["text"])
         value = len(text.splitlines())
         return {

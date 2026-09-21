@@ -2316,7 +2316,10 @@ def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
     tmp_path: Path,
 ) -> None:
     control_database = tmp_path / "control.sqlite"
+    from loom.queue._action_results import initialize_action_results
+
     with sqlite3.connect(control_database) as conn:
+        initialize_action_results(conn)
         conn.execute(
             "CREATE TABLE managed_admissions ("
             "run_uri TEXT PRIMARY KEY, cancellation_operation_id TEXT)"

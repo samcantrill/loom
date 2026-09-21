@@ -376,6 +376,9 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
         cancellations = conn.execute(
             "SELECT * FROM preparation_cancellations"
         ).fetchall()
+        conn.execute("DROP TABLE action_demands")
+        conn.execute("DROP TABLE action_claims")
+        conn.execute("DROP TABLE action_graph_cancellations")
         conn.execute("DROP TABLE preparation_cancellations")
         conn.execute("DROP TABLE preparation_operations")
         _initialize_preparation_schema(conn, legacy=True)
@@ -390,7 +393,7 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
             cancellations,
         )
         conn.execute("PRAGMA user_version = 15")
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 16
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 17
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert (
             conn.execute("SELECT * FROM preparation_operations").fetchall()

@@ -53,3 +53,23 @@ def test_cli_rejects_paths_outside_selected_project_before_start(
     )
     assert not (tmp_path / "binding.json").exists()
     assert not (tmp_path / "deployment").exists()
+
+
+def test_cli_forwards_repeated_fresh_selection_as_native_intent(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import importlib
+
+    captured = []
+    def native(request, **options):
+        captured.append(request)
+        return SimpleNamespace(observation=SimpleNamespace(operation=None, admission=None), to_dict=lambda: {"accepted": request.to_dict()})
+    monkeypatch.setattr(importlib.import_module("loom._run"), "run", native)
+    selection = _selection(tmp_path)
+    output, errors = io.StringIO(), io.StringIO()
+    assert main(["run", "pipeline.yaml", "--deployment", str(selection), "--reconcile", "--operation-id", "fresh-op", "--fresh-stage", "reader", "--fresh-stage", "author", "--format", "json"], stdout=output, stderr=errors) == 0, errors.getvalue()
+    request, = captured
+    assert request.fresh_stages == ("author", "reader")
+    assert request.preparation.operation_id == "fresh-op"
+    assert request.mode == "reconcile"
+    assert "force_stages" not in request.preparation.run_options
+    assert json.loads(output.getvalue())["result"]["accepted"]["fresh_stages"] == ["author", "reader"]
