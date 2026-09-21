@@ -394,7 +394,26 @@ existing committed/fenced/absent receipt path. Operators do not need to restart
 the coordinator or edit agent databases to recover a confirmed same-epoch fence.
 
 Agents connect outbound using bounded long polling and own no prefetched durable
-queue. Coordinator policy authorizes pool membership, while one exact agent
+queue. An idle agent still renews its HTTPS work request every five seconds.
+Inside that request the coordinator checks durable state, then sleeps on a
+session-specific notification until work, invalidation, or a deadline requires
+another check. It no longer checks SQLite every 50 ms for each waiting agent.
+Offer refresh and its 30-second TTL, the ten-second HTTP client timeout, and
+scheduler reconciliation keep their existing timing. Sleeping HTTP handlers
+still occupy threads and sockets.
+
+Notifications carry no assignment or permission. Target publication notifies
+after commit; the awakened handler rechecks current credentials, session, offer,
+and accepted time before atomically recording delivery and its poll receipt.
+Delivery and policy/session invalidation are ordered by the coordinator owner.
+If an internal notification is lost, the final deadline check finds durable work;
+if an HTTP reply is lost, exact poll replay returns its existing receipt. Shutdown
+rejects new waiters and drains registered handlers, including their exact fence
+cleanup, before releasing root ownership. Restart creates fresh in-memory signals
+and uses the existing durable reconciliation protocol. No schema migration or
+agent-first upgrade is needed within the existing compatible version range.
+
+Coordinator policy authorizes pool membership, while one exact agent
 availability domain backs every allowed pool view so capacity is not duplicated
 per pool. Work names a prepared resident stage and safe versioned values, not
 arbitrary shell text or implementation targets. Worker environments exclude

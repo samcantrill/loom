@@ -1571,6 +1571,9 @@ class LocalDaemon:
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
+        from ._agent_poll_waiters import _PollWaiters
+
+        self._poll_waiters = _PollWaiters()
         self._service_error: str | None = None
         self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
@@ -1919,6 +1922,9 @@ class LocalDaemon:
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
+        from ._agent_poll_waiters import _PollWaiters
+
+        self._poll_waiters = _PollWaiters()
         self._wake.set()
         self._execution = execution
         self._thread = thread
@@ -1953,8 +1959,11 @@ class LocalDaemon:
             pass
 
     def stop(self) -> None:
-        self._stop.set()
-        self._wake.set()
+        with self._cycle_lock:
+            self._stop.set()
+            self._poll_waiters.close()
+            self._wake.set()
+        self._poll_waiters.drain()
         thread = self._thread
         self._thread = None
         if thread is not None:
@@ -2017,7 +2026,9 @@ class LocalDaemon:
             raise QueueServiceError(
                 "SLURM bootstrap credentials must remain role-exclusive"
             )
-        self._agent_policy = policy
+        with self._cycle_lock:
+            self._agent_policy = policy
+            self._poll_waiters.notify_all()
 
     def _require_view_role(
         self, principal: LocalDaemonPrincipal, role: LocalDaemonRole
@@ -2973,6 +2984,8 @@ class LocalDaemon:
                     if admission_row is not None:
                         _request_admission_cancellation(conn, str(admission_row[0]), principal_id=principal.subject, request_operation_id=cancellation_operation_id)
             conn.commit()
+        if control.kind.value in {"drain", "reload"}:
+            self._poll_waiters.notify(control.expected_session_id)
         self._wake.set()
         return freeze_plain_data(
             {
@@ -3131,6 +3144,7 @@ class LocalDaemon:
                 self.config = replacement
                 self._agent_policy = replacement.agent_policy
                 self._scheduling_epoch = next_epoch
+                self._poll_waiters.notify_all()
         self._wake.set()
         return freeze_plain_data(
             {
@@ -3888,6 +3902,7 @@ class LocalDaemon:
                 )
                 conn.commit()
             self._epoch = new_epoch
+            self._poll_waiters.notify_all()
             execution = self._execution
             if execution is not None:
                 execution.coordinator_epoch = new_epoch
@@ -3982,6 +3997,7 @@ class LocalDaemon:
         if previous is not None and parse_timestamp(now) < parse_timestamp(previous):
             self._degrade_time(conn, "clock_regressed")
             conn.commit()
+            self._poll_waiters.notify_all()
             raise QueueServiceError(
                 "coordinator accepted-time regressed; scheduling is degraded"
             )
@@ -3992,6 +4008,7 @@ class LocalDaemon:
         ):
             self._degrade_time(conn, "clock_step_exceeds_policy")
             conn.commit()
+            self._poll_waiters.notify_all()
             raise QueueServiceError(
                 "coordinator accepted-time step exceeds protected policy; scheduling is degraded"
             )
