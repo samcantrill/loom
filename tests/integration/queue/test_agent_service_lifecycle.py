@@ -565,3 +565,88 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
     assert len(work.launches()) == 1
     with sqlite3.connect(work.daemon.config.control_database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0] == 1
+
+
+def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
+    remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost rejection after real offer expiry must not wedge startup replay."""
+    from loom.queue.errors import QueueConflictError
+
+    work = remote_owner
+    lost = Event()
+    original_refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
+    original_call = LocalDaemonAgentHttpClient._call
+
+    class LostApplication(BaseException):
+        pass
+
+    def short_first_offer(client, *, ttl_seconds=30):
+        return original_refresh(client, ttl_seconds=ttl_seconds if lost.is_set() else 1)
+
+    def lose_expiry_reply(client, operation, value, **kwargs):
+        try:
+            return original_call(client, operation, value, **kwargs)
+        except QueueConflictError:
+            if operation == "poll" and not lost.is_set():
+                lost.set()
+                raise LostApplication() from None
+            raise
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "refresh_resource_offer", short_first_offer)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", lose_expiry_reply)
+    epoch = work.daemon._epoch
+    first = work.start_agent()
+    assert lost.wait(15)
+    first.thread.join(timeout=10)
+    assert not first.thread.is_alive()
+    assert len(first.errors) == 1 and isinstance(first.errors[0], LostApplication)
+    root = work.service_config.client.agent_root
+    assert root is not None
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        session_id, revision, sequence, state = conn.execute(
+            "SELECT session_id, availability_revision, sequence, state "
+            "FROM agent_poll_state_local"
+        ).fetchone()
+    assert state == "PENDING"
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute(
+            "SELECT active, result_json FROM agent_poll_state"
+        ).fetchone() == (0, None)
+    assert work.launches() == ()
+
+    # A changed request is not authoritative evidence for consuming this intent.
+    probe = LocalDaemonAgentHttpClient(work.service_config.client)
+    try:
+        for override in ({"wait_timeout_ms": 1000}, {"availability_revision": "other"}):
+            with pytest.raises(QueueConflictError) as error:
+                probe._call("poll", {
+                    "session_id": session_id,
+                    "availability_revision": revision,
+                    "sequence": sequence,
+                    "wait_timeout_ms": 5000,
+                    **override,
+                })
+            assert type(error.value) is QueueConflictError
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert conn.execute("SELECT state FROM agent_poll_state_local").fetchone()[0] == "PENDING"
+    finally:
+        probe.close()
+
+    work.daemon.client_view(
+        LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+    ).submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+    second = work.start_agent()
+    deadline = monotonic() + 45
+    while not work.released():
+        assert monotonic() < deadline, "same-epoch pending poll blocked agent recovery"
+        assert not second.errors
+        sleep(0.05)
+    assert work.daemon._epoch == epoch
+    assert all(stage.status is StageStatus.SUCCEEDED for stage in work.authority.open_run(work.run_uri).stages)
+    assert not second.errors
+    assert len(work.launches()) == 1
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0] == 1
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        assert conn.execute("SELECT sequence FROM agent_poll_state_local").fetchone()[0] > sequence

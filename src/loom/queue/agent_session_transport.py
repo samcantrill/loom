@@ -74,6 +74,7 @@ from .agent_sessions import (
     AgentControl,
     AgentControlEffect,
     AgentPollActiveError,
+    AgentPollFencedError,
     AgentPollSequenceGapError,
     AgentRegistration,
     AgentRetirementProof,
@@ -4186,6 +4187,8 @@ class LocalDaemonAgentHttpClient:
 
         The retained request digest validates the configured timeout as well as
         session/revision/sequence. An incompatible restart keeps work retained.
+        Only an exact coordinator-confirmed fence can consume a pending poll
+        without a result while the same coordinator epoch is still running.
         """
         journal = self._require_journal()
         pending = journal.pending_poll()
@@ -4215,7 +4218,11 @@ class LocalDaemonAgentHttpClient:
                 raise QueueServiceError("retained poll recovery result is invalid")
             result = {key: item for key, item in recovery.items() if key != "state"}
         else:
-            result = self._call("poll", value)
+            try:
+                result = self._call("poll", value)
+            except AgentPollFencedError:
+                journal.fence_poll(session_id, sequence)
+                return
         journal.complete_poll(session_id, sequence, result)
         if result.get("result") == "assignment":
             request = _ResidentAssignmentBundle.from_remote_dict(result.get("request"))
@@ -5203,6 +5210,8 @@ class LocalDaemonAgentHttpClient:
             self._close_connection()
             if payload.get("error") == "agent_poll_active":
                 raise AgentPollActiveError("work poll is already active")
+            if payload.get("error") == "agent_poll_fenced":
+                raise AgentPollFencedError("work poll was fenced and is not reusable")
             if payload.get("error") == "agent_poll_stale":
                 raise AgentStalePollError("work poll sequence is stale")
             if payload.get("error") == "agent_poll_sequence_gap":
@@ -5438,6 +5447,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply_query_failure(exc.code, exc.status)
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
+        except AgentPollFencedError:
+            self._reply(409, {"ok": False, "error": "agent_poll_fenced"})
         except AgentStalePollError:
             self._reply(409, {"ok": False, "error": "agent_poll_stale"})
         except AgentPollSequenceGapError:

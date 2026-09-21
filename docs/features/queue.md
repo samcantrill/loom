@@ -382,6 +382,17 @@ not lifecycle truth. Pristine-empty bootstrap is valid only when there is no
 authority-relevant retained admission or tombstone; missing or divergent
 expected truth leaves the coordinator degraded.
 
+An agent application restart replays its exact pending work poll before checking
+controls or advertising capacity. If the coordinator is still in the same epoch
+and confirms that this exact poll was fenced without a committed result, the
+agent records the fence locally and continues reconciliation. The coordinator
+checks the authenticated session, availability revision, sequence and request
+digest before returning this distinct outcome. A changed request, active poll,
+generic conflict or uncertain transport result does not authorize discarding the
+pending poll. Recovery after a coordinator epoch change continues to use the
+existing committed/fenced/absent receipt path. Operators do not need to restart
+the coordinator or edit agent databases to recover a confirmed same-epoch fence.
+
 Agents connect outbound using bounded long polling and own no prefetched durable
 queue. Coordinator policy authorizes pool membership, while one exact agent
 availability domain backs every allowed pool view so capacity is not duplicated
