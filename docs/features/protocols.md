@@ -702,6 +702,17 @@ reservation transaction. Agents expose no inbound scheduling listener and do
 not communicate with peers. Local direct/IPC and remote HTTP adapters must
 produce the same application outcomes.
 
+Pending work polls use process-local session notifications behind the same HTTP
+API. A change counter read before the durable-state check prevents a commit in
+the check-to-wait gap from being missed. Notifications are hints: SQLite remains
+the authority for assignment identity, exact poll replay, and delivery receipts.
+No transaction or coordinator cycle lock is held while a handler waits.
+Policy/session invalidation and delivery have an ordered winner; a later control
+cannot retract an already committed receipt. Offer expiry uses accepted time,
+while the fixed request budget uses monotonic time. Deadline checks recover a
+missed notification, and normal session reconciliation handles coordinator
+restart. The five-second work request and its wire schema remain unchanged.
+
 Protected role configuration supplies explicit local state roots, endpoints
 and expected service identities, trust/certificate/key references, principal/
 pool policy, manageable provider-backed resources, scheduling components, and

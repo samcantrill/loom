@@ -1,8 +1,9 @@
 # Event-driven agent waiting: implementation plan
 
-Implementation proposal approved for publication on 2026-09-22. Runtime
-implementation has not started. This is an ordinary feature plan, not a numbered
-roadmap stage.
+Implemented on 2026-09-22 as an ordinary feature change, not a numbered roadmap
+stage. The design and examples below explain the accepted behavior; the
+implementation evidence at the end records the concrete owners, measurements,
+and validation.
 
 Replace the coordinator's repeated database checks during an agent work request
 with an in-memory notification and a bounded wait. Keep the existing HTTPS
@@ -24,7 +25,7 @@ types are implementation choices, not new public APIs.
 
 **1. What changes, and why**
 
-An agent currently opens a work request with a maximum five-second wait. The
+Before this change, an agent opened a work request with a maximum five-second wait. The
 coordinator registers that poll durably, checks for an assignment, and then runs
 a loop resembling this:
 
@@ -38,7 +39,7 @@ while before_request_deadline():
 return record_wait_response()
 ```
 
-The real interval is `LocalDaemonConfig.poll_interval_seconds`; 0.05 seconds is
+The former inner-loop interval was `LocalDaemonConfig.poll_interval_seconds`; 0.05 seconds is
 the default. Each iteration opens database connections, checks state, and uses
 `BEGIN IMMEDIATE` for the delivery lookup even when no assignment exists. Offer
 validation also executes the accepted-time metadata update. In the ordinary
@@ -46,7 +47,7 @@ inner-loop validation connection that update is not committed before close.
 
 There are two separate loops here. Across the network, an idle agent renews its
 HTTP work request after the five-second wait response. Inside the coordinator,
-that one request currently causes repeated 50 ms checks. The approximately 100
+that one request previously caused repeated 50 ms checks. The approximately 100
 checks are local checking cycles, not 100 HTTP requests. This proposal changes
 the inner loop; agents continue speaking the same long-polling protocol.
 
@@ -308,8 +309,10 @@ guard. If targeting occurs after the wait receipt, the assignment remains
 
 Use the existing `_cycle_lock` for the short validation/delivery section and
 matching policy/session mutations where needed to make their ordering explicit.
-Several session operations already use this guard, but `wait_for_work` is not
-decorated and `replace_agent_policy` currently assigns the policy directly.
+At the baseline, several session operations already used this guard, while
+`wait_for_work` was not decorated and `replace_agent_policy` assigned the policy
+directly. The implementation now guards policy installation and short poll
+decisions; it does not decorate the blocking poll.
 Do not decorate the entire blocking poll. Audit the direct and HTTP callers and
 ensure policy installation participates in the same ordering. Preserve the
 existing lock order with scheduling reload and SQLite.
@@ -337,7 +340,7 @@ introduce a new global lock solely to optimize a hypothetical large fleet.
 
 **7. Wake for invalidation as well as assignments**
 
-The 50 ms loop currently discovers more than new work. Wire notifications at the
+The former 50 ms loop discovered more than new work. Wire notifications at the
 owners of supported state changes before removing that loop.
 
 | Trigger | Owner and notification boundary |
@@ -572,3 +575,104 @@ documentation matches the implementation, and the review can account for every
 supported invalidation producer. Future streaming, longer waits, a fully
 event-driven scheduler, and accepted-time persistence changes remain separate
 decisions with their own measured need.
+
+
+**Implementation evidence (2026-09-22)**
+
+The implementation starts from `307680bb6a3d60cb2ab316d307c3f0b0fc8cc96b`.
+Relative to the source evidence baseline above, this adds only the published
+planning documentation; no intervening runtime change required a design update.
+
+The daemon owns private [`_PollWaiters`](../../src/loom/queue/_agent_poll_waiters.py)
+and creates a fresh collection on start. `AgentSessionService.wait_for_work`
+subscribes before registration, then uses `_begin_work_poll`, `_check_work_poll`,
+and `_finish_work_poll` under short cycle-lock sections. The check reads current
+policy/session/offer state and reuses `_take_targeted_delivery` for its existing
+atomic delivery/receipt commit. The timeout path makes the final delivery check
+under the same guard as its wait receipt. `stop()` closes subscriptions under
+that guard, drains them outside it, and only then releases owner locks. The HTTP
+server already stops accepting requests before daemon teardown; its daemon
+handler threads are covered by the poll subscription drain. No transport or
+schema change was needed. The initial delivery check now also runs inside the
+exact-identity exception cleanup, so a service exception there immediately
+fences its poll instead of leaving it active until restart. The integration
+assertion records this earlier fence while preserving lost-response recovery
+and the one-assignment/one-launch assertions.
+
+Publisher audit:
+
+| Supported mutation | Implemented notification or reason none is needed |
+| --- | --- |
+| `_target_remote_delivery`, including exact target replay | Notify that session after commit; direct and scheduler callers use the cycle guard. |
+| `_control_agent` drain/reload | Notify that session after the withdrawal/fence commit. |
+| `acknowledge_control` applied revision | Notify that session after commit. |
+| `replace_agent_session` | Notify the old session after the replacement commit. |
+| `retire_clean` | Notify immediately after the first withdrawal commit, even if the later empty-reference proof fails. |
+| `service_lifetime` authorizes retirement | Notify after committed withdrawal. |
+| `decline_assignment` and `release_assignment` | Notify after their committed availability revision and offer withdrawal. These additional existing producers were identified during implementation. |
+| Protected policy replacement and scheduling reload | Notify all subscribed sessions after installing policy under the cycle guard. |
+| Accepted-time degradation | Notify after the degradation commit; ordinary high-water updates remain silent. |
+| Operator time recovery | Notify after the epoch replacement and offer withdrawal commit, under the cycle guard. |
+| Registration / startup poll fencing | No previous live handler exists for that new session/process lifetime. |
+| Session reconciliation | Policy installation or epoch restart already supplies the relevant invalidation boundary; reconciliation does not withdraw an offer. |
+| Offer publication | Existing active-poll rejection prevents concurrent publication. |
+| Offer renewal | Extends the same offer; the previous expiry hint may cause one early check but cannot delay expiry detection. |
+| Poll completion, exact exception fencing, final retirement | Completion belongs to that handler; retirement's earlier withdrawal already notifies. |
+
+The private signal never holds the cycle lock or accesses SQLite. Subscriber
+reference counts keep a rejected concurrent retry from removing the original
+handler's signal. Only live subscriptions occupy the collection. No durable
+counter, new configuration, dependency, assignment identity, or agent journal
+field was introduced.
+
+Measured on `sleipnir`, Python 3.12, one synthetic agent, coordinator-only roots
+on NAS, with the scheduler parked to isolate waiting work. Each row is one direct
+poll, including registration/completion. SQL tracing covers statements within
+the yielded coordinator connections; root-opening identity validation is outside
+that callback. INSERT counts include uncommitted accepted-time high-water writes.
+Connection close rolls those validation transactions back; SQL count is not a
+physical disk-write measurement.
+
+| Idle request | Connections / BEGIN | SELECT | INSERT / UPDATE | COMMIT | Process CPU | Elapsed |
+| --- | --- | --- | --- | --- | --- | --- |
+| Before, 1 s | 25 / 25 | 64 | 14 / 1 | 14 | 86.9 ms | 1.116 s |
+| Before, 2 s | 45 / 45 | 114 | 23 / 2 | 24 | 195.9 ms | 2.102 s |
+| After, 1 s | 6 / 6 | 18 | 5 / 1 | 4 | 23.5 ms | 1.104 s |
+| After, 2 s | 6 / 6 | 18 | 4 / 2 | 4 | 15.2 ms | 2.087 s |
+
+A separate direct delivery observation with one waiting agent and the scheduler
+parked measured 142.9 ms from entering target publication to receiving the reply,
+including input retention and database work; 102.1 ms elapsed after target
+publication returned. Process CPU was 32.4 ms. Four measured cycle-lock
+acquisitions waited 0.0012–0.0037 ms each. These are uncontended observations on
+a shared host while other validation ran, not fleet latency bounds or throughput guarantees. Real scheduler,
+TLS, execution, and restart behavior are qualified by the integration suites.
+
+[`test_agent_waiting.py`](../../tests/unit/loom/queue/test_agent_waiting.py) adds
+barrier-driven commit-before-wait, sleeping delivery, exact replay, lost signal,
+target replay, rollback, invalidation ordering, rejected retry, expiry equality,
+shutdown/drain, restart/issuer retention, and unrelated-session coverage. It also
+asserts that doubling an idle wait does not increase waiting SQL and that repeated
+notifications do not extend the deadline. Existing execution integration tests
+retain the single-launch and same-epoch fenced-poll recovery obligations.
+
+Validation covers the three unit suites and two integration suites named above,
+plus the new waiting suite, local daemon production, service lifetime, and the
+local daemon authority contract because the cycle guard and stop lifetime are
+shared owners. Ruff, targeted Pyright, local documentation links/snippets, and
+diff checks cover the changed surface. No configuration fields changed, so no
+configuration-extra lane is selected. Physical GPU/container/Slurm fleet
+qualification is outside this waiting change. Test temporary roots use a short
+`TMPDIR` because supervisor Unix socket paths derived from a long NAS temporary
+path exceed the platform socket-address limit.
+
+Local unit validation passed all 176 selected cases, including 26 waiting cases;
+a subsequent strengthening of the invalidation wake test passed all six affected
+cases. Ruff and targeted Pyright passed; all 14 local plan links, six illustrative
+Python snippets, and whitespace checks passed. All 203 selected integration and
+contract cases passed with no skips: 107 before the earlier-fence assertion was
+updated, then the corrected case and the remaining 95 cases. The first failed
+assertion expected an active poll after a handled initial-check exception; the
+accepted design puts that check inside exact fence cleanup. Its replacement
+asserts the immediate fence and retains the original restart/single-launch checks.
+The implementation PR records the exact selectors and reviewed revision.

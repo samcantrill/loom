@@ -539,7 +539,10 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
         with sqlite3.connect(root / "control.sqlite") as conn:
             assert conn.execute("SELECT sequence FROM agent_poll_state_local").fetchone()[0] == 2
     elif loss == "fenced":
-        assert poll == (1, None)
+        # The initial delivery check now shares the same exact-identity fence
+        # cleanup as later checks. The lost client reply still leaves PENDING
+        # locally, and epoch recovery below must retain one assignment/launch.
+        assert poll == (0, None)
     else:
         assert poll is not None and poll[0] == 0
         assert json.loads(poll[1])["result"] == "assignment"
