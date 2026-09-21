@@ -25,7 +25,7 @@ from loom.pipeline.cleanup.preparation_pins import (
 )
 from loom.pipeline.planning._action_identity import action_execution_identity
 from loom.pipeline.planning.fingerprints import _output_spec_identity
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import ActionProducerBinding
 from loom.pipeline.stores.coordinator_authority import coordinator_authority_identity
 from loom.pipeline.stores.read_models import ActionResultBinding, LifecycleReason
@@ -49,11 +49,6 @@ class ActionResultResolution:
     def reconcile_producers(self, run_uri: str) -> None:
         for claim in self.store.producers(run_uri):
             self._observe(claim)
-            current = self.store.claim(claim["claim_id"])
-            if current["state"] != "owned" and current["attempt_id"] is not None:
-                self.execution._authority_store(run_uri).release_action_producer(
-                    run_uri, self._producer_binding(current)
-                )
 
     def detach_graph(self, run_uri: str, operation_id: str) -> None:
         for claim in self.store.detach_graph(run_uri, operation_id):
@@ -342,6 +337,16 @@ class ActionResultResolution:
         )
 
     def _observe(self, claim: Mapping[str, Any]) -> None:
+        self._observe_result(claim)
+        current = self.store.claim(claim["claim_id"])
+        if current["state"] != "owned" and current["attempt_id"] is not None:
+            self.execution._authority_store(
+                current["owner_run_uri"]
+            ).release_action_producer(
+                current["owner_run_uri"], self._producer_binding(current)
+            )
+
+    def _observe_result(self, claim: Mapping[str, Any]) -> None:
         if claim["state"] not in {"owned", "settling"}:
             return
         snapshot = self.execution._authority_store(claim["owner_run_uri"]).open_run(
@@ -356,6 +361,23 @@ class ActionResultResolution:
             None,
         )
         if stage is None:
+            return
+        if (
+            snapshot.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
+            and stage.status is StageStatus.PENDING
+        ):
+            # Authority settles the exact unstarted attempt with its permission,
+            # so ordinary explicit retry can create a successor consistently.
+            self.execution._authority_store(
+                claim["owner_run_uri"]
+            ).release_action_producer(
+                claim["owner_run_uri"], self._producer_binding(claim)
+            )
+            self.store.fail(
+                claim["claim_id"],
+                {"code": "producer_abandoned"},
+                expected_revision=claim["revision"],
+            )
             return
         if stage.status is StageStatus.SUCCEEDED and stage.latest_commit is not None:
             result = {

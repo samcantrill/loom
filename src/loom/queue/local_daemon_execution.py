@@ -1942,6 +1942,8 @@ class LocalDaemonExecution:
             LocalDaemonAdmissionState.CANCELLED,
         }:
             return outcome
+        if self._action_resolution is not None:
+            self._action_resolution.reconcile_producers(admission.run_uri)
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority
         )

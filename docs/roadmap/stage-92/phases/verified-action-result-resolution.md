@@ -414,3 +414,29 @@ than repeating the 22-minute suite. Remaining required gate targets are running
 with `make test-config-extra test-mcp-extra build`, retained in
 `validate-pr-remaining.log`; these are not yet claimed passed. Final gate status
 will reconcile the baseline, the affected corrections and remaining targets.
+
+### Independent Review Correction
+
+The required independent reviewer examined PR #332 at
+`c6258ea3bec2193d5e91aa575ce6f765bbc4058c` and found one product blocker:
+fail-fast source termination could leave an owned claim whose prepared producer
+remained pending and could never launch. A later equivalent graph waited forever.
+No other concrete blocker was found; full validation remained pending.
+
+The bounded correction reconciles producer claims when a run becomes terminal
+and when a consumer observes the original producer. Native authority settles the
+exact unstarted attempt and stage of a failed/interrupted source together with
+its continuation permission, refusing to treat a live execution binding as
+abandoned. Claims then fail explicitly; existing authorized retry can create a
+successor with consistent attempt and worker-projection history. Successful
+original commits remain eligible. Both embedded and authenticated owners use
+this existing mutation; no new wire shape or project hook is introduced.
+
+`fail-fast-action-regression.log` records 7 passes: authority continuation and
+settlement through both backends, plus a native two-independent-action graph
+with one CPU, failed waiting graph, explicit owner retry and verified waiter
+reuse. `review-correction-static.log` records Ruff pass and Pyright zero errors.
+Affected action-resolution, rejection/retry, native failure-policy and authority
+regressions passed: 26 tests in 328.22 s, recorded in
+`review-correction-regressions.log`. This correction
+still requires the same reviewer's bounded confirmation on the final PR head.

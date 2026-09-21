@@ -1139,12 +1139,26 @@ class AuthorityRepository:
             conn.execute("INSERT INTO action_producers VALUES (?, ?, ?, ?, 1) ON CONFLICT(run_uri, claim_id) DO UPDATE SET attempt_id = excluded.attempt_id, active = 1", (run_uri, binding.claim_id, binding.stage_name, binding.attempt_id))
 
     def release_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        """Retire continuation and settle an unstarted producer abandoned by its run."""
         with self.transaction() as conn:
             row = conn.execute("SELECT * FROM action_producers WHERE run_uri = ? AND claim_id = ?", (run_uri, binding.claim_id)).fetchone()
             if row is None:
                 return
             if (row["stage_name"], row["attempt_id"]) != (binding.stage_name, binding.attempt_id):
                 raise AuthorityRepositoryError("action producer settlement conflicts")
+            if RunStatus(str(_require_run_row(conn, run_uri)["status"])) in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+                stage = conn.execute('SELECT status FROM authority_stages WHERE run_uri = ? AND stage_name = ?', (run_uri, binding.stage_name)).fetchone()
+                attempt = conn.execute('SELECT attempt_id, status FROM stage_attempts WHERE run_uri = ? AND stage_name = ? ORDER BY attempt_number DESC LIMIT 1', (run_uri, binding.stage_name)).fetchone()
+                if (stage is not None and stage["status"] == StageStatus.PENDING.value
+                    and attempt is not None and attempt["attempt_id"] == binding.attempt_id
+                    and attempt["status"] == StageStatus.PENDING.value):
+                    if conn.execute("SELECT 1 FROM managed_attempt_bindings WHERE run_uri = ? AND attempt_id = ? AND state != 'terminal' LIMIT 1", (run_uri, binding.attempt_id)).fetchone() is not None:
+                        raise AuthorityRepositoryError("abandoned action still has a live execution binding")
+                    revision = self._next_revision(conn)
+                    reason = LifecycleReason(code="action.producer_abandoned", detail={"claim_id": binding.claim_id})
+                    conn.execute('UPDATE stage_attempts SET status = ?, revision_sequence = ?, reason_json = ? WHERE run_uri = ? AND attempt_id = ?', (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), run_uri, binding.attempt_id))
+                    _upsert_stage(conn, run_uri=run_uri, stage_name=binding.stage_name, status=StageStatus.FAILED, revision=revision, reason=reason)
+                    _touch_run(conn, run_uri=run_uri, revision=revision)
             conn.execute("UPDATE action_producers SET active = 0 WHERE run_uri = ? AND claim_id = ?", (run_uri, binding.claim_id))
 
     def bind_action_result(

@@ -1908,3 +1908,8 @@ domain-specific assumptions
 
 This gives `loom.pipeline` a durable operational foundation without turning the
 runtime into a heavyweight orchestration service.
+
+When a failed or interrupted graph abandons a prepared action, producer settlement
+marks the exact unstarted attempt and stage failed in the authority transaction.
+It requires no live execution binding, preserves the abandoned attempt's history,
+and permits the existing explicit retry path to create a successor.

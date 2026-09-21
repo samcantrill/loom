@@ -1048,6 +1048,9 @@ When the last demand disappears, settlement is irrevocable: no new waiter can
 revive the claim. Native containment and release evidence still govern capacity.
 Restart reconstructs these decisions before retained workers resume, and remote
 and SLURM grant/start/control paths use the same exact-attempt decision.
+If fail-fast terminates a graph with a prepared producer that never started,
+Loom records that exact stage and attempt as failed and settles its claim.
+Waiters fail explicitly, and native retry can prepare a consistent successor.
 A failed shared producer is an explicit failure for waiters; only the existing
 native authorized retry/resume may continue that realization. Fresh execution is
 the explicit way to request an independent one.

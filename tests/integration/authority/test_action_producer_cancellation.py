@@ -2,7 +2,7 @@
 
 import pytest
 
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
     ActionProducerBinding,
     CancellationEpochRequest,
@@ -78,3 +78,26 @@ def test_exact_producer_continues_but_final_detach_revokes_start(
         reason=LifecycleReason(code="worker.contained"),
     )
     assert authority.finalize_cancellation(uri, cancellation).value == "CANCELLED"
+
+
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
+def test_failed_run_settles_exact_unstarted_producer_for_retry(tmp_path, backend):
+    uri, authority, _, _ = _consumer(tmp_path, backend)
+    binding = ActionProducerBinding("abandoned", "producer", "producer-1")
+    authority.bind_action_producer(uri, binding)
+    _prepare(authority, uri, "producer")
+    snapshot = authority.open_run(uri)
+    authority.transition_run(
+        uri,
+        from_status=snapshot.status,
+        to_status=RunStatus.FAILED,
+        expected_revision=snapshot.revision,
+    )
+    authority.release_action_producer(uri, binding)
+    settled = authority.open_run(uri)
+    stage = settled.stages[0]
+    assert stage.status is StageStatus.FAILED
+    assert stage.attempts[0].status is StageStatus.FAILED
+    assert stage.reason is not None and stage.reason.code == "action.producer_abandoned"
+    authority.release_action_producer(uri, binding)
+    assert authority.open_run(uri) == settled
