@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
+
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -896,6 +898,14 @@ class _ScopedCoordinatorAuthority:
         self._run(run_uri)
         return self._store.bind_action_result(run_uri, stage_name, binding, expected_revision=expected_revision)
 
+    def bind_action_producer(self, run_uri: str, binding) -> None:
+        self._run(run_uri)
+        self._store.bind_action_producer(run_uri, binding)
+
+    def release_action_producer(self, run_uri: str, binding) -> None:
+        self._run(run_uri)
+        self._store.release_action_producer(run_uri, binding)
+
     def bind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
@@ -1477,10 +1487,7 @@ class LocalDaemonExecution:
             "scheduler_observed_at": None
             if submission is None
             else submission.scheduler_observed_at,
-            "cancel_requested": self._run_cancellation_operation(
-                retained.assignment.run_uri
-            )
-            is not None,
+            "cancel_requested": self._attempt_cancel_requested(retained.assignment.run_uri, retained.assignment.attempt_id),
             "start_consumed": retained.start_consumed,
             "bootstrap_registered": retained.bootstrap_incarnation is not None,
             "input_ready": retained.input_ready,
@@ -1662,6 +1669,7 @@ class LocalDaemonExecution:
                         assignment.run_uri,
                         scoped_authority,
                         intent.plan.stage_order,
+                        attempt_id=assignment.attempt_id,
                     )
                 ),
                 decision_receipt=decision_receipt,
@@ -1679,6 +1687,8 @@ class LocalDaemonExecution:
     def resume_retained_local_work(self) -> None:
         """Join every local supervisor operation before daemon availability."""
 
+        if self._action_resolution is not None:
+            self._action_resolution.reconcile_cancellations()
         if self.agent_id is None:
             return
         assert self.journal is not None
@@ -1948,12 +1958,16 @@ class LocalDaemonExecution:
         intent: ManagedLocalIntent,
         scoped_authority: _ScopedCoordinatorAuthority,
     ) -> LocalDaemonExecutionOutcome:
-        if (
-            admission.cancellation_operation_id is not None
-            or self.cancellation_operation(admission.admission_id) is not None
-        ):
-            return self._cancel(admission, scoped_authority, intent.plan.stage_order)
-        self.admission_activated(admission.admission_id)
+        action_resolver = self._action_resolution
+        if action_resolver is not None:
+            action_resolver.reconcile_producers(admission.run_uri)
+        cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
+        if cancelling:
+            outcome = self._cancel(admission, scoped_authority, intent.plan.stage_order)
+            if action_resolver is None or not any(action_resolver.store.producer_needed(admission.run_uri, node) for node in intent.plan.stage_order):
+                return outcome
+        else:
+            self.admission_activated(admission.admission_id)
 
         placements = dict(intent.placements)
         orchestrator = RunOrchestrator(
@@ -1961,35 +1975,37 @@ class LocalDaemonExecution:
             store=self.stage_work_store,
             owner_id=self.coordinator_id,
         )
-        if self.cancellation_operation(admission.admission_id) is not None:
-            return self._cancel(admission, scoped_authority, intent.plan.stage_order)
         _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
         snapshot = scoped_authority.open_run(admission.run_uri)
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
-        terminal = self._terminal_outcome(
+        terminal = None if cancelling else self._terminal_outcome(
             admission,
             intent.plan,
             snapshot,
             scoped_authority,
             continue_independent=intent.continue_independent,
         )
-        if terminal is not None:
+        if terminal is not None and not cancelling:
             return terminal
-        action_resolver = self._action_resolution
+        def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
+            if cancelling:
+                return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
+            return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
+
         orchestrator.reconcile(
             admission_id=admission.admission_id,
             plan=intent.plan,
             authority_snapshot=snapshot,
             placements=placements,
             execution_requirements=intent.execution_requirements,
-            ready_action=None if action_resolver is None else lambda stage_plan, readiness, revision: action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision),
+            ready_action=resolve_ready,
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
-            controller_action=lambda stage_plan, readiness: (
+            controller_action=None if cancelling else lambda stage_plan, readiness: (
                 self._apply_controller_action(
                     scoped_authority,
                     admission.run_uri,
@@ -2004,7 +2020,7 @@ class LocalDaemonExecution:
             admission.run_uri, scoped_authority
         )
         snapshot = scoped_authority.open_run(admission.run_uri)
-        terminal = self._terminal_outcome(
+        terminal = None if cancelling else self._terminal_outcome(
             admission,
             intent.plan,
             snapshot,
@@ -2013,6 +2029,8 @@ class LocalDaemonExecution:
         )
         if terminal is not None:
             return terminal
+        if cancelling:
+            return self._cancel(admission, scoped_authority, intent.plan.stage_order)
         if slurm_in_flight or any(
             stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
             for stage in snapshot.stages
@@ -2061,7 +2079,8 @@ class LocalDaemonExecution:
             return None
         with self._launch_lock:
             decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-            window = self.stage_work_store.ready_window()
+            window = tuple(record for record in self.stage_work_store.ready_window()
+                           if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
             if not window:
                 return None
             contexts = self._cycle_contexts
@@ -2299,10 +2318,7 @@ class LocalDaemonExecution:
             "assignment": record.assignment.to_dict(),
             "request": dict(record.request),
             "expected_sequence": sequence,
-            "cancel_requested": self._run_cancellation_operation(
-                record.assignment.run_uri
-            )
-            is not None,
+            "cancel_requested": self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
             "job_id": record.job_id,
             "cluster": record.cluster,
             "release_requested": record.state
@@ -2459,7 +2475,7 @@ class LocalDaemonExecution:
                     )
                 if (
                     record.state not in {"terminal", "logical_released", "released"}
-                    and self._run_cancellation_operation(assignment.run_uri) is None
+                    and not self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)
                 ):
                     raise QueueConflictError("SLURM live assignment cannot release")
         self.slurm_assignments.accept_agent_evidence(
@@ -2516,7 +2532,7 @@ class LocalDaemonExecution:
                         "SLURM release lacks exact containment evidence"
                     )
                 if record.state not in {"terminal", "logical_released", "released"}:
-                    if self._run_cancellation_operation(assignment.run_uri) is None:
+                    if not self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id):
                         raise QueueConflictError("SLURM live assignment cannot release")
                     authority = self._remote_authority(assignment.run_uri)
                     if record.fence is None:
@@ -2558,8 +2574,7 @@ class LocalDaemonExecution:
                     )
         return {
             "sequence": sequence,
-            "cancel_requested": self._run_cancellation_operation(assignment.run_uri)
-            is not None,
+            "cancel_requested": self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id),
         }
 
     def _drive_local_slurm(self, record: SlurmStageRecord) -> None:
@@ -4340,6 +4355,9 @@ class LocalDaemonExecution:
             return LocalDaemonExecutionOutcome(
                 terminal[before.status], "authority_terminal_before_cancellation"
             )
+        if self._action_resolution is not None:
+            self._action_resolution.detach_graph(admission.run_uri, operation_id)
+            self._action_resolution.reconcile_producers(admission.run_uri)
         cancellation_request = CancellationEpochRequest(
             operation_id=operation_id,
             coordinator_id=self.coordinator_id,
@@ -4399,6 +4417,8 @@ class LocalDaemonExecution:
                 LocalDaemonAdmissionState.CANCELLING,
                 "cancellation finalization did not reach a terminal authority state",
             )
+        if self._action_resolution is not None:
+            self._action_resolution.reconcile_producers(admission.run_uri)
         return LocalDaemonExecutionOutcome(final)
 
     def _fan_out_local_cancellation(
@@ -4422,6 +4442,9 @@ class LocalDaemonExecution:
                     self._daemon_owner()._recovery_is_settling(assignment_id)
                     or settling
                 )
+                continue
+            if self._action_attempt_needed(run_uri, self._attempt_id(assignment_id)):
+                settling = True
                 continue
             journal_state = self.journal.find_state(assignment_id)
             if coordinator_state == "reserved" and journal_state is None:
@@ -4506,7 +4529,7 @@ class LocalDaemonExecution:
                 return False
             rows = tuple(
                 conn.execute(
-                    "SELECT assignment_id, session_id, state, fence "
+                    "SELECT assignment_id, session_id, state, fence, attempt_id "
                     "FROM remote_assignments WHERE run_uri = ? "
                     "AND state != 'RELEASED' ORDER BY assignment_id",
                     (run_uri,),
@@ -4514,6 +4537,9 @@ class LocalDaemonExecution:
             )
             for row in rows:
                 assignment_id = str(row["assignment_id"])
+                if action_attempt_needed(conn, run_uri, str(row["attempt_id"])):
+                    settling = True
+                    continue
                 if self._recovery_retains_assignment(assignment_id):
                     settling = (
                         self._daemon_owner()._recovery_is_settling(assignment_id)
@@ -5388,7 +5414,7 @@ class LocalDaemonExecution:
                 supervisor=supervisor,
                 resident_launch_profile=launch_profile,
                 cancellation_requested=lambda: self._install_cancellation_if_requested(
-                    admission, authority, intent.plan.stage_order
+                    admission, authority, intent.plan.stage_order, attempt_id=assignment.attempt_id
                 ),
                 suspend_requested=(
                     None if self.daemon is None else self.daemon._stop.is_set
@@ -5427,9 +5453,10 @@ class LocalDaemonExecution:
         admission: LocalDaemonAdmission,
         authority: _ScopedCoordinatorAuthority,
         stage_names: Sequence[str],
+        *, attempt_id: str | None = None,
     ) -> bool:
         return self._install_run_cancellation_if_requested(
-            admission.run_uri, authority, stage_names
+            admission.run_uri, authority, stage_names, attempt_id=attempt_id
         )
 
     def _install_run_cancellation_if_requested(
@@ -5437,10 +5464,13 @@ class LocalDaemonExecution:
         run_uri: str,
         authority: _ScopedCoordinatorAuthority,
         stage_names: Sequence[str],
+        *, attempt_id: str | None = None,
     ) -> bool:
         operation_id = self._run_cancellation_operation(run_uri)
         if operation_id is None:
-            return False
+            return attempt_id is not None and self._attempt_cancel_requested(run_uri, attempt_id)
+        if self._action_resolution is not None:
+            self._action_resolution.detach_graph(run_uri, operation_id)
         authority.install_cancellation_epoch(
             run_uri,
             CancellationEpochRequest(
@@ -5450,7 +5480,7 @@ class LocalDaemonExecution:
                 stage_names=tuple(stage_names),
             ),
         )
-        return True
+        return attempt_id is None or self._attempt_cancel_requested(run_uri, attempt_id)
 
     def _daemon_owner(self) -> LocalDaemon:
         if self.daemon is None:
@@ -5484,14 +5514,7 @@ class LocalDaemonExecution:
 
         record = self._remote_assignment_record(assignment_id)
         authority = self._remote_authority(str(record["run_uri"]))
-        operation_id = self._run_cancellation_operation(str(record["run_uri"]))
-        if (
-            operation_id is not None
-            and authority.read_cancellation_epoch_receipt(
-                str(record["run_uri"]), operation_id
-            )
-            is not None
-        ):
+        if self._attempt_cancel_requested(str(record["run_uri"]), str(record["attempt_id"])):
             return False
         granted = authority.grant_prepared_attempt(
             str(record["run_uri"]),
@@ -5833,12 +5856,7 @@ class LocalDaemonExecution:
             return record.fence
         with sqlite3.connect(self.config.control_database) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            cancellation = conn.execute(
-                "SELECT cancellation_operation_id FROM managed_admissions "
-                "WHERE run_uri = ?",
-                (record.assignment.run_uri,),
-            ).fetchone()
-            if cancellation is not None and cancellation[0] is not None:
+            if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                 raise QueueConflictError("SLURM assignment run is cancelling")
             authority = self._remote_authority(record.assignment.run_uri)
             fence = authority.grant_prepared_attempt(
@@ -5846,6 +5864,7 @@ class LocalDaemonExecution:
                 assignment_id=assignment_id,
                 attempt_id=record.assignment.attempt_id,
             )
+            attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence.fencing_token)
             self.slurm_assignments.mark_granted(
                 assignment_id, incarnation, fence.fencing_token
             )
@@ -5874,12 +5893,7 @@ class LocalDaemonExecution:
             raise QueueConflictError("SLURM start permit fence conflicts")
         with sqlite3.connect(self.config.control_database) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            cancellation = conn.execute(
-                "SELECT cancellation_operation_id FROM managed_admissions "
-                "WHERE run_uri = ?",
-                (record.assignment.run_uri,),
-            ).fetchone()
-            if cancellation is not None and cancellation[0] is not None:
+            if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                 conn.commit()
                 return False
             permitted = self.slurm_assignments.consume_start(assignment_id)
@@ -6167,7 +6181,6 @@ class LocalDaemonExecution:
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
-            on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
 
     def _authority_store(self, run_uri: str) -> CoordinatorAuthorityStore:
@@ -6191,6 +6204,14 @@ class LocalDaemonExecution:
             if daemon is None
             else daemon._recovery_fences_ordinary_terminal(assignment_id)
         )
+
+    def _action_attempt_needed(self, run_uri: str, attempt_id: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            return action_attempt_needed(conn, run_uri, attempt_id)
+
+    def _attempt_cancel_requested(self, run_uri: str, attempt_id: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            return action_attempt_cancelled(conn, run_uri, attempt_id)
 
     def _run_cancellation_operation(self, run_uri: str) -> str | None:
         with sqlite3.connect(self.config.control_database) as conn:

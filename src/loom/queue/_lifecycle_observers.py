@@ -24,6 +24,7 @@ _MUTATIONS = frozenset(
     {
         "transition_run",
         "transition_stage",
+        "bind_action_result",
         "ensure_prepared_attempt",
         "confirm_execution_started",
         "finalize_cancellation",

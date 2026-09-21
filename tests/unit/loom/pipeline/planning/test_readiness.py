@@ -118,3 +118,16 @@ def test_pending_attempt_is_ready_only_as_exact_prepared_replay() -> None:
     assert replay is not None
     assert replay.readiness_generation == "generation-1"
     assert replay.next_attempt == 1
+
+
+def test_failed_consumer_without_attempt_requires_authorized_resume() -> None:
+    assert evaluate_attempt_readiness(
+        _plan(), completed_stages={"produce"}, current_stage_status=StageStatus.FAILED
+    ) is None
+    ready = evaluate_attempt_readiness(
+        _plan(), completed_stages={"produce"}, current_stage_status=StageStatus.STALE
+    )
+    assert ready is not None
+    assert ready.next_attempt == 1
+    assert ready.expected_stage_status is StageStatus.STALE
+    assert ready.expected_attempt_id is None

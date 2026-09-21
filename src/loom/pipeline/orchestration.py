@@ -784,6 +784,8 @@ class RunOrchestrator:
         projected: list[StageWorkRecord] = []
         for ready_order, stage_plan in enumerate(plan.ordered_stage_plans):
             stage = stage_facts.get(stage_plan.stage_name)
+            if stage is not None and stage.result_binding is not None:
+                continue
             current_attempt = (
                 None
                 if stage is None or not stage.attempts
@@ -814,6 +816,7 @@ class RunOrchestrator:
                     if upstream in commits
                 },
                 current_attempt=current_attempt,
+                current_stage_status=None if stage is None else stage.status,
                 run_cancelled=cancelled,
                 retry_authorization=retry,
                 prepared_generation=(
@@ -922,6 +925,7 @@ class RunOrchestrator:
                         if upstream in committed_outputs
                     },
                     current_attempt=current_attempt,
+                    current_stage_status=None if stage is None else stage.status,
                     run_cancelled=run_cancelled,
                     retry_authorization=_retry_authorization(stage),
                     prepared_generation=(

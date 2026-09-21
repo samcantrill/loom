@@ -920,4 +920,144 @@ existing verification response (`schema_version: 1`, native `candidate_digest`,
 `verdict: verified`). The read-only candidate projects `project_contracts` from its
 original report reference. Completed reuse, observing already-owned work and
 `one_observed_failure` retry retain their existing lifecycle. These node contracts
-do not themselves implement cross-target action-result lookup.
+are also the checked semantic input to the action-result lifecycle described below.
+
+### Verified action results across graphs
+
+A version 3 processor can participate in action reuse across separately submitted
+native graphs. Keep submitting with `loom run` or `RunRequest`; deployment selection
+still chooses managed local, persistent local, remote coordinator, or SLURM
+execution. No project scheduler or second submission API is required.
+
+Reuse requires a successful resident readiness qualification with explicit
+`readiness.source_roots` covering the installed project code and runtime assets.
+That qualification produces `action_reuse_qualified` in the resident descriptor.
+An imports-only readiness check, missing qualification, or null node semantic key
+executes normally without cross-graph action selection. The protected processor
+and actual stage factory remain installed Python targets; captured configuration
+cannot install executable code or register lifecycle handlers.
+
+For a dependency-ready node, Loom combines:
+
+- the project's namespaced semantic key;
+- qualified project, environment and executor identities, the protected processor,
+  and the stage's actual factory target and initialization arguments;
+- each input port's original producer commit and artifact reference, including
+  native publication closure identity;
+- declared output contracts and the retained execution generation.
+
+The current node alias, another node's configuration and renamed upstream edges
+do not change this action identity. The application decides which configuration,
+scientific data identities and other domain facts belong in its semantic key.
+The ordinary capture and audit fingerprints remain unchanged and still identify
+the authored graph and invocation.
+
+Within one principal, native authority, run store and installed implementation
+scope, a transactional claim selects one producer. Concurrent equivalent nodes
+wait for it without allocating attempts. Once it succeeds, the waiting graph
+verifies and binds the **original** commit and output facts. It does not copy them
+into a new producer commit. A new downstream node can run against that binding.
+A successful action remains eligible when another action makes its original
+graph fail or the original graph is later cancelled.
+
+The installed processor also implements `operation: verify_result`. The native
+request has `schema_version: 3`, the current checked `contract`, an immutable
+`candidate`, and `artifact_access`. The candidate contains exactly:
+
+```text
+schema_version: 1
+candidate_digest: sha256:<native digest>
+namespace, semantic_key, execution_key
+producer: {run_uri, node_id, attempt_id, assignment_id, fencing_token}
+result: {commit, artifact_facts}
+output_contracts
+installation
+access
+```
+
+`producer` and `result` always name the original producer. The candidate digest
+binds every other candidate field. `artifact_access` is the private read view:
+`{mode: read_only, outputs: {output_port: <ArtifactRef data>}}`. Read the refs in
+this view; a remote verifier must not interpret an original coordinator URI as
+an agent-local path. Loom uses its existing regular-file materialization or
+protected shared-publication namespace. Original identities stay in the
+candidate even when materialization changes a local URI. Projects with companion
+files use their declared native shared closure when verification crosses machines;
+a primary JSON file alone is not a transferable declaration of arbitrary files.
+
+The processor checks domain content and returns only one of these exact shapes:
+
+```python
+# Domain-specific checks use the current contract and authorized artifact refs.
+return {
+    "schema_version": 1,
+    "candidate_digest": request["candidate"]["candidate_digest"],
+    "verdict": "verified",
+}
+
+# Or, for a content/contract mismatch:
+return {
+    "schema_version": 1,
+    "candidate_digest": request["candidate"]["candidate_digest"],
+    "verdict": "rejected",
+    "reason": {"code": "line_count_mismatch", "output_port": "text"},
+}
+```
+
+A reason code is a bounded lowercase ASCII identifier, not a Loom-maintained
+domain enum. `output_port` is null or one declared output. Rejection is retained
+with the project namespace and original producer/artifact evidence. Exceptions,
+malformed responses, candidate-digest mismatches and attempted lifecycle
+instructions fail verification. They are not converted into cache misses.
+Loom verifies native authority, checksums/shared closure, scope and retention
+before and after the installed callback, then commits a revision-guarded binding.
+The callback cannot publish commits, choose producers, authorize retries or alter
+cancellation state. Its preparation child uses the existing native dispatch,
+committed report and cleanup machinery; it never republishes a target graph.
+Native preparation envelope 8 carries fresh generations; envelope 9 carries the
+separate action verification request/report. Earlier envelopes remain readable.
+
+To request a new realization deliberately, name the current graph node:
+
+```bash
+loom run pipeline.yaml --deployment deployment.yaml --reconcile \
+  --operation-id new-realization --fresh-stage author
+```
+
+```python
+from dataclasses import replace
+
+# request is an ordinary configured RunRequest.
+fresh_request = replace(request, fresh_stages=("author",))
+```
+
+Each selected node gets a retained native generation before preparation can be
+retried. Replaying the same operation ID preserves that generation; a new
+operation ID requests another one. Unknown or duplicate nodes fail instead of
+silently doing ordinary reuse. This does not change the project's scientific key
+or seed. Descendants see the new original input commit, even if its bytes match
+the previous result. The previous default-generation result stays available to
+ordinary future submissions. Existing `force_stages` and native same-realization
+retry retain their separate meanings.
+
+Cancellation detaches a graph's demands. If another live graph still needs a
+producer, the exact original attempt remains authorized through the original
+run's cancellation barrier; unrelated work receives ordinary cancellation.
+The original graph can remain `CANCELLING` while this physical work settles.
+When the last demand disappears, settlement is irrevocable: no new waiter can
+revive the claim. Native containment and release evidence still govern capacity.
+Restart reconstructs these decisions before retained workers resume, and remote
+and SLURM grant/start/control paths use the same exact-attempt decision.
+A failed shared producer is an explicit failure for waiters; only the existing
+native authorized retry/resume may continue that realization. Fresh execution is
+the explicit way to request an independent one.
+
+Claims and bindings retain original run evidence through existing preparation
+pins. Native shared-publication receipts already protect their primary and
+companion closure. Cleanup rechecks these protections before deletion. There is
+no automatic action-cache expiry or eviction API in this interface.
+
+An authorized agent control with `cancel_active` is administrative containment:
+it revokes continuation for that agent's exact affected attempts even when other
+graphs still need them. Those consumers observe the unsuccessful producer; Loom
+does not silently replace it. This differs from cancelling one graph's demand.

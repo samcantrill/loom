@@ -28,6 +28,7 @@ from loom.pipeline.transition_policy import TransitionIntent
 from loom.serialization import PlainData
 
 from .authority import (
+    ActionProducerBinding,
     AuthorityStoreError,
     CancellationEpochReceipt,
     CancellationEpochRequest,
@@ -62,6 +63,8 @@ COORDINATOR_AUTHORITY_SERVICE_HEADER = "X-Loom-Authority-Service"
 COORDINATOR_PUBLISH_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/publish"
 COORDINATOR_OPEN_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/open"
 COORDINATOR_BIND_RESULT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/stages/bind-result"
+COORDINATOR_BIND_PRODUCER_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/actions/bind-producer"
+COORDINATOR_RELEASE_PRODUCER_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/actions/release-producer"
 COORDINATOR_TRANSITION_RUN_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/transition"
 )
@@ -505,6 +508,12 @@ class AuthenticatedCoordinatorAuthority:
             body={"request": request_value.to_dict()},
         )
         return CoordinatorAdmissionReceipt.from_dict(_body_required(result, "receipt"))
+
+    def bind_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        self._call(COORDINATOR_BIND_PRODUCER_PATH, run_uri, body={"binding": binding.to_dict()})
+
+    def release_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None:
+        self._call(COORDINATOR_RELEASE_PRODUCER_PATH, run_uri, body={"binding": binding.to_dict()})
 
     def bind_action_result(
         self, run_uri: str, stage_name: str, binding: ActionResultBinding,

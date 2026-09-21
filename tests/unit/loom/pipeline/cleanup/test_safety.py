@@ -160,3 +160,23 @@ def test_shared_attempt_and_committed_closure_are_retained(tmp_path, published):
         assert not decision.approved
         assert decision.reason_code is CleanupSafetyReason.RETAINED_SHARED_PUBLICATION
         assert primary.is_file()
+
+
+def test_action_candidate_verification_retains_and_checks_shared_companions(tmp_path):
+    from pathlib import Path
+    import pytest
+    from loom.queue._action_result_resolution import ActionResultResolution
+    from loom.queue._shared_publication import publish
+    from loom.pipeline.stores.errors import ArtifactStoreError
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    reference = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots, agent_id="agent-1", fence="fence-1")["result"]
+    verifier = object.__new__(ActionResultResolution)
+    verifier._verify_artifact(reference)
+    primary = Path(reference.uri.removeprefix("file://"))
+    for path in (primary, primary.parent / "values.bin", primary.parent / "catalog" / "checkpoint"):
+        assert assess_local_target_safety(_target(path), (_root(tmp_path),)).reason_code is CleanupSafetyReason.RETAINED_SHARED_PUBLICATION
+    (primary.parent / "catalog" / "checkpoint").write_bytes(b"corrupt companion")
+    with pytest.raises(ArtifactStoreError, match="closure integrity"):
+        verifier._verify_artifact(reference)

@@ -21,6 +21,7 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
+    ActionProducerBinding,
     CancellationEpochReceipt,
     CoordinatorAdmissionRequest,
     LocalDaemonAuthority,
@@ -77,6 +78,10 @@ class CoordinatorAuthorityStore(
         self, run_uri: str, stage_name: str, binding: ActionResultBinding,
         *, expected_revision: BackendRevision | None = None,
     ) -> BackendRevision: ...
+
+    def bind_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None: ...
+
+    def release_action_producer(self, run_uri: str, binding: ActionProducerBinding) -> None: ...
 
     def transition_run(
         self,

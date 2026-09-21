@@ -114,7 +114,7 @@ class PreparationStage:
             raise QueueConflictError("preparation installation_mismatch")
         if binding.action_verification is not None:
             return {"report": context.save_artifact(
-                "report", _run_action_verification(binding), artifact_type="json", codec_key="json.v1"
+                "report", _run_action_verification(binding, private.get("action_artifacts")), artifact_type="json", codec_key="json.v1"
             )}
         if isinstance(binding.input_receipt, SharedInputReceipt):
             roots = cast(Mapping[str, str], private["shared_roots"])
@@ -230,11 +230,25 @@ class PreparationStage:
         }
 
 
-def _run_action_verification(binding: PreparationChildInput) -> dict[str, PlainData]:
+def _run_action_verification(binding: PreparationChildInput, artifact_access: object = None) -> dict[str, PlainData]:
     from loom.pipeline._action_verification import action_verification_request, action_verification_response
 
     assert binding.project_preparation is not None
     requested = action_verification_request(binding.action_verification)
+    from dataclasses import replace
+    from loom.io.uris import uri_to_path
+
+    candidate = _plain_mapping(requested["candidate"])
+    outputs = _plain_mapping(artifact_access or {})
+    facts = cast(list[Mapping[str, PlainData]], _plain_mapping(candidate["result"])["artifact_facts"])
+    if set(outputs) != {str(fact["artifact_name"]) for fact in facts}:
+        raise QueueConflictError("action verifier input materialization is incomplete")
+    for fact in facts:
+        original = ArtifactRef.from_dict(fact["artifact"])
+        materialized = ArtifactRef.from_dict(outputs[cast(str, fact["artifact_name"])])
+        if replace(materialized, uri=original.uri) != original:
+            raise QueueConflictError("action verifier materialized identity conflicts")
+        LocalArtifactStore(Path(uri_to_path(materialized.uri)).parent).validate(materialized)
     selected = _plain_mapping(binding.project_preparation["processor"])
     response, failure = None, None
     try:
@@ -245,6 +259,7 @@ def _run_action_verification(binding: PreparationChildInput) -> dict[str, PlainD
         value = cast(Any, processor)({
             "schema_version": 3, "operation": "verify_result",
             "project_preparation": dict(binding.project_preparation),
+            "artifact_access": {"mode": "read_only", "outputs": outputs},
             **requested,
         })
         response = action_verification_response(value, _plain_mapping(requested["candidate"]))
@@ -529,17 +544,25 @@ def _worker_context() -> Mapping[str, PlainData]:
         raise QueueServiceError("preparation requires its managed worker input binding")
     try:
         value = json.loads(encoded)
+        version = value.get("schema_version") if isinstance(value, dict) else None
+        action_context = version == 5
+        if action_context:
+            if not isinstance(value.get("action_artifacts"), dict):
+                raise ValueError
+            for artifact in value["action_artifacts"].values():
+                ArtifactRef.from_dict(artifact)
+            version = 4 if "shared_scope" in value else 3
         if (
             not isinstance(value, dict)
-            or (set(value) - {"local_scope", "project_preparation", "shared_scope"}) not in (
+            or (set(value) - {"local_scope", "project_preparation", "shared_scope"} - ({"action_artifacts"} if action_context else set())) not in (
                 {"schema_version", "profile_descriptor", "shared_roots"},
                 {"schema_version", "profile_descriptor", "staged_directory"},
             )
             or type(value["schema_version"]) is not int
-            or value["schema_version"] not in (1, 2, 3, 4)
-            or (value["schema_version"] in (2, 3)) != ("local_scope" in value)
-            or (value["schema_version"] != 4 and (value["schema_version"] == 3) != ("project_preparation" in value))
-            or (value["schema_version"] == 4) != ("shared_scope" in value)
+            or version not in (1, 2, 3, 4)
+            or (version in (2, 3)) != ("local_scope" in value)
+            or (version != 4 and (version == 3) != ("project_preparation" in value))
+            or (version == 4) != ("shared_scope" in value)
             or not isinstance(value.get("shared_roots", {}), dict)
             or any(
                 not isinstance(alias, str)

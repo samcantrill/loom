@@ -44,6 +44,8 @@ _ROUTES = {
     "/runs/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
     "/stages/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
     "/stages/bind-result": AuthorityMutationOperation.BIND_ACTION_RESULT,
+    "/actions/bind-producer": AuthorityMutationOperation.BIND_ACTION_PRODUCER,
+    "/actions/release-producer": AuthorityMutationOperation.RELEASE_ACTION_PRODUCER,
     "/admissions/bind": AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
     "/cancellation/install": AuthorityMutationOperation.INSTALL_CANCELLATION_EPOCH,
     "/cancellation/read": AuthorityMutationOperation.READ_CANCELLATION_EPOCH,

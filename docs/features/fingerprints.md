@@ -52,6 +52,16 @@ matter to pipeline planning, stage specs, and project code.
 
 ---
 
+### Causal identity for installed actions
+
+Native installed-action reuse has a separate causal identity from the authored
+stage/capture fingerprints described here. It combines the checked project key,
+qualified implementation, actual original input commits/refs, output contracts,
+and native generation. Consumer aliases and unrelated graph configuration do not
+enter that key. A fresh producer commit invalidates descendants even when bytes
+match. See [verified action results](agent-preparation.md#verified-action-results-across-graphs)
+for scope, verification, cancellation, retry and fresh-submission behavior.
+
 ## 2. Core Position
 
 `loom.fingerprints` sits above plain structured data serialization and below

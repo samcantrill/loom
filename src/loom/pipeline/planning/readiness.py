@@ -96,6 +96,7 @@ def evaluate_attempt_readiness(
     successful_stages: Collection[str] | None = None,
     committed_outputs: Mapping[str, str] | None = None,
     current_attempt: ReadinessAttemptView | None = None,
+    current_stage_status: StageStatus | None = None,
     run_cancelled: bool = False,
     retry_authorization: RetryAuthorization | None = None,
     prepared_generation: str | None = None,
@@ -104,6 +105,8 @@ def evaluate_attempt_readiness(
 
     ``completed_stages`` is retained for the in-process compatibility runner.
     Durable consumers supply exact commit identities as ``committed_outputs``.
+    ``current_stage_status`` preserves an authorized resume of a consumer that
+    failed before it allocated an attempt. Such a stage must be STALE to retry.
     The predicate never reads a store, allocates, or performs a controller action.
     """
 
@@ -124,6 +127,9 @@ def evaluate_attempt_readiness(
     retry_decision_id: str | None = None
     if stage_plan.action is PlanAction.RUN:
         if current_attempt is None:
+            if current_stage_status not in {None, StageStatus.STALE}:
+                return None
+            expected_status = current_stage_status
             next_attempt = 1
         else:
             expected_status = StageStatus(current_attempt.status)

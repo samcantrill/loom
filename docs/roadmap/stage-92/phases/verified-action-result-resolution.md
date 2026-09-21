@@ -334,13 +334,63 @@ lists to tuples, while the retained report remains lists. Native
 fixture carries nested sequence payloads and the native tests pass. rphys remains
 on merged U1 until the corrected U2 implementation is reviewed and merged.
 
-Remaining implementation is required before delivery: exact producer continuation
-through cancellation epochs and local/remote/SLURM fan-out; final-demand settlement
-and restart; native authorized producer retry; retention of complete shared
-publication closures; explicit terminal corruption failures; and translated
-read-only verifier artifact access through existing native input materialization.
-Move remote/SLURM claim-fence persistence into their existing coordinator
-transaction: their grant paths hold control.sqlite, so a nested connection from
-the current grant callback would conflict. Keep the original authority fence.
-Then run required causal boundary tests, documentation, full `make validate-pr`,
-actual PR-head independent review and delivery. No partial U2 merge is permitted.
+Native producer continuation, final-demand settlement and restart are now
+implemented across embedded/authenticated authority and local/remote/SLURM
+launch boundaries. Producer permissions name the exact original claim/attempt;
+remote and SLURM fence publication joins the existing coordinator transaction.
+Public graph cancellation detaches demands in its admission transaction before
+any restart can replay work. An authorized original-owner retry retains its
+claim; a failed waiter can resume without allocating a consumer attempt. Current
+status is preserved when failing a resumed consumer with unavailable input.
+
+The installed verifier receives separately materialized read references; immutable
+candidate refs retain original producer identity. Existing shared-publication
+verification covers the full receipt and companion closure, and existing native
+retention protects original run authority and publications. Projects with local
+companions must read them through their protected original-root binding; a copied
+primary alone does not establish access to a project-defined closure. Portable
+closures use existing shared publication rather than project-aware Loom copying.
+
+Current targeted evidence (development receipts, final gate pending):
+
+- `build/validation/action-result-foundations/cancellation-rejections-development.log`:
+  5 passes for local shared cancellation/restart and native corruption,
+  project rejection and producer failure.
+- `retry-failed-graph-development.log`: 8 passes for authorized producer retry
+  and reuse of successful work from a failed source graph with new downstream work.
+- `retry-public-cancellation-development.log`: readiness, explicit waiter retry
+  and whole-target cancellation checks passed (9); two new cancellation assertions
+  had a test-only column typo, corrected before the exact rerun below.
+- `public-cancellation-restart-development.log`: 2 passes through public
+  cancellation acceptance, atomic demand detach, coordinator restart, surviving
+  versus final-demand producer and untouched original commit identity.
+- Embedded/authenticated producer continuation: 4 passes; remote/SLURM exact
+  grant/start boundaries: 3 passes; artifact-access regression selection: 50 passes.
+- CLI fresh forwarding and complete shared-closure retention/integrity passed.
+  The initial waiter-retry failure was corrected and its selector passed above.
+
+Exact placement coverage refines the initial fixture paths: native local restart
+is in `tests/integration/queue/test_action_result_resolution.py`, authority epoch
+and original-input binding in `tests/integration/authority/test_action_{producer_cancellation,result_binding}.py`,
+remote grant/start in `tests/unit/loom/queue/test_agent_sessions.py`, and SLURM's
+existing transaction owner in `test_action_slurm_grant.py`. Shared primary and
+companion corruption/retention uses `tests/unit/loom/pipeline/cleanup/test_safety.py`
+with the real shared-publication fixture. The final gate also runs existing
+placement, run cancellation, shared-publication and read-model regressions.
+These tests exercise the affected native boundaries; no physical deployment
+qualification is inferred.
+
+An additional administrative-cancellation regression reproduced that shared
+continuation could delay an operator's explicit `cancel_active` control. The
+control transaction now moves its exact active claims into settlement before
+native containment; graph-demand cancellation remains distinct. The regression
+and claim selection tests pass (8), followed by all agent-session and claim tests
+(57) in `administrative-cancellation-suite.log`. `final-static.log` records Ruff
+pass and Pyright zero errors/warnings after this correction. This source delta
+was made while the broader gate ran; its affected tests and static checks were
+rerun separately and must be reconciled with that gate's receipt.
+
+The final `make validate-pr` is in progress. An initial gate stopped in Pyright
+on new test-fixture typing before suite execution; fixture narrowing/annotations
+were corrected. Required suites, diff checks, actual PR-head independent review,
+merge and synchronization remain pending. No partial U2 merge is permitted.

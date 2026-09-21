@@ -1392,6 +1392,13 @@ class CoordinatorPreparations:
             ):
                 raise QueueConflictError("cancellation operation identity is ambiguous")
             result = _mapping(json.loads(str(row["result_json"])))
+            # Acceptance and demand detachment share one transaction. A restart
+            # must not resume a producer using a cancellation that only exists
+            # in the public operation table.
+            from .local_daemon import _request_admission_cancellation
+            native_cancel = None
+            if row["queue_item_id"] is not None and conn.execute("SELECT 1 FROM managed_admissions WHERE queue_item_id = ?", (row["queue_item_id"],)).fetchone() is not None:
+                native_cancel = _request_admission_cancellation(conn, str(row["queue_item_id"]), principal_id=principal_id)
             # Suppression retains actual references; it must not require space
             # for an admission which was refused or will never be created.
             cancel_result: dict[str, PlainData] = {
@@ -1399,8 +1406,12 @@ class CoordinatorPreparations:
                 "target_operation_id": operation_id,
                 "queue_item_id": result["queue_item_id"],
                 "admission": result["admission"],
-                "native_cancellation_operation_id": None,
-                "native_control": None,
+                "native_cancellation_operation_id": None if native_cancel is None else native_cancel.cancellation_operation_id,
+                "native_control": None if native_cancel is None else {
+                    "admission_id": native_cancel.admission_id,
+                    "state": native_cancel.state.value,
+                    "revision": native_cancel.revision,
+                },
             }
             operation = _operation(cancel_id, "pending", None, cancel_result)
             result["cancellation_operation_id"] = cancel_id

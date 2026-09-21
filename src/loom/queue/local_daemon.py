@@ -2848,47 +2848,10 @@ class LocalDaemon:
             raise QueueServiceError("cancellation principal is required")
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM managed_admissions WHERE queue_item_id = ?",
-                (queue_item_id,),
-            ).fetchone()
-            if row is None:
-                raise AdmissionNotFoundError("managed admission was not found")
-            admission = _admission_from_row(row)
-            repairing_cancelled = (
-                admission.state is LocalDaemonAdmissionState.CANCELLED
-                and repair_revision == admission.revision
-                and admission.cancellation_operation_id is None
-            )
-            if not repairing_cancelled and admission.state in {
-                LocalDaemonAdmissionState.SUCCEEDED,
-                LocalDaemonAdmissionState.FAILED,
-                LocalDaemonAdmissionState.CANCELLED,
-            }:
-                conn.commit()
-                return admission
-            operation_id = admission.cancellation_operation_id or (
-                f"authority-cancel-{uuid4()}"
-            )
-            conn.execute(
-                "UPDATE managed_admissions SET state = ?, "
-                "cancellation_operation_id = ?, "
-                "cancellation_principal_id = COALESCE("
-                "cancellation_principal_id, ?), blocked_reason = NULL, "
-                "revision = revision + 1 WHERE admission_id = ? AND "
-                "(state != ? OR cancellation_operation_id IS NULL OR "
-                "cancellation_principal_id IS NULL OR blocked_reason IS NOT NULL)",
-                (
-                    LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
-                    operation_id,
-                    principal_id,
-                    admission.admission_id,
-                    LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
-                ),
-            )
+            admission = _request_admission_cancellation(conn, queue_item_id, principal_id=principal_id, repair_revision=repair_revision)
             conn.commit()
         self._wake.set()
-        return self._admission(admission.admission_id)
+        return admission
 
     def _control_agent(
         self, principal: LocalDaemonPrincipal, control: AgentControl
@@ -2981,6 +2944,16 @@ class LocalDaemon:
                     (control.expected_session_id,),
                 )
             if control.cancel_active:
+                from ._action_results import cancel_action_producer
+
+                # Administrative containment stops these exact physical attempts,
+                # even when another graph still depends on their results.
+                for assignment in conn.execute(
+                    "SELECT run_uri, attempt_id FROM remote_assignments "
+                    "WHERE session_id = ? AND state != 'RELEASED'",
+                    (control.expected_session_id,),
+                ).fetchall():
+                    cancel_action_producer(conn, str(assignment[0]), str(assignment[1]))
                 run_rows = tuple(
                     conn.execute(
                         "SELECT DISTINCT run_uri FROM remote_assignments "
@@ -2996,27 +2969,9 @@ class LocalDaemon:
                             f"{control.operation_id}\0{run_uri}".encode()
                         ).hexdigest()
                     )
-                    conn.execute(
-                        "UPDATE managed_admissions SET state = ?, "
-                        "cancellation_operation_id = COALESCE("
-                        "cancellation_operation_id, ?), "
-                        "cancellation_principal_id = COALESCE("
-                        "cancellation_principal_id, ?), blocked_reason = NULL, "
-                        "revision = revision + 1 WHERE run_uri = ? AND "
-                        "state NOT IN (?, ?, ?) AND (state != ? OR "
-                        "cancellation_operation_id IS NULL OR "
-                        "cancellation_principal_id IS NULL OR blocked_reason IS NOT NULL)",
-                        (
-                            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
-                            cancellation_operation_id,
-                            principal.subject,
-                            run_uri,
-                            LocalDaemonAdmissionState.SUCCEEDED.value,
-                            LocalDaemonAdmissionState.FAILED.value,
-                            LocalDaemonAdmissionState.CANCELLED.value,
-                            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
-                        ),
-                    )
+                    admission_row = conn.execute("SELECT queue_item_id FROM managed_admissions WHERE run_uri = ?", (run_uri,)).fetchone()
+                    if admission_row is not None:
+                        _request_admission_cancellation(conn, str(admission_row[0]), principal_id=principal.subject, request_operation_id=cancellation_operation_id)
             conn.commit()
         self._wake.set()
         return freeze_plain_data(
@@ -4705,6 +4660,54 @@ def _acquire_lock(root: Path):  # type: ignore[no-untyped-def]
         lock.close()
         raise QueueServiceError(f"local daemon role is already locked: {root}") from exc
     return lock
+
+
+def _request_admission_cancellation(
+    conn: sqlite3.Connection, queue_item_id: str, *, principal_id: str,
+    repair_revision: int | None = None, request_operation_id: str | None = None,
+) -> LocalDaemonAdmission:
+    """One transaction owner for cancellation intent and shared-action demands."""
+    from ._action_results import detach_action_graph
+
+    row = conn.execute(
+        "SELECT * FROM managed_admissions WHERE queue_item_id = ?",
+        (queue_item_id,),
+    ).fetchone()
+    if row is None:
+        raise AdmissionNotFoundError("managed admission was not found")
+    admission = _admission_from_row(row)
+    repairing_cancelled = (
+        admission.state is LocalDaemonAdmissionState.CANCELLED
+        and repair_revision == admission.revision
+        and admission.cancellation_operation_id is None
+    )
+    if not repairing_cancelled and admission.state in {
+        LocalDaemonAdmissionState.SUCCEEDED,
+        LocalDaemonAdmissionState.FAILED,
+        LocalDaemonAdmissionState.CANCELLED,
+    }:
+        return admission
+    operation_id = admission.cancellation_operation_id or (
+        request_operation_id or f"authority-cancel-{uuid4()}"
+    )
+    conn.execute(
+        "UPDATE managed_admissions SET state = ?, "
+        "cancellation_operation_id = ?, "
+        "cancellation_principal_id = COALESCE("
+        "cancellation_principal_id, ?), blocked_reason = NULL, "
+        "revision = revision + 1 WHERE admission_id = ? AND "
+        "(state != ? OR cancellation_operation_id IS NULL OR "
+        "cancellation_principal_id IS NULL OR blocked_reason IS NOT NULL)",
+        (
+            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
+            operation_id,
+            principal_id,
+            admission.admission_id,
+            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
+        ),
+    )
+    detach_action_graph(conn, admission.run_uri, operation_id)
+    return _admission_from_row(conn.execute("SELECT * FROM managed_admissions WHERE admission_id = ?", (admission.admission_id,)).fetchone())
 
 
 def _admission_from_row(row: sqlite3.Row) -> LocalDaemonAdmission:

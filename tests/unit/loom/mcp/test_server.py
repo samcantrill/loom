@@ -267,7 +267,8 @@ def test_public_deployment_discovery_is_inert_and_has_no_override(tmp_path, monk
         })
 
 
-def test_run_delegates_complete_native_intent_and_absolute_deadline(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fresh", [False, True])
+def test_run_delegates_complete_native_intent_and_absolute_deadline(tmp_path, monkeypatch, fresh):
     from loom.mcp import create_server as public_server
     from loom.mcp import _server
     from tests.contracts.test_mcp_tools import PREPARE
@@ -276,6 +277,9 @@ def test_run_delegates_complete_native_intent_and_absolute_deadline(tmp_path, mo
     request = {"preparation": {**PREPARE, "overlays": ["a.yaml", "b.yaml"],
                               "overrides": ["x=1", "x=2"], "run_options": {"tags": {"trial": "mcp-check"}}},
                "queue_item_id": "queue-one"}
+
+    if fresh:
+        request["fresh_stages"] = ["author", "reader"]
 
     def run(native, **kwargs):
         captured.append((native.to_dict(), kwargs))

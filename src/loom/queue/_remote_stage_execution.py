@@ -877,7 +877,7 @@ class _ResidentAssignmentBundle:
         claims = tuple(self.claims)
         if (
             any(not isinstance(item, _RemoteArtifact) for item in inputs)
-            or len(inputs) > 32
+            or len(inputs) > 32 + len(_preparation_verification_refs(fingerprint))
             or len({item.logical_name for item in inputs}) != len(inputs)
         ):
             raise QueueServiceError("resident input logical names must be unique")
@@ -900,6 +900,16 @@ class _ResidentAssignmentBundle:
             if (transferred is None or transferred.artifact_id != archive.artifact_id
                 or f"sha256:{transferred.digest}" != archive.checksum):
                 raise QueueConflictError("preparation archive conflicts with its retained input")
+        for name, ref in _preparation_verification_refs(fingerprint).items():
+            if name in expected_inputs:
+                raise QueueConflictError("action verification input name is reserved")
+            expected_inputs.add(name)
+            transferred = next((item for item in inputs if item.logical_name == name), None)
+            if transferred is None:
+                raise QueueConflictError("action verification input is missing")
+            projected = replace(transferred.local_ref(Path("/")), uri=ref.uri).to_dict()
+            if projected != ref.to_dict():
+                raise QueueConflictError("action verification input differs from the original result")
         if set(item.logical_name for item in inputs) != expected_inputs or set(outputs) != set(fingerprint_record.payload.declared_outputs):
             raise QueueConflictError(
                 "resident stage interface conflicts with its fingerprint"
@@ -1898,11 +1908,24 @@ class _ResidentAssignmentWorkspace:
             local_context["shared_scope"] = dict(preparation.shared_scope)
         if preparation.project_preparation is not None:
             local_context["project_preparation"] = dict(preparation.project_preparation)
+        if preparation.action_verification is not None:
+            from ._shared_publication import resolve_input
+            from .shared_execution import execution_roots
+
+            artifacts = {}
+            for item in request.inputs:
+                if not item.logical_name.startswith(_ACTION_RESULT_INPUT_PREFIX):
+                    continue
+                path = self.input_path(item.logical_name)
+                if shared_binding(item.metadata) is not None:
+                    path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+                artifacts[item.logical_name.removeprefix(_ACTION_RESULT_INPUT_PREFIX)] = item.local_ref(path).to_dict()
+            local_context["action_artifacts"] = artifacts
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
             return {
-                "schema_version": 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+                "schema_version": 5 if preparation.action_verification is not None else 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
                 "profile_descriptor": dict(launch_profile.descriptor),
                 "staged_directory": str(directory),
@@ -1920,7 +1943,7 @@ class _ResidentAssignmentWorkspace:
             assert source is not None
             path = Path(str(matches[0]["container_path"])) / source.relative_to(Path(str(matches[0]["host_path"])))
         return {
-            "schema_version": 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
+            "schema_version": 5 if preparation.action_verification is not None else 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
                 **local_context,
             "profile_descriptor": dict(launch_profile.descriptor),
             "shared_roots": {} if path is None else {alias: str(path)},
@@ -2470,6 +2493,19 @@ def _validate_remote_semantic_data(
 
 
 _PREPARATION_ARCHIVE_INPUT = "preparation_archive"
+_ACTION_RESULT_INPUT_PREFIX = "action_result_"
+
+
+def _preparation_verification_refs(fingerprint: Mapping[str, PlainData]) -> dict[str, ArtifactRef]:
+    preparation = _preparation_input_from_fingerprint(fingerprint)
+    if preparation is None or preparation.action_verification is None:
+        return {}
+    from loom.pipeline._project_contracts import plain_mapping
+
+    candidate = plain_mapping(preparation.action_verification["candidate"])
+    result = plain_mapping(candidate["result"])
+    return {_ACTION_RESULT_INPUT_PREFIX + str(fact["artifact_name"]): ArtifactRef.from_dict(fact["artifact"])
+            for fact in cast(list[Mapping[str, PlainData]], result["artifact_facts"])}
 
 
 def _preparation_archive(fingerprint: Mapping[str, PlainData]) -> ArtifactRef | None:
@@ -2486,6 +2522,10 @@ def _resident_input_refs(
 ) -> dict[str, ArtifactRef]:
     """Join the fixed child's archive to native transfer without a pipeline input."""
     result = dict(inputs)
+    for name, ref in _preparation_verification_refs(fingerprint).items():
+        if name in result:
+            raise QueueConflictError("action verification input name is reserved")
+        result[name] = ref
     archive = _preparation_archive(fingerprint)
     if archive is not None:
         if _PREPARATION_ARCHIVE_INPUT in result:

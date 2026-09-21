@@ -871,8 +871,9 @@ def test_operator_control_scope_denial_happens_before_control_persistence(
         daemon.stop()
 
 
+@pytest.mark.parametrize("shared,administrative", [(False, False), (True, False), (True, True)])
 def test_remote_start_permit_serializes_with_cancellation_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared: bool, administrative: bool
 ) -> None:
     capabilities = (
         "python",
@@ -890,6 +891,7 @@ def test_remote_start_permit_serializes_with_cancellation_request(
             ),
         )
     )
+    policy = replace(policy, principals=_policy().principals)
     config = _config(tmp_path, policy)
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -910,6 +912,12 @@ def test_remote_start_permit_serializes_with_cancellation_request(
                 retirement_verifier=_TEST_RETIREMENT_VERIFIER,
             )
         )
+        from loom.queue._action_results import ActionResults
+        actions = ActionResults(daemon._connection)
+        if shared:
+            actions.select(run_uri="run://cancelled", node="stage", scope={}, identity={"digest": "shared"}, attempt_id="attempt-assignment-cancelled")
+            actions.select(run_uri="run://waiting", node="renamed", scope={}, identity={"digest": "shared"})
+            actions.detach_graph("run://cancelled", "cancel-op")
         with daemon._connection() as conn:
             for assignment_id, run_uri in (
                 ("assignment-permitted", "run://permitted"),
@@ -937,7 +945,7 @@ def test_remote_start_permit_serializes_with_cancellation_request(
                 "accepted_at, authority_operation_id, run_priority, "
                 "enqueue_sequence, cancellation_operation_id) "
                 "VALUES ('admission-cancelled', 'item-cancelled', ?, "
-                "'run://cancelled', 'digest', 'managed-stage', 'CANCELLED', ?, "
+                "'run://cancelled', 'digest', 'managed-stage', 'CANCELLING', ?, "
                 "'authority-op', 0, 1, 'cancel-op')",
                 (str(handshake["coordinator_id"]), "2020-01-01T00:00:00Z"),
             )
@@ -958,11 +966,31 @@ def test_remote_start_permit_serializes_with_cancellation_request(
             "assignment-permitted",
             fence="fence-assignment-permitted",
         )
-        assert not _view(daemon).start_permit(
+        assert _view(daemon).start_permit(
             session.session_id,
             "assignment-cancelled",
             fence="fence-assignment-cancelled",
-        )
+        ) is shared
+        if shared:
+            assert calls.pop() == ("assignment-cancelled", "fence-assignment-cancelled")
+            if administrative:
+                control = AgentControl(
+                    operation_id="control-cancel-shared",
+                    kind=AgentControlKind.DRAIN,
+                    agent_id=session.agent_id,
+                    expected_session_id=session.session_id,
+                    expected_config_revision=session.config_revision,
+                    pool="default", cancel_active=True, reason="maintenance",
+                )
+                monkeypatch.setattr(execution, "cancellation_epoch_receipt", lambda *args: object())
+                with daemon._cycle_lock:
+                    daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)).control_agent(control)
+                    assert not actions.producer_needed("run://cancelled", "stage")
+                    assert _view(daemon).next_control(session.session_id) == control
+                assert actions.select(run_uri="run://waiting", node="renamed", scope={}, identity={"digest": "shared"})["decision"] == "failed"
+            else:
+                actions.detach_graph("run://waiting", "cancel-final")
+            assert not _view(daemon).start_permit(session.session_id, "assignment-cancelled", fence="fence-assignment-cancelled")
         assert calls == [("assignment-permitted", "fence-assignment-permitted")]
         with daemon._connection() as conn:
             rows = dict(
@@ -972,7 +1000,7 @@ def test_remote_start_permit_serializes_with_cancellation_request(
             )
         assert rows == {
             "assignment-permitted": 1,
-            "assignment-cancelled": 0,
+            "assignment-cancelled": int(shared),
         }
     finally:
         daemon.stop()
