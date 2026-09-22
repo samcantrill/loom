@@ -69,3 +69,35 @@ class SharedClosureConsumer:
             "digest": digest.hexdigest(), "size": size, "consumer_pid": os.getpid(),
             "producer_pid": manifest["producer_pid"],
         }, artifact_type="json", codec_key="json.v1")}
+
+
+class SharedRecoveryProducer:
+    """Synthetic complete progress followed by ordinary failure or root death."""
+
+    def run(self, context, inputs):
+        import json
+        binding = context.metadata["loom.recovery_binding"]
+        execution = context.metadata["loom.execution_binding"]
+        current = Path(binding["current"]["path"])
+        assert execution["run_state_root"] is None
+        assert current.is_dir()
+        assert not inputs
+        if execution["attempt"] == 1:
+            assert not binding["predecessors"]
+            (current / "checkpoint").mkdir()
+            (current / "checkpoint" / "weights").write_bytes(b"completed-progress")
+            (current / "catalog.json").write_text('{"checkpoint":"checkpoint/weights"}')
+            (current / "partial").write_bytes(b"incomplete-progress")
+            if context.stage_config["death"]:
+                os._exit(19)
+            raise RuntimeError("synthetic failure after complete progress")
+        assert execution["attempt"] == 2
+        assert len(binding["predecessors"]) == 1
+        prior = binding["predecessors"][0]
+        assert prior["attempt"] == 1
+        previous = Path(prior["path"])
+        assert previous != current
+        catalog = json.loads((previous / "catalog.json").read_text())
+        assert (previous / catalog["checkpoint"]).read_bytes() == b"completed-progress"
+        (current / "restored").write_bytes(b"restored")
+        return {"manifest": context.save_artifact("manifest", {"restored": True, "binding": binding}, artifact_type="json", codec_key="json.v1")}

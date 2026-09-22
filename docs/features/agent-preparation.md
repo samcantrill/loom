@@ -1064,3 +1064,141 @@ An authorized agent control with `cancel_active` is administrative containment:
 it revokes continuation for that agent's exact affected attempts even when other
 graphs still need them. Those consumers observe the unsuccessful producer; Loom
 does not silently replace it. This differs from cancelling one graph's demand.
+
+## Durable remote recovery
+
+Remote execution with a selected shared publication root also supplies an
+assignment-owned recovery directory. Preparation children and profiles without a
+publication root retain their existing behavior. This directory holds opaque
+stage-owned progress, including checkpoint catalogs and dependencies. It is
+separate from successful artifact publication and from local coordinator state.
+
+### Stage binding
+
+`StageContext.metadata["loom.execution_binding"]` remains schema 1. Its origin
+run/node, attempt and environment identity stay authoritative; remote
+`run_state_root` remains null. A remote stage additionally receives
+`StageContext.metadata["loom.recovery_binding"]`:
+
+```json
+{
+  "schema_version": 1,
+  "current": {
+    "root_id": "outputs",
+    "tree": "loom-recovery/<assignment-id>/<attempt-id>",
+    "path": "/worker-visible/outputs/loom-recovery/<assignment-id>/<attempt-id>"
+  },
+  "predecessors": [
+    {
+      "attempt": 1,
+      "path": "/worker-visible/outputs/loom-recovery-retained/<publication-id>",
+      "reference": {
+        "schema_version": 1,
+        "root_id": "outputs",
+        "tree": "loom-recovery-retained/<publication-id>",
+        "publication_id": "<sha256-of-native-identity>",
+        "receipt_digest": "<sha256-of-receipt>",
+        "budgets": {
+          "max_members": 1024,
+          "max_payload_bytes": 268435456,
+          "max_manifest_bytes": 1048576
+        },
+        "identity": {
+          "assignment_id": "<prior-assignment-id>",
+          "attempt_id": "<prior-native-attempt-id>",
+          "stage_name": "fit",
+          "attempt": 1,
+          "agent_id": "<stable-agent-root-id>",
+          "fence": "<prior-execution-fence>",
+          "origin_run_id": "<opaque-original-run-id>"
+        }
+      }
+    }
+  ]
+}
+```
+
+`current.path` is the writable attempt directory itself, already created by
+Loom. Each predecessor path is its complete retained attempt directory, with
+unchanged relative member names. Lists may be frozen to tuples in context
+metadata. Predecessors are ordered by increasing attempt and belong to the
+same original run and node. The native owner selects them from prior failed
+assignments (including guarded recovery without a worker result), requires
+positive release and retained references, and verifies every member before
+binding. The first attempt has no predecessors. Same-ID admission replay does
+not create a retry; the existing explicit retry authorization must create a new
+native attempt first.
+
+Paths are local to the executing host or container. Only logical root-relative
+references cross the wire, in the reserved `loom.remote_recovery` assignment
+metadata; it carries schema 1, `root_id`, current `tree`, and predecessor
+references. Workers resolve these through their installed mappings. Both keys
+are native reserved metadata and cannot be injected through authored metadata.
+A retained reference does not grant authority to choose another predecessor.
+
+Stages write only beneath `current.path`, read only supplied predecessor paths,
+and keep their complete dependency closure inside each attempt tree. They must
+use relative references, or preserve enough domain provenance to rebase old
+absolute callback/checkpoint paths onto the supplied predecessor root. Loom does
+not rewrite scientific payloads or decide which epoch, checkpoint, partial file,
+or environment is compatible. In particular, retaining partial files does not
+make them completed progress. Consumers must not discover predecessors by
+scanning siblings. Recovery directories are renamed when sealed; do not publish
+successful artifact references pointing outside the separate artifact subtree.
+
+### Settlement, integrity and retention
+
+The sealing trigger is the existing native provider-release operation, after
+its exact session, assignment and fence checks, terminal or guarded-containment
+checks, and matching positive provider-release proof. The proof is persisted
+before sealing. Ordinary supervisor-proven root death without a worker result
+uses the existing synthetic failed result; guarded containment can also settle
+without a report. Missing results, expired leases and uncertain process liveness
+alone cannot reach this trigger or authorize retry. Failed work stays failed.
+
+Using the admitted publication budgets and IO primitives, the coordinator checks
+the current ownership marker, inventories all regular members, writes the
+bounded `.loom-publication.json` recovery receipt, fsyncs, and atomically renames
+the directory on the shared filesystem. The recovery receipt has schema 1,
+publication identity, native owner identity and a complete member inventory
+(relative path, size and SHA-256); it has no successful-output association.
+An early positively settled attempt may have an empty closure. Symlinks and
+nonregular members are rejected. All members and directories become
+non-writable; containers receive only the new current tree read-write and
+selected predecessor trees read-only. The shared root and other attempts are
+not mounted. Host workers remain trusted installed code, as for existing shared
+publication; deliberate same-UID permission changes are outside that boundary.
+
+The coordinator retains the portable closure reference in its existing native
+receipt store under the assignment identity before releasing reusable authority.
+Delivery and release records remain the ownership and eligibility evidence;
+there is no second scientific catalog. A crash between receipt writing, rename,
+and the coordinator transaction replays the same identity and checks bytes.
+A missing or altered member, changed receipt, stale fence, or conflicting seal
+fails explicitly and preserves inspectable evidence. Such errors never produce
+successful outputs or silently substitute another tree.
+
+References, original assignment deliveries, ownership receipts and retained
+bytes have no implicit expiry or automatic destructive cleanup. Existing
+receipt-aware cleanup protects staging and retained trees, their members and
+ancestors. No unpin/reclamation API is added; any future removal must prove both
+execution settlement and absence of recovery consumers. Old attempts remain
+available after a successor succeeds.
+
+### Validation scope
+
+The owning consumer acceptance packet is
+[rphys reference fleet execution](https://github.com/samcantrill/rphys/blob/develop/docs/roadmap/stage-94/phases/reference-fleet-execution.md#native-recovery-prerequisite).
+Native regression fixtures exercise real HTTPS resident failure and root death,
+explicit retry and same-ID replay, different host prefixes, read-only container
+mount projection, interrupted sealing/reopen, corruption, stale ownership and
+existing receipt-aware retention. Related shared publication, local execution
+binding and guarded settlement tests protect existing consumers. These fixtures
+do not qualify an actual NAS, container image, scientific checkpoint or fleet;
+the owning rphys packet retains that deployment acceptance.
+
+The native implementation validation passed 145 affected tests with the config
+extra and 79 isolated baseline import/admission checks. Focused recovery
+coverage includes empty recovery directories created before a container worker
+starts. Changed-source/test Ruff, Pyright and diff checks also passed. Full
+repository and physical deployment acceptance remain with the owning phase.

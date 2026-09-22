@@ -218,7 +218,7 @@ def test_native_attachment_roundtrip_is_bound_before_construction(tmp_path, monk
             StageWorkerRequest.from_dict(changed)
 
 
-@pytest.mark.parametrize("key", ["loom.project_contract", "loom.project_contracts", "loom.execution_binding"])
+@pytest.mark.parametrize("key", ["loom.project_contract", "loom.project_contracts", "loom.execution_binding", "loom.remote_recovery", "loom.recovery_binding"])
 def test_public_admission_rejects_reserved_metadata_before_writes(tmp_path, key):
     store = LocalRunStore(tmp_path / "runs")
     uri = path_to_run_uri(tmp_path / "runs" / "forged")

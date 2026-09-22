@@ -14,7 +14,7 @@ CONTRACT = "loom.project_contract"
 CONTRACTS = "loom.project_contracts"
 CAPTURE = "loom.project_contract_capture"
 EXECUTION = "loom.execution_binding"
-RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, EXECUTION})
+RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
 
 
 def reject_overrides(metadata: Mapping[str, object] | None) -> None:
@@ -291,7 +291,7 @@ def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
     }
     if plain_mapping(actual) != expected:
         raise ValueError("worker attachment differs from admitted report")
-    if EXECUTION in request.metadata:
+    if {EXECUTION, "loom.remote_recovery", "loom.recovery_binding"}.intersection(request.metadata):
         raise ValueError(
             "worker execution binding must be supplied by assignment authority"
         )
