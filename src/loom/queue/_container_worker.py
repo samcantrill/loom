@@ -158,6 +158,18 @@ def build_container_worker(
             source = staging_tree(assignment, profile.shared_roots, agent_id, create=True)
             target = Path(str(root["container_path"])) / source.relative_to(str(root["host_path"]))
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
+        from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
+        recovery = validate_wire(assignment)
+        if recovery is not None:
+            root = cast(Mapping[str, PlainData], profile.shared_roots[recovery["root_id"]])
+            source = current_tree(assignment, profile.shared_roots, agent_id=agent_id)
+            source.mkdir(parents=True, exist_ok=True)
+            target = Path(str(root["container_path"])) / recovery["tree"]
+            mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
+            for reference in recovery["predecessors"]:
+                source = resolve_recovery(reference, profile.shared_roots)
+                target = Path(str(root["container_path"])) / reference["tree"]
+                mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
         for item in assignment.inputs:
             reference = shared_binding(item.metadata)
             if reference is None:

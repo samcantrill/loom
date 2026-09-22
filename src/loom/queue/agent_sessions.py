@@ -4154,6 +4154,20 @@ class AgentSessionService:
                     (proof_json, assignment_id),
                 )
             conn.commit()
+        # The persisted provider proof and guarded terminal/containment checks
+        # above are the sole seal trigger, including a supervisor-proven death
+        # without a worker result. Retention precedes reusable authority release.
+        with self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            retained_row = self._require_remote_assignment(conn, session_id, assignment_id)
+            delivery = conn.execute("SELECT request_json FROM agent_deliveries WHERE assignment_id = ?", (assignment_id,)).fetchone()
+            if delivery is None:
+                raise QueueConflictError("recovery delivery ownership is unavailable")
+            from ._shared_recovery import retain_released
+            retain_released(conn, retained_row,
+                _ResidentAssignmentBundle.from_remote_dict(json.loads(delivery["request_json"])),
+                self._daemon.config.coordinator_shared_roots, agent_id=session.agent_root_id)
+            conn.commit()
         if recovery is None:
             self._remote_execution().remote_release(assignment_id)
         else:

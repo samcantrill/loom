@@ -862,6 +862,8 @@ class _ResidentAssignmentBundle:
             object.__setattr__(self, "schema_version", 5)
         elif self.schema_version == 5:
             raise QueueServiceError("shared assignment requires explicit scope")
+        from ._shared_recovery import validate_wire
+        validate_wire(self)
         preparation = _preparation_input_from_fingerprint(fingerprint)
         if (
             preparation is not None
@@ -1832,6 +1834,13 @@ class _ResidentAssignmentWorkspace:
             for item in request.inputs
             if item.logical_name in fingerprint.payload.declared_inputs
         }
+        metadata = dict(request.worker_metadata)
+        from ._shared_recovery import WIRE, BINDING, worker_binding
+        metadata.pop(WIRE, None)
+        if resolve_shared:
+            recovery = worker_binding(self)
+            if recovery is not None:
+                metadata[BINDING] = recovery
         logs = self.root / "logs"
         local_run_uri = f"loom-agent:{request.assignment_id}"
         return StageWorkerRequest(
@@ -1848,7 +1857,7 @@ class _ResidentAssignmentWorkspace:
             traceback_path=str(logs / "traceback.log"),
             result_path=str(self.root / "worker-result.json"),
             resolved_runtime=request.resolved_runtime,
-            metadata=request.worker_metadata,
+            metadata=metadata,
         )
 
     def shared_launch_profile(self) -> ResidentWorkerLaunchProfile:
@@ -2489,7 +2498,10 @@ def _validate_remote_semantic_data(
     from loom.pipeline._project_contracts import CONTRACT, CAPTURE, EXECUTION
     if EXECUTION in worker_metadata and cast(Mapping[str, PlainData], worker_metadata[EXECUTION])["run_state_root"] is not None:
         raise QueueServiceError("remote execution cannot export a local state root")
-    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, EXECUTION}}, "worker_metadata")
+    from ._shared_recovery import WIRE, BINDING
+    if BINDING in worker_metadata:
+        raise QueueServiceError("remote execution cannot export resolved recovery paths")
+    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, EXECUTION, WIRE}}, "worker_metadata")
 
 
 _PREPARATION_ARCHIVE_INPUT = "preparation_archive"
