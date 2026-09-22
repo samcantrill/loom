@@ -10,11 +10,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from loom.coordinator import RunRequest
+from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest
 from loom.preparation import CoordinatorPreparation
 from loom.queue import LocalDaemon
 from loom.queue.deployment import load_coordinator_service_config
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.agent_session_transport import (
+    AgentTlsServerConfig,
+    LocalDaemonAgentHttpServer,
+)
+from loom.queue.agent_sessions import TransportPrincipalPolicy
+from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 from tests.integration.queue.test_preparation_operations import (
     _service,
     _request,
@@ -90,6 +96,70 @@ def _reconciled_request(operation_id: str, *, retry: bool = False):
         mode="reconcile",
         retry_policy="one_observed_failure" if retry else "never",
     )
+
+
+@pytest.mark.parametrize("preparation_available", [False, True])
+def test_https_negotiates_reconciliation_before_submission(
+    tmp_path: Path, preparation_available: bool
+) -> None:
+    service = _reconciled_service(tmp_path)
+    service = replace(service, daemon=replace(
+        service.daemon,
+        agent_policy=replace(service.daemon.agent_policy, principals=(
+            TransportPrincipalPolicy("client", "caller", "client"),
+        )),
+    ))
+    credentials = mutual_tls_credentials(tmp_path / "tls")
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(
+        service.daemon,
+        preparation=CoordinatorPreparation(service) if preparation_available else None,
+    )
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig(
+        "localhost", 0,
+        credentials["server"].with_suffix(".crt"),
+        credentials["server"].with_suffix(".key"),
+        credentials["ca"].with_suffix(".crt"),
+        {certificate_fingerprint(credentials["query"].with_suffix(".crt")): "client"},
+    ))
+    server.start()
+    connection = tmp_path / "client.json"
+    connection.write_text(json.dumps({
+        "schema_version": 1,
+        "kind": "loom.coordinator-client",
+        "transport": {
+            "kind": "https",
+            "url": f"https://localhost:{server.port}",
+            "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+            "certificate_path": str(credentials["query"].with_suffix(".crt")),
+            "private_key_path": str(credentials["query"].with_suffix(".key")),
+        },
+    }))
+    connection.chmod(0o600)
+    try:
+        with CoordinatorClient.from_connection_file(connection) as client:
+            description = client.describe_connection()
+            assert "authenticated-application-v1" in description.capabilities
+            assert "daemon-control-v1" in description.capabilities
+            for capability in ("agent-preparation-v1", "reconciled-run-v1"):
+                assert (capability in description.capabilities) == preparation_available
+            request = _reconciled_request("https-reconcile")
+            if not preparation_available:
+                with pytest.raises(CoordinatorClientError) as rejected:
+                    client.start_run(request)
+                assert rejected.value.code == "unsupported"
+                assert rejected.value.mutation_outcome == "not_applied"
+                assert not daemon._preparations.contains("https-reconcile")
+            else:
+                client.start_run(request)
+                applied = daemon.wait_operation("https-reconcile", timeout=60).operation
+                assert applied.state == "applied", applied.to_dict()
+                assert client.start_run(request) == applied
+                assert _result(applied)["decision"] == "new_attempt"
+    finally:
+        server.stop()
+        daemon.stop()
 
 
 def test_concurrent_reconciled_publication_and_verified_reuse(tmp_path):

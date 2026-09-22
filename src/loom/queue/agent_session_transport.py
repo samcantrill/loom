@@ -5882,7 +5882,7 @@ def _dispatch_application(
             result["role"] = role
             result["capabilities"] = [
                 "authenticated-application-v1",
-                CONTROL_CAPABILITY,
+                *cast(list[PlainData], result["capabilities"]),
             ]
         return result
     if operation == "handshake":
