@@ -136,6 +136,8 @@ results reuse native models at their existing import paths.
 Pages accept integer limits from 1 to 100. Preparation aliases/modes are empty
 when that capability is unavailable. Connection metadata describes supported
 policy and identity; it is not a reservation or proof of later authorization.
+Unix and HTTPS connections advertise the same enabled preparation and reconciled
+run capabilities. HTTPS also advertises its authenticated application transport.
 
 The bounded observation methods accept finite durations from 0 to 25 seconds.
 Zero performs one nonblocking observation. `TIMEOUT` means the window ended;
