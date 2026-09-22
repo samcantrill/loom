@@ -5353,7 +5353,7 @@ class LocalDaemonExecution:
             )
             from ._shared_recovery import bind_delivery
             with self._daemon_owner()._connection() as conn:
-                delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots)
+                delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id)
             self.coordinator.reserve(
                 assignment,
                 claims,

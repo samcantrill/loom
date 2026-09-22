@@ -50,7 +50,7 @@ def _workspace(tmp_path, *, attempt=1, predecessors=(), container=False, prefix=
             recovery.WIRE: {
                 "schema_version": 1,
                 "root_id": "outputs",
-                "tree": f"loom-recovery/{assignment}/{attempt_id}",
+                "tree": f"loom-work/{hashlib.sha256(b'agent-1').hexdigest()}/{assignment}/{attempt_id}/recovery",
                 "predecessors": list(predecessors),
             },
         },
@@ -108,6 +108,16 @@ def test_interrupted_seal_replays_without_worker_result_and_preserves_every_memb
                 agent_id="agent-1",
                 fence="fence-1",
             )
+    import loom.queue._remote_stage_execution as remote_execution
+
+    synced = []
+    sync_directory = remote_execution._fsync_directory
+
+    def observe_sync(path):
+        sync_directory(path)
+        synced.append(path)
+
+    monkeypatch.setattr(remote_execution, "_fsync_directory", observe_sync)
     reopened = _ResidentAssignmentWorkspace(tmp_path / "agent", workspace.assignment_id)
     ref = recovery.seal(
         reopened.request(), profile.shared_roots, agent_id="agent-1", fence="fence-1"
@@ -122,6 +132,7 @@ def test_interrupted_seal_replays_without_worker_result_and_preserves_every_memb
         == ref
     )
     retained = recovery.resolve(ref, profile.shared_roots)
+    assert {retained.parent, retained.parent.parent, current.parent}.issubset(synced)
     assert not current.exists()
     assert (retained / "checkpoints" / "completed").read_bytes() == b"complete"
     assert (retained / "partial").read_bytes() == b"partial"
@@ -214,8 +225,7 @@ def test_retry_binding_resolves_other_prefix_and_mounts_only_exact_readonly_pred
     ).argv
     assert any(str(ref["tree"]) in arg and arg.endswith(":ro") for arg in argv)
     assert any(
-        "loom-recovery/recovery-2/attempt-2" in arg and arg.endswith(":rw")
-        for arg in argv
+        "/recovery-2/attempt-2/recovery" in arg and arg.endswith(":rw") for arg in argv
     )
     assert not any(arg.startswith(str(tmp_path / "shared") + ":") for arg in argv)
 
@@ -254,11 +264,15 @@ def test_uncertain_liveness_and_obsolete_fence_cannot_retain_or_rebind(tmp_path)
 
 
 @pytest.mark.parametrize("mount_created", [False, True])
-def test_early_death_has_an_empty_closure_only_after_positive_release(tmp_path, mount_created):
+def test_early_death_has_an_empty_closure_only_after_positive_release(
+    tmp_path, mount_created
+):
     workspace, profile, _ = _workspace(tmp_path)
     assert workspace.worker_result() is None
     if mount_created:
-        recovery.current_tree(workspace.request(), profile.shared_roots).mkdir(parents=True)
+        recovery.current_tree(workspace.request(), profile.shared_roots).mkdir(
+            parents=True
+        )
     # No child binding means no scientific files; native settlement may still
     # retain the exact empty attempt instead of manufacturing progress.
     ref = recovery.seal(
@@ -267,3 +281,23 @@ def test_early_death_has_an_empty_closure_only_after_positive_release(tmp_path, 
     assert ref is not None
     tree = recovery.resolve(ref, profile.shared_roots)
     assert json.loads((tree / ".loom-publication.json").read_text())["members"] == []
+
+
+def test_current_tree_uses_stable_machine_partition_and_rejects_other_machine(tmp_path):
+    workspace, profile, _ = _workspace(tmp_path)
+    request = workspace.request()
+    from loom.queue._shared_publication import staging_relative
+
+    first = recovery.current_relative(request, "agent-1")
+    other = recovery.current_relative(request, "agent-2")
+    assert first != other
+    assert (
+        Path(first).parent == Path(staging_relative(request, "agent-1")).parent.parent
+    )
+    assert first.split("/")[1] == hashlib.sha256(b"agent-1").hexdigest()
+    with pytest.raises(QueueConflictError, match="machine ownership"):
+        recovery.current_tree(request, profile.shared_roots, agent_id="agent-2")
+    with pytest.raises(QueueConflictError, match="machine ownership"):
+        recovery.seal(
+            request, profile.shared_roots, agent_id="agent-2", fence="fence-1"
+        )

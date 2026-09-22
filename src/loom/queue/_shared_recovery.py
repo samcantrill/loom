@@ -12,7 +12,7 @@ from dataclasses import replace
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from loom.pipeline.stores.atomic import atomic_write_bytes
@@ -27,15 +27,17 @@ from loom.pipeline.stores.shared_artifacts import (
 )
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueConflictError
-from ._shared_publication import identity, publication_id, selected
+from ._shared_publication import identity, publication_id, selected, staging_relative
 
 WIRE = "loom.remote_recovery"
 BINDING = "loom.recovery_binding"
 _PRINCIPAL = "native-shared-recovery"
 
 
-def current_relative(request: Any) -> str:
-    return f"loom-recovery/{request.assignment_id}/{request.attempt_id}"
+def current_relative(request: Any, agent_id: str) -> str:
+    return str(
+        PurePosixPath(staging_relative(request, agent_id)).parent.parent / "recovery"
+    )
 
 
 def _reference(value: object) -> dict[str, Any]:
@@ -117,8 +119,16 @@ def validate_wire(request: Any) -> dict[str, Any] | None:
         type(value["schema_version"]) is not int
         or value["schema_version"] != 1
         or value["root_id"] != selection[0]
-        or value["tree"] != current_relative(request)
         or not isinstance(value["predecessors"], list)
+    ):
+        raise QueueConflictError("remote recovery ownership conflicts")
+    parts = PurePosixPath(relative(value["tree"])).parts
+    if (
+        len(parts) != 5
+        or parts[0] != "loom-work"
+        or len(parts[1]) != 64
+        or any(c not in "0123456789abcdef" for c in parts[1])
+        or parts[2:] != (request.assignment_id, request.attempt_id, "recovery")
     ):
         raise QueueConflictError("remote recovery ownership conflicts")
     execution = request.worker_metadata["loom.execution_binding"]
@@ -140,11 +150,21 @@ def validate_wire(request: Any) -> dict[str, Any] | None:
 
 
 def bind_delivery(
-    request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData]
+    request: Any,
+    conn: Any,
+    run_uri: str,
+    roots: Mapping[str, PlainData],
+    *,
+    session_id: str,
 ) -> Any:
     selection = selected(request)
     if selection is None or request.preparation_input is not None:
         return request
+    session = conn.execute(
+        "SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if session is None:
+        raise QueueConflictError("recovery destination machine is unavailable")
     predecessors = []
     rows = conn.execute(
         "SELECT r.*, d.request_json, a.result_json AS recovery_json FROM remote_assignments r "
@@ -184,7 +204,7 @@ def bind_delivery(
             WIRE: {
                 "schema_version": 1,
                 "root_id": selection[0],
-                "tree": current_relative(request),
+                "tree": current_relative(request, session["agent_root_id"]),
                 "predecessors": predecessors,
             },
         },
@@ -207,9 +227,13 @@ def current_tree(
     roots: Mapping[str, PlainData],
     *,
     owner: Mapping[str, PlainData] | None = None,
+    agent_id: str | None = None,
 ) -> Path:
     value = validate_wire(request)
     assert value is not None
+    machine = str(owner["agent_id"]) if owner is not None else agent_id
+    if machine is not None and value["tree"] != current_relative(request, machine):
+        raise QueueConflictError("recovery destination machine ownership conflicts")
     root = cast(Mapping[str, PlainData], roots[value["root_id"]])
     selection = selected(request)
     assert selection is not None
@@ -304,7 +328,7 @@ def seal(
     root = cast(Mapping[str, PlainData], roots[value["root_id"]])
     final_relative = f"loom-recovery-retained/{pub_id}"
     final = contained(Path(str(root["host_path"])), final_relative, exists=False)
-    staging = current_tree(request, roots)
+    staging = current_tree(request, roots, agent_id=agent_id)
     available = final if final.exists() else staging
     if not available.exists():
         # Proven no-start/early death can have no recovery files. Retain an empty
@@ -350,9 +374,13 @@ def seal(
             _fsync_directory(Path(directory))
         final.parent.mkdir(parents=True, exist_ok=True)
         os.rename(staging, final)
-        _fsync_directory(final.parent)
-        _fsync_directory(final.parent.parent)
-        _fsync_directory(staging.parent)
+    # The rename can have completed before an interrupted caller synced either
+    # parent. Repeat both barriers on replay before retaining its reference.
+    from ._remote_stage_execution import _fsync_directory
+
+    _fsync_directory(final.parent)
+    _fsync_directory(final.parent.parent)
+    _fsync_directory(staging.parent)
     ref = {
         "schema_version": 1,
         "root_id": value["root_id"],

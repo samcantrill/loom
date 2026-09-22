@@ -162,7 +162,7 @@ def build_container_worker(
         recovery = validate_wire(assignment)
         if recovery is not None:
             root = cast(Mapping[str, PlainData], profile.shared_roots[recovery["root_id"]])
-            source = current_tree(assignment, profile.shared_roots)
+            source = current_tree(assignment, profile.shared_roots, agent_id=agent_id)
             source.mkdir(parents=True, exist_ok=True)
             target = Path(str(root["container_path"])) / recovery["tree"]
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")

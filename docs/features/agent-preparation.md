@@ -1085,8 +1085,8 @@ run/node, attempt and environment identity stay authoritative; remote
   "schema_version": 1,
   "current": {
     "root_id": "outputs",
-    "tree": "loom-recovery/<assignment-id>/<attempt-id>",
-    "path": "/worker-visible/outputs/loom-recovery/<assignment-id>/<attempt-id>"
+    "tree": "loom-work/<machine-hash>/<assignment-id>/<attempt-id>/recovery",
+    "path": "/worker-visible/outputs/loom-work/<machine-hash>/<assignment-id>/<attempt-id>/recovery"
   },
   "predecessors": [
     {
@@ -1119,7 +1119,8 @@ run/node, attempt and environment identity stay authoritative; remote
 ```
 
 `current.path` is the writable attempt directory itself, already created by
-Loom. Each predecessor path is its complete retained attempt directory, with
+Loom. Its machine partition reuses the shared-publication SHA-256 of the stable
+agent-root identity; host-prefix translation never changes that identity. Each predecessor path is its complete retained attempt directory, with
 unchanged relative member names. Lists may be frozen to tuples in context
 metadata. Predecessors are ordered by increasing attempt and belong to the
 same original run and node. The native owner selects them from prior failed
@@ -1174,6 +1175,8 @@ receipt store under the assignment identity before releasing reusable authority.
 Delivery and release records remain the ownership and eligibility evidence;
 there is no second scientific catalog. A crash between receipt writing, rename,
 and the coordinator transaction replays the same identity and checks bytes.
+Replay repeats the source and destination parent-directory fsync barriers before
+retaining a reference, even when the renamed tree is already visible.
 A missing or altered member, changed receipt, stale fence, or conflicting seal
 fails explicitly and preserves inspectable evidence. Such errors never produce
 successful outputs or silently substitute another tree.
@@ -1202,3 +1205,8 @@ extra and 79 isolated baseline import/admission checks. Focused recovery
 coverage includes empty recovery directories created before a container worker
 starts. Changed-source/test Ruff, Pyright and diff checks also passed. Full
 repository and physical deployment acceptance remain with the owning phase.
+
+The review correction for replayed rename durability and stable-machine recovery
+partitioning passed 49 affected recovery, remote-assignment and shared-publication
+tests, plus changed-file Ruff, Pyright and diff checks. Worker binding fields
+remain unchanged; consumers continue to resolve the supplied current path.
