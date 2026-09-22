@@ -127,9 +127,16 @@ from loom.queue.agent_sessions import (
 from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
 from loom.scheduling import (
     ExactQuantity,
+    FifoSchedulingPolicy,
+    PolicyDecisionState,
+    ResolvedResourceRequest,
     ResourceClaim,
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
+    SchedulingKernel,
+    ValidatedResourceEntryView,
+    WorkItem,
+    WorkSearchState,
 )
 from loom.serialization import PlainData, freeze_plain_data, json_dumps_pretty
 from tests.support.mutual_tls import (
@@ -2122,6 +2129,28 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         )
         assert successor_target.session_id == successor.session_id
         assert successor_target.availability_atoms == ()
+        kernel = SchedulingKernel(
+            planners={"cpu": CpuResourcePlanner()}, policy=FifoSchedulingPolicy()
+        )
+        replacement_work = WorkItem(
+            "replacement-work",
+            1,
+            {
+                "cpu": ResolvedResourceRequest(
+                    "cpu", ValidatedResourceEntryView("cpu", ExactQuantity(1), "count")
+                )
+            },
+        )
+        withheld_candidate = next(
+            candidate
+            for candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
+        withheld_decision = kernel.decide(
+            work=(replacement_work,), candidates=(withheld_candidate,), as_of=1
+        )
+        assert withheld_decision.state is PolicyDecisionState.WAIT
+        assert withheld_decision.work_evaluations[0].state is WorkSearchState.COMPLETE
         withheld_snapshot = ManagedOfferSnapshot(
             agent_id=successor_target.agent_id,
             session_id=successor_target.session_id,
@@ -2217,6 +2246,19 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         )
         assert len(released_target.availability_atoms) == 1
         assert released_target.availability_atoms[0].amount.fraction == 1
+        released_candidate = next(
+            candidate
+            for candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
+        released_decision = kernel.decide(
+            work=(replacement_work,), candidates=(released_candidate,), as_of=1
+        )
+        assert released_decision.state is PolicyDecisionState.SELECT
+        assert released_decision.candidate_id == released_candidate.candidate_id
+        assert released_decision.stage_work_id == replacement_work.stage_work_id
+        assert released_decision.selected is not None
+        assert released_decision.selected.claims[0].atoms[0].amount == ExactQuantity(1)
         released_snapshot = ManagedOfferSnapshot(
             agent_id=released_target.agent_id,
             session_id=released_target.session_id,

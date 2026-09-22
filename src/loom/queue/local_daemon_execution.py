@@ -4888,7 +4888,7 @@ class LocalDaemonExecution:
                 inventory[kind] = ResourceInventoryEnvelope(
                     agent_id,
                     kind,
-                    offer.availability_revision,
+                    scheduling_availability_revision,
                     data=data,
                     atoms=kind_inventory_atoms,
                 )
