@@ -3255,6 +3255,172 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
         daemon.stop()
 
 
+@pytest.mark.parametrize("recovery", ["normal", "release_restart", "legacy_renewal"])
+def test_repeated_capacity_release_publishes_fresh_offer(tmp_path, monkeypatch, recovery):
+    """Identical restored capacity cannot renew a consumed offer after release."""
+    credentials = _credentials(tmp_path / "tls")
+    first_descriptor = ResidentProfileDescriptor(
+        "resident-a", "revision-a", "project-a", "environment-a", "executor-a"
+    )
+    second_descriptor = ResidentProfileDescriptor(
+        "resident-b", "revision-b", "project-b", "environment-b", "executor-b"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    runs = LocalRunStore(tmp_path / "runs")
+    prepared = [
+        _prepare_remote_producer_run(
+            runs, run_name=f"repeat-{index}", machine_id="agent-a", value=index,
+            requirement=ExecutionRequirement("project-a", "environment-a", "executor-a"),
+        ) for index in range(3)
+    ]
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        runs.root,
+        _local_launch_profile(),
+        agent_policy=policy,
+        remote_profiles=(first_descriptor, second_descriptor),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential"
+            },
+        ),
+    )
+    server.start()
+    project_root = Path(__file__).resolve().parents[3]
+    profiles = (
+        ResidentExecutionProfile(first_descriptor, project_root, Path(sys.executable)),
+        ResidentExecutionProfile(second_descriptor, project_root, Path(sys.executable)),
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        profiles,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
+    from loom.queue.agent_session_transport import _RemoteAgentJournal
+
+    try:
+        hello = agent.handshake()
+        session = agent.register(AgentRegistration(
+            "register-repeat", str(hello["coordinator_id"]), str(hello["coordinator_epoch"]),
+            agent.agent_root_id, "config-1", "inventory-1", "availability-1",
+            ("default",), capabilities,
+        ))
+        coordinator = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        completed = _RemoteAgentJournal.complete_assignment_release
+        for index, (run_uri, authority) in enumerate(prepared):
+            agent.refresh_resource_offer()
+            current = agent.active_session()
+            assert current is not None
+            coordinator.submit(LocalDaemonAdmissionRequest(f"repeat-{index}", run_uri))
+            if index == 1 and recovery != "normal":
+                def prior_release(journal, released, assignment_id):
+                    if recovery == "release_restart":
+                        raise RuntimeError("release acknowledgement interrupted")
+                    # The pre-correction producer persisted release without fencing its offer.
+                    journal.persist_reconciled_session(released)
+                    journal.resolve_assignment_reference(released.session_id, assignment_id)
+                monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", prior_release)
+            def execute():
+                assert current is not None
+                return agent.execute_one(current.session_id, current.availability_revision,
+                    sequence=agent.next_poll_sequence(current.session_id), wait_timeout_ms=5000)
+            if index == 1 and recovery == "release_restart":
+                with pytest.raises(RuntimeError, match="acknowledgement interrupted"):
+                    execute()
+                monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", completed)
+                agent.close()
+                daemon.stop()
+                daemon.start()
+                agent = LocalDaemonAgentHttpClient(remote_config)
+                # Match outbound startup: settle retained cleanup first, then
+                # handshake/reconcile the session before publishing fresh capacity.
+                assert agent.resume_retained_work()[0]["state"] == "RELEASED"
+                recovered = agent.active_session()
+                assert recovered is not None
+                epoch = str(agent.handshake()["coordinator_epoch"])
+                assert epoch != current.coordinator_epoch
+                recovered = agent.reconcile(recovered.session_id, epoch,
+                    idempotency_key=f"release-restart:{epoch}")
+                assert recovered.coordinator_epoch == epoch
+            else:
+                assert execute()["state"] == "RELEASED"
+            if index == 1 and recovery == "legacy_renewal":
+                monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", completed)
+                with pytest.raises(QueueConflictError):
+                    agent.refresh_resource_offer()
+                assert agent._require_journal().pending_resource_mutation(current.session_id) is not None
+                agent.close()
+                agent = LocalDaemonAgentHttpClient(remote_config)
+                assert agent.resume_retained_work() == ()
+                # Reconciliation resolves the definite renewal rejection before republishing.
+                agent.refresh_resource_offer()
+            assert coordinator.wait(f"repeat-{index}", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+            assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+            # Service reconnect reconstructs idle providers. Their availability
+            # revision may repeat; these are supported observations, not forged IDs.
+            agent.close()
+            agent = LocalDaemonAgentHttpClient(remote_config)
+            assert agent.resume_retained_work() == ()
+        with sqlite3.connect(config.control_database) as conn:
+            release_revisions = [row[0] for row in conn.execute("SELECT next_availability_revision FROM remote_assignments")]
+            assert len(release_revisions) == 3 and len(set(release_revisions)) == 1
+            assert conn.execute("SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'").fetchone()[0] == 3
+        assert not agent._require_journal().unresolved_assignment_references()
+        assert agent._require_journal().next_offer_renewal(session.session_id) is None
+        agent.refresh_resource_offer()
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_offers WHERE current = 1").fetchone()[0] == 1
+        # Replaying an acknowledged old release cannot consume the new offer.
+        last = agent.active_session()
+        assert last is not None
+        with sqlite3.connect(config.control_database) as conn:
+            assignment_id = conn.execute("SELECT assignment_id FROM remote_assignments LIMIT 1").fetchone()[0]
+        agent._require_journal().complete_assignment_release(last, assignment_id)
+        assert agent._require_journal().next_offer_renewal(session.session_id) is not None
+        with sqlite3.connect(cast(Path, remote_config.agent_root) / "supervisor" / "supervisor.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 3
+    finally:
+        assert agent._supervisor is not None
+        agent._supervisor.shutdown_for_test()
+        agent.close()
+        server.stop()
+        daemon.stop()
+
+
 def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
     tmp_path: Path,
 ) -> None:
