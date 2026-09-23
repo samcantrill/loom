@@ -2348,3 +2348,46 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
     other = replace(config, assignment_payload_root_id=None)
     with pytest.raises(QueueConflictError, match="durable deployment binding"):
         LocalDaemon(other).start()
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_assignment_root_reload_binds_before_activation_and_restart(tmp_path, monkeypatch, interrupt):
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
+    profile, *_ = _assignment_reference_fixture(tmp_path)
+    roots = dict(profile.shared_roots)
+    roots["alternate"] = roots["control"]
+    config = replace(_config(tmp_path), shared_roots=roots)
+    replacement = replace(config, assignment_payload_root_id="control")
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        if interrupt:
+            original = daemon._record_scheduling_reload_intent
+            def after_acceptance(**kwargs):
+                original(**kwargs)
+                raise RuntimeError("after accepted reload intent")
+            monkeypatch.setattr(daemon, "_record_scheduling_reload_intent", after_acceptance)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        request = CoordinatorSchedulingReload("select-assignment-root", before.scheduling_epoch, "select protected control root")
+        if interrupt:
+            with pytest.raises(RuntimeError, match="accepted reload intent"):
+                operator.reload_scheduling(request)
+        else:
+            assert operator.reload_scheduling(request)["state"] == "applied"
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone() == ("control",)
+            assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+    finally:
+        daemon.stop()
+    for rejected in (config, replace(replacement, assignment_payload_root_id="alternate")):
+        with pytest.raises(QueueConflictError, match="durable deployment binding"):
+            LocalDaemon(rejected).start()
+    restarted = LocalDaemon(replacement)
+    restarted.start()
+    try:
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone() == ("control",)
+            assert conn.execute("SELECT state FROM scheduling_reloads WHERE operation_id = 'select-assignment-root'").fetchone() == ("applied",)
+    finally:
+        restarted.stop()

@@ -3120,6 +3120,7 @@ class LocalDaemon:
                         principal_id=principal.subject,
                         request_json=encoded,
                         replacement_fingerprint=candidate_fingerprint,
+                        assignment_payload_root_id=replacement.assignment_payload_root_id,
                     )
                 with self._connection() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -3457,11 +3458,17 @@ class LocalDaemon:
         principal_id: str,
         request_json: str,
         replacement_fingerprint: str,
+        assignment_payload_root_id: str | None,
     ) -> None:
         """Persist the exact fully prepared replacement before activation."""
 
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if assignment_payload_root_id is not None:
+                retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
+                if retained is not None and retained[0] != assignment_payload_root_id:
+                    raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
+                conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (assignment_payload_root_id,))
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "

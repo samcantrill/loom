@@ -31,7 +31,7 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "cancel_missing"])
+@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "cancel_missing", "missing_selector"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
     scientific = scenario == "scientific"
     _service(tmp_path)
@@ -87,7 +87,8 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, SHARED_EXECUTION_CAPABILITY, "shared-assignment-reference-v1")
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
-    authored["assignment_payload_root_id"] = "control"
+    if scenario != "missing_selector":
+        authored["assignment_payload_root_id"] = "control"
     profile = authored["preparation"]["profiles"]["existing-project"]
     profile.update(configuration_policy="shared", shared_locations=[location], project_processor={
         "schema_version": 1, "callable": "tests.support.shared_execution_stages:inspect_shared",
@@ -138,6 +139,15 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert child.state.value == "SUCCEEDED"
             pipeline_path.write_text("authored files changed after capture")
             target_uri = result["prepared_run"]["run_uri"]
+            if scenario == "missing_selector":
+                from loom.coordinator import CoordinatorClientError
+                with pytest.raises(CoordinatorClientError) as missing:
+                    client.submit(LocalDaemonAdmissionRequest("target", target_uri))
+                assert missing.value.code == "assignment_payload_root_required"
+                assert missing.value.mutation_outcome == "not_applied"
+                with sqlite3.connect(service.daemon.control_database) as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM managed_admissions WHERE run_uri = ?", (target_uri,)).fetchone()[0] == 0
+                return
             client.submit(LocalDaemonAdmissionRequest("target", target_uri))
             unavailable = remote.wait_for_work(session.session_id, session.availability_revision, sequence=1, wait_timeout_ms=250)
             assert unavailable["result"] == "wait"

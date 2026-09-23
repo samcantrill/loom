@@ -475,7 +475,10 @@ coordinator field `assignment_payload_root_id`, selecting an existing writable
 `shared_roots` alias (for example `runs`). Each eligible resident profile must
 map that alias and qualify the same challenge bytes. The control root needs no
 output-publication budget or container mount. The selector is bound durably to
-the coordinator root and cannot be reinterpreted on reload or restart. Local and
+the coordinator root at startup or accepted scheduling-reload intent and cannot
+be reinterpreted on reload or restart. A new shared intent needing remote execution
+without the selector fails admission with `assignment_payload_root_required`;
+retained admission replay keeps its existing identity. Local and
 nonshared operation may omit it.
 
 The coordinator handshake and qualified agent registration use

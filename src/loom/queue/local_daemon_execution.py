@@ -1779,7 +1779,7 @@ class LocalDaemonExecution:
         return self._scheduling.active_planners()["gpu"]
 
     def validate_fresh_intent(self, intent: ManagedLocalIntent) -> None:
-        """Reject a not-yet-admitted runtime record from another epoch."""
+        """Validate active scheduling and shared delivery before fresh admission."""
 
         for placement in intent.placements.values():
             for kind, descriptor in placement.planner_descriptors.items():
@@ -1809,6 +1809,29 @@ class LocalDaemonExecution:
                     raise QueueConflictError(
                         "managed runtime SLURM profile is not active"
                     )
+        if self.config.assignment_payload_root_id is None:
+            from ._shared_assignment import _AssignmentPayloadRootRequired
+            from .shared_execution import SHARED_EXECUTION_SCOPE, scope
+            local = self.config.resident_worker_launch_profile
+            local_descriptor = None if local is None else ResidentProfileDescriptor.from_dict(local.descriptor)
+            running = {item.stage_name for item in intent.plan.stage_plans if item.action is PlanAction.RUN}
+            for stage in intent.pipeline.stages:
+                if stage.name not in running:
+                    continue
+                required = scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+                placement = intent.placements[stage.name]
+                if required is None or placement.route.kind is not ExecutionRouteKind.MANAGED_AGENT:
+                    continue
+                local_matches = (
+                    placement.target in (None, self.config.machine_id)
+                    and local_descriptor is not None
+                    and bool(local_descriptor.shared_roots)
+                    and _profile_satisfies_requirement(local_descriptor, intent.execution_requirements[stage.name])
+                    and all(local_descriptor.shared_roots.get(alias) == facts
+                        for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items())
+                )
+                if not local_matches:
+                    raise _AssignmentPayloadRootRequired()
 
     def _require_active_descriptor(
         self, kind: str, descriptor: SchedulingComponentDescriptor

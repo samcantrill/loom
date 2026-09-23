@@ -30,6 +30,13 @@ CAPABILITY = "shared-assignment-reference-v1"
 KIND = "loom.shared-assignment-reference"
 
 
+class _AssignmentPayloadRootRequired(QueueServiceError):
+    """A new remote shared intent has no protected payload root selector."""
+
+    def __init__(self) -> None:
+        super().__init__("shared remote assignments require assignment_payload_root_id")
+
+
 def reference(value: object) -> dict[str, PlainData] | None:
     if not isinstance(value, Mapping) or "kind" not in value:
         return None
@@ -77,9 +84,7 @@ def require_root(
     profile: ResidentProfileDescriptor,
 ) -> None:
     if root_id is None:
-        raise QueueServiceError(
-            "shared remote assignments require assignment_payload_root_id"
-        )
+        raise _AssignmentPayloadRootRequired()
     root = roots.get(root_id)
     if not isinstance(root, Mapping) or root.get("access") != "rw":
         raise QueueServiceError("assignment payload root must be mapped and writable")
