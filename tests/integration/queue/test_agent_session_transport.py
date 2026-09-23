@@ -3363,8 +3363,19 @@ def test_repeated_capacity_release_publishes_fresh_offer(tmp_path, monkeypatch, 
                     execute()
                 monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", completed)
                 agent.close()
+                daemon.stop()
+                daemon.start()
                 agent = LocalDaemonAgentHttpClient(remote_config)
+                # Match outbound startup: settle retained cleanup first, then
+                # handshake/reconcile the session before publishing fresh capacity.
                 assert agent.resume_retained_work()[0]["state"] == "RELEASED"
+                recovered = agent.active_session()
+                assert recovered is not None
+                epoch = str(agent.handshake()["coordinator_epoch"])
+                assert epoch != current.coordinator_epoch
+                recovered = agent.reconcile(recovered.session_id, epoch,
+                    idempotency_key=f"release-restart:{epoch}")
+                assert recovered.coordinator_epoch == epoch
             else:
                 assert execute()["state"] == "RELEASED"
             if index == 1 and recovery == "legacy_renewal":
