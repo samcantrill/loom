@@ -395,6 +395,11 @@ the coordinator or edit agent databases to recover a confirmed same-epoch fence.
 
 Agents connect outbound using bounded long polling and own no prefetched durable
 queue. An idle agent still renews its HTTPS work request every five seconds.
+After confirmed assignment release, the agent durably retires its consumed offer
+and publishes fresh capacity, even when the available resources are unchanged.
+Restart reconciliation also replaces an older retained offer whose renewal the
+coordinator has definitively rejected; an uncertain response remains replayable.
+
 Inside that request the coordinator checks durable state, then sleeps on a
 session-specific notification until work, invalidation, or a deadline requires
 another check. It no longer checks SQLite every 50 ms for each waiting agent.

@@ -1700,6 +1700,42 @@ class _RemoteAgentJournal:
                 raise QueueConflictError("remote assignment reference is unavailable")
             conn.commit()
 
+    def complete_assignment_release(self, session: AgentSession, assignment_id: str) -> None:
+        """Consume the delivery and its offer atomically after proven release."""
+        if session.agent_root_id != self.root_id:
+            raise QueueConflictError("released session does not match the agent root")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT resolved FROM agent_session_references WHERE session_id = ? "
+                "AND reference_kind = 'delivery' AND reference_id = ?",
+                (session.session_id, assignment_id),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("remote assignment reference is unavailable")
+            if not row["resolved"]:
+                if session.state is AgentSessionState.ACTIVE:
+                    updated = conn.execute(
+                        "UPDATE agent_sessions_local SET value_json = ?, state = ? "
+                        "WHERE session_id = ? AND state = ?",
+                        (_canonical_json(session.value()), session.state.value,
+                         session.session_id, AgentSessionState.ACTIVE.value),
+                    ).rowcount
+                    if updated != 1:
+                        raise QueueServiceError("remote agent session evidence is unavailable")
+                self._invalidate_resource_offer(conn, session.session_id)
+                conn.execute(
+                    "UPDATE agent_session_references SET resolved = 1 WHERE session_id = ? "
+                    "AND reference_kind = 'delivery' AND reference_id = ?",
+                    (session.session_id, assignment_id),
+                )
+            conn.commit()
+
+    @staticmethod
+    def _invalidate_resource_offer(conn: sqlite3.Connection, session_id: str) -> None:
+        conn.execute("UPDATE agent_offers_local SET state = 'FENCED' WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM agent_offer_renewals_local WHERE session_id = ?", (session_id,))
+
     def has_unresolved_assignment_references(self) -> bool:
         with self._connection() as conn:
             row = conn.execute(
@@ -2861,6 +2897,11 @@ class LocalDaemonAgentHttpClient:
             # A definite rejection cannot later change capacity. Unknown transport
             # outcomes keep the exact intent for retry.
             with journal._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if operation == "renew":
+                    # A definite rejection cannot be fixed by renewing the same
+                    # consumed offer, even if capacity returned to identical bytes.
+                    journal._invalidate_resource_offer(conn, session_id)
                 conn.execute(
                     "DELETE FROM agent_mutation_intents WHERE operation = ? "
                     "AND operation_id = ? AND result_json IS NULL",
@@ -3677,11 +3718,9 @@ class LocalDaemonAgentHttpClient:
                 },
             )
         )
-        if session.state is AgentSessionState.ACTIVE:
-            journal.persist_reconciled_session(session)
-        elif session.state is not AgentSessionState.REPLACED:
+        if session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
-        journal.resolve_assignment_reference(session_id, assignment_id)
+        journal.complete_assignment_release(session, assignment_id)
         return session
 
     def release_contained_assignment(
@@ -4372,6 +4411,19 @@ class LocalDaemonAgentHttpClient:
             # application stopped, before the execution journal saw the bundle.
             execution_journal.persist_request(assignment, request.to_dict())
             providers, _ = self._runtime_owners(session)
+            if execution_journal.read_state(assignment_id) is AssignmentState.RELEASED:
+                # The release reply may be lost after coordinator acceptance.
+                # Replay its retained proof, not an already committed output manifest.
+                released = self.release_assignment(
+                    session_id, assignment_id,
+                    fence=cast(str, execution_journal.read_grant_fence(assignment_id)),
+                    availability_revision=cast(str, execution_journal.read_availability_revision(assignment_id)),
+                )
+                completed.append(freeze_plain_data({
+                    "result": "assignment", "assignment_id": assignment_id,
+                    "state": "RELEASED", "session": released.value(),
+                }, path="remote release restart completion"))
+                continue
             launch_json = workspace.supervisor_launch_json()
             if (
                 launch_json is None
