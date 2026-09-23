@@ -672,6 +672,7 @@ class LocalDaemonConfig:
     resident_preparation_ready: bool = False
     resident_preparation_staged_ready: bool = False
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
+    assignment_payload_root_id: str | None = None
 
     @property
     def coordinator_shared_roots(self) -> Mapping[str, PlainData]:
@@ -693,6 +694,12 @@ class LocalDaemonConfig:
         roots = root_bindings(self.shared_roots)
         qualifications(roots)
         object.__setattr__(self, "shared_roots", freeze_plain_data(roots, path="coordinator shared roots"))
+        if self.assignment_payload_root_id is not None:
+            if not isinstance(self.assignment_payload_root_id, str):
+                raise QueueServiceError("assignment_payload_root_id must be a root identifier")
+            root = self.coordinator_shared_roots.get(self.assignment_payload_root_id)
+            if not isinstance(root, Mapping) or root.get("access") != "rw":
+                raise QueueServiceError("assignment_payload_root_id must select a writable shared root")
         coordinator = Path(self.coordinator_root)
         if type(self.resident_preparation_ready) is not bool:
             raise QueueServiceError("resident preparation readiness must be boolean")
@@ -1754,6 +1761,20 @@ class LocalDaemon:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
+            # Additive delivery migration retains all historical inline bytes.
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_deliveries)")}
+                if "reference_json" not in columns:
+                    conn.execute("ALTER TABLE agent_deliveries ADD COLUMN reference_json TEXT")
+                retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
+                selected = self.config.assignment_payload_root_id
+                if retained is not None and retained[0] != selected:
+                    raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
+                if selected is not None and retained is None:
+                    conn.execute("INSERT INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (selected,))
+                conn.commit()
+
             agent_id = (
                 None
                 if self.config.agent_root is None
@@ -3099,6 +3120,7 @@ class LocalDaemon:
                         principal_id=principal.subject,
                         request_json=encoded,
                         replacement_fingerprint=candidate_fingerprint,
+                        assignment_payload_root_id=replacement.assignment_payload_root_id,
                     )
                 with self._connection() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -3436,11 +3458,17 @@ class LocalDaemon:
         principal_id: str,
         request_json: str,
         replacement_fingerprint: str,
+        assignment_payload_root_id: str | None,
     ) -> None:
         """Persist the exact fully prepared replacement before activation."""
 
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if assignment_payload_root_id is not None:
+                retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
+                if retained is not None and retained[0] != assignment_payload_root_id:
+                    raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
+                conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (assignment_payload_root_id,))
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "
@@ -3613,6 +3641,8 @@ class LocalDaemon:
             raise QueueConflictError(
                 "scheduling reload cannot replace process or agent-owned configuration"
             )
+        if self.config.assignment_payload_root_id is not None and replacement.assignment_payload_root_id != self.config.assignment_payload_root_id:
+            raise QueueConflictError("scheduling reload cannot replace assignment payload root")
         current_roots = self.config.coordinator_shared_roots
         replacement_roots = replacement.coordinator_shared_roots
         if any(replacement_roots.get(alias) != root for alias, root in current_roots.items()):
@@ -5030,6 +5060,7 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
         return config.active_configuration_fingerprint
     payload = {
         **({"shared_roots": thaw_plain_data(config.shared_roots)} if config.shared_roots else {}),
+        **({"assignment_payload_root_id": config.assignment_payload_root_id} if config.assignment_payload_root_id is not None else {}),
         **(
             {"resident_preparation_staged_ready": True}
             if config.resident_preparation_staged_ready

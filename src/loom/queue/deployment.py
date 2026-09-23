@@ -249,7 +249,7 @@ def load_coordinator_service_config(
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots"},
+        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"},
         "coordinator service config",
     )
     from ._lifecycle_observers import LifecycleObservers, parse_event_sinks
@@ -333,6 +333,7 @@ def load_coordinator_service_config(
     )
     daemon = LocalDaemonConfig(
         shared_roots=cast(Mapping[str, PlainData], payload.get("shared_roots", {})),
+        assignment_payload_root_id=cast(str | None, payload.get("assignment_payload_root_id")),
         coordinator_root=root / "coordinator",
         agent_root=None if local_agent is None else local_agent.agent_root,
         run_store_root=_path(payload, "run_store_root", base),
@@ -1471,6 +1472,7 @@ def _coordinator_active_projection(
                 ],
                 "agent_policy": payload["agent_policy"],
                 "agent_server_credentials": server_credentials,
+                **({"assignment_payload_root_id": payload["assignment_payload_root_id"]} if payload.get("assignment_payload_root_id") is not None else {}),
                 **({"shared_roots_digest": _canonical_fingerprint(_mapping(payload, "shared_roots"))} if payload.get("shared_roots") else {}),
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),

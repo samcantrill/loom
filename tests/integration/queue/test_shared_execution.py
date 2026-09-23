@@ -31,7 +31,9 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
+@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "cancel_missing", "missing_selector"])
+def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
+    scientific = scenario == "scientific"
     _service(tmp_path)
     first = tmp_path / "nas" / "data"
     second = tmp_path / "mnt" / "lab" / "data"
@@ -43,9 +45,14 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
     for name in ("selected.bin", "challenge"):
         os.link(first / name, second / name)
     challenge = hashlib.sha256((first / "challenge").read_bytes()).hexdigest()
+    control = tmp_path / "control-payloads"
+    control.mkdir()
+    (control / "challenge").write_bytes(b"control-challenge")
     def roots(path):
         return {"data": {"host_path": str(path), "container_path": "/loom/data", "access": "ro",
-                         "challenge": {"path": "challenge", "sha256": challenge}}}
+                         "challenge": {"path": "challenge", "sha256": challenge}},
+                "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
+                    "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}}}
     location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected.bin"}
     agent_path = tmp_path / "agent.json"
     authored_agent = json.loads(agent_path.read_text())
@@ -56,6 +63,12 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
     stage = pipeline["pipeline"]["stages"][0]
     stage["factory"] = {"_target_": "tests.support.shared_execution_stages.SharedInputConsumer"}
     stage["config"] = {"input": location, "expected": hashlib.sha256(payload).hexdigest()}
+    nested = {}
+    if scientific:
+        nested = {"values": [0.5] * 80, "text": "x" * (140 * 1024)}
+        for _ in range(40):
+            nested = {"nested": nested}
+        stage["config"]["scientific"] = nested
     stage["outputs"] = {"receipt": {"artifact_type": "json", "codec_key": "json.v1"}}
     stage["placement"] = {"target": "worker-b"}
     pipeline_path.write_text(json.dumps(pipeline))
@@ -65,11 +78,17 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
         readiness_requirements=ResidentReadinessRequirements(imports=("loom", "loom.preparation", "weave")),
         shared_roots=roots(second),
     ))
+    # A worker installation needs only the existing shared execution contract;
+    # the new host transport capability must not invalidate retained workers.
+    assert executor.readiness_result is not None and executor.readiness_result.ok
+    assert not any(check.check_id == "packages.shared_assignment" for check in executor.readiness_result.checks)
     missing_roots = replace(executor, descriptor=replace(executor.descriptor, profile_id="missing-roots"), shared_roots={})
     assert not missing_roots.descriptor.shared_roots
-    capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, SHARED_EXECUTION_CAPABILITY)
+    capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, SHARED_EXECUTION_CAPABILITY, "shared-assignment-reference-v1")
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
+    if scenario != "missing_selector":
+        authored["assignment_payload_root_id"] = "control"
     profile = authored["preparation"]["profiles"]["existing-project"]
     profile.update(configuration_policy="shared", shared_locations=[location], project_processor={
         "schema_version": 1, "callable": "tests.support.shared_execution_stages:inspect_shared",
@@ -120,6 +139,15 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
             assert child.state.value == "SUCCEEDED"
             pipeline_path.write_text("authored files changed after capture")
             target_uri = result["prepared_run"]["run_uri"]
+            if scenario == "missing_selector":
+                from loom.coordinator import CoordinatorClientError
+                with pytest.raises(CoordinatorClientError) as missing:
+                    client.submit(LocalDaemonAdmissionRequest("target", target_uri))
+                assert missing.value.code == "assignment_payload_root_required"
+                assert missing.value.mutation_outcome == "not_applied"
+                with sqlite3.connect(service.daemon.control_database) as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM managed_admissions WHERE run_uri = ?", (target_uri,)).fetchone()[0] == 0
+                return
             client.submit(LocalDaemonAdmissionRequest("target", target_uri))
             unavailable = remote.wait_for_work(session.session_id, session.availability_revision, sequence=1, wait_timeout_ms=250)
             assert unavailable["result"] == "wait"
@@ -128,7 +156,102 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
             remote.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,
                 session.inventory_revision, session.availability_revision, 1, 0, 30,
                 _resident_provider_descriptors(executor, session.agent_id), resident_profiles=(executor.descriptor,)), idempotency_key="offer-qualified")
-            executed = remote.execute_one(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=5000)
+            payload_backup = None
+            payload_path = None
+            if scenario in {"unresolved_restart", "cancel_missing"}:
+                original_resolve = remote._resolve_delivery
+                def missing_payload(sid, raw):
+                    nonlocal payload_path, payload_backup
+                    payload_path = control / raw["location"]["path"]
+                    payload_backup = payload_path.read_bytes()
+                    payload_path.unlink()
+                    return original_resolve(sid, raw)
+                monkeypatch.setattr(remote, "_resolve_delivery", missing_payload)
+            elif scenario == "workspace_restart":
+                original_resolve = remote._resolve_delivery
+                def interrupt_workspace(sid, raw):
+                    original_resolve(sid, raw)
+                    raise RuntimeError("application restart")
+                monkeypatch.setattr(remote, "_resolve_delivery", interrupt_workspace)
+            elif scenario == "started_restart":
+                def interrupt_result(*args, **kwargs):
+                    raise RuntimeError("application restart")
+                monkeypatch.setattr(remote, "commit_result", interrupt_result)
+            if scenario in {"unresolved_restart", "workspace_restart", "started_restart", "cancel_missing"}:
+                from loom.queue.errors import QueueServiceError
+                with pytest.raises((QueueServiceError, RuntimeError), match="unavailable|application restart"):
+                    remote.execute_one(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=5000)
+                if scenario in {"unresolved_restart", "cancel_missing"}:
+                    from loom.queue.errors import QueueConflictError
+                    with pytest.raises(QueueConflictError, match="cannot advertise"):
+                        remote.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch,
+                            session.config_revision, session.inventory_revision, session.availability_revision,
+                            1, 0, 30, _resident_provider_descriptors(executor, session.agent_id),
+                            resident_profiles=(executor.descriptor,)), idempotency_key="unresolved-offer")
+                assert remote._supervisor is not None
+                supervisor_id = remote._supervisor.supervisor_id
+                remote.close()
+                remote = LocalDaemonAgentHttpClient(config)
+                assert remote._supervisor is not None
+                assert remote._supervisor.supervisor_id == supervisor_id
+                if scenario in {"unresolved_restart", "cancel_missing"}:
+                    assert remote._require_journal().has_unresolved_assignment_references()
+                    if scenario == "cancel_missing":
+                        client.cancel("target")
+                        def interrupt_decline(*args, **kwargs):
+                            raise RuntimeError("before cancellation settlement")
+                        monkeypatch.setattr(remote, "decline_assignment", interrupt_decline)
+                        with pytest.raises(RuntimeError, match="cancellation settlement"):
+                            remote.resume_retained_work()
+                        remote.close()
+                        remote = LocalDaemonAgentHttpClient(config)
+                        remote.resume_retained_work()
+                        assert not remote._require_journal().has_unresolved_assignment_references()
+                        assert client.wait("target", timeout_seconds=25).state.value == "CANCELLED"
+                        return
+                    with pytest.raises(QueueServiceError, match="unavailable"):
+                        remote.resume_retained_work()
+                    assert payload_path is not None and payload_backup is not None
+                    payload_path.write_bytes(payload_backup)
+                else:
+                    with sqlite3.connect(service.daemon.control_database) as conn:
+                        reference_json = conn.execute("SELECT reference_json FROM agent_deliveries").fetchone()[0]
+                    payload_path = control / json.loads(reference_json)["location"]["path"]
+                    payload_backup = payload_path.read_bytes()
+                    payload_path.unlink()
+                if scenario in {"unresolved_restart", "started_restart"}:
+                    import multiprocessing
+                    from tests.integration.queue.test_agent_session_transport import _reconcile_remote_agent_application
+                    remote.close()
+                    context = multiprocessing.get_context("spawn")
+                    events = context.Queue()
+                    process = context.Process(target=_reconcile_remote_agent_application,
+                        args=(config, session.session_id, events))
+                    process.start()
+                    try:
+                        event = events.get(timeout=60)
+                        process.join(timeout=20)
+                        assert process.exitcode == 0
+                        assert event[0] == "replayed", event
+                        assert event[1] != os.getpid()
+                        assert event[2:5] == (True, True, ("RELEASED",))
+                        assert event[5] == supervisor_id
+                        executed = {"state": event[4][0]}
+                    finally:
+                        if process.is_alive():
+                            process.kill()
+                            process.join()
+                        events.close()
+                    remote = LocalDaemonAgentHttpClient(config)
+                else:
+                    (executed,) = remote.resume_retained_work()
+                assert remote.resume_retained_work() == ()
+                assert payload_path is not None and payload_backup is not None
+                payload_path.write_bytes(payload_backup)
+                with sqlite3.connect(config.agent_root / "supervisor" / "supervisor.sqlite") as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+            else:
+                executed = remote.execute_one(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=5000)
             assert executed["state"] == "RELEASED", executed
             assert client.wait("target", timeout_seconds=25).state.value == "SUCCEEDED"
             with sqlite3.connect(service.daemon.execution_database) as conn:
@@ -150,6 +273,19 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch):
             assert workspaces
             request = _ResidentAssignmentWorkspace(config.agent_root, workspaces[0].name).request()
             assert request.schema_version == 5 and request.inputs == ()
+            with sqlite3.connect(service.daemon.control_database) as conn:
+                full, reference_json = conn.execute("SELECT request_json, reference_json FROM agent_deliveries WHERE assignment_id = ?", (request.assignment_id,)).fetchone()
+            ref = json.loads(reference_json)
+            assert ref["kind"] == "loom.shared-assignment-reference"
+            assert len(reference_json.encode()) < 4096
+            data = (control / ref["location"]["path"]).read_bytes()
+            assert data == full.encode()
+            assert hashlib.sha256(data).hexdigest() == ref["sha256"]
+            assert len(data) == ref["size_bytes"]
+            if scientific:
+                assert len(data) > 128 * 1024
+                assert cast(Any, request.to_dict())["fingerprint"]["payload"]["stage_config"]["scientific"] == nested
+            assert "control" not in cast(Any, request.to_dict())["fingerprint"]["payload"]["fingerprint_fields"]["loom.shared_execution"]["roots"]
             assert str(first) not in json.dumps(request.to_dict())
             assert str(second) not in json.dumps(request.to_dict())
     finally:

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
 
+from ._shared_assignment import _AssignmentPayloadRootRequired
 from .errors import (
     QueueConflictError,
     QueueError,
@@ -675,6 +676,11 @@ def dispatch_control(
         ) from exc
     except CoordinatorClientError:
         raise
+    except _AssignmentPayloadRootRequired as exc:
+        raise control_error(
+            "assignment_payload_root_required", operation, payload,
+            boundary="coordinator", dispatched=False,
+        ) from exc
     except Exception as exc:
         if legacy:
             raise
