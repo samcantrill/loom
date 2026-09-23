@@ -569,6 +569,11 @@ class _RemoteAgentJournal:
             raise QueueServiceError(
                 "remote agent control state is unavailable"
             ) from exc
+        with self._connection() as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_session_references)")}
+            if "reference_json" not in columns:
+                conn.execute("ALTER TABLE agent_session_references ADD COLUMN reference_json TEXT")
+            conn.commit()
         self.root_id = metadata["stable_id"]
 
     def _validated_metadata(
@@ -1336,14 +1341,23 @@ class _RemoteAgentJournal:
                 raise QueueConflictError("work poll was fenced")
             if poll_result == "assignment":
                 request_value = result.get("request")
-                request = _ResidentAssignmentBundle.from_remote_dict(request_value)
+                from ._shared_assignment import reference
+                ref = reference(request_value)
+                if ref is not None:
+                    if ref["session_id"] != session_id:
+                        raise QueueConflictError("shared assignment reference targets another session")
+                    assignment_id = str(ref["assignment_id"])
+                else:
+                    assignment_id = _ResidentAssignmentBundle.from_remote_dict(request_value).assignment_id
                 conn.execute(
                     "INSERT INTO agent_session_references(session_id, "
                     "reference_kind, reference_id, resolved) "
                     "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
                     "reference_kind, reference_id) DO NOTHING",
-                    (session_id, request.assignment_id),
+                    (session_id, assignment_id),
                 )
+                if ref is not None:
+                    conn.execute("UPDATE agent_session_references SET reference_json = ? WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?", (_canonical_json(ref), session_id, assignment_id))
                 poll_state = "DELIVERED"
             elif poll_result == "wait":
                 poll_state = "WAIT"
@@ -1696,6 +1710,21 @@ class _RemoteAgentJournal:
                 "SELECT 1 FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
             ).fetchone()
         return row is not None or pending_poll is not None
+
+    def delivery_request(self, session_id: str, assignment_id: str) -> object:
+        """Read the original authenticated wire representation, including unresolved references."""
+        with self._connection() as conn:
+            retained = conn.execute("SELECT reference_json FROM agent_session_references WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?", (session_id, assignment_id)).fetchone()
+            if retained is not None and retained[0] is not None:
+                return json.loads(retained[0])
+            row = conn.execute("SELECT result_json FROM agent_poll_state_local WHERE session_id = ?", (session_id,)).fetchone()
+        if row is None or row[0] is None:
+            return None
+        result = json.loads(row[0])
+        request = result.get("request")
+        if isinstance(request, dict) and request.get("assignment_id") == assignment_id:
+            return request
+        return None
 
     def unresolved_assignment_references(self) -> tuple[tuple[str, str], ...]:
         """Return the exact durable deliveries that startup must reconcile."""
@@ -2545,7 +2574,16 @@ class LocalDaemonAgentHttpClient:
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
 
+        from ._shared_assignment import CAPABILITY
         from .shared_execution import SHARED_EXECUTION_CAPABILITY, qualifications
+        if CAPABILITY in request.declared_capabilities:
+            if CAPABILITY not in cast(Sequence[str], self.handshake()["capabilities"]):
+                raise QueueServiceError("coordinator lacks shared-assignment-reference-v1")
+            if SHARED_EXECUTION_CAPABILITY not in request.declared_capabilities:
+                raise QueueServiceError("shared assignment references require shared execution")
+            # Reference transport runs in this host application. Workers consume
+            # the unchanged full bundle, so their existing qualification remains
+            # sufficient, including installations retained for inline recovery.
         if SHARED_EXECUTION_CAPABILITY in request.declared_capabilities:
             if not any(profile.shared_roots for profile in self._profiles.values()):
                 raise QueueServiceError("shared execution capability requires qualified roots")
@@ -3399,6 +3437,14 @@ class LocalDaemonAgentHttpClient:
                 "evidence": None if evidence is None else dict(evidence),
             },
         )
+        workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), control.assignment_id)
+        if (code == "never_started" and not workspace.has_request()
+            and self._execution_journal is not None
+            and self._execution_journal.find_state(control.assignment_id) is None):
+            session = self._require_journal().session(session_id)
+            providers, _ = self._runtime_owners(session)
+            self.decline_assignment(session_id, control.assignment_id,
+                availability_revision=self._availability_revision(session, control.assignment_id, providers))
         self._require_journal().acknowledge_assignment_control(control.operation_id)
 
     def _apply_assignment_control(
@@ -3408,6 +3454,12 @@ class LocalDaemonAgentHttpClient:
             journal = self._execution_journal
             if journal is None:
                 return "unknown", None
+            workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), control.assignment_id)
+            raw = self._require_journal().delivery_request(control.session_id, control.assignment_id)
+            from ._shared_assignment import reference
+            if (not workspace.has_request() and reference(raw) is not None
+                and control.fence is None and journal.find_state(control.assignment_id) is None):
+                return "never_started", None
             try:
                 state = journal.read_state(control.assignment_id)
                 fence = journal.read_grant_fence(control.assignment_id)
@@ -3788,13 +3840,35 @@ class LocalDaemonAgentHttpClient:
         )
         if delivery.get("result") != "assignment":
             return delivery
-        raw_request = delivery.get("request")
-        request = _ResidentAssignmentBundle.from_remote_dict(
-            thaw_plain_data(raw_request, path="remote delivered request")
-        )
+        try:
+            request = self._resolve_delivery(session_id, delivery.get("request"))
+        except (QueueError, OSError):
+            # No provider claim exists yet to subtract this unresolved delivery
+            # from an offer. Reuse the native retained-work startup barrier.
+            self._restart_with_retained_work = True
+            raise
         return self._execute_delivered_assignment(
             session_id, request, suspend_requested=suspend_requested
         )
+
+    def _resolve_delivery(self, session_id: str, raw: object) -> _ResidentAssignmentBundle:
+        from ._shared_assignment import reference, resolve, verify_bundle
+        ref = reference(raw)
+        if ref is None:
+            return _ResidentAssignmentBundle.from_remote_dict(thaw_plain_data(raw))
+        profile = next((item for item in (*self._profiles.values(), *self._retained_profiles.values())
+            if item.descriptor.profile_id == ref["profile_id"]
+            and item.descriptor.fingerprint == ref["profile_fingerprint"]), None)
+        if profile is None:
+            raise QueueConflictError("shared assignment reference has no exact protected profile")
+        workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), str(ref["assignment_id"]))
+        if workspace.has_request():
+            request = workspace.request()
+            verify_bundle(ref, request, session_id=session_id)
+            return request
+        request = resolve(ref, profile, session_id=session_id)
+        workspace.persist_request(request, profile)
+        return request
 
     def _execute_delivered_assignment(
         self,
@@ -4225,7 +4299,7 @@ class LocalDaemonAgentHttpClient:
                 return
         journal.complete_poll(session_id, sequence, result)
         if result.get("result") == "assignment":
-            request = _ResidentAssignmentBundle.from_remote_dict(result.get("request"))
+            request = self._resolve_delivery(session_id, result.get("request"))
             self._execute_delivered_assignment(
                 session_id, request, suspend_requested=suspend_requested
             )
@@ -4262,7 +4336,22 @@ class LocalDaemonAgentHttpClient:
             workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), assignment_id
             )
+            raw_delivery = journal.delivery_request(session_id, assignment_id)
+            if not workspace.has_request():
+                if raw_delivery is None:
+                    raise QueueConflictError("retained assignment delivery is unavailable")
+                self._assignment_call(session_id, assignment_id, lambda: self.poll_assignment_control(session_id))
+                if (session_id, assignment_id) not in journal.unresolved_assignment_references():
+                    continue
+                request = self._resolve_delivery(session_id, raw_delivery)
+                completed.append(self._execute_delivered_assignment(session_id, request, suspend_requested=suspend_requested))
+                continue
             request = workspace.request()
+            if raw_delivery is not None:
+                from ._shared_assignment import reference, verify_bundle
+                ref = reference(raw_delivery)
+                if ref is not None:
+                    verify_bundle(ref, request, session_id=session_id)
             request.validate_remote_transport()
             profile = self._profile_for_descriptor(request.profile)
             if profile is None:
@@ -4279,6 +4368,9 @@ class LocalDaemonAgentHttpClient:
                 offer_id=request.offer_id,
                 claim_id=request.claim_id,
             )
+            # Workspace publication may have committed immediately before the
+            # application stopped, before the execution journal saw the bundle.
+            execution_journal.persist_request(assignment, request.to_dict())
             providers, _ = self._runtime_owners(session)
             launch_json = workspace.supervisor_launch_json()
             if (

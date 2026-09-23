@@ -468,6 +468,57 @@ mount requires an explicit replacement deployment after retained work settles;
 restarting with edited files does not bypass the native configuration binding.
 
 
+#### Immutable shared assignment delivery
+
+New shared remote assignments, including preparation, require the protected
+coordinator field `assignment_payload_root_id`, selecting an existing writable
+`shared_roots` alias (for example `runs`). Each eligible resident profile must
+map that alias and qualify the same challenge bytes. The control root needs no
+output-publication budget or container mount. The selector is bound durably to
+the coordinator root and cannot be reinterpreted on reload or restart. Local and
+nonshared operation may omit it.
+
+The coordinator handshake and qualified agent registration use
+`shared-assignment-reference-v1` in addition to `shared-execution-v1`. Reference
+decoding belongs to the agent host application; workers retain their existing
+shared-execution qualification and unchanged full-bundle contract. Update
+protected agent policy and registration through the existing guarded reload or
+session replacement flow; retained sessions do not acquire capabilities
+implicitly. Agents without reference support receive no new shared assignments.
+
+Every new shared assignment uses a small authenticated reference, regardless of
+size. It identifies the assignment, attempt, targeted session, original issuer
+epoch and protected profile by ID and descriptor fingerprint, plus a versioned
+root-relative location, exact byte length and SHA-256. The complete canonical
+UTF-8 JSON bundle lives in `.loom-assignment-payloads` below the selected root.
+Publication fsyncs a regular file and links it without replacement; matching
+bytes are reusable, conflicting bytes cannot overwrite the identity. The full
+bundle remains in the coordinator's existing durable delivery row. There are no
+new scientific byte, depth or collection limits, and the HTTPS control limits
+are unchanged.
+
+The agent journals the reference before opening NAS. It selects its installed
+profile first, walks its own root mapping without symlinks, verifies exact size
+and digest, rejects ambiguous/non-finite JSON, and then validates the full native
+bundle. Reference integrity grants no execution permission: claims, full-bundle
+acceptance digest, fence and start permit still apply. No extra dataset or control
+root mounts are granted to workloads.
+
+Missing or changed payload bytes leave an inspectable unresolved delivery that
+blocks new capacity. Restore the same bytes/mapping and replay, or use native
+explicit cancellation and pre-grant settlement. Restart after verified workspace
+persistence uses that bundle; it does not reread the NAS payload to join a retained
+execution. Coordinator replay preserves the original reference and issuer epoch.
+Additive nullable reference columns are installed under existing owner locks;
+historical inline polls, deliveries and workspaces retain their original bytes
+and digests. Nonshared remote delivery remains inline.
+
+Payload files belong to retained delivery/poll/workspace history. Terminal or
+staging cleanup does not delete them. There is no automatic payload collector;
+pre-commit orphan files authorize nothing and must remain until their publication
+owner is settled and absence of retained references is proven.
+
+
 Every command accepts an explicit `--env-file`. Weave composes the protected
 YAML against that file's values without inheriting missing values from the
 service process. There is no automatic dotenv search or shell execution. A local

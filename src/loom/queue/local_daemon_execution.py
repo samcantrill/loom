@@ -1278,6 +1278,17 @@ class _AuthorityReliabilityStore:
 class LocalDaemonExecution:
     """Build and drive the existing Phase 1 and Phase 2 owners."""
 
+    def _shared_assignment_candidate(self, profile, capabilities):
+        from ._shared_assignment import CAPABILITY, require_root
+        if not {CAPABILITY, SHARED_EXECUTION_CAPABILITY}.issubset(capabilities):
+            return False
+        config = self._daemon_owner().config
+        try:
+            require_root(config.assignment_payload_root_id, config.coordinator_shared_roots, profile)
+        except QueueServiceError:
+            return False
+        return True
+
     def __init__(
         self,
         *,
@@ -4924,7 +4935,7 @@ class LocalDaemonExecution:
                         "resident_executor_fingerprint": profile.executor_fingerprint,
                         "artifact_capability": "regular-file-relay-v1",
                         **(shared_attributes({"roots": dict(profile.shared_roots)})
-                           if profile.shared_roots and SHARED_EXECUTION_CAPABILITY in json.loads(str(row["capabilities_json"])) else {}),
+                           if profile.shared_roots and self._shared_assignment_candidate(profile, json.loads(str(row["capabilities_json"]))) else {}),
                         **(
                             {
                                 "preparation_input_capability": PREPARATION_INPUT_CAPABILITY

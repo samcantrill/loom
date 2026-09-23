@@ -1981,6 +1981,7 @@ class AgentSessionService:
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
                     "agent-sessions-v12",
+                    "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
@@ -3229,7 +3230,7 @@ class AgentSessionService:
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT assignment_id, request_json FROM agent_deliveries "
+                "SELECT assignment_id, request_json, reference_json FROM agent_deliveries "
                 "WHERE session_id = ? AND "
                 "state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
                 (session_id,),
@@ -3241,7 +3242,7 @@ class AgentSessionService:
                 "result": "assignment",
                 "sequence": sequence,
                 "coordinator_epoch": epoch,
-                "request": cast(PlainData, json.loads(str(row["request_json"]))),
+                "request": cast(PlainData, json.loads(str(row["reference_json"] or row["request_json"]))),
             }
             updated = conn.execute(
                 "UPDATE agent_deliveries SET state = 'DELIVERED', poll_sequence = ? "
@@ -5642,7 +5643,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_session_tombstones (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS session_replacements (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, request_json TEXT NOT NULL, request_digest TEXT NOT NULL, agent_id TEXT NOT NULL, old_session_id TEXT NOT NULL UNIQUE, successor_session_id TEXT UNIQUE, state TEXT NOT NULL, readiness TEXT NOT NULL, withholding_reason TEXT, decision_projection_json TEXT NOT NULL, decision_projection_digest TEXT NOT NULL, required_claim_ids_json TEXT NOT NULL, observed_claim_ids_json TEXT NOT NULL, successor_observation_digest TEXT, readiness_projection_digest TEXT, result_json TEXT NOT NULL, decided_at TEXT NOT NULL, ready_at TEXT);
         CREATE TABLE IF NOT EXISTS agent_replacement_coverage (session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, reference_class TEXT NOT NULL, PRIMARY KEY(session_id, assignment_id, reference_class));
-        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_sequence INTEGER);
+        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_sequence INTEGER, reference_json TEXT);
         CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, start_permitted INTEGER NOT NULL DEFAULT 0, report_json TEXT, report_digest TEXT, next_availability_revision TEXT, provider_release_proof_json TEXT);
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
@@ -5657,7 +5658,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_offers_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_offer_renewals_local (session_id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, availability_revision TEXT NOT NULL, sequence INTEGER NOT NULL, digest TEXT NOT NULL, result_json TEXT);
         CREATE TABLE IF NOT EXISTS agent_poll_state_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, sequence INTEGER NOT NULL, request_digest TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT);
-        CREATE TABLE IF NOT EXISTS agent_session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
+        CREATE TABLE IF NOT EXISTS agent_session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, reference_json TEXT, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_reference_revision (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL);
         INSERT OR IGNORE INTO agent_reference_revision(singleton, revision) VALUES (1, 0);
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_insert AFTER INSERT ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
@@ -5691,7 +5692,9 @@ def _target_remote_delivery(
     if set(input_paths) != expected_transfers:
         raise QueueServiceError("targeted delivery input sources are incomplete")
     encoded = _canonical_json(request.to_dict())
-    if len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
+    from .shared_execution import assignment_scope
+    shared = assignment_scope(request.fingerprint) is not None
+    if not shared and len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
         raise QueueServiceError("targeted delivery request is too large")
     with daemon._cycle_lock, daemon._connection() as conn:  # type: ignore[attr-defined]
         conn.execute("BEGIN IMMEDIATE")
@@ -5839,6 +5842,21 @@ def _target_remote_delivery(
             conn.commit()
             daemon._poll_waiters.notify(session_id)
             return
+        reference_json = None
+        if shared:
+            from ._shared_assignment import CAPABILITY, publish, require_root
+            if CAPABILITY not in session.capabilities:
+                raise QueueServiceError("agent session lacks shared-assignment-reference-v1")
+            root_id = daemon.config.assignment_payload_root_id
+            roots = daemon.config.coordinator_shared_roots
+            require_root(root_id, roots, request.profile)
+            bound = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
+            if bound is not None and bound[0] != root_id:
+                raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
+            conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (root_id,))
+            reference_json = _canonical_json(publish(encoded, request,
+                root_id=cast(str, root_id), roots=roots, session_id=session_id,
+                issuer_epoch=cast(str, daemon._epoch)))
         offer = conn.execute(
             "SELECT offer_json, expires_at FROM agent_offers WHERE session_id = ? "
             "AND availability_revision = ? AND coordinator_epoch = ? "
@@ -5928,13 +5946,14 @@ def _target_remote_delivery(
             retained_inputs,
         )
         conn.execute(
-            "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, coordinator_epoch, request_json, state, poll_sequence) VALUES (?, ?, ?, ?, ?, 'TARGETED', NULL)",
+            "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, coordinator_epoch, request_json, reference_json, state, poll_sequence) VALUES (?, ?, ?, ?, ?, ?, 'TARGETED', NULL)",
             (
                 request.assignment_id,
                 session_id,
                 availability_revision,
                 daemon._epoch,
                 encoded,
+                reference_json,
             ),  # type: ignore[attr-defined]
         )
         conn.execute(

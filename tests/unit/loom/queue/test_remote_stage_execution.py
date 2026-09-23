@@ -1433,3 +1433,107 @@ def test_execution_binding_preserves_original_identity_and_container_visibility(
     assert _container_state_root(tmp_path / "runs" / "original-run", replace(launch, container=binding)) is None
     binding["container"]["mounts"] = []
     assert _container_state_root(tmp_path / "runs" / "original-run", replace(launch, container=binding)) is None
+
+
+def _assignment_reference_fixture(tmp_path):
+    from loom.queue._shared_assignment import publish
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
+    root = tmp_path / "control"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"same-root")
+    roots = {"control": {"host_path": str(root), "container_path": None, "access": "rw",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"same-root").hexdigest()}}}
+    profile = replace(_profile(tmp_path), shared_roots=roots)
+    base = _request(profile)
+    record = StageFingerprintRecord.from_dict(base.fingerprint)
+    record = StageFingerprintRecord.create(algorithm="sha256", payload=replace(record.payload,
+        fingerprint_fields={SHARED_EXECUTION_SCOPE: {"capability": "shared-execution-v1", "roots": {}, "locations": []}}), inputs_summary=record.inputs_summary)
+    request = replace(base, fingerprint=record.to_dict())
+    encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
+    ref = cast(dict[str, Any], publish(encoded, request, root_id="control", roots=roots, session_id="session-1", issuer_epoch="epoch-1"))
+    return profile, request, encoded, ref, root / ref["location"]["path"]
+
+
+def test_assignment_payload_publication_is_no_clobber_and_control_only(tmp_path):
+    from loom.queue._shared_assignment import publish, resolve, require_root
+    profile, request, encoded, ref, path = _assignment_reference_fixture(tmp_path)
+    assert resolve(ref, profile, session_id="session-1") == request
+    assert publish(encoded, request, root_id="control", roots=profile.shared_roots, session_id="session-1", issuer_epoch="epoch-1") == ref
+    with pytest.raises(QueueConflictError, match="size mismatch|conflicts"):
+        publish(encoded + " ", request, root_id="control", roots=profile.shared_roots, session_id="session-1", issuer_epoch="epoch-1")
+    assert path.read_bytes() == encoded.encode()
+    with pytest.raises(QueueServiceError, match="assignment_payload_root_id"):
+        require_root(None, profile.shared_roots, request.profile)
+    with pytest.raises(QueueServiceError, match="mapped and writable"):
+        require_root("missing", profile.shared_roots, request.profile)
+    with pytest.raises(QueueServiceError, match="not qualified"):
+        require_root("control", profile.shared_roots, replace(request.profile, shared_roots={}))
+    alternate = Path("/proc/self/root") / path.parents[1].relative_to("/")
+    remote = replace(profile, shared_roots={"control": {**cast(dict[str, Any], profile.shared_roots["control"]), "host_path": str(alternate)}})
+    assert resolve(ref, remote, session_id="session-1") == request
+
+
+@pytest.mark.parametrize("damage", ["missing", "truncated", "extra", "changed", "symlink", "parent_symlink", "duplicate", "nonfinite", "identity", "profile", "session", "version", "escape"])
+def test_assignment_reference_fails_before_workspace_and_can_replay(tmp_path, damage):
+    from loom.queue._shared_assignment import reference, resolve
+    profile, request, encoded, ref, path = _assignment_reference_fixture(tmp_path)
+    original = json.loads(json.dumps(ref))
+    if damage == "missing":
+        path.unlink()
+    elif damage in {"truncated", "extra", "changed"}:
+        path.write_bytes({"truncated": encoded[:-1].encode(), "extra": (encoded + " ").encode(), "changed": encoded.replace("build", "fault").encode()}[damage])
+    elif damage == "symlink":
+        other = path.with_suffix(".other")
+        path.rename(other)
+        path.symlink_to(other)
+    elif damage == "parent_symlink":
+        parent = path.parent
+        parent.rename(parent.with_suffix(".other"))
+        parent.symlink_to(parent.with_suffix(".other"), target_is_directory=True)
+    elif damage in {"duplicate", "nonfinite"}:
+        data = ('{"assignment_id":"duplicate",' + encoded[1:]) if damage == "duplicate" else encoded.replace('"attempt":1', '"attempt":NaN')
+        path.write_text(data)
+        ref.update(size_bytes=len(data.encode()), sha256=hashlib.sha256(data.encode()).hexdigest())
+    elif damage == "identity":
+        ref["attempt_id"] = "another-attempt"
+    elif damage == "profile":
+        ref["profile_id"] = "another-profile"
+    elif damage == "session":
+        ref["session_id"] = "another-session"
+    elif damage == "version":
+        ref["schema_version"] = 2
+    else:
+        ref["location"]["path"] = "../escape"
+    with pytest.raises((QueueServiceError, QueueConflictError)):
+        resolve(cast(dict, reference(ref)), profile, session_id="session-1")
+    if damage == "parent_symlink":
+        path.parent.unlink()
+        path.parent.with_suffix(".other").rename(path.parent)
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(encoded)
+    assert resolve(cast(dict, reference(original)), profile, session_id="session-1") == request
+
+
+def test_unresolved_reference_journal_survives_restart_and_historical_schema(tmp_path):
+    profile, request, encoded, ref, path = _assignment_reference_fixture(tmp_path)
+    agent_root = tmp_path / "agent"
+    LocalDaemon.initialize_agent_root(agent_root)
+    with sqlite3.connect(agent_root / "control.sqlite") as conn:
+        conn.execute("ALTER TABLE agent_session_references DROP COLUMN reference_json")
+        conn.execute("INSERT INTO agent_poll_state_local VALUES ('session-1', 'availability-1', 1, 'digest', 'PENDING', NULL)")
+    result = {"result": "assignment", "sequence": 1, "coordinator_epoch": "new-epoch", "request": ref}
+    journal = _RemoteAgentJournal(agent_root)
+    journal.complete_poll("session-1", 1, result)
+    journal.close()
+    path.unlink()
+    journal = _RemoteAgentJournal(agent_root)
+    try:
+        assert journal.has_unresolved_assignment_references()
+        assert journal.delivery_request("session-1", request.assignment_id) == ref
+        journal.complete_poll("session-1", 1, result)
+        with sqlite3.connect(agent_root / "control.sqlite") as conn:
+            assert json.loads(conn.execute("SELECT result_json FROM agent_poll_state_local").fetchone()[0]) == result
+        assert not _ResidentAssignmentWorkspace(agent_root, request.assignment_id).has_request()
+    finally:
+        journal.close()

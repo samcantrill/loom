@@ -2253,3 +2253,98 @@ def test_gpu_availability_update_is_atomic_replayable_and_inspectable(
         }
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize(("reference_capable", "legacy_inline", "restart_before_poll"), [(True, False, False), (False, False, False), (True, True, False), (True, False, True)])
+def test_shared_reference_target_publication_poll_restart_and_inline_migration(tmp_path, monkeypatch, reference_capable, legacy_inline, restart_before_poll):
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture, _agent_provider_descriptors
+    from loom.queue.agent_sessions import _target_remote_delivery
+    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY
+    import loom.queue._shared_assignment as payloads
+    from loom.serialization import thaw_plain_data
+    profile, request, encoded, orphan_ref, path = _assignment_reference_fixture(tmp_path)
+    capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, "shared-execution-v1", payloads.CAPABILITY)
+    policy = _policy()
+    policy = replace(policy, agents=(replace(policy.agents[0], capabilities=capabilities),))
+    config = replace(_config(tmp_path), agent_policy=policy,
+        shared_roots=profile.shared_roots, assignment_payload_root_id="control")
+    LocalDaemon.initialize(config)
+    # A pre-amendment coordinator has full request_json and no reference column.
+    with sqlite3.connect(config.control_database) as conn:
+        conn.execute("ALTER TABLE agent_deliveries DROP COLUMN reference_json")
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        view = _view(daemon)
+        handshake = view.handshake()
+        registration = AgentRegistration("shared-register", str(handshake["coordinator_id"]), str(handshake["coordinator_epoch"]),
+            "shared-agent-root", "config-1", "inventory-1", "availability-1", ("default",), capabilities if reference_capable else capabilities[:-1],
+            retirement_verifier=_TEST_RETIREMENT_VERIFIER)
+        session = view.register(registration)
+        view.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, "config-1", "inventory-1", "availability-1",
+            1, 1, 30, _agent_provider_descriptors("cpu", "memory"), resident_profiles=(profile.descriptor,)), idempotency_key="shared-offer")
+        source = tmp_path / "source"
+        source.write_bytes(b"input")
+        def target():
+            _target_remote_delivery(daemon, session_id=session.session_id, availability_revision="availability-1",
+                request=request, run_uri="file:///run", input_paths={"input-1": source})
+        if not reference_capable:
+            with pytest.raises(QueueServiceError, match="shared-assignment-reference-v1"):
+                target()
+            with sqlite3.connect(config.control_database) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+            return
+        real_publish = payloads.publish
+        def interrupted(*args, **kwargs):
+            real_publish(*args, **kwargs)
+            raise OSError("after publication before commit")
+        monkeypatch.setattr(payloads, "publish", interrupted)
+        with pytest.raises(OSError, match="before commit"):
+            target()
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+        assert path.read_bytes() == encoded.encode()
+        monkeypatch.setattr(payloads, "publish", real_publish)
+        target()
+        target()
+        if legacy_inline:
+            # Reconstruct a pre-amendment row through its native full-bundle
+            # producer. Absence of a reference means inline forever, not a
+            # request to republish according to today's shared configuration.
+            with sqlite3.connect(config.control_database) as conn:
+                conn.execute("UPDATE agent_deliveries SET reference_json = NULL")
+        issuer_epoch = session.coordinator_epoch
+        if restart_before_poll:
+            daemon.stop()
+            daemon = LocalDaemon(config)
+            daemon.start()
+            view = _view(daemon)
+            session = view.reconcile(session, str(view.handshake()["coordinator_epoch"]), idempotency_key="target-reconcile")
+            view.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, "config-1", "inventory-1", "availability-1",
+                1, 1, 30, _agent_provider_descriptors("cpu", "memory"), resident_profiles=(profile.descriptor,)), idempotency_key="restarted-offer")
+        delivered = view.wait_for_work(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1)
+        ref = thaw_plain_data(delivered["request"])
+        assert isinstance(ref, dict)
+        if legacy_inline:
+            assert ref == request.to_dict()
+        else:
+            assert ref["sha256"] == hashlib.sha256(encoded.encode()).hexdigest()
+            assert ref["issuer_epoch"] == issuer_epoch
+        assert view.wait_for_work(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1) == delivered
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("SELECT request_json FROM agent_deliveries").fetchone()[0] == encoded
+        daemon.stop()
+        if legacy_inline:
+            with sqlite3.connect(config.control_database) as conn:
+                conn.execute("ALTER TABLE agent_deliveries DROP COLUMN reference_json")
+        daemon = LocalDaemon(config)
+        daemon.start()
+        recovered = _view(daemon).recover_poll(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1, coordinator_epoch=session.coordinator_epoch)
+        assert recovered["state"] == "committed"
+        assert recovered["request"] == delivered["request"]
+        assert path.read_bytes() == encoded.encode()
+    finally:
+        daemon.stop()
+    other = replace(config, assignment_payload_root_id=None)
+    with pytest.raises(QueueConflictError, match="durable deployment binding"):
+        LocalDaemon(other).start()

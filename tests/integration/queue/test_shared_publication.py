@@ -128,10 +128,12 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
         REMOTE_EXECUTION_CAPABILITY,
         REGULAR_FILE_RELAY_CAPABILITY,
         SHARED_EXECUTION_CAPABILITY,
+        "shared-assignment-reference-v1",
         "preparation-input-v2",
     )
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
+    authored["assignment_payload_root_id"] = "outputs"
     authored["preparation"]["profiles"]["existing-project"].update(
         configuration_policy="shared", shared_locations=[]
     )
