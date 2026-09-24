@@ -4124,36 +4124,13 @@ class LocalDaemonAgentHttpClient:
         }:
 
             def start_supervisor_launch() -> str:
-                environment = _worker_environment(
-                    profile.launch_profile,
-                    workspace.root,
-                    commands,
-                    providers,
-                    cast(
-                        Mapping[str, object],
-                        request.resolved_runtime.get("resource_selection"),
-                    ),
-                )
                 nonlocal launch
-                launch = ResidentWorkerLaunch(
-                    supervisor_id=supervisor.supervisor_id,
-                    continuity_epoch=supervisor.continuity_epoch,
-                    agent_id=supervisor.agent_id,
-                    session_id=session.session_id,
-                    assignment_id=request.assignment_id,
-                    process_execution_id=execution_id,
-                    execution_fence=fence,
-                    launch_operation_id=f"{request.assignment_id}:launch:{fence}",
-                    bundle_digest=hashlib.sha256(
-                        _canonical_json(request.to_dict()).encode("utf-8")
-                    ).hexdigest(),
-                    workspace_root=workspace.root,
-                    profile=profile.launch_profile,
-                    environment=environment,
-                    resource_controls=_managed_resource_controls(
-                        request.resolved_runtime, bindings_prepared=True
-                    ),
-                )
+                try:
+                    launch = build_supervisor_launch()
+                except (ValueError, QueueError, OSError) as exc:
+                    # No supervisor call has occurred: construction failure is
+                    # definite no-start evidence, not an uncertain process.
+                    raise ManagedProcessStartError(str(exc)) from exc
                 workspace.persist_supervisor_launch(
                     json.dumps(
                         _launch_value(launch), sort_keys=True, separators=(",", ":")
@@ -4173,6 +4150,37 @@ class LocalDaemonAgentHttpClient:
                     )
                 workspace.mark_process_started(execution_id, receipt.process_id)
                 return execution_id
+
+            def build_supervisor_launch() -> ResidentWorkerLaunch:
+                environment = _worker_environment(
+                    profile.launch_profile,
+                    workspace.root,
+                    commands,
+                    providers,
+                    cast(
+                        Mapping[str, object],
+                        request.resolved_runtime.get("resource_selection"),
+                    ),
+                )
+                return ResidentWorkerLaunch(
+                    supervisor_id=supervisor.supervisor_id,
+                    continuity_epoch=supervisor.continuity_epoch,
+                    agent_id=supervisor.agent_id,
+                    session_id=session.session_id,
+                    assignment_id=request.assignment_id,
+                    process_execution_id=execution_id,
+                    execution_fence=fence,
+                    launch_operation_id=f"{request.assignment_id}:launch:{fence}",
+                    bundle_digest=hashlib.sha256(
+                        _canonical_json(request.to_dict()).encode("utf-8")
+                    ).hexdigest(),
+                    workspace_root=workspace.root,
+                    profile=profile.launch_profile,
+                    environment=environment,
+                    resource_controls=_managed_resource_controls(
+                        request.resolved_runtime, bindings_prepared=True
+                    ),
+                )
 
             with self._control_lock:
                 permitted = cast(

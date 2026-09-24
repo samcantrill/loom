@@ -409,7 +409,10 @@ def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) ->
         client.shutdown_for_test()
 
 
-def test_separate_service_accepts_shared_container_preparation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("snapshot_alias", ["projects", "unmapped-projects"])
+def test_separate_service_accepts_shared_container_preparation(
+    tmp_path: Path, snapshot_alias: str
+) -> None:
     from examples.execution.containers.apptainer_fixture import fake_apptainer
     from loom.pipeline.planning import StageFingerprintRecord
     from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
@@ -445,7 +448,7 @@ def test_separate_service_accepts_shared_container_preparation(tmp_path: Path) -
         request = _request(resident)
         binding = PreparationChildInput(
             "prepare-1", "existing", "pipeline.yaml",
-            SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+            SharedInputReceipt("sha256:" + "a" * 64, snapshot_alias, "capture"),
             resident.descriptor.to_dict(), shared_scope=scope,
         )
         fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
@@ -467,6 +470,23 @@ def test_separate_service_accepts_shared_container_preparation(tmp_path: Path) -
         client = AgentProcessSupervisorService.initialize(agent, configuration=configuration)
         launch = None
         try:
+            if snapshot_alias == "unmapped-projects":
+                from loom.queue.errors import QueueServiceError
+
+                with pytest.raises(
+                    QueueServiceError, match="shared snapshot root is not mapped"
+                ):
+                    replace(
+                        _launch(client, workspace.root),
+                        assignment_id=request.assignment_id,
+                        profile=profile,
+                    )
+                assert workspace.supervisor_launch_json() is None
+                with sqlite3.connect(agent / "supervisor/supervisor.sqlite") as connection:
+                    assert connection.execute(
+                        "SELECT COUNT(*) FROM launches"
+                    ).fetchone()[0] == 0
+                return
             launch = replace(
                 _launch(client, agent / "assignments" / request.assignment_id),
                 assignment_id=request.assignment_id, profile=profile,
