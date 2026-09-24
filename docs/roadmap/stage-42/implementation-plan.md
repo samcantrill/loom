@@ -137,12 +137,15 @@ intent-only documentation review does not cover this expanded design.
   P5 and walkthrough received targeted confirmation. Subsequent edits only record
   this receipt/checks, maintainer approval/publication and planning/card status,
   not product contracts.
-- Landing-base drift check: `91da0e0173d719cff03abe636fbb92c94ea7cf59` adds remote
-  prelaunch construction-failure reporting and its tests/docs after the original
-  evidence revision. It changes no Stage 42 proposed interface, durable format or
-  authority start-witness contract; its before-start failure case is already in
-  P5's validation scope. Reuse the independent review; refresh source again at
-  implementation startup rather than claiming future drift is already checked.
+- Landing-base drift check through `e0892b350fde1e1def92531af591510890aa5072`:
+  PR #346 adds remote prelaunch construction-failure reporting; PR #347 adds
+  supervisor-backed rejection of unaccepted assignments during recovery. Their
+  source/tests/docs preserve Stage 42's interfaces and authority evidence owners.
+  Supervisor rejection is process no-start evidence, not a replacement for P5's
+  retained authority acknowledgement across terminalization. Before-start
+  failure/recovery is already in P5's validation scope. Reuse the independent
+  review; refresh source again at implementation startup rather than claiming
+  future drift is already checked.
 - Manager documentation evidence: 12 packet Markdown files, 49 internal packet
   links/anchors resolved, 32 Python/JSON snippets syntax-checked without execution,
   68 uniquely owned IDs mapped to phases, one v42 roadmap entry, clean diff/prose

@@ -147,7 +147,8 @@ maintainer explicitly requested committing this packet and merging it into
 deferrals for publication. It does not request running the implementation phases.
 
 Publication scope is `docs/roadmap.md` and all twelve Markdown files under
-`docs/roadmap/stage-42/`. The planning PR's merge record is the landing authority;
+`docs/roadmap/stage-42/`. The merge record for
+[planning PR #348](https://github.com/samcantrill/loom/pull/348) is the landing authority;
 implementation startup must verify these exact paths are tracked, path-clean and
 present on its fetched `develop` base. No self-referential merge SHA is stored in
 the packet.
