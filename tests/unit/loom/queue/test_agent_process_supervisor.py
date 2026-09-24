@@ -6,6 +6,8 @@ import json
 import sqlite3
 import sys
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from dataclasses import replace
 from pathlib import Path
 from multiprocessing.connection import Client
@@ -160,9 +162,108 @@ def test_reopened_supervisor_does_not_adopt_nonterminal_pid(tmp_path: Path) -> N
     )
 
     assert reopened.query(launch).state is SupervisorLaunchState.UNKNOWN
+    assert reopened.reject_unstarted_assignment(launch.assignment_id) is False
     with pytest.raises(AgentProcessSupervisorError, match="requires clean shutdown"):
         reopened.rotate_clean_continuity()
     assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+    assert supervisor.reject_unstarted_assignment(launch.assignment_id) is False
+
+
+def test_rejection_is_durable_and_blocks_all_assignment_launches(tmp_path: Path) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    assert supervisor.reject_unstarted_assignment(launch.assignment_id) is True
+    reopened = AgentProcessSupervisor(
+        agent_root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+    )
+    assert reopened.reject_unstarted_assignment(launch.assignment_id) is True
+    for value in (launch, replace(launch, launch_operation_id="different-operation",
+                                 execution_fence="different-fence")):
+        with pytest.raises(AgentProcessSupervisorError, match="durably rejected"):
+            reopened.launch(value)
+    with sqlite3.connect(agent_root / "supervisor/supervisor.sqlite") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+
+
+def test_supervisor_v4_migrates_rejection_state(tmp_path: Path) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    original = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    with sqlite3.connect(agent_root / "supervisor/supervisor.sqlite") as conn:
+        conn.execute("DROP TABLE rejected_assignments")
+        conn.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
+    migrated = AgentProcessSupervisor(
+        agent_root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+    )
+    assert migrated.supervisor_id == original.supervisor_id
+    assert migrated.continuity_epoch == original.continuity_epoch
+    assert migrated.reject_unstarted_assignment("assignment-A") is True
+
+
+def test_launch_and_rejection_have_only_one_winner(tmp_path: Path) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(_profile(),)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    barrier = Barrier(2)
+
+    def start():
+        barrier.wait(timeout=5)
+        try:
+            return supervisor.launch(launch)
+        except AgentProcessSupervisorError as exc:
+            assert "durably rejected" in str(exc)
+            return None
+
+    def reject():
+        barrier.wait(timeout=5)
+        return supervisor.reject_unstarted_assignment(launch.assignment_id)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        started = workers.submit(start)
+        rejected = workers.submit(reject)
+        receipt, proof = started.result(timeout=10), rejected.result(timeout=10)
+    assert (receipt is None) is proof
+    if receipt is not None:
+        deadline = monotonic() + 5
+        while supervisor.contain(launch).state is not SupervisorLaunchState.CONTAINED:
+            assert monotonic() < deadline
+            sleep(0.01)
+
+
+def test_rejection_service_requires_current_owner_identity(tmp_path: Path) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    client = AgentProcessSupervisorService.initialize(
+        agent_root, configuration=SupervisorLaunchConfiguration("agent-A", (_profile(),))
+    )
+    try:
+        epoch = client.continuity_epoch
+        client.continuity_epoch = "stale-epoch"
+        with pytest.raises(AgentProcessSupervisorError, match="identity is stale"):
+            client.reject_unstarted_assignment("assignment-A")
+        with sqlite3.connect(agent_root / "supervisor/supervisor.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM rejected_assignments").fetchone()[0] == 0
+        client.continuity_epoch = epoch
+        assert client.reject_unstarted_assignment("assignment-A") is True
+        assert client.reject_unstarted_assignment("assignment-A") is True
+        (tmp_path / "workspace").mkdir()
+        with pytest.raises(AgentProcessSupervisorError, match="durably rejected"):
+            client.launch(_launch(client, tmp_path / "workspace"))
+    finally:
+        client.shutdown_for_test()
 
 
 def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
@@ -651,6 +752,7 @@ def test_successful_exit_qualification_is_durable_and_legacy_is_unqualified(
     if legacy:
         with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
             conn.execute("ALTER TABLE launches DROP COLUMN successful_exit")
+            conn.execute("DROP TABLE rejected_assignments")
             conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
     reopened = AgentProcessSupervisor(
         tmp_path / "agent" / "supervisor", agent_id="agent-A", profiles=(profile,)
@@ -799,6 +901,7 @@ def test_reboot_requires_prelaunch_host_root_and_boot_evidence(
     elif fault == "legacy":
         with owner._connect() as conn:
             conn.execute("DELETE FROM metadata WHERE key = 'boot_evidence'")
+            conn.execute("DROP TABLE rejected_assignments")
             conn.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
     else:
         destination = tmp_path / "moved"

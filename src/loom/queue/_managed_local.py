@@ -2080,11 +2080,25 @@ class SQLiteAgentJournal:
             )
         return AssignmentState.DECLINED
 
+    def record_supervisor_rejected_start(
+        self, assignment_id: str, *, fence: str, result: StageWorkerResult
+    ) -> AssignmentState:
+        """Record no-start after the supervisor durably forbids this assignment.
+
+        The remote recovery owner obtains the positive rejection before calling;
+        missing launch records alone are not sufficient evidence.
+        """
+        return self._set_start_failed(
+            assignment_id, f"{assignment_id}:root", result, rejected_fence=fence
+        )
+
     def _set_start_failed(
         self,
         assignment_id: str,
         process_execution_id: str,
         result: StageWorkerResult,
+        *,
+        rejected_fence: str | None = None,
     ) -> AssignmentState:
         if result.status is not StageStatus.FAILED:
             raise ManagedLocalError("definitive start failure requires a failed result")
@@ -2092,8 +2106,13 @@ class SQLiteAgentJournal:
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
             identity = json.loads(cast(str, row["identity_json"]))
+            permitted_states = {AssignmentState.START_INTENT.value}
+            if rejected_fence is not None:
+                if row["grant_fence"] != rejected_fence:
+                    raise ManagedLocalError("rejected start fence is stale")
+                permitted_states.add(AssignmentState.START_UNKNOWN.value)
             if (
-                row["state"] != AssignmentState.START_INTENT.value
+                row["state"] not in permitted_states
                 or row["process_execution_id"] != process_execution_id
                 or row["grant_fence"] is None
                 or result.run_uri != identity["run_uri"]

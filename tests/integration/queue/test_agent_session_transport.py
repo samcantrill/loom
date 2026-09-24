@@ -2622,6 +2622,8 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("binding_failure_before_result_commit", False),
         ("binding_failure_after_no_start_commit", False),
         ("launch_construction_before_result_commit", False),
+        ("legacy_launch_construction", False),
+        ("rejection_before_result", False),
         ("missing_claim_before_result_commit", False),
         ("native_failure_before_result_commit", False),
         ("reported_failure_before_result_commit", False),
@@ -2641,6 +2643,8 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         "binding_failure_before_result_commit",
         "binding_failure_after_no_start_commit",
         "launch_construction_before_result_commit",
+        "legacy_launch_construction",
+        "rejection_before_result",
         "missing_claim_before_result_commit",
     }
     native_failure = restart_barrier in {
@@ -2681,7 +2685,10 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         if restart_barrier == "missing_claim_before_result_commit"
         else "all",
         enforce=("cpu",)
-        if no_start and restart_barrier != "launch_construction_before_result_commit"
+        if no_start and restart_barrier not in {
+            "launch_construction_before_result_commit", "legacy_launch_construction",
+            "rejection_before_result",
+        }
         else (),
         native_failure=native_failure,
         reported_failure=reported_failure,
@@ -2811,9 +2818,16 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
 
         if no_start:
             monkeypatch.setattr(supervisor, "launch", forbidden_launch)
-        if restart_barrier == "launch_construction_before_result_commit":
+        if restart_barrier in {
+            "launch_construction_before_result_commit", "legacy_launch_construction",
+            "rejection_before_result",
+        }:
 
             def unavailable_snapshot(*args, **kwargs):
+                if restart_barrier != "launch_construction_before_result_commit":
+                    # Reproduce the legacy unknown journal without dispatching:
+                    # the old constructor exception escaped definite-failure handling.
+                    raise RuntimeError("simulated agent application restart")
                 raise QueueServiceError("shared snapshot root is not mapped")
 
             monkeypatch.setattr(
@@ -2971,6 +2985,40 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             monkeypatch.setattr(replacement_supervisor, "launch", forbidden_launch)
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
+        if restart_barrier == "rejection_before_result":
+            from loom.queue._agent_process_supervisor import AgentProcessSupervisorError
+
+            assert replacement._execution_journal is not None
+            original_reject = replacement_supervisor.reject_unstarted_assignment
+
+            def unavailable_rejection(*args, **kwargs):
+                raise AgentProcessSupervisorError("managed supervisor operation is invalid")
+
+            monkeypatch.setattr(
+                replacement_supervisor, "reject_unstarted_assignment", unavailable_rejection
+            )
+            with pytest.raises(AgentProcessSupervisorError, match="operation is invalid"):
+                replacement.resume_retained_work()
+            assert replacement._execution_journal.retained_claim_commands()
+            monkeypatch.setattr(
+                replacement_supervisor, "reject_unstarted_assignment", original_reject
+            )
+            original_rejected = replacement._execution_journal.record_supervisor_rejected_start
+
+            def interrupt_rejected(*args, **kwargs):
+                raise RuntimeError("interrupted after supervisor rejection")
+
+            monkeypatch.setattr(
+                replacement._execution_journal, "record_supervisor_rejected_start",
+                interrupt_rejected,
+            )
+            with pytest.raises(RuntimeError, match="after supervisor rejection"):
+                replacement.resume_retained_work()
+            assert replacement._execution_journal.retained_claim_commands()
+            monkeypatch.setattr(
+                replacement._execution_journal, "record_supervisor_rejected_start",
+                original_rejected,
+            )
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
         assert replacement.resume_retained_work() == ()
@@ -3030,6 +3078,8 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             assert failure is not None
             if restart_barrier == "launch_construction_before_result_commit":
                 assert "shared snapshot root is not mapped" in str(failure["message"])
+            elif restart_barrier in {"legacy_launch_construction", "rejection_before_result"}:
+                assert "durably rejected unstarted assignment" in str(failure["message"])
             else:
                 assert "enforce" in str(failure["message"])
             if restart_barrier == "missing_claim_before_result_commit":

@@ -1075,9 +1075,24 @@ snapshot receipt's source alias must exist in the agent profile's
 `preparation_shared_roots`; a missing alias reports `shared snapshot root is not
 mapped`. A matching filesystem path under a different alias does not grant access.
 Errors after dispatch to the supervisor remain uncertain until its durable
-receipt establishes the process outcome. Existing `start_unknown` records without
-a launch or definite failure receipt still require guarded recovery; this change
-does not infer release authority from missing records.
+receipt establishes the process outcome.
+
+On startup, retained `start_intent` or `start_unknown` assignments without a
+persisted launch can be settled only after the authenticated supervisor atomically
+verifies it has never accepted a launch for that assignment and permanently
+rejects all future launches for it. This durable rejection survives interrupted
+recovery and is replayable. The agent then records a failed-before-start result
+and uses normal acknowledgement and resource release; it never retries the
+assignment or claims scientific success. The original exception is not recovered
+retrospectively: the failure identifies supervisor rejection during recovery.
+
+Any accepted launch, even terminal or uncertain, refuses this recovery path.
+Missing/corrupt supervisor state or an older service without this operation
+remains recovery-required. Supervisor schema 5 stores rejection tombstones for
+the lifetime of the root, migrates intact schema 4 in place, and cannot be opened
+by older binaries. Upgrade the supervisor as well as the agent through an owned
+shutdown/start transition; do not replace or reinitialize its state. Other unknown
+starts retain their existing guarded containment requirements.
 
 Remote execution with a selected shared publication root also supplies an
 assignment-owned recovery directory. Preparation children and profiles without a

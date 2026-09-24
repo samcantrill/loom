@@ -4455,6 +4455,27 @@ class LocalDaemonAgentHttpClient:
             commands = execution_journal.assignment_claim_commands(assignment_id)
             if launch_json is None:
                 retained_fence = execution_journal.read_grant_fence(assignment_id)
+                with self._control_lock:
+                    if (
+                        retained_fence is not None
+                        and workspace.supervisor_launch_json() is None
+                        and execution_journal.read_state(assignment_id) in {
+                            AssignmentState.START_INTENT, AssignmentState.START_UNKNOWN
+                        }
+                    ):
+                        # The supervisor atomically checks historical acceptance
+                        # and fences all future launches. Absence alone is not proof.
+                        if not supervisor.reject_unstarted_assignment(assignment_id):
+                            continue
+                        execution_journal.record_supervisor_rejected_start(
+                            assignment_id, fence=retained_fence,
+                            result=_start_failed_worker_result(
+                                workspace.worker_request(),
+                                ManagedProcessStartError(
+                                    "supervisor durably rejected unstarted assignment during recovery"
+                                ),
+                            ),
+                        )
                 retained_result = (
                     execution_journal.read_result(assignment_id)
                     if execution_journal.definitive_start_failed(assignment_id)
