@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked; stage 42 / P1; implementation checkpoint, not complete.
+- Status: in_progress; stage 42 / P1; completing validation after maintainer clarification.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 1: Submission Context
@@ -86,7 +86,8 @@ branch. No tracking database, hook registry, or config-field inference is needed
    reported partial view, not invented original intent.
 5. Add Python exports, submission CLI/MCP context input and context inspection.
    Update relevant `docs/features` and command/tool docs. Existing invocation
-   without context behaves unchanged. The same fixture drives both transports
+   without context behaves unchanged except for the explicitly approved limits
+   on all initial tags (run-context Transport And Limits). The same fixture drives both transports
    and adapters, including QUERY read access and rejection of submission writes.
 
 ## Test And Validation Plan
@@ -137,11 +138,12 @@ or many-to-one submission semantics. Manager preparation passed.
 One phase executor was selected for the cross-cutting store,
 replay and adapter implementation scope; it owns implementation and validation,
 not PR delivery. Pre-submit validation, independent phase review and PR/merge:
-blocked pending contract clarification and passing validation.
+pending completion of validation repairs and limit regression coverage.
 Refiner: not needed yet. Blocker corrections: 0/3. Improvement entries: none.
 
-Execution paused by manager pending resolution of the effective-tag compatibility
-conflict described below. No accepted limits or grandfather policy were changed.
+Execution resumed after the maintainer explicitly selected universal initial-tag
+limits on 2026-09-25. No grandfathering is permitted. One directly related executor
+repair completes the validation failures and adds the clarified limit coverage.
 
 ## Completion Record
 
@@ -185,15 +187,11 @@ tool-name expectation in `tests/unit/loom/mcp/test_server.py` also still needs
 the new read tool; its lane was not reached. Expanded optional integration/MCP
 coverage is unvalidated at this checkpoint.
 
-Blocking contract decision: existing authored `RunOptions.tags` accepts arbitrary
-string mappings (`src/loom/pipeline/runtime/options.py::_str_mapping`), but the
-new effective-annotation initialization passes merged runtime tags through the
-128-key/48-KiB submission-context limits. A supported config with 129 authored
-tags and no explicit context can therefore fail before binding, conflicting with
-this card's unchanged no-context invocation contract. Legacy projection uses the
-same bounded annotation object. The manager must resolve whether/how existing
-effective tags are grandfathered versus the accepted annotation limits before
-implementation continues; no silent truncation or limit change is authorized.
+Resolved contract decision: on 2026-09-25 the maintainer explicitly accepted
+the 128-key/48-KiB limits for all initial tags, including authored-only tags.
+The run-context contract owns this intentional compatibility exception.
+Add assertions for rejection before binding/target execution and unchanged
+persisted legacy evidence on partial inspection; no truncation or grandfathering.
 
 | Item | Result |
 | --- | --- |

@@ -160,6 +160,12 @@ is verified, not on the planning branch or local `develop`.
 
 ## Non-Goals And Reopen Triggers
 
+Implementation clarification approved on 2026-09-25: the maintainer selected
+"Apply limits to all initial tags", accepting rejection of previously valid
+oversized authored/runtime labels. The run-context card's Transport And Limits
+section owns the clarified rule; this does not authorize grandfathering or
+truncation. The existing whole-stage execution request remains in force.
+
 No separate hosted tracking/catalog server, dashboard, cross-deployment federation,
 arbitrary SQL/expression execution, semantic/vector search, metric extractor,
 general authorization redesign, automatic rerun/cancellation/deletion, or new

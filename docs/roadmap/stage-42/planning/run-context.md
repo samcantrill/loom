@@ -402,6 +402,18 @@ value at most 1 KiB. The complete encoded request must also fit the transport
 budget. Advertise limits; do not silently truncate stored values. These limits
 are public proposed defaults, distinct from private storage choices.
 
+Maintainer clarification (2026-09-25): these limits apply to **all initial
+annotations**, including the merged effective authored/runtime and explicit
+context tags, even when no explicit context is submitted. Oversized initial
+tags are rejected before successful binding or target execution; they are not
+grandfathered, split into a separate label store, or silently truncated. This is
+an accepted compatibility exception to unchanged no-context invocation behavior.
+Existing persisted evidence is not deleted or rewritten by inspection; an
+unrepresentable legacy annotation view reports its limitation explicitly under
+the existing partial-view contract. Empty-context request serialization/digests
+remain unchanged. P1 tests cover oversized authored-only and merged tag sets,
+as well as valid boundary values; later annotation writes retain the same limits.
+
 CLI routes use the existing `loom runs` family (`context`, `annotate`, `notes`)
 with JSON machine output. MCP adds corresponding context/patch/note tools using
 the native client. Neither adapter implements a second mutation transaction.
