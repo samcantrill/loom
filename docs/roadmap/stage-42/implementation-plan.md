@@ -1,16 +1,15 @@
 # Roadmap Stage 42 Implementation Plan
 
 Status: maintainer-approved plan; independent plan readiness review passed;
-documentation publication authorized; implementation not started.
+implementation authorized and in progress.
 Roadmap stage: 42
 Stage descriptor: Run Discovery, Annotations, Lineage, And Result Access
 Planning document: [planning.md](planning.md)
 Workflow: [roadmap-stage-implementation](../../../.codex/workflows/roadmap-stage-implementation.md)
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: none; documentation handoff only.
-Startup requirements: verify packet landing and current source drift; require an
-explicit implementation request.
+Current phase: P1, submission context.
+Startup requirements: satisfied on 2026-09-24; explicit whole-stage execution requested.
 
 ## Summary
 
@@ -48,12 +47,10 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 - Evidence revision: `220358ed26392f30bb2f36bf09d547607a57d442`.
 - Clean control checkout at evidence capture:
   `/nas/home/can134/work/loom-worktrees/control-stage-40`.
-- Current documentation worktree:
-  `/nas/home/can134/work/loom-worktrees/run-discovery-results-planning`, branch
-  `agent/run-discovery-results-stage`; no implementation worktree created.
-- Future execution worktree root: `/nas/home/can134/work/loom-worktrees`.
-- Future persistent stage worktree: `/nas/home/can134/work/loom-worktrees/stage-42`.
-- Future coordination branch: `agent/stage-42`.
+- Execution worktree root: `/nas/home/can134/work/loom-worktrees`.
+- Persistent stage worktree: `/nas/home/can134/work/loom-worktrees/stage-42`.
+- Coordination branch: `agent/stage-42`.
+- P1 approved base: `305ffa4416e53d3bb189e6251642641025993e98`.
 - Shared Git gate: `.codex/prompts/phase-loop-management.md`.
 - Before execution, land the approved packet, refresh source evidence against
   current `develop`, and follow the implementation workflow. Never edit local
@@ -64,7 +61,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 
 | Phase | Slug / plan | Status | Branch | PR | Ownership and usable outcome | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | [submission-context](phases/submission-context.md) | pending | `agent/stage-42-p1-submission-context` | none | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
+| P1 | [submission-context](phases/submission-context.md) | in_progress | `agent/stage-42-p1-submission-context` | none | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
 | P2 | [run-annotations](phases/run-annotations.md) | pending | `agent/stage-42-p2-run-annotations` | none | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | pending | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Evaluator truth tables, scope/coverage, pagination and adapter parity |
 | P4 | [output-selection](phases/output-selection.md) | pending | `agent/stage-42-p4-output-selection` | none | Exact current/historical output selection with original producer and reuse associations | Authority commit/reuse/history contracts and metadata-only guarantees |
@@ -162,16 +159,16 @@ intent-only documentation review does not cover this expanded design.
 | --- | --- | --- | --- |
 | Independent full-packet review | Planning workflow | Full review and targeted R1 confirmation recorded above | passed |
 | Concrete design approval | Maintainer | Recorded in planning approval owner | approved |
-| Packet publication | Planning PR / implementation startup | Verify merged PR and exact tracked packet paths on the selected base | verify at startup |
-| Source drift at startup | Implementation workflow | Refresh evidence and affected tests/contracts only; reuse unaffected readiness | not yet assessed |
+| Packet publication | Planning PR / implementation startup | PR #348 merged at selected base; packet matches approved PR head | passed |
+| Source drift at startup | Implementation workflow | Only approved documentation changed since checked e0892b35; reuse readiness | passed |
 
 ## Implementation Workflow State
 
-- Startup drift check and readiness reuse: not started.
+- Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
-  its local validation and independent review gates; not authorized by this task.
-- Phase statuses: all pending.
-- Stage cleanup and terminal disposition: no execution worktree or phase PR yet.
+  its local validation and independent review gates; authorized by explicit execution request.
+- Phase statuses: P1 in_progress; P2–P6 pending.
+- Stage cleanup and terminal disposition: persistent worktree created; no phase PR yet.
 - Improvement log entries: none.
 
 ## Completion

@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P1.
+- Status: in_progress; stage 42 / P1.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 1: Submission Context
-- Worktree/coordination/base: manifest execution context; refresh base at startup.
+- Worktree/coordination: manifest execution context; base `305ffa4416e53d3bb189e6251642641025993e98`.
 - Dependencies: existing v40/v41 native lifecycle; no earlier stage-42 phase.
-- Named refinement uncertainty: none. Blocker: stage approval/landing gates.
+- Named refinement uncertainty: none. Approval, landing, source drift and isolation gates passed.
 
 ## Objective And Context
 
@@ -134,7 +134,10 @@ unknown original context, which is accepted compatibility debt.
 Read this entire card, manifest shared constraints, and the run-context detailed
 contract. Implement the five slices; do not revisit generic vocabulary, identity,
 or many-to-one submission semantics. Manager preparation, implementation,
-pre-submit validation, independent phase review and PR/merge: not started.
+preparation passed. One phase executor is selected for the cross-cutting store,
+replay and adapter implementation scope; it owns implementation and validation,
+not PR delivery. Pre-submit validation, independent phase review and PR/merge:
+pending implementation.
 Refiner: not needed yet. Blocker corrections: 0/3. Improvement entries: none.
 
 ## Completion Record
