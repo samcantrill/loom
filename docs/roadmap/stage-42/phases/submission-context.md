@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P1.
+- Status: blocked; stage 42 / P1; implementation checkpoint, not complete.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 1: Submission Context
@@ -140,8 +140,65 @@ not PR delivery. Pre-submit validation, independent phase review and PR/merge:
 pending implementation.
 Refiner: not needed yet. Blocker corrections: 0/3. Improvement entries: none.
 
+Execution paused by manager pending resolution of the effective-tag compatibility
+conflict described below. No accepted limits or grandfather policy were changed.
+
 ## Completion Record
+
+Implementation coverage: bounded immutable context and request digests; original
+principal/time in the preparation journal; coordinator schema 18 and additive
+embedded/service authority annotation schemas; initialization before published
+binding/admission; separate reconciled reasons; context inspection; native Unix,
+HTTPS QUERY/client, Python, CLI and MCP adapters. Annotation mutations remain P2.
+The scoped coordinator authority protocol owns these organizational operations;
+the worker-facing per-run lifecycle protocol does not gain annotation writes.
+
+Development checks: baseline coordinator unit selection passed 24 tests; initial
+context contract/integration selection with config extras passed 22 tests. The
+expanded final selection is the approved `make validate-pr` across all lanes;
+added coverage also exercises late failure with surviving output references,
+HTTPS lost-response context replay, authenticated authority initialization,
+QUERY read-only access and real MCP stdio context round-trips.
+
+Initial final-gate attempt passed Ruff and stopped at type checking. P1 typing
+issues were corrected. The manager explicitly authorized the narrow pre-existing
+typing repair at `tests/unit/loom/queue/test_gpu_probe.py:93`: assert that retained
+evidence is a mapping before inspecting `claim_retained`, preserving the original
+assertion and production behavior. This is the only non-context repair.
+
+Final-gate checkpoint: `make validate-pr` passed Ruff and Pyright (zero errors),
+then failed the default lane: **3174 passed, 9 failed, 2 skipped, 360 deselected**
+in 1453.94 seconds. Later lanes and build/lock/diff gates were not reached.
+Evidence: `build/stage-42-p1-validate-pr.log` (local, ignored). Validated tree:
+`056aff7f24fbb1703579187b3f3bd5f3f64cf09b`; only this completion record changed
+after that gate. No subsequent runtime corrections or rerun were made because
+the manager directed a blocked handoff after the running gate finished.
+
+Remaining baseline failures are in
+`tests/integration/queue/test_agent_session_transport.py` (two: exact capability
+set and rejection-message expectation), `tests/package/test_runs_api.py`
+(exports), `tests/unit/loom/authority/test_repository_run_lifecycle.py` (schema
+version), `tests/unit/loom/queue/test_coordinator_upgrade.py` (four: version
+expectations/unsupported-version fixture and schema-16 fixture shape), and
+`tests/unit/loom/queue/test_local_daemon.py` (exact capability set). The MCP unit
+tool-name expectation in `tests/unit/loom/mcp/test_server.py` also still needs
+the new read tool; its lane was not reached. Expanded optional integration/MCP
+coverage is unvalidated at this checkpoint.
+
+Blocking contract decision: existing authored `RunOptions.tags` accepts arbitrary
+string mappings (`src/loom/pipeline/runtime/options.py::_str_mapping`), but the
+new effective-annotation initialization passes merged runtime tags through the
+128-key/48-KiB submission-context limits. A supported config with 129 authored
+tags and no explicit context can therefore fail before binding, conflicting with
+this card's unchanged no-context invocation contract. Legacy projection uses the
+same bounded annotation object. The manager must resolve whether/how existing
+effective tags are grandfathered versus the accepted annotation limits before
+implementation continues; no silent truncation or limit change is authorized.
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, cleanup | Pending implementation |
+| Implementation paths | `src/loom/{runs,queue,authority,pipeline/stores,cli,mcp}`, coordinator facade; new context/annotation helpers and additive schema migrations |
+| Documentation | `docs/features/{coordinator-client,agent-preparation,cli,mcp}.md` |
+| Tests | New context contract/integration files and existing native, authority, Python, MCP/QUERY adapters; narrow authorized GPU-probe typing repair |
+| Completion | Blocked checkpoint; full gate failed; accepted behavior and required evidence not yet complete |
+| Review/PR/merge/cleanup | Not started; manager-owned after contract resolution and passing validation |

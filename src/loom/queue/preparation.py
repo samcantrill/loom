@@ -24,6 +24,7 @@ from uuid import uuid4
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest, hash_mapping, validate_digest
 from loom.io.uris import path_to_file_uri
+from loom.runs.context import SubmissionContext
 from loom.serialization import (
     PlainData,
     stable_json_bytes,
@@ -180,11 +181,23 @@ class PrepareRunRequest:
     overlays: tuple[str, ...] = ()
     overrides: tuple[str, ...] = ()
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
+    context: SubmissionContext | None = None
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
 
         _invocation(self)
+        if self.context is not None:
+            if not isinstance(self.context, SubmissionContext):
+                raise QueueServiceError("preparation context is invalid")
+            explicit_tags = self.run_options.get("tags", {})
+            if isinstance(explicit_tags, Mapping) and any(
+                key in explicit_tags and explicit_tags[key] != value
+                for key, value in self.context.tags.items()
+            ):
+                raise QueueServiceError("explicit context and run_options tags conflict")
+            if self.context.empty:
+                object.__setattr__(self, "context", None)
         validate_queue_id(self.operation_id, "operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
         if self.run_name is not None:
@@ -203,11 +216,12 @@ class PrepareRunRequest:
             "config_path": self.config_path,
             "preparation_profile": self.preparation_profile,
             **_invocation_data(self),
+            **({"context": self.context.to_dict()} if self.context is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
-        if set(data) - {"overlays", "overrides", "run_options"} != {
+        if set(data) - {"overlays", "overrides", "run_options", "context"} != {
             "operation_id",
             "run_name",
             "source",
@@ -224,6 +238,9 @@ class PrepareRunRequest:
             cast(tuple[str, ...], data.get("overlays", ())),
             cast(tuple[str, ...], data.get("overrides", ())),
             cast(Mapping[str, PlainData], data.get("run_options", {})),
+            None if data.get("context") is None else SubmissionContext.from_dict(
+                cast(Mapping[str, object], data["context"])
+            ),
         )
 
     def intent_digest(self, principal_id: str) -> str:

@@ -6795,6 +6795,8 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
             )
         for role, operation, value in (
             ("client", "submit", {"request": {}}),
+            ("client", "prepare_run", {"request": {}}),
+            ("query", "prepare_run", {"request": {}}),
             ("client", "cancel", {"queue_item_id": "item"}),
             ("operator", "scheduling_reload", {"request": {}}),
             ("slurm_bootstrap", "register", {}),
@@ -6836,6 +6838,13 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
             }
         assert inspected == ["file:///runs/known"]
 
+        context = query.get_run_context("file:///runs/known")
+        assert context["run_uri"] == "file:///runs/known"
+        assert context["annotations"] is None
+        assert "authority_unavailable" in cast(list[str], context["unavailable"])
+        assert owner_view_calls == []
+        assert inspected == ["file:///runs/known", "file:///runs/known"]
+
         daemon.replace_agent_policy(
             AgentPolicyConfig(
                 revision="policy-2",
@@ -6850,7 +6859,8 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
             "schema_version": 1,
             "code": "unauthorized",
         }
-        assert inspected == ["file:///runs/known"]
+        assert query.get_run_context("file:///runs/revoked")["code"] == "unauthorized"
+        assert inspected == ["file:///runs/known", "file:///runs/known"]
         assert owner_view_calls == []
     finally:
         mutation_client.close()

@@ -55,6 +55,13 @@ and adapter invocation inputs are rejected; validator registries and live Python
 objects are not serialized options. Preparation-profile options apply only to the
 internal child. Accepted requests and published provenance retain invocation intent.
 
+An optional `context` object supplies `description`, string `tags`, and plain JSON
+`metadata` independently of execution configuration. It is retained with the
+native submission and initializes authority annotations before publication is
+acknowledged. See [submission context](coordinator-client.md#submission-context)
+for precedence, replay, limits, legacy evidence and inspection. The existing
+`loom queue daemon-prepare --request ...` JSON input accepts this field too.
+
 The selection permits at most 100 includes, 4,096 captured regular files and
 64 MiB of selected file bytes. The configuration must be in that selected
 closure. Large datasets and environment directories belong outside the capture.

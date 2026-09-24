@@ -51,6 +51,14 @@ def register_subparser(
     actions = parser.add_subparsers(dest="runs_action", metavar="ACTION")
     actions.required = True
 
+    from .queue import _add_client_connection_arguments
+
+    context_parser = actions.add_parser("context", help="read native submission context and annotations")
+    context_parser.add_argument("run_uri")
+    _add_client_connection_arguments(context_parser)
+    _add_output_options(context_parser)
+    context_parser.set_defaults(handler=handle_context)
+
     index_parser = actions.add_parser("index", help="rebuild a run catalog index")
     index_parser.add_argument("collection", metavar="COLLECTION", help="run collection path")
     _add_output_options(index_parser)
@@ -167,6 +175,19 @@ def register_subparser(
     )
     _add_output_options(import_parser)
     import_parser.set_defaults(handler=handle_import)
+
+
+def handle_context(namespace: argparse.Namespace) -> int:
+    """Read context through the existing native coordinator connection."""
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+
+    try:
+        with _daemon_client(namespace) as client:
+            result = client.get_run_context(namespace.run_uri)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_index(namespace: argparse.Namespace) -> int:

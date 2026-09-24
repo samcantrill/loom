@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 import sys
 from typing import cast
 from uuid import uuid4
@@ -32,6 +34,7 @@ def register_subparser(
     )
     parser.add_argument("--queue-item-id", help="exact native admission queue identity")
     parser.add_argument("--run-name", help="new prepared run name")
+    parser.add_argument("--context", type=Path, help="JSON file containing submission description, tags and metadata")
     parser.add_argument("--reconcile", action="store_true", help="resolve the canonical target using the installed project")
     parser.add_argument("--retry-failed", action="store_true", help="with --reconcile, retry one observed eligible failed revision")
     parser.add_argument("--fresh-stage", action="append", default=None,
@@ -65,6 +68,7 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.queue.errors import QueueError
     from loom.queue.preparation import PrepareRunRequest
     from loom.queue.run import RunRequest
+    from loom.runs import SubmissionContext
 
     try:
         from loom.queue.errors import QueueConfigError
@@ -75,6 +79,13 @@ def handle(namespace: argparse.Namespace) -> int:
             raise QueueConfigError("--reconcile requires an unresolved target; --retry-failed requires --reconcile")
         selection = load_deployment(namespace.deployment)
         identity = namespace.operation_id or "run-" + uuid4().hex
+        context_path = getattr(namespace, "context", None)
+        context = None
+        if context_path is not None:
+            try:
+                context = SubmissionContext.from_dict(json.loads(context_path.read_text(encoding="utf-8")))
+            except (ValueError, TypeError, OSError) as exc:
+                raise QueueConfigError(f"invalid submission context: {exc}") from exc
         request = RunRequest(
             PrepareRunRequest(
                 identity,
@@ -90,6 +101,7 @@ def handle(namespace: argparse.Namespace) -> int:
                         selectors=SelectorCliOptions.from_namespace(namespace)
                     ),
                 ),
+                context=context,
             ),
             None if reconcile else namespace.queue_item_id or identity,
             mode="reconcile" if reconcile else "exact",

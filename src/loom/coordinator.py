@@ -14,6 +14,7 @@ import time
 from typing import cast
 
 from loom.serialization import PlainData
+from loom.runs.context import RunContext
 from loom.queue.local_daemon import (
     LocalDaemonOperation,
     LocalDaemonAdmission,
@@ -258,6 +259,11 @@ class CoordinatorClient(NativeCoordinatorClient):
         return RunObservation(
             operation_id, operation, admission, inspection, connection
         )
+
+    def get_run_context(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunContext:
+        """Read original intent, current annotations and native evidence without execution."""
+        return RunContext.from_dict(self._native_call(
+            "get_run_context", {"run_uri": run_uri}, expected_coordinator_id))
 
     def inspect_run(
         self, run_uri: str, *, expected_coordinator_id: str | None = None

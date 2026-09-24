@@ -22,6 +22,7 @@ from loom.io.uris import uri_to_path
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
 from loom.serialization import PlainData, stable_json_bytes
+from loom.runs.context import SubmissionContext
 
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
@@ -478,6 +479,13 @@ class CoordinatorPreparations:
             if run_mode == "reconcile":
                 result.update(queue_item_id=None, admission=None, cancellation_operation_id=None,
                               binding=None, decision=None, verification_report_ref=None)
+            accepted_at = self.daemon._clock()
+            result["submission"] = {
+                "operation_id": request.operation_id,
+                "principal_id": principal_id,
+                "accepted_at": accepted_at,
+                "context": None if request.context is None else request.context.to_dict(),
+            }
             # Reserve enough outer-envelope space to report a terminal failure
             # even for an identifier near the native projection limit.
             _operation(
@@ -499,6 +507,8 @@ class CoordinatorPreparations:
                     _json(result),
                 ),
             )
+            conn.execute("UPDATE preparation_operations SET accepted_at = ? WHERE operation_id = ?",
+                         (accepted_at, request.operation_id))
             # Transfer this bounded startup attachment into the durable native
             # operation in the same acceptance transaction.
             conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
@@ -1037,6 +1047,7 @@ class CoordinatorPreparations:
             return
         # Unknown publication failures leave the durable claim applying. The
         # next pass uses native complete replay or native partial-target conflict.
+        self._initialize_context(row, prepared.run_uri)
         result["prepared_run"] = prepared.to_dict()
         self._store_result(
             _with_report(
@@ -1093,7 +1104,6 @@ class CoordinatorPreparations:
                     queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
                     reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
                     result["queue_item_id"] = queue_id
-                    result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
                     try:
                         self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
                     except _ResultTooLarge:
@@ -1165,6 +1175,8 @@ class CoordinatorPreparations:
                     if reconciliation["verification_generation"] == 0:
                         raise QueueConflictError("candidate verifier is missing")
                     result["verification_report_ref"] = report.reference.to_dict()
+                    self._initialize_context(row, uri, legacy=True)
+                    result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
                     result["prepared_run"] = candidate["prepared_run"]
                     result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
                     self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
@@ -1177,10 +1189,29 @@ class CoordinatorPreparations:
         except QueueConflictError:
             self._fail(self._read(operation_id), "publication_conflict", conflict=True)
             return
+        self._initialize_context(row, prepared.run_uri)
+        result["binding"] = {"run_uri": prepared.run_uri, "publication_operation_id": reconciliation["publication_owner"]}
         result["prepared_run"] = prepared.to_dict()
         result["decision"] = "new_attempt"
         self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
         self._continue_run(self._read(operation_id))
+
+    def _initialize_context(self, row: sqlite3.Row, run_uri: str, *, legacy: bool = False) -> None:
+        from loom.pipeline.stores.local_runs import LocalRunStore
+
+        factory = self.daemon.config.coordinator_authority_factory
+        assert factory is not None
+        authority = factory(run_uri)
+        if authority.read_run_annotations(run_uri) is not None:
+            return
+        request = PrepareRunRequest.from_dict(_mapping(json.loads(str(row["request_json"]))))
+        runtime = LocalRunStore(self.daemon.config.run_store_root).read_runtime_metadata(run_uri) or {}
+        context = SubmissionContext() if legacy else request.context or SubmissionContext()
+        effective = SubmissionContext(context.description,
+            {**cast(Mapping[str, str], runtime.get("tags", {})), **context.tags}, context.metadata)
+        authority.initialize_run_annotations(run_uri, effective,
+            None if legacy else str(row["operation_id"]),
+            None if legacy else self.daemon._require_started())
 
     def _check_run_budget(
         self, operation_id: str, result: Mapping[str, PlainData]
@@ -1247,7 +1278,7 @@ class CoordinatorPreparations:
             run_name = ""
         with self.daemon._connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM preparation_operations WHERE kind = 'run' "
+                "SELECT * FROM preparation_operations WHERE kind IN ('run', 'prepare_run') "
                 "AND (queue_item_id = ? OR target_name = ?)",
                 (request.queue_item_id, run_name),
             ).fetchall()
@@ -1257,6 +1288,10 @@ class CoordinatorPreparations:
                 Path(cast(str, selected["run_store_root"])) / str(row["target_name"])
             )
             if row["queue_item_id"] != request.queue_item_id and uri != request.run_uri:
+                continue
+            if row["kind"] == "prepare_run":
+                if row["state"] != "applied":
+                    raise QueueConflictError("target preparation and context initialization are incomplete")
                 continue
             if row["queue_item_id"] != request.queue_item_id or uri != request.run_uri:
                 raise QueueConflictError("reserved run admission identity conflicts")
@@ -1397,7 +1432,8 @@ class CoordinatorPreparations:
             # in the public operation table.
             from .local_daemon import _request_admission_cancellation
             native_cancel = None
-            if row["queue_item_id"] is not None and conn.execute("SELECT 1 FROM managed_admissions WHERE queue_item_id = ?", (row["queue_item_id"],)).fetchone() is not None:
+            bound = "binding" not in result or result["binding"] is not None
+            if bound and row["queue_item_id"] is not None and conn.execute("SELECT 1 FROM managed_admissions WHERE queue_item_id = ?", (row["queue_item_id"],)).fetchone() is not None:
                 native_cancel = _request_admission_cancellation(conn, str(row["queue_item_id"]), principal_id=principal_id)
             # Suppression retains actual references; it must not require space
             # for an admission which was refused or will never be created.
@@ -1427,7 +1463,7 @@ class CoordinatorPreparations:
                 (_json(projected.result), operation_id),
             )
             selected = _mapping(json.loads(str(row["selected_json"])))
-            if "reconciliation" in selected and row["target_name"] is not None:
+            if bound and "reconciliation" in selected and row["target_name"] is not None:
                 conn.execute("UPDATE preparation_operations SET cancellation_requested = 1 WHERE target_name = ? AND principal_id = ?",
                              (row["target_name"], principal_id))
             conn.execute(
@@ -1457,7 +1493,8 @@ class CoordinatorPreparations:
                 target_result = _mapping(json.loads(str(target["result_json"])))
                 result = _mapping(json.loads(str(control["result_json"])))
                 state = "pending"
-                if target_result["admission"] is None and target["target_name"] is not None and "reconciliation" in _mapping(json.loads(str(target["selected_json"]))):
+                bound = "binding" not in target_result or target_result["binding"] is not None
+                if bound and target_result["admission"] is None and target["target_name"] is not None and "reconciliation" in _mapping(json.loads(str(target["selected_json"]))):
                     from .local_daemon import AdmissionNotFoundError
                     try:
                         target_result["admission"] = self.daemon.admission_for_queue_item(str(target["queue_item_id"])).to_dict()
@@ -1486,7 +1523,7 @@ class CoordinatorPreparations:
                     }
                 elif target["state"] in _TERMINAL:
                     state = "applied"
-                if state == "applied" and target["target_name"] is not None:
+                if bound and state == "applied" and target["target_name"] is not None:
                     with self.daemon._connection() as conn:
                         children = conn.execute("SELECT child_admission_id FROM preparation_operations WHERE target_name = ? AND principal_id = ? AND child_admission_id IS NOT NULL",
                                                 (target["target_name"], target["principal_id"])).fetchall()

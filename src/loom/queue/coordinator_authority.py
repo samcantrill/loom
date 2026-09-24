@@ -36,6 +36,7 @@ from loom.pipeline.stores.read_models import (
     ReliabilityPolicyFact,
 )
 from loom.pipeline.transition_policy import TransitionIntent
+from loom.runs.context import RunAnnotations, SubmissionContext
 
 
 @runtime_checkable
@@ -73,6 +74,11 @@ class CoordinatorAuthorityStore(
     ) -> tuple[EventObserverLinkRecord, ...]: ...
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
+
+    def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
+                                   operation_id: str | None, coordinator_id: str | None) -> RunAnnotations: ...
+
+    def read_run_annotations(self, run_uri: str) -> RunAnnotations | None: ...
 
     def bind_action_result(
         self, run_uri: str, stage_name: str, binding: ActionResultBinding,
