@@ -41,11 +41,14 @@ def run_resident_probe(
     *,
     timeout_seconds: float,
     device_environment: Mapping[str, str] | None = None,
+    runtime: Mapping[str, PlainData] | None = None,
 ) -> ResidentProbeResult:
     """Run a fixed Python probe in the worker environment and contain its tree.
 
     The caller owns the meaning of its fixed script and mapping payload.  This
-    helper owns only bounded process IO and descendant containment.
+    helper owns only bounded process IO and descendant containment. An owned
+    resource probe supplies its acquired resource intent through ``runtime``;
+    software-readiness callers leave it absent.
     """
     if not isinstance(script, str) or not script:
         raise ValueError("resident probe script is invalid")
@@ -70,7 +73,7 @@ def run_resident_probe(
 
     if profile.container is not None:
         return _container_probe(
-            profile, script, request, float(timeout_seconds), device_environment
+            profile, script, request, float(timeout_seconds), device_environment, runtime
         )
 
     try:
@@ -251,7 +254,7 @@ def _drain_and_contain(
     )
 
 
-def _container_probe(profile, script, request, timeout_seconds, device_environment):
+def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime):
     """Use the same daemon evidence owner for installed-environment probes.
 
     Unknown Docker effects retain scratch and evidence for operator recovery; they
@@ -260,6 +263,7 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
     import hashlib
     import shutil
     import sqlite3
+    from loom.pipeline.errors import RuntimeResourceError
     from ._container_worker import build_container_worker
     from ._docker_worker import DockerWorker
     from ._managed_local import _worker_environment
@@ -282,6 +286,7 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             profile,
             workspace=workspace,
             environment=environment,
+            runtime=runtime,
             worker=(
                 str(binding["python_executable"]),
                 "-c",
@@ -291,7 +296,7 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
                 json.dumps(request, sort_keys=True, separators=(",", ":")),
             ),
         )
-    except (ValueError, OSError):
+    except (ValueError, OSError, RuntimeResourceError):
         shutil.rmtree(scratch)
         return ResidentProbeResult(
             None, "installed container probe command is invalid", True

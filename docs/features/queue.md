@@ -645,6 +645,13 @@ enumeration nor an unrequested GPU compute check proves that a kernel ran.
 
 ### Optional GPU compute qualification
 
+Owned container probes pass their activated one-device resource request and
+provider-selected device binding through the same container command builder as
+ordinary workers. Apptainer/Singularity therefore derives NVIDIA passthrough
+(`--nv`) from the GPU request; an environment variable alone is not a resource
+grant. Software-readiness probes do not request GPU passthrough. This does not
+change occupancy blocking, claim release, or process-containment requirements.
+
 For an agent that selects GPUs and declares `torch` in its readiness imports or
 required distributions, `--probe-gpu` runs a fixed tiny Torch computation on each
 selected device, sequentially for each resident profile. It uses that profile's

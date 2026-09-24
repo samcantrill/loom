@@ -16,6 +16,41 @@ from loom.queue._resident_probe import run_resident_probe
 pytestmark = pytest.mark.unit
 
 
+def test_software_container_probe_does_not_infer_gpu_request(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import json
+    from types import SimpleNamespace
+
+    from loom.pipeline.executors.apptainer.commands import SubprocessApptainerExecRunner
+
+    image = tmp_path / "installed.sif"
+    image.write_bytes(b"command-only fixture")
+    profile = replace(
+        _profile(tmp_path),
+        container={
+            "kind": "apptainer",
+            "container": {"image": {"reference": str(image)}},
+            "options": {"command": sys.executable},
+            "python_executable": "/image/bin/python",
+            "daemon_endpoint": None,
+        },
+    )
+    calls = []
+
+    def run(_runner, command, **kwargs):
+        calls.append(command)
+        assert "--nv" not in command.argv
+        index = command.argv.index(str(image))
+        Path(command.argv[index + 4]).write_text(json.dumps({"ok": True}))
+        return SimpleNamespace(error=None, returncode=0, timed_out=False)
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-ambient")
+    monkeypatch.setattr(SubprocessApptainerExecRunner, "run", run)
+    result = run_resident_probe(profile, "print('{}')", {}, timeout_seconds=2)
+    assert len(calls) == 1 and result.payload == {"ok": True}
+    assert result.contained and result.failure is None
+
+
 def test_probe_reports_scratch_cleanup_failure_after_containing_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
