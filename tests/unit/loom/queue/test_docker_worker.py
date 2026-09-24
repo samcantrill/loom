@@ -260,6 +260,7 @@ def test_supervisor_recovers_daemon_ownership_without_native_epoch_rotation(
     from types import SimpleNamespace
     from loom.queue._agent_process_supervisor import (
         AgentProcessSupervisor,
+        AgentProcessSupervisorError,
         ResidentWorkerLaunch,
         SupervisorLaunchState,
     )
@@ -286,7 +287,13 @@ def test_supervisor_recovers_daemon_ownership_without_native_epoch_rotation(
         agent_root, agent_id="agent-A", profiles=(profile,)
     )
     launch = replace(_launch(original, workspace), profile=profile)
+    rejected = replace(launch, assignment_id="rejected-assignment", launch_operation_id="rejected-launch")
+    assert original.reject_unstarted_assignment(rejected.assignment_id)
+    with pytest.raises(AgentProcessSupervisorError, match="durably rejected"):
+        original.launch(rejected)
+    assert daemon.calls == []
     running = original.launch(launch)
+    assert original.reject_unstarted_assignment(launch.assignment_id) is False
     assert running.process_id is None and running.backend_id == "immutable-id"
     assert not running.qualified_success
 

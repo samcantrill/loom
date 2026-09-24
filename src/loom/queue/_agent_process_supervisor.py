@@ -323,7 +323,7 @@ class AgentProcessSupervisor:
     ``UNKNOWN`` for a nonterminal launch: a PID is not adoption evidence.
     """
 
-    _SCHEMA_VERSION = 4
+    _SCHEMA_VERSION = 5
 
     def __init__(
         self,
@@ -369,6 +369,7 @@ class AgentProcessSupervisor:
             CREATE TABLE reboot_recoveries (
               operation_id TEXT PRIMARY KEY, intent TEXT NOT NULL, result TEXT NOT NULL
             );
+            CREATE TABLE rejected_assignments (assignment_id TEXT PRIMARY KEY);
             CREATE TABLE launches (
               operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
               launch_json TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL,
@@ -411,7 +412,7 @@ class AgentProcessSupervisor:
                     for row in conn.execute("SELECT key, value FROM metadata")
                 }
                 if (
-                    values.get("schema_version") not in {"2", "3", "4"}
+                    values.get("schema_version") not in {"2", "3", "4", "5"}
                     or values.get("agent_id") != self._agent_id
                     or values.get("configuration_fingerprint")
                     != self._configuration.fingerprint
@@ -443,6 +444,13 @@ class AgentProcessSupervisor:
                         "CREATE TABLE IF NOT EXISTS reboot_recoveries ("
                         "operation_id TEXT PRIMARY KEY, intent TEXT NOT NULL, result TEXT NOT NULL)"
                     )
+                if values.get("schema_version") == "4":
+                    conn.execute(
+                        "CREATE TABLE rejected_assignments (assignment_id TEXT PRIMARY KEY)"
+                    )
+                    conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
+                    values["schema_version"] = "5"
+                conn.execute("SELECT assignment_id FROM rejected_assignments LIMIT 0")
                 conn.execute(
                     "SELECT operation_id, intent, result FROM reboot_recoveries LIMIT 0"
                 )
@@ -597,6 +605,32 @@ class AgentProcessSupervisor:
             )
         )
 
+    def reject_unstarted_assignment(self, assignment_id: str) -> bool:
+        """Atomically forbid future launches, only if none was ever accepted.
+
+        The tombstone lasts for the supervisor root's lifetime and covers every
+        operation/fence for this immutable assignment. Any accepted launch,
+        including an uncertain or terminal one, refuses this no-start proof.
+        """
+        if not isinstance(assignment_id, str) or not assignment_id.strip():
+            raise AgentProcessSupervisorError("assignment identity is required")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for row in conn.execute("SELECT launch_json FROM launches"):
+                if json.loads(row[0])["assignment_id"] == assignment_id:
+                    return False
+            conn.execute(
+                "INSERT OR IGNORE INTO rejected_assignments VALUES (?)", (assignment_id,)
+            )
+        return True
+
+    @staticmethod
+    def _require_not_rejected(conn: sqlite3.Connection, assignment_id: str) -> None:
+        if conn.execute(
+            "SELECT 1 FROM rejected_assignments WHERE assignment_id = ?", (assignment_id,)
+        ).fetchone() is not None:
+            raise AgentProcessSupervisorError("assignment was durably rejected before launch")
+
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
         if launch.backend_kind == "docker":
@@ -604,6 +638,14 @@ class AgentProcessSupervisor:
         require_group_wait_support()
         encoded = _launch_json(launch)
         with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)
+            ).fetchone()
+        if existing is None:
+            self.bind_execution_host()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_not_rejected(conn, launch.assignment_id)
             row = conn.execute(
                 "SELECT * FROM launches WHERE operation_id = ?",
                 (launch.launch_operation_id,),
@@ -614,7 +656,6 @@ class AgentProcessSupervisor:
                         "launch operation conflicts with durable identity"
                     )
                 return self._receipt(launch, row)
-            self.bind_execution_host()
             conn.execute(
                 "INSERT INTO launches(operation_id, digest, launch_json, state, revision) VALUES (?, ?, ?, ?, 1)",
                 (
@@ -830,6 +871,8 @@ class AgentProcessSupervisor:
 
         self._validate_launch(launch)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_not_rejected(conn, launch.assignment_id)
             row = conn.execute(
                 "SELECT * FROM launches WHERE operation_id = ?",
                 (launch.launch_operation_id,),
@@ -1344,6 +1387,16 @@ class AgentProcessSupervisorClient:
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("launch", _launch_value(launch)))
 
+    def reject_unstarted_assignment(self, assignment_id: str) -> bool:
+        value = self._call("reject_unstarted_assignment", {
+            "assignment_id": assignment_id,
+            "supervisor_id": self.supervisor_id,
+            "continuity_epoch": self.continuity_epoch,
+        })
+        if not isinstance(value, bool):
+            raise AgentProcessSupervisorError("managed supervisor response is invalid")
+        return value
+
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("query", _launch_value(launch)))
 
@@ -1649,6 +1702,14 @@ def _serve(root: Path) -> None:
                         "service_process_id": os.getpid(),
                         "reboot_generations": supervisor.reboot_generations(),
                     }
+                elif operation == "reject_unstarted_assignment":
+                    value = request["value"]
+                    if (not isinstance(value, Mapping)
+                        or set(value) != {"assignment_id", "supervisor_id", "continuity_epoch"}
+                        or value["supervisor_id"] != supervisor.supervisor_id
+                        or value["continuity_epoch"] != supervisor.continuity_epoch):
+                        raise AgentProcessSupervisorError("supervisor rejection identity is stale")
+                    response = supervisor.reject_unstarted_assignment(value["assignment_id"])
                 elif operation == "launch":
                     response = _receipt_value(
                         supervisor.launch(cast(ResidentWorkerLaunch, launch))
