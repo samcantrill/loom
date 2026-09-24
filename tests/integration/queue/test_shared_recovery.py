@@ -91,6 +91,9 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
         outputs={"manifest": {"artifact_type": "json", "codec_key": "json.v1"}},
         placement={"target": "worker-b"},
     )
+    pipeline["runtime"]["reliability"] = {
+        "timeout": {"enabled": True, "duration_seconds": 3600.5},
+    }
     pipeline_path.write_text(json.dumps(pipeline))
     profiles = [
         qualified_resident_profile(
@@ -256,6 +259,18 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
                     "without a durable worker result"
                     in cast(Any, retained_result["failure"])["message"]
                 )
+                duration = cast(Any, retained_result["executor_metadata"])[
+                    "request"
+                ]["resolved_runtime"]["reliability"]["timeout"]["duration_seconds"]
+                assert type(duration) is float and duration == 3600.5
+            with daemon._connection() as conn:
+                settled = conn.execute(
+                    "SELECT state, provider_release_proof_json FROM remote_assignments "
+                    "WHERE run_uri = ? AND stage_name = 'produce' AND attempt = 1",
+                    (target_uri,),
+                ).fetchone()
+                assert settled["state"] == "RELEASED"
+                assert settled["provider_release_proof_json"] is not None
             retained = list(root.glob("loom-recovery-retained/*"))
             assert len(retained) == 1
             assert (

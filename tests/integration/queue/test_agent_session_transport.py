@@ -4530,6 +4530,65 @@ def test_failure_report_exception_cannot_widen_surrounding_or_legacy_fields() ->
         )
 
 
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_report_metadata_preserves_plain_values(schema_version: int) -> None:
+    metadata = {
+        "request": {"resolved_runtime": {"reliability": {
+            "timeout": {"enabled": True, "duration_seconds": 3600.5},
+        }}},
+        "observations": [None, True, 2, 0.25, "ready", {"ratio": 0.75}],
+        "nested": _nested_report_detail(5),
+    }
+    report = replace(_failure_report({}), schema_version=schema_version,
+                     executor_metadata=metadata)
+    encoded = json.dumps({"report": report.to_dict()}).encode()
+    decoded = _decode(encoded, failure_report=True)
+    replayed = _RemoteExecutionReport.from_dict(decoded["report"])
+    assert replayed.to_dict()["executor_metadata"] == metadata
+    assert json.dumps({"report": replayed.to_dict()}).encode() == encoded
+    with pytest.raises(QueueServiceError):
+        _decode(encoded)
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_report_metadata_rejects_nonfinite_numbers(number: str) -> None:
+    report = replace(_failure_report({}), schema_version=4,
+                     executor_metadata={"duration_seconds": "NUMBER"})
+    encoded = json.dumps({"report": report.to_dict()}).replace('"NUMBER"', number)
+    with pytest.raises(QueueServiceError, match="JSON.*invalid"):
+        _decode(encoded.encode(), failure_report=True)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        (_nested_report_detail(7), "too deeply nested"),
+        ({"values": [0.5] * 65}, "collection is too large"),
+        ({str(index): 0.5 for index in range(65)}, "object is too large"),
+        ({"": 0.5}, "object key is invalid"),
+        ({"key" * 54: 0.5}, "object key is invalid"),
+        ({"text": "x" * 65_536}, "maximum 65536 bytes"),
+    ],
+)
+def test_report_metadata_preserves_existing_transport_bounds(metadata, message):
+    report = replace(_failure_report({}), schema_version=4,
+                     executor_metadata=metadata)
+    with pytest.raises(QueueServiceError, match=message):
+        _decode(json.dumps({"report": report.to_dict()}).encode(), failure_report=True)
+
+
+def test_report_metadata_plain_values_do_not_widen_legacy_or_envelope_fields():
+    report = replace(_failure_report({}), schema_version=4,
+                     executor_metadata={"duration_seconds": 3600.5}).to_dict()
+    for schema_version in (1, 2):
+        with pytest.raises(QueueServiceError):
+            _decode(json.dumps({"report": {**report, "schema_version": schema_version}}).encode(),
+                    failure_report=True)
+    with pytest.raises(QueueServiceError):
+        _decode(json.dumps({"report": report, "authorization_revision": 0.5}).encode(),
+                failure_report=True)
+
+
 def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() -> None:
     with pytest.raises(QueueServiceError, match="JSON is invalid"):
         _decode(b'{"value":1,"value":2}')
@@ -6989,7 +7048,10 @@ def test_loopback_report_routes_preserve_near_limit_failure_and_strict_envelopes
             credentials[certificate].with_suffix(".key"),
         )
     )
-    report = _failure_report(_nested_report_detail(511)).to_dict()
+    report = replace(
+        _failure_report(_nested_report_detail(511)),
+        schema_version=3, executor_metadata={"duration_seconds": 3600.5},
+    ).to_dict()
     envelope: dict[str, PlainData] = {
         "assignment_id": "assignment-1",
         "fence": "fence-1",
@@ -7489,7 +7551,10 @@ def test_agent_policy_reload_rebuilds_the_shared_gpu_monitor(
 def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
     from loom.queue.agent_session_transport import _decode
 
-    report = _failure_report(_nested_report_detail(511)).to_dict()
+    report = replace(
+        _failure_report(_nested_report_detail(511)),
+        schema_version=3, executor_metadata={"duration_seconds": 3600.5},
+    ).to_dict()
     request = {
         "session_id": "session",
         "coordinator_epoch": "epoch",
