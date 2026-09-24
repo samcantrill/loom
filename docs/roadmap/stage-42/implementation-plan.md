@@ -1,7 +1,7 @@
 # Roadmap Stage 42 Implementation Plan
 
 Status: maintainer-approved plan; independent plan readiness review passed;
-implementation authorized and in progress.
+implementation authorized; P1 blocked on annotation-limit compatibility decision.
 Roadmap stage: 42
 Stage descriptor: Run Discovery, Annotations, Lineage, And Result Access
 Planning document: [planning.md](planning.md)
@@ -61,7 +61,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 
 | Phase | Slug / plan | Status | Branch | PR | Ownership and usable outcome | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | [submission-context](phases/submission-context.md) | in_progress | `agent/stage-42-p1-submission-context` | none | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
+| P1 | [submission-context](phases/submission-context.md) | blocked | `agent/stage-42-p1-submission-context` | none | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
 | P2 | [run-annotations](phases/run-annotations.md) | pending | `agent/stage-42-p2-run-annotations` | none | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | pending | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Evaluator truth tables, scope/coverage, pagination and adapter parity |
 | P4 | [output-selection](phases/output-selection.md) | pending | `agent/stage-42-p4-output-selection` | none | Exact current/historical output selection with original producer and reuse associations | Authority commit/reuse/history contracts and metadata-only guarantees |
@@ -167,7 +167,9 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1 in_progress; P2–P6 pending.
+- Phase statuses: P1 blocked; P2–P6 pending. P1 card owns the legacy tag-limit
+  contract conflict and incomplete validation evidence. Maintainer clarification
+  is required before changing the accepted limit/compatibility contract.
 - Stage cleanup and terminal disposition: persistent worktree created; no phase PR yet.
 - Improvement log entries: none.
 
@@ -175,4 +177,5 @@ intent-only documentation review does not cover this expanded design.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| P1–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |
+| P1 | No PR; checkpoint `810de61d` | Implementation checkpoint; Ruff/Pyright pass, baseline 3174 passed / 9 failed; later lanes not reached | Legacy tag-limit decision and validation failures; see P1 card | Worktree retained, no cleanup |
+| P2–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |

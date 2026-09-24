@@ -133,11 +133,11 @@ unknown original context, which is accepted compatibility debt.
 
 Read this entire card, manifest shared constraints, and the run-context detailed
 contract. Implement the five slices; do not revisit generic vocabulary, identity,
-or many-to-one submission semantics. Manager preparation, implementation,
-preparation passed. One phase executor is selected for the cross-cutting store,
+or many-to-one submission semantics. Manager preparation passed.
+One phase executor was selected for the cross-cutting store,
 replay and adapter implementation scope; it owns implementation and validation,
 not PR delivery. Pre-submit validation, independent phase review and PR/merge:
-pending implementation.
+blocked pending contract clarification and passing validation.
 Refiner: not needed yet. Blocker corrections: 0/3. Improvement entries: none.
 
 Execution paused by manager pending resolution of the effective-tag compatibility
