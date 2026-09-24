@@ -31,7 +31,7 @@ from time import monotonic, sleep
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.serialization import PlainData, freeze_plain_data, is_plain_data, thaw_plain_data
 from loom.queue._managed_local import (
     AgentResourceProvider,
     AssignmentState,
@@ -6469,7 +6469,12 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
         and "failure" in report
     ):
         _bounded_failure_json(report["failure"])
-        _bounded_json({**value, "report": {**report, "failure": None}}, depth=0)
+        envelope_report = {**report, "failure": None}
+        if report["schema_version"] in {3, 4} and "executor_metadata" in report:
+            # Route metadata is plain data; keep its original envelope depth.
+            _bounded_json(report["executor_metadata"], depth=2, plain_scalars=True)
+            envelope_report["executor_metadata"] = None
+        _bounded_json({**value, "report": envelope_report}, depth=0)
     else:
         _bounded_json(value, depth=0)
     return value
@@ -6529,7 +6534,8 @@ def _bounded_failure_json(value: object) -> None:
 
 
 def _bounded_json(
-    value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION
+    value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION,
+    plain_scalars: bool = False,
 ) -> None:
     if depth > _MAX_JSON_DEPTH:
         raise QueueServiceError("agent protocol JSON is too deeply nested")
@@ -6539,12 +6545,16 @@ def _bounded_json(
         for key, item in value.items():
             if not isinstance(key, str) or not key or len(key) > 160:
                 raise QueueServiceError("agent protocol object key is invalid")
-            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection,
+                          plain_scalars=plain_scalars)
     elif isinstance(value, list):
         if len(value) > max_collection:
             raise QueueServiceError("agent protocol collection is too large")
         for item in value:
-            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection,
+                          plain_scalars=plain_scalars)
+    elif plain_scalars and is_plain_data(value):
+        return
     elif value is not None and not isinstance(value, (str, int, bool)):
         raise QueueServiceError("agent protocol JSON value is invalid")
 

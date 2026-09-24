@@ -177,11 +177,18 @@ worker-local traceback files. These records are private execution diagnostics,
 not automatically sanitized public reports.
 
 Authenticated agent and SLURM report delivery accepts finite numeric details and
-native causal chains only within the schema-2 `failure` subtree. That subtree is
+native causal chains within the schema-2-and-later `failure` subtree. That subtree is
 limited to depth 512 and 256 entries per object/list; the complete agent request
 remains limited to 64 KiB. Supported clients check the same bounds before sending
 and explain which size or nesting limit to reduce. Failures are never flattened
-or silently removed to fit. Ordinary protocol JSON restrictions remain unchanged.
+or silently removed to fit. Schema-3/4 `executor_metadata` also preserves generic
+plain-data values, including finite floating-point numbers in configured runtime
+facts. It retains the ordinary envelope-relative depth limit of 8, collection
+limit of 64 and key restrictions. The transport does not interpret metadata
+parameter names or coerce their numeric values. Both outbound and inbound checks
+use these rules; nonfinite numbers and floats in integer-only envelope fields
+remain invalid. This lets a native failed-worker report retain a fractional
+timeout and proceed through result commit, resource release and explicit retry.
 Detailed inspection is the existing daemon-admission text/JSON view; the separate
 HTTP run-inspection status/location schema is unchanged and retains its 1-MiB cap.
 
