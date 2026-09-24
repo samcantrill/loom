@@ -2621,6 +2621,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("failed_before_result_commit", False),
         ("binding_failure_before_result_commit", False),
         ("binding_failure_after_no_start_commit", False),
+        ("launch_construction_before_result_commit", False),
         ("missing_claim_before_result_commit", False),
         ("native_failure_before_result_commit", False),
         ("reported_failure_before_result_commit", False),
@@ -2639,6 +2640,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         "failed_before_result_commit",
         "binding_failure_before_result_commit",
         "binding_failure_after_no_start_commit",
+        "launch_construction_before_result_commit",
         "missing_claim_before_result_commit",
     }
     native_failure = restart_barrier in {
@@ -2678,7 +2680,9 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         account_for=[]
         if restart_barrier == "missing_claim_before_result_commit"
         else "all",
-        enforce=("cpu",) if no_start else (),
+        enforce=("cpu",)
+        if no_start and restart_barrier != "launch_construction_before_result_commit"
+        else (),
         native_failure=native_failure,
         reported_failure=reported_failure,
         machine_id="agent-a",
@@ -2807,6 +2811,15 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
 
         if no_start:
             monkeypatch.setattr(supervisor, "launch", forbidden_launch)
+        if restart_barrier == "launch_construction_before_result_commit":
+
+            def unavailable_snapshot(*args, **kwargs):
+                raise QueueServiceError("shared snapshot root is not mapped")
+
+            monkeypatch.setattr(
+                "loom.queue.agent_session_transport.ResidentWorkerLaunch",
+                unavailable_snapshot,
+            )
         if restart_barrier in {
             "binding_failure_before_result_commit",
             "binding_failure_after_no_start_commit",
@@ -3015,7 +3028,10 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             assert str(tmp_path) not in json.dumps(public_request)
             failure = runs.read_stage_failure(run_uri, "build")
             assert failure is not None
-            assert "enforce" in str(failure["message"])
+            if restart_barrier == "launch_construction_before_result_commit":
+                assert "shared snapshot root is not mapped" in str(failure["message"])
+            else:
+                assert "enforce" in str(failure["message"])
             if restart_barrier == "missing_claim_before_result_commit":
                 assert "no active claim" in str(failure["message"])
             if restart_barrier in {

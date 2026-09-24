@@ -1067,6 +1067,18 @@ does not silently replace it. This differs from cancelling one graph's demand.
 
 ## Durable remote recovery
 
+Remote worker environment and launch construction errors are reported as failed
+attempts before calling the process supervisor. The failure retains the original
+exception and follows normal result acknowledgement and resource release, including
+after an interrupted result delivery. For shared container preparation, the
+snapshot receipt's source alias must exist in the agent profile's
+`preparation_shared_roots`; a missing alias reports `shared snapshot root is not
+mapped`. A matching filesystem path under a different alias does not grant access.
+Errors after dispatch to the supervisor remain uncertain until its durable
+receipt establishes the process outcome. Existing `start_unknown` records without
+a launch or definite failure receipt still require guarded recovery; this change
+does not infer release authority from missing records.
+
 Remote execution with a selected shared publication root also supplies an
 assignment-owned recovery directory. Preparation children and profiles without a
 publication root retain their existing behavior. This directory holds opaque
