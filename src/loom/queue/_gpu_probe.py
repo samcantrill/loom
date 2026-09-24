@@ -12,6 +12,7 @@ from uuid import uuid4
 from loom.diagnostics.models import PreflightCheckResult, PreflightCheckStatus as Status
 from loom.diagnostics.models import PreflightGroup as Group
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.serialization import PlainData
 
 from ._agent_process_supervisor import (
@@ -367,6 +368,16 @@ def _probe_device(
                     evidence=evidence,
                 )
         environment = provider.worker_environment(command)
+        # This probe owns one activated exclusive device. Pass its request as
+        # well as its binding so containers derive GPU transport like workers.
+        resources = ResourceRequest(
+            entries={"gpu": ResourceEntry("gpu", 1, "count")}
+        )
+        runtime: dict[str, PlainData] = {
+            "resources": resources.to_dict(),
+            "resource_policy": {"account_for": "all", "enforce": ["gpu"]},
+            "resource_selection": {"account_for": ["gpu"], "enforce": ["gpu"]},
+        }
         journal.mark_probe_launch_intent(owner.probe_id)
         result = run_resident_probe(
             profile.launch_profile,
@@ -374,6 +385,7 @@ def _probe_device(
             {},
             timeout_seconds=profile.readiness_requirements.timeout_seconds,
             device_environment=environment,
+            runtime=runtime,
         )
         if not result.contained:
             evidence["claim_retained"] = True

@@ -24,6 +24,81 @@ from loom.scheduling import CapacityAtom, ExactQuantity
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    "kind,returncode", (("apptainer", 0), ("apptainer", 1), ("docker", None))
+)
+def test_owned_gpu_probe_projects_claim_and_releases_after_containment(
+    tmp_path, monkeypatch, kind, returncode
+):
+    from dataclasses import replace
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from loom.pipeline.executors.apptainer.commands import SubprocessApptainerExecRunner
+    from loom.queue._gpu_probe import _probe_device
+    from loom.queue._remote_stage_execution import GpuDeviceDescriptor, ResidentGpuDevice
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile
+
+    image = tmp_path / "installed.sif"
+    image.write_bytes(b"command-only fixture")
+    device = GpuDeviceDescriptor("GPU-owned", model="test-card", vram_bytes=1024)
+    profile = replace(
+        _profile(tmp_path),
+        gpu_devices=(ResidentGpuDevice(device, "GPU-owned"),),
+        container={
+            "kind": kind,
+            "container": {
+                "image": {
+                    "reference": str(image) if kind == "apptainer" else "sha256:" + "a" * 64
+                }
+            },
+            "options": {"command": sys.executable},
+            "python_executable": "/image/bin/python",
+            "daemon_endpoint": None if kind == "apptainer" else "unix:///not-contacted.sock",
+        },
+    )
+    provider = GpuResourceProvider(
+        GpuResourcePlanner.claim_contracts,
+        (device.capacity_atom("agent:GPU-owned"),),
+        bindings={"agent:GPU-owned": "GPU-owned"},
+    )
+    journal = _journal(tmp_path)
+    calls = []
+
+    def run(_runner, command, **kwargs):
+        calls.append(command)
+        retained = journal.retained_claim_commands()
+        assert len(retained) == 1
+        assert retained[0].claim.atoms == (device.capacity_atom("agent:GPU-owned"),)
+        index = command.argv.index(str(image))
+        Path(command.argv[index + 4]).write_text(
+            json.dumps({"protocol": "loom.gpu-probe.v1", "ok": True})
+        )
+        return SimpleNamespace(error=None, returncode=returncode, timed_out=False)
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-ambient")
+    monkeypatch.setattr(SubprocessApptainerExecRunner, "run", run)
+    result = _probe_device(profile, "GPU-owned", "agent", journal, {"gpu": provider})
+    if kind == "apptainer":
+        assert len(calls) == 1
+        assert "--nv" in calls[0].argv
+        assert "CUDA_VISIBLE_DEVICES=GPU-owned" in calls[0].argv
+        assert not any("GPU-ambient" in arg for arg in calls[0].argv)
+    else:
+        # Docker's existing unsupported GPU mapping must reject the request,
+        # rather than silently launching without GPU enforcement.
+        assert calls == []
+    assert result.status == ("PASS" if returncode == 0 else "FAIL")
+    assert result.details["evidence"]["claim_retained"] is False
+    assert journal.retained_claim_commands() == ()
+    with sqlite3.connect(journal.path) as connection:
+        assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
+            ("released",)
+        ]
+        assert connection.execute("SELECT count(*) FROM assignments").fetchone()[0] == 0
+
+
 def _provider() -> GpuResourceProvider:
     return GpuResourceProvider(
         GpuResourcePlanner.claim_contracts,
