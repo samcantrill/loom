@@ -91,6 +91,9 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
         outputs={"manifest": {"artifact_type": "json", "codec_key": "json.v1"}},
         placement={"target": "worker-b"},
     )
+    pipeline["runtime"]["reliability"] = {
+        "timeout": {"enabled": True, "duration_seconds": 3600.5},
+    }
     pipeline_path.write_text(json.dumps(pipeline))
     profiles = [
         qualified_resident_profile(
@@ -121,10 +124,7 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
     authored = json.loads(config_path.read_text())
     authored["assignment_payload_root_id"] = "outputs"
     authored["preparation"]["profiles"]["existing-project"].update(
-        configuration_policy="shared", shared_locations=[],
-        runtime_options={"executor": "local", "reliability": {
-            "timeout": {"enabled": True, "duration_seconds": 3600.5},
-        }},
+        configuration_policy="shared", shared_locations=[]
     )
     if pure_coordinator:
         authored["local_agent"] = None
