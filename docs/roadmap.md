@@ -164,6 +164,7 @@ written.
 | v29 | Durable dependency-aware stage scheduler and multi-machine agent pools | One managed system that admits runs, schedules each dependency-ready stage attempt across authenticated agent resources, moves artifacts safely, and preserves fenced lifecycle truth through restart, disconnection, cancellation, and recovery. |
 | v40 | Coordinator client, agent preparation, and MCP | One native Unix/HTTPS coordinator client, preparation in existing worker environments, and project-neutral Codex tools/skills over the same durable operations. |
 | v41 | Unified run lifecycle and agent execution | One configured run across cold/persistent local services, fleets and connected Slurm, with agent-owned execution, durable restart/result reconciliation and removal of parallel execution pathways. |
+| v42 | Run discovery, annotations, lineage, and result access | Describe submissions, search native and caller-supplied facts, trace recorded dependencies, and retrieve exact published outputs through Python, CLI, and MCP. |
 
 ## v0 - Local Runtime Kernel
 
@@ -3080,6 +3081,54 @@ integration rather than accumulating all cleanup.
 - [Behavior, design and validation](roadmap/stage-41/planning.md)
 - [Implementation manifest and phase plans](roadmap/stage-41/implementation-plan.md)
 
+## v42 - Run Discovery, Annotations, Lineage, And Result Access
+
+Status: maintainer-approved detailed interface, durable-format, compatibility and
+six-phase implementation plan, with a plain-language code walkthrough. The
+implementation manifest records the passed complete-packet review; the planning
+manifest records approval and the documentation publication handoff. Product
+implementation has not started and is separate from this documentation task.
+
+Provide one generic workflow for people and agents: describe submitted work,
+find executions from recorded facts, inspect their state and outputs, traverse
+upstream/downstream dependencies, retrieve selected published results, and add
+organizational labels or observations. Build on the native coordinator client
+and run lifecycle from v40/v41, authority-backed run/catalog/provenance facts,
+and existing artifact identity, output-commit, and materialization contracts.
+
+Applications supply all domain labels and interpretation. Loom accepts tags
+such as `dataset`, `model`, `study`, `customer`, or `document_type` without
+knowing their meaning or inferring them from configuration. Preserve original
+submission intent alongside editable run descriptions, metadata, and attributed
+notes. Use the existing `run_uri` identity; do not create an experiment identity.
+
+Search combines caller tags/typed metadata with supported native identities,
+lifecycle states, explicit timestamp ranges, and recorded provenance. Include
+tag vocabulary discovery, field/operator discovery, text search over descriptions
+and notes, deterministic ordering, bounded pages, and truthful coverage warnings.
+Metadata discovery does not load large artifact payloads or start services/work.
+
+Dependency traversal distinguishes declared ordering from recorded artifact
+consumption and supports cross-run relationships where recorded. Output selection
+defaults to current committed results and explicitly supports history. Retrieval
+binds selected versions, preserves producer and reuse relationships, and obtains
+the complete declared artifact files through supported access paths. A failed run
+can still have useful committed outputs; inaccessible evidence is not an empty
+result. Python, CLI, and MCP share these behavioral contracts.
+
+The stage adds scoped discovery/access through the existing coordinator; it does
+not add a separate hosted catalog, distributed tracking platform, dashboard,
+general query engine, metric extractor, application-specific reader, or automatic
+execution/deletion policy. rphys result interpretation remains downstream, just
+as invoice/report interpretation would for another application.
+
+- [Intent, scope, decisions, and design handoff](roadmap/stage-42/planning.md)
+- [Submission context, identities, tags, and notes](roadmap/stage-42/planning/run-context.md)
+- [Queries, time/provenance filters, and discovery examples](roadmap/stage-42/planning/discovery.md)
+- [Dependency traversal, output retrieval, and agent workflows](roadmap/stage-42/planning/output-access.md)
+- [Implementation manifest and six phase plans](roadmap/stage-42/implementation-plan.md)
+- [Plain-language implementation walkthrough with code](roadmap/stage-42/implementation-walkthrough.md)
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
@@ -3206,10 +3255,11 @@ until there is a specific downstream need and a separate design review.
   continuation in core `loom`. Explicit lookup and publication of
   project-declared immutable artifacts is scoped to v15/v16 instead.
 - Hosted workflow orchestration, remote tracking servers, web dashboards,
-  general authorization systems, and hosted run catalog services as core Loom
-  features. V10 owns authority service supervision and v29 adds only scoped
-  daemon/client mTLS principals; external systems such as Prefect or MLflow remain
-  optional adapters.
+  general authorization systems, and separate hosted run catalog services as core
+  Loom features. V10 owns authority service supervision and v29 adds scoped
+  daemon/client mTLS principals. V42 extends the existing coordinator with scoped
+  run/metadata queries and artifact access, without adding a separate tracking
+  service; external systems such as Prefect or MLflow remain optional adapters.
 - SLURM job arrays, multi-node MPI orchestration, cloud batch backends,
   Kubernetes, cluster-native controllers beyond v11 delegated dispatch, and
   workflow submission across unrelated clusters.
