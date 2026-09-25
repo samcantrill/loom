@@ -2,7 +2,9 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P3; vocabulary semantics approved.
+- Status: pr_open; stage 42 / P3; vocabulary semantics approved.
+- PR: [#352](https://github.com/samcantrill/loom/pull/352), targeting `develop`;
+  implementation head `93ab7af9fc414ac2359e9acb724f023effce861a`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p3-run-discovery`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 3: Run Discovery
@@ -161,5 +163,5 @@ accepted that projection interpretation for independent review against FR-Q02.
 | Config/native/CLI coverage | `make lint typecheck test-config-extra test-mcp-extra build` completed config-extra: **336 passed, 15 skipped, 3302 deselected**, including all **5** `tests/integration/queue/test_run_queries.py` cases. These exercise Unix and HTTPS CLIENT, HTTPS QUERY vocabulary/search, CLI search translation, actual admission/assignment links, annotation mutation, unavailable authority under NOT, disconnected scope and reconciled original submissions. Skips are opt-in physical container acceptance, not P3 obligations. |
 | MCP and remaining gate components | The preceding command stopped at one stale MCP SDK tool-name inventory after 54 MCP passes. Updated that expectation for the six new tools; `make lint typecheck test-mcp-extra build` then passed: **55 MCP tests**, project-wide Ruff, Pyright **0 errors/warnings**, source distribution and wheel. It includes the required tool contracts and real stdio selection. `uv lock --check` and staged diff checks pass. No selected P3 obligation is skipped. |
 | Evidence tree | Reconciled validation applies to staged content tree `93adc4c02eb164eca209e4593e7e155ec48f389f`, based on `e1fb5162f17cdefdfef7b2ca32b7f390f9dfa361`; source subtree `8de098c1683a93ae2901b12473e0a6128c97e151`, tests subtree `a6772f9df1e481b5041964eb81adf6a18243b457`. Only this completion receipt changed afterward. No background validation jobs remain. |
-| Remaining work | Manager's actual-head independent review and publication workflow. No public contract choice remains unresolved; no summary rerun is required by this card. |
+| Remaining work | PR #352 opened with verified canonical title, target and implementation head; independent actual-head review and delivery pending. Manager checked diff scope and reconciled source/test subtree evidence; only roadmap status changed afterward. No public contract choice remains unresolved; no summary rerun is required by this card. |
 | Residual limits | Live pages are not snapshots. Uncaptured run start/finish facts remain unknown; revision/preparation times are not substituted. Job assignment arrays are preserved but not scalar-searchable. No physical runtime qualification is claimed. |
