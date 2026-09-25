@@ -362,6 +362,48 @@ def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
 
 
 @pytest.mark.parametrize("backend,https", [("embedded", False), ("embedded", True), ("authenticated", False), ("authenticated", True)])
+def test_native_legacy_note_limits_and_service_forwarding(tmp_path, backend, https):
+    from tests.integration.mcp.test_stdio import _coordinator
+    from tests.integration.authority.test_coordinator_authority_api import _authority_factory
+
+    factory = _authority_factory(tmp_path)[1] if backend == "authenticated" else None
+    with _coordinator(tmp_path, https=https, authority_factory=factory) as (service, daemon, _):
+        # Exercise the supported authored RunOptions producer through preparation.
+        path = tmp_path / "projects" / "pipeline.yaml"
+        config = json.loads(path.read_text())
+        texts = ["x" * 16385, "\x00" * 131072]
+        config["runtime"]["notes"] = texts
+        path.write_text(json.dumps(config))
+        client = CoordinatorClient.from_connection_file(tmp_path / "client.json") if https else CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+        with client:
+            client.prepare_run(_request())
+            operation: Any = daemon.wait_operation(_request().operation_id, timeout=60).operation
+            assert operation.state == "applied", operation
+            uri = operation.result["prepared_run"]["run_uri"]
+            runtime_path = uri_to_path(uri) / "runtime.json"
+            retained = runtime_path.read_bytes()
+            page = client.list_run_notes(uri)
+            assert len(page.notes) == 1 and page.notes[0].text == texts[0]
+            assert page.notes[0].author is page.notes[0].created_at is None
+            assert page.next_cursor is not None
+            with pytest.raises(CoordinatorClientError) as error:
+                client.list_run_notes(uri, cursor=page.next_cursor)
+            assert error.value.code == "unrepresentable_note"
+            assert error.value.ids["note_id"] == "legacy-000000000001"
+            annotations = client.get_run_context(uri).annotations
+            assert annotations is not None
+            revision = annotations.revision
+            assert client.patch_run_annotations(
+                uri, mutation_id="legacy-patch", expected_revision=revision,
+                set_tags={"review": "yes"},
+            ).tags["review"] == "yes"
+            note = client.append_run_note(uri, mutation_id="legacy-note", text="new")
+            assert client.append_run_note(uri, mutation_id="legacy-note", text="new") == note
+            assert client.list_run_notes(uri).notes == page.notes
+            assert runtime_path.read_bytes() == retained
+
+
+@pytest.mark.parametrize("backend,https", [("embedded", False), ("embedded", True), ("authenticated", False), ("authenticated", True)])
 def test_native_annotation_concurrency_lost_reply_restart_and_cli(tmp_path, monkeypatch, capsys, backend, https):
     from concurrent.futures import ThreadPoolExecutor
     from loom.cli.main import main

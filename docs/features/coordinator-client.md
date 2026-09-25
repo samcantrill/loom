@@ -75,7 +75,7 @@ Patches preserve unrelated keys. Metadata sets replace one top-level value;
 setting null retains the key, while `remove_metadata` removes it. Omitting
 `description` preserves it, and `description=None` clears it. Setting and removing
 the same key is invalid. Patch input and resulting annotations obey the advertised
-context limits; notes are at most 16 KiB UTF-8. The complete encoded request must
+context limits; native note appends are at most 16 KiB UTF-8. The complete encoded request must
 fit 64 KiB on either transport, including escaping and the control envelope.
 
 Annotation revision is independent of lifecycle revision. A stale revision raises
@@ -98,6 +98,12 @@ writes; the first mutation retains them and establishes writable legacy labels
 once. First-write patches use the projected revision zero. Existing captured
 configuration, submission intent, lifecycle state, fingerprints and artifacts
 remain unchanged.
+
+Retained legacy note text keeps its full original length and unknown attribution.
+If one encoded legacy note cannot fit the 768-KiB page budget, listing that item
+reports `CoordinatorClientError(code="unrepresentable_note")` with `ids.note_id`. Earlier
+items can still be read in bounded pages. This limitation does not prevent tag
+patches or native note appends, and does not truncate or rewrite legacy evidence.
 
 `RunInspectionHttpClient.list_run_notes` is available to QUERY principals. Writes
 require CLIENT authority; reads never promote a caller or trigger a mutation.

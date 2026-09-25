@@ -204,6 +204,63 @@ def test_legacy_first_write_and_rollback_preserve_runtime_evidence(authority):
     assert factory(uri).list_run_notes(uri).notes == page.notes
 
 
+def test_legacy_note_sizes_preserve_mutations_and_bound_listing(authority):
+    from loom.pipeline.runtime.options import RunOptions
+    from loom.runs.context import RUN_CONTEXT_LIMITS
+
+    factory, (uri, _), backend = authority
+    store = factory(uri)
+    # RunOptions is the supported producer, with no native append text limit.
+    texts = tuple(RunOptions(notes=("x" * 16385, "\x00" * 131072)).notes)
+    first = store.list_run_notes(uri, 1, legacy_notes=texts)
+    assert first.notes[0].text == texts[0]
+    assert first.notes[0].author is first.notes[0].created_at is None
+    assert first.notes[0].source == "legacy_runtime"
+    assert first.next_cursor is not None
+    with pytest.raises(ValueError, match="legacy-000000000001.*unrepresentable"):
+        store.list_run_notes(uri, cursor=first.next_cursor, legacy_notes=texts)
+    patch = store.mutate_run_annotations(
+        uri, "alice", "patch", "patch_run_annotations",
+        {"expected_revision": 0, "set_tags": {"review": "yes"}},
+        SubmissionContext(), texts,
+    )
+    assert patch.tags == {"review": "yes"}
+    note = store.mutate_run_annotations(
+        uri, "alice", "note", "append_run_note", {"text": "native"},
+        SubmissionContext(), texts,
+    )
+    reopened = factory(uri)
+    assert reopened.list_run_notes(uri, 1).notes == first.notes
+    with pytest.raises(ValueError, match="legacy-000000000001.*unrepresentable"):
+        reopened.list_run_notes(uri, cursor=first.next_cursor)
+    # Durable owners retain the complete unrepresentable record, not a truncation.
+    if backend != "service":
+        import json
+        from loom.io.uris import uri_to_path
+
+        database = (
+            reopened.database_path if backend == "repository"
+            else uri_to_path(uri) / ".loom/authority.sqlite3"
+        )
+        with sqlite3.connect(database) as conn:
+            value = json.loads(conn.execute(
+                "SELECT note_json FROM run_annotation_notes WHERE run_uri=? AND note_id=?",
+                (uri, "legacy-000000000001"),
+            ).fetchone()[0])
+        assert value["text"] == texts[1]
+        assert value["author"] is value["created_at"] is None
+    assert reopened.mutate_run_annotations(
+        uri, "alice", "note", "append_run_note", {"text": "native"},
+        SubmissionContext(), texts,
+    ) == note
+    with pytest.raises(ValueError, match="note text"):
+        store.mutate_run_annotations(
+            uri, "alice", "too-long", "append_run_note",
+            {"text": "x" * (RUN_CONTEXT_LIMITS["text_bytes"] + 1)},
+            SubmissionContext(), texts,
+        )
+
+
 @pytest.mark.parametrize("backend", ["embedded", "repository"])
 def test_annotation_mutation_schema_migration_preserves_initial_context(
     tmp_path, backend

@@ -27,7 +27,7 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.serialization import PlainData
 from loom.runs.context import RunAnnotations, SubmissionContext
-from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError, RunNote, RunNotePage
+from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError, RunNote, RunNotePage, _UnrepresentableRunNoteError
 
 from .authority import (
     ActionProducerBinding,
@@ -478,7 +478,10 @@ class AuthenticatedCoordinatorAuthority:
                        legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
         response = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/notes", run_uri,
             body={"limit": limit, "cursor": cursor, "legacy_notes": list(legacy_notes)})
-        return RunNotePage.from_dict(_mapping(_body_required(response, "result"), "result"))
+        value = _mapping(_body_required(response, "result"), "result")
+        if "unrepresentable_note_id" in value:
+            raise _UnrepresentableRunNoteError(cast(str, value["unrepresentable_note_id"]))
+        return RunNotePage.from_dict(value)
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         result = self._call(COORDINATOR_OPEN_RUN_PATH, run_uri)

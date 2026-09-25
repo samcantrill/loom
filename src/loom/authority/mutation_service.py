@@ -629,7 +629,7 @@ class AuthorityMutationService:
                                body={"annotations": None if annotations is None else annotations.to_dict()})
             case AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS | AuthorityMutationOperation.LIST_RUN_NOTES:
                 from loom.runs.context import SubmissionContext
-                from loom.runs.annotations import AnnotationConflictError
+                from loom.runs.annotations import AnnotationConflictError, _UnrepresentableRunNoteError
 
                 body = request.body
                 assert body is not None
@@ -637,9 +637,13 @@ class AuthorityMutationService:
                 if not isinstance(notes, (list, tuple)) or any(not isinstance(note, str) for note in notes):
                     raise ValueError("invalid legacy notes")
                 legacy_notes = cast(tuple[str, ...], tuple(notes))
+                result: dict[str, PlainData]
                 if operation == AuthorityMutationOperation.LIST_RUN_NOTES:
-                    result = self._repository.list_run_notes(_required_run_uri(request),
-                        cast(int, body.get("limit", 50)), cast(str | None, body.get("cursor")), legacy_notes).to_dict()
+                    try:
+                        result = self._repository.list_run_notes(_required_run_uri(request),
+                            cast(int, body.get("limit", 50)), cast(str | None, body.get("cursor")), legacy_notes).to_dict()
+                    except _UnrepresentableRunNoteError as exc:
+                        result = {"unrepresentable_note_id": exc.note_id}
                 else:
                     context = body.get("legacy_context", {})
                     change = body.get("change")

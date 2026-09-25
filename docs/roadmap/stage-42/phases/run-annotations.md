@@ -111,7 +111,7 @@ Workflow preparation passed; no refinement uncertainty. One phase executor is
 selected for the cross-store CAS/receipt and adapter implementation scope, with
 manager-owned validation acceptance and independent actual-PR review/delivery.
 Implementation and expanded local validation complete; actual-PR review found R1 below.
-Blocker corrections 1/3 (one scoped refiner correction assigned);
+Blocker corrections 1/3 (one scoped refiner correction completed);
 improvement entries none. Required selected tests need baseline, config-extra
 and MCP-extra environments as their markers require; do not claim deselection
 as adapter coverage. Expand for changed shared migration/protocol consumers.
@@ -136,6 +136,40 @@ Extend supported-producer coverage across both durable authority owners. No new
 execution/lifecycle owner or arbitrary scope expansion. Review otherwise found
 the transactions, replay, native attribution and validation evidence consistent.
 Merge remains blocked until correction and the same reviewer's confirmation.
+
+R1 correction: native append validation retains the 16-KiB limit, while retained
+legacy `RunNote` text has no retrospective append limit. Both durable owners keep
+the full imported text and unknown attribution; unrelated patches and short native
+appends/replays succeed even when a legacy record cannot fit a page. Pagination
+returns a bounded prefix, then explicitly reports `unrepresentable_note` with
+`ids.note_id` when the next individual record exceeds 768 KiB after encoding.
+The authority-service result preserves this condition through the scoped adapter
+and native Unix/HTTPS error envelopes. No schema, receipt, or lifecycle change.
+
+Validation selection follows `loom-targeted-validation`: supported `RunOptions`
+producers at 16,385 bytes and an escaped 768-KiB-overflow record exercise both
+durable owners, process service, authenticated authority forwarding, native
+Unix/HTTPS, first-write import, reopen, replay, retained runtime bytes and native
+append rejection. Expanded to existing authority mutation/coordinator API tests
+and all native run-context tests because the error crosses those boundaries.
+Further expansion is required only for changed shared decoding, schema, or
+unrelated mutation behavior; none changed. Unaffected broad/MCP/build evidence
+below is reused. The same reviewer's R1 confirmation remains pending.
+
+R1 evidence on the correction tree based on `40a7b82b` (subsequent edits only this
+record): isolated locked Python 3.12/dev pytest for
+`tests/integration/authority/test_run_annotations.py`,
+`tests/contracts/test_run_context_contract.py`,
+`tests/integration/authority/test_coordinator_authority_api.py` and
+`tests/integration/authority/test_mutation_api.py`: **60 passed**. Config-extra
+`tests/integration/queue/test_run_context.py`: all **14 existing cases passed**;
+final `-k legacy_note_limits_and_service_forwarding`: **4 passed, 14 deselected**.
+The latter replaced the test's Unix message-text assumption with checks of the
+documented structured code and note ID; HTTPS and Unix now both pass. Final
+`make lint typecheck` passes (Ruff; Pyright **0 errors/warnings**), including the
+manager-owned unrelated retirement-test typing correction. `git diff --check`
+passes. No skipped selected obligations; unrelated broad/MCP/build evidence is
+unchanged. Correction budget remains **1/3**, and the sole refiner is consumed.
 
 | Item | Result |
 | --- | --- |

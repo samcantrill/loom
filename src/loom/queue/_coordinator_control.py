@@ -643,7 +643,7 @@ def dispatch_control(
             result = get_run_context(daemon, cast(str, value["run_uri"]), inspect_run)
         elif operation in {"patch_run_annotations", "append_run_note", "list_run_notes"}:
             from ._run_context import annotation_operation
-            from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError
+            from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError, _UnrepresentableRunNoteError
             from loom.pipeline.stores.authority import AuthorityStoreError
 
             dispatched = operation in MUTATION_OPERATIONS
@@ -654,6 +654,9 @@ def dispatch_control(
                     ids={"current_revision": exc.current_revision}) from exc
             except AnnotationValidationError as exc:
                 raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
+            except _UnrepresentableRunNoteError as exc:
+                raise control_error("unrepresentable_note", operation, payload, boundary="coordinator",
+                    ids={"note_id": exc.note_id}) from exc
             except AuthorityStoreError as exc:
                 raise control_error("unavailable", operation, payload, boundary="coordinator", dispatched=dispatched) from exc
             applied = dispatched

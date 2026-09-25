@@ -71,8 +71,10 @@ def page_notes(
                 note.to_dict(), ensure_ascii=True, separators=(",", ":")
             ).encode()
         )
-        if selected and encoded_bytes + size > RUN_CONTEXT_LIMITS["note_page_bytes"]:
-            break
+        if encoded_bytes + size > RUN_CONTEXT_LIMITS["note_page_bytes"]:
+            if selected:
+                break
+            raise _UnrepresentableRunNoteError(note.note_id)
         selected.append(note)
         encoded_bytes += size
     continuation = None
@@ -97,6 +99,17 @@ class AnnotationConflictError(ValueError):
 
 class AnnotationValidationError(ValueError):
     """The owner rejected an annotation before committing any effect."""
+
+
+class _UnrepresentableRunNoteError(ValueError):
+    """Retained evidence cannot fit a bounded note response."""
+
+    def __init__(self, note_id: str) -> None:
+        super().__init__(f"note {note_id} is unrepresentable within the note page byte limit")
+        self.note_id = note_id
+
+    def __reduce__(self):
+        return (type(self), (self.note_id,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +225,8 @@ class RunNote:
     """An immutable observation with native UTC time and authenticated identity.
 
     Legacy runtime notes have unknown author/time and ``source=legacy_runtime``.
+    Their retained text is not subject to the native append size limit; listing
+    reports an explicit error when an individual record cannot fit a page.
     Correction means appending another note, never replacing an existing entry.
     """
 
@@ -231,7 +246,10 @@ class RunNote:
             or self.source not in {"native", "legacy_runtime"}
         ):
             raise ValueError("invalid note identity")
-        _text(self.text, "note text", RUN_CONTEXT_LIMITS["text_bytes"])
+        if self.source == "native":
+            _text(self.text, "note text", RUN_CONTEXT_LIMITS["text_bytes"])
+        elif not isinstance(self.text, str):
+            raise ValueError("legacy note text must be text")
         for value in (self.author, self.created_at):
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError("invalid note attribution")
