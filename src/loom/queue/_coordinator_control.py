@@ -64,6 +64,9 @@ CONTROL_OPERATIONS = frozenset(
         "list_run_notes",
         "search_runs",
         "select_outputs",
+        "describe_artifact",
+        "read_artifact_chunk",
+        "read_artifact",
         "trace_lineage",
         "list_output_commits",
         "search_submissions",
@@ -413,7 +416,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         from loom.runs._query_page import QueryPage
 
         return QueryPage.from_dict(value)
-    if operation == "query_fields":
+    if operation in {"query_fields", "describe_artifact", "read_artifact_chunk", "read_artifact"}:
         return value
     raise ValueError("control result operation is unsupported")
 
@@ -445,6 +448,10 @@ def validate_request(
     """Validate the finite public request before invoking application owners."""
     from ._run_queries import QUERY_OPERATIONS, validate_query_request
     from ._output_selection import OUTPUT_OPERATIONS, validate_output_request
+    from ._artifact_access import ARTIFACT_OPERATIONS, validate_artifact_request
+
+    if operation in ARTIFACT_OPERATIONS:
+        return validate_artifact_request(operation, {k: v for k, v in payload.items() if k != "expected_coordinator_id"})
 
     if operation == "trace_lineage":
         from ._lineage import validate_lineage_request
@@ -616,6 +623,7 @@ def dispatch_control(
                     "run-query-v1",
                     "output-query-v1",
                     "lineage-query-v1",
+                    "artifact-read-v1",
                     *(
                         ("agent-preparation-v1", "reconciled-run-v1")
                         if daemon.preparation_available
@@ -688,6 +696,9 @@ def dispatch_control(
                 raise control_error("invalid_cursor", operation, payload, boundary="coordinator") from exc
             except QueryError as exc:
                 raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
+        elif operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"}:
+            from ._artifact_access import artifact_operation
+            result = artifact_operation(daemon, operation, value)
         elif operation == "get_run_context":
             from ._run_context import get_run_context
 

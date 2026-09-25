@@ -149,11 +149,18 @@ write boundary is P6 source/tests/user docs and this card; no additional backend
 or credential service is authorized. Preserve full `make validate-pr` and real
 HTTPS multi-file transfer acceptance, with concrete failure/containment/overwrite
 checks above. Existing legacy limits remain explicit outcomes rather than new
-scope. Implementation/validation/independent review/PR pending.
+scope. Implementation complete; final validation, independent review and PR pending.
 Refiner not needed yet; blocker corrections 0/3; improvement entries none.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation | Native exact-locator declaration/chunk/preview resolver; flat Python methods, CLIENT/QUERY Unix/HTTPS routes, CLI and MCP; client-owned verified temporary downloads and atomic no-replace publication |
+| Changed paths | `src/loom/queue/_artifact_access.py`, `_coordinator_control.py`, `_coordinator_client.py`, `agent_session_transport.py`; `src/loom/_artifact_fetch.py`, `coordinator.py`, `cli/artifacts.py`, `mcp/_server.py`; artifact-access contract/native/composed tests, existing transport/MCP capability tests; `docs/features/artifact-access.md`, artifacts index |
+| Affected contracts and consumers | Exact authority identity and scope per call; contained regular-file/receipt membership; complete inventories; bounded inert preview; stream integrity and client destination ownership; native/Python/CLI/MCP parity and explicit source annotation |
+| Focused evidence | Isolated locked Python 3.12 config lane: artifact access contracts, native Unix/real mutual-TLS HTTPS transfer, two-vocabulary workflow, existing materialization and shared publication: 15 passed. Isolated config+MCP lane: existing stdio reconnect workflow extended with describe/read/fetch on Unix and HTTPS: 2 passed, 8 deselected. Subsequent local race/receipt failure assertions and preview verification await final gate |
+| Selected final checks and expansion triggers | Required `make validate-pr` covers baseline, config, MCP, Ruff, Pyright, builds including the real HTTPS lane. Expand only for failures, source changes invalidating evidence, or a newly affected owner. No additional backend, cloud, physical fleet, or mapped-local optimization is claimed |
+| Validated revision/tree and final gate | Pending final gate on stable implementation tree |
+| Review/PR/merge | Manager-owned; pending |
+| Residual limitations | No retention pin or durable partial resume; legacy original bytes remain unverified without checksum. Atomic non-replacing directory publication requires Linux/filesystem `renameat2` support; unsupported hosts fail without overwriting. No inferred application closure or external reader |
