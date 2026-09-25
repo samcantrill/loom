@@ -16,6 +16,10 @@ def test_runs_public_exports_are_stable() -> None:
     import loom.runs as runs
 
     assert runs.__all__ == [
+        "AnnotationConflictError",
+        "AnnotationPatch",
+        "RunNote",
+        "RunNotePage",
         "RunAnnotations",
         "RunContext",
         "SubmissionContext",

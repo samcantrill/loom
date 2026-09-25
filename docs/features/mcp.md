@@ -84,13 +84,23 @@ Tool annotations describe read versus mutation behavior and grant no authority.
 | `loom_get_job` | Exactly one of `admission_id` or `queue_item_id` | Native admission detail; queue mode first resolves the ID |
 | `loom_inspect_run` | `run_uri` | Native diagnostic success/failure union for an admitted run |
 | `loom_run_context` | `run_uri` | Original submission, current annotations, bounded submission links and native inspection; no execution or payload download |
+| `loom_patch_run_annotations` | `run_uri`, `mutation_id`, `patch` including `expected_revision` | Native CAS patch, preserving unrelated keys; omitted description differs from explicit null |
+| `loom_append_run_note` | `run_uri`, `mutation_id`, `text` | Append-only native author/time; same-ID exact replay returns the original note |
+| `loom_list_run_notes` | `run_uri`, `limit=50`, `cursor=null` | Up to 50 notes in native time/ID order; legacy attribution remains unknown |
 | `loom_list_agents` | `limit=20`, `cursor=null` | Native agent page |
 | `loom_get_agent` | `agent_id` | Native availability/freshness projection |
 | `loom_submit_run` | `run_uri`, `queue_item_id`, optional explicit `retry_failed_revision` | Native admission |
 | `loom_wait_for_change` | `admission_id`, `expected_revision`, `timeout_seconds=25` | Native admission change/timeout observation |
 | `loom_cancel_job` | `queue_item_id` | Native cancellation acknowledgement |
 
-Pages contain 1–100 items; waits accept 0–25 seconds. Adapter capacity admission
+Job/agent pages contain 1–100 items; note pages contain 1–50. Annotation writes
+use run-scoped IDs shared across patch and note operations for each authenticated
+principal. An uncertain reply must be replayed with its original ID/request;
+a stale patch may be deliberately rebased only with a new ID. The tools do not
+assign author identity or automatically rebase conflicts. See
+[annotation semantics](coordinator-client.md#editing-annotations-and-appending-notes).
+
+Waits accept 0–25 seconds. Adapter capacity admission
 and native I/O share one 30-second request budget. Synchronous calls run outside
 the SDK event loop with bounded outstanding work and reserved ordinary-call
 capacity while waits are active. Codex's 60-second timeout leaves room around

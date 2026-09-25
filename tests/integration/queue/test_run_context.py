@@ -98,6 +98,18 @@ def test_oversized_legacy_projection_is_partial_and_nonmutating(tmp_path):
         assert SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict() == authority_before
         with sqlite3.connect(database) as conn:
             assert conn.execute("SELECT COUNT(*) FROM run_annotations").fetchone()[0] == 0
+        from loom.queue._run_context import annotation_operation
+
+        store.write_runtime_metadata(uri, {"tags": {"legacy": "retained"}, "notes": ["old observation"]})
+        legacy_bytes = (run_dir / "runtime.json").read_bytes()
+        changed = cast(Any, annotation_operation(daemon, "patch_run_annotations",
+            {"run_uri": uri, "mutation_id": "first-write", "patch": {"expected_revision": 0, "set_tags": {"new": "label"}}}, "native-caller"))
+        assert changed.revision == 1 and changed.tags == {"legacy": "retained", "new": "label"}
+        notes = cast(Any, annotation_operation(daemon, "list_run_notes", {"run_uri": uri, "limit": 50, "cursor": None}, "native-caller"))
+        assert notes.notes[0].source == "legacy_runtime"
+        assert notes.notes[0].author is notes.notes[0].created_at is None
+        assert (run_dir / "runtime.json").read_bytes() == legacy_bytes
+        assert SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict() == authority_before
     finally:
         daemon.stop()
 
@@ -211,6 +223,14 @@ def test_native_context_replay_cli_and_inert_inspection(tmp_path, capsys, late_f
             )
             output = json.loads(capsys.readouterr().out)
             assert output["result"]["annotations"]["description"] == "reason"
+            snapshot = SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict()
+            client.patch_run_annotations(uri, mutation_id="post-completion", expected_revision=1, set_tags={"review": "pending"})
+            client.append_run_note(uri, mutation_id="post-completion-note", text="Observed committed results")
+            after_inspection = client.get_run_context(uri).inspection
+            assert after_inspection is not None
+            assert after_inspection["stages"] == context.inspection["stages"]
+            assert after_inspection["locations"] == context.inspection["locations"]
+            assert SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict() == snapshot
     finally:
         server.stop()
         daemon.stop()
@@ -330,5 +350,185 @@ def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
             "first",
             "second",
         }
+        authority = SQLitePerRunAuthorityStore(uris[0])
+        snapshot = authority.open_run(uris[0]).to_dict()
+        authority.mutate_run_annotations(uris[0], "caller", "reused-review", "patch_run_annotations",
+            {"expected_revision": 1, "set_tags": {"review": "done"}}, SubmissionContext())
+        authority.mutate_run_annotations(uris[0], "caller", "reused-note", "append_run_note", {"text": "Reviewed reused output"}, SubmissionContext())
+        assert authority.open_run(uris[0]).to_dict() == snapshot
+        assert get_run_context(daemon, uris[0], None).initializer_submission == context.initializer_submission
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("backend,https", [("embedded", False), ("embedded", True), ("authenticated", False), ("authenticated", True)])
+def test_native_legacy_note_limits_and_service_forwarding(tmp_path, backend, https):
+    from tests.integration.mcp.test_stdio import _coordinator
+    from tests.integration.authority.test_coordinator_authority_api import _authority_factory
+
+    factory = _authority_factory(tmp_path)[1] if backend == "authenticated" else None
+    with _coordinator(tmp_path, https=https, authority_factory=factory) as (service, daemon, _):
+        # Exercise the supported authored RunOptions producer through preparation.
+        path = tmp_path / "projects" / "pipeline.yaml"
+        config = json.loads(path.read_text())
+        texts = ["x" * 16385, "\x00" * 131072]
+        config["runtime"]["notes"] = texts
+        path.write_text(json.dumps(config))
+        client = CoordinatorClient.from_connection_file(tmp_path / "client.json") if https else CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+        with client:
+            client.prepare_run(_request())
+            operation: Any = daemon.wait_operation(_request().operation_id, timeout=60).operation
+            assert operation.state == "applied", operation
+            uri = operation.result["prepared_run"]["run_uri"]
+            runtime_path = uri_to_path(uri) / "runtime.json"
+            retained = runtime_path.read_bytes()
+            page = client.list_run_notes(uri)
+            assert len(page.notes) == 1 and page.notes[0].text == texts[0]
+            assert page.notes[0].author is page.notes[0].created_at is None
+            assert page.next_cursor is not None
+            with pytest.raises(CoordinatorClientError) as error:
+                client.list_run_notes(uri, cursor=page.next_cursor)
+            assert error.value.code == "unrepresentable_note"
+            assert error.value.ids["note_id"] == "legacy-000000000001"
+            annotations = client.get_run_context(uri).annotations
+            assert annotations is not None
+            revision = annotations.revision
+            assert client.patch_run_annotations(
+                uri, mutation_id="legacy-patch", expected_revision=revision,
+                set_tags={"review": "yes"},
+            ).tags["review"] == "yes"
+            note = client.append_run_note(uri, mutation_id="legacy-note", text="new")
+            assert client.append_run_note(uri, mutation_id="legacy-note", text="new") == note
+            assert client.list_run_notes(uri).notes == page.notes
+            assert runtime_path.read_bytes() == retained
+
+
+@pytest.mark.parametrize("backend,https", [("embedded", False), ("embedded", True), ("authenticated", False), ("authenticated", True)])
+def test_native_annotation_concurrency_lost_reply_restart_and_cli(tmp_path, monkeypatch, capsys, backend, https):
+    from concurrent.futures import ThreadPoolExecutor
+    from loom.cli.main import main
+    from loom.queue._coordinator_control import dispatch_control
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+    from tests.integration.mcp.test_stdio import _coordinator
+    from tests.integration.authority.test_coordinator_authority_api import _authority_factory
+
+    factory = _authority_factory(tmp_path)[1] if backend == "authenticated" else None
+    with _coordinator(tmp_path, https=https, authority_factory=factory) as (service, daemon, _):
+        def connect():
+            return CoordinatorClient.from_connection_file(tmp_path / "client.json") if https else CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+
+        with connect() as client:
+            request = replace(_request(), context=SubmissionContext("original", {"keep": "yes"}, {"n": 3}))
+            client.prepare_run(request)
+            operation: Any = daemon.wait_operation(request.operation_id, timeout=60).operation
+            assert operation.state == "applied", operation
+            uri = operation.result["prepared_run"]["run_uri"]
+            selected_factory = service.daemon.coordinator_authority_factory
+            assert selected_factory is not None
+            authority = selected_factory(uri)
+            before = authority.open_run(uri).to_dict()
+            run_dir = uri_to_path(uri)
+            fingerprints = {path.relative_to(run_dir): path.read_bytes() for path in run_dir.rglob("*.json") if ".loom" not in path.parts}
+            original_context = client.get_run_context(uri)
+
+            def patch(name):
+                with connect() as other:
+                    try:
+                        return other.patch_run_annotations(uri, mutation_id=name, expected_revision=1, set_tags={name: "yes"})
+                    except CoordinatorClientError as exc:
+                        return exc
+
+            with ThreadPoolExecutor(2) as pool:
+                values = list(pool.map(patch, ["a", "b"]))
+            winner = next(item for item in values if not isinstance(item, CoordinatorClientError))
+            loser = next(item for item in values if isinstance(item, CoordinatorClientError))
+            assert loser.code == "conflict" and loser.ids["current_revision"] == 2
+            assert loser.mutation_outcome == "not_applied"
+            result = client.patch_run_annotations(uri, mutation_id="rebase", expected_revision=2,
+                set_tags={"b" if "a" in winner.tags else "a": "yes"}, set_metadata={"null": None}, description=None)
+            assert result.tags == {"keep": "yes", "a": "yes", "b": "yes"}
+            assert result.metadata == {"n": 3, "null": None} and result.description is None
+            transport = client._transport
+            call = transport.call
+
+            def lose_response(operation, payload, *args, **kwargs):
+                response = call(operation, payload, *args, **kwargs)
+                if operation == "append_run_note":
+                    return {"ok": True, "result": {"acknowledgement": "lost"}}
+                return response
+
+            monkeypatch.setattr(transport, "call", lose_response)
+            with pytest.raises(CoordinatorClientError) as lost:
+                client.append_run_note(uri, mutation_id="lost-note", text="retained")
+            assert lost.value.mutation_outcome == "unknown"
+            assert lost.value.code == "invalid_response"
+            assert lost.value.ids["mutation_id"] == "lost-note"
+            monkeypatch.setattr(transport, "call", call)
+            daemon.stop()
+            daemon.start()
+            note = client.append_run_note(uri, mutation_id="lost-note", text="retained")
+            assert note.author and note.created_at and note.text == "retained"
+            assert client.list_run_notes(uri).notes == (note,)
+            if https:
+                from loom.queue.agent_session_transport import RunInspectionHttpClient, RunInspectionTlsClientConfig, LocalDaemonAgentHttpClient, AgentTlsClientConfig
+                from loom.queue.errors import QueueServiceError
+
+                address = json.loads((tmp_path / "client.json").read_text())["transport"]["url"]
+                tls = tmp_path / "tls"
+                query_client = RunInspectionHttpClient(RunInspectionTlsClientConfig(address, tls / "ca.crt", tls / "query.crt", tls / "query.key"))
+                assert query_client.list_run_notes(uri)["notes"] == [note.to_dict()]
+                unauthorized = LocalDaemonAgentHttpClient(AgentTlsClientConfig(address, tls / "ca.crt", tls / "query.crt", tls / "query.key"))
+                try:
+                    with pytest.raises(QueueServiceError):
+                        unauthorized._call("append_run_note", {"run_uri": uri, "mutation_id": "query-write", "text": "denied"}, role="query")
+                finally:
+                    unauthorized.close()
+                assert client.list_run_notes(uri).notes == (note,)
+            with pytest.raises(CoordinatorClientError) as conflict:
+                client.patch_run_annotations(uri, mutation_id="lost-note", expected_revision=3)
+            assert conflict.value.code == "conflict"
+            with pytest.raises(CoordinatorClientError) as spoofed:
+                client._native_call("append_run_note", {"run_uri": uri, "mutation_id": "spoof", "text": "note", "author": "admin"}, None)
+            assert spoofed.value.code == "invalid_request"
+            query = LocalDaemonPrincipal("readonly", LocalDaemonRole.QUERY)
+            with pytest.raises(CoordinatorClientError) as denied:
+                dispatch_control(daemon, query, "append_run_note", {"run_uri": uri, "mutation_id": "denied", "text": "no"}, transport="https", wait_slice=5, inspect_run=None)
+            assert denied.value.code == "unauthorized" and denied.value.mutation_outcome == "not_applied"
+            connection = ["--connection", str(tmp_path / "client.json")] if https else ["--endpoint", str(service.daemon.endpoint)]
+            assert main(["runs", "annotate", uri, "--mutation-id", "cli-patch", "--patch", json.dumps({"expected_revision": 3, "remove_metadata": ["n"]}), *connection, "--format", "json"]) == 0
+            assert json.loads(capsys.readouterr().out)["result"]["metadata"] == {"null": None}
+            assert main(["runs", "notes", uri, "--mutation-id", "cli-note", "--text", "CLI observation", *connection, "--format", "json"]) == 0
+            cli_note = json.loads(capsys.readouterr().out)["result"]
+            assert cli_note["author"] == note.author
+            assert main(["runs", "notes", uri, "--limit", "1", *connection, "--format", "json"]) == 0
+            page = json.loads(capsys.readouterr().out)["result"]
+            assert page["notes"] == [note.to_dict()] and page["next_cursor"]
+            with pytest.raises(CoordinatorClientError) as oversized:
+                client.patch_run_annotations(uri, mutation_id="oversized-result", expected_revision=4,
+                    set_tags={str(index): "v" for index in range(126)})
+            assert oversized.value.code == "invalid_request"
+            assert oversized.value.mutation_outcome == "not_applied"
+            unchanged = client.get_run_context(uri).annotations
+            assert unchanged is not None and unchanged.revision == 4
+            from loom.pipeline.stores.authority import AuthorityStoreError
+
+            owner_type = type(authority)
+            original_mutate = owner_type.mutate_run_annotations
+
+            def lose_authority_acknowledgement(self, *args, **kwargs):
+                result = original_mutate(self, *args, **kwargs)
+                if args[2] == "lost-owner-note":
+                    raise AuthorityStoreError("authority reply lost after commit")
+                return result
+
+            with monkeypatch.context() as patcher:
+                patcher.setattr(owner_type, "mutate_run_annotations", lose_authority_acknowledgement)
+                with pytest.raises(CoordinatorClientError) as uncertain:
+                    client.append_run_note(uri, mutation_id="lost-owner-note", text="Owner acknowledgement lost")
+                assert uncertain.value.code == "unavailable"
+                assert uncertain.value.mutation_outcome == "unknown"
+            replay = client.append_run_note(uri, mutation_id="lost-owner-note", text="Owner acknowledgement lost")
+            assert sum(entry.note_id == replay.note_id for entry in client.list_run_notes(uri).notes) == 1
+            assert authority.open_run(uri).to_dict() == before
+            assert all((run_dir / path).read_bytes() == data for path, data in fingerprints.items())
+            assert client.get_run_context(uri).initializer_submission == original_context.initializer_submission

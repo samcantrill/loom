@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P2.
+- Status: pr_open; stage 42 / P2.
+- PR: [#351](https://github.com/samcantrill/loom/pull/351), target `develop`; independent actual-head review pending.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p2-run-annotations`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 2: Run Annotations
-- Worktree/coordination/base: manifest execution context; base after P1.
+- Worktree/coordination: manifest execution context; base `27d32d86040ccd7379361715656ba46b8133dde2`.
 - Dependencies: P1. Named refinement uncertainty: none.
-- Blockers: stage gates and P1 merge.
+- Blockers: none; maintainer chose run-scoped mutation IDs. P1 PR #349 remotely merged, completion metadata published and synchronization passed.
 
 ## Objective, Scope, And Reuse
 
@@ -17,7 +18,10 @@ attributed notes. This is independently valuable before search ships. P3 consume
 the same authority-owned view. Own `FR-42-C04/C05/C06`, `EX-42-C02`,
 `VAL-42-C03/C04`, `DQ-42-C02/C03`; P1 already owns submission replay.
 
-Reuse P1 models, authority owners and native context route. Extend
+Reuse P1 models, authority owners and native context route. Organizational
+authority methods now live in `queue/coordinator_authority.py`,
+`pipeline/stores/coordinator_authority.py` and `_run_annotations.py`; extend that
+scoped owner rather than adding worker-facing lifecycle methods. Extend
 `src/loom/pipeline/stores/{authority.py,read_models.py,sqlite_authority.py,authority_protocol.py,authority_client.py,service_authority.py}`,
 `src/loom/authority/_repository.py` and routes, native coordinator client/control,
 `src/loom/cli/runs.py`, and `src/loom/mcp/_server.py`. Do not write legacy runtime
@@ -56,7 +60,8 @@ Private SQL/helper names and DTO grouping remain implementation discretion.
    for notes and mutation receipts. Validate JSON values and text/transport limits
    at ingress. Set/remove overlap rejects; absent versus null remains distinct.
 2. Implement the same CAS/receipt transaction in embedded and service authority
-   paths. Use authenticated principal plus mutation ID/digest and run target;
+   paths. Use `(run_uri, authenticated principal, mutation ID)` receipt identity;
+   validate same-run replay/conflict and independent cross-run ID reuse;
    test restart persistence. First write on a legacy run explicitly establishes
    the writable annotation record from its legacy view once.
 3. Add native `patch_run_annotations`, `append_run_note`, `list_run_notes` routes;
@@ -102,11 +107,82 @@ the owner instead. Durable generic audit history beyond notes/current annotation
 is deferred until there is a consumer. Supported merge state includes all four
 client operations even if P3 never ships.
 
-Workflow preparation/refinement/implementation/validation/independent review/PR:
-not started. Blocker corrections 0/3; improvement entries none.
+Workflow preparation passed; no refinement uncertainty. One phase executor is
+selected for the cross-store CAS/receipt and adapter implementation scope, with
+manager-owned validation acceptance and independent actual-PR review/delivery.
+Implementation and expanded local validation complete; actual-PR review found R1 below.
+Blocker corrections 1/3 (one scoped refiner correction completed);
+improvement entries none. Required selected tests need baseline, config-extra
+and MCP-extra environments as their markers require; do not claim deselection
+as adapter coverage. Expand for changed shared migration/protocol consumers.
 
 ## Completion Record
 
+### Independent Review R1: Legacy Note Limits
+
+Review of PR #351 head `7496fc31f57d0a103f0d5b1b3c032184f7af8d24` found one
+product blocker: supported `RunOptions.notes` can contain 16,385-byte text, but
+`RunNote` applies the 16-KiB native append limit to `legacy_runtime` too.
+Shared mutation code converts all legacy notes on every write, so such a note
+breaks listing, unrelated tag patches and valid short native appends. This
+violates preserved legacy evidence and unrelated annotation-write contracts;
+the maintainer's initial-tag decision does not authorize rejecting legacy notes.
+
+Smallest correction: separate native append limits from retained legacy evidence,
+preserve full legacy text/unknown attribution without truncation or rewriting,
+retain bounded listing with an explicit limitation when text cannot fit, and
+prevent legacy projection size from invalidating otherwise valid mutations.
+Extend supported-producer coverage across both durable authority owners. No new
+execution/lifecycle owner or arbitrary scope expansion. Review otherwise found
+the transactions, replay, native attribution and validation evidence consistent.
+Merge remains blocked until correction and the same reviewer's confirmation.
+
+R1 correction: native append validation retains the 16-KiB limit, while retained
+legacy `RunNote` text has no retrospective append limit. Both durable owners keep
+the full imported text and unknown attribution; unrelated patches and short native
+appends/replays succeed even when a legacy record cannot fit a page. Pagination
+returns a bounded prefix, then explicitly reports `unrepresentable_note` with
+`ids.note_id` when the next individual record exceeds 768 KiB after encoding.
+The authority-service result preserves this condition through the scoped adapter
+and native Unix/HTTPS error envelopes. No schema, receipt, or lifecycle change.
+
+Validation selection follows `loom-targeted-validation`: supported `RunOptions`
+producers at 16,385 bytes and an escaped 768-KiB-overflow record exercise both
+durable owners, process service, authenticated authority forwarding, native
+Unix/HTTPS, first-write import, reopen, replay, retained runtime bytes and native
+append rejection. Expanded to existing authority mutation/coordinator API tests
+and all native run-context tests because the error crosses those boundaries.
+Further expansion is required only for changed shared decoding, schema, or
+unrelated mutation behavior; none changed. Unaffected broad/MCP/build evidence
+below is reused. The same reviewer's R1 confirmation remains pending.
+
+R1 evidence on the correction tree based on `40a7b82b` (subsequent edits only this
+record): isolated locked Python 3.12/dev pytest for
+`tests/integration/authority/test_run_annotations.py`,
+`tests/contracts/test_run_context_contract.py`,
+`tests/integration/authority/test_coordinator_authority_api.py` and
+`tests/integration/authority/test_mutation_api.py`: **60 passed**. Config-extra
+`tests/integration/queue/test_run_context.py`: all **14 existing cases passed**;
+final `-k legacy_note_limits_and_service_forwarding`: **4 passed, 14 deselected**.
+The latter replaced the test's Unix message-text assumption with checks of the
+documented structured code and note ID; HTTPS and Unix now both pass. Final
+`make lint typecheck` passes (Ruff; Pyright **0 errors/warnings**), including the
+manager-owned unrelated retirement-test typing correction. `git diff --check`
+passes. No skipped selected obligations; unrelated broad/MCP/build evidence is
+unchanged. Correction budget remains **1/3**, and the sole refiner is consumed.
+
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Changed paths | Inert run values/limits; shared annotation SQL owner and additive embedded/repository migrations; coordinator-scoped authority adapters and service fixture; native control/Unix/HTTPS/query, Python, CLI and MCP; corresponding contracts, integration/package/schema tests and feature docs |
+| Implementation | `e125ab95b6e05b873c1748373a381a4953ef1dec`: atomic run-scoped receipts before annotation CAS, current-field patches, attributed append-only notes, bounded live pages, legacy first-write preservation, classified uncertain acknowledgements and adapter parity |
+| Validation selection | Expanded to `make validate-pr` because both authority schemas and shared native decoding changed. Required context/annotation, mutation API, config-backed native/CLI and MCP selectors are included in their separate locked dependency lanes; no selected adapter coverage is inferred from deselection. |
+| Broad baseline / config evidence | `make validate-pr`: default **3206 passed, 2 skipped, 372 deselected**; config-extra **322 passed, 15 skipped, 3261 deselected**, including all 14 run-context integration cases. Baseline skips are the two existing queue CLI manifest checks needing `dotenv`; config skips are the 15 opt-in container acceptance cases. None is a P2 obligation. |
+| MCP and remaining full-gate components | The broad command stopped on two stale MCP discovery assertions, after 47 MCP passes. Updated only their expected tool names/mutation hints in `500fb4e09ec2b82049332620e980c7e570805d7c`; `make lint typecheck test-mcp-extra build` then passed: **49 MCP tests**, project-wide Ruff, Pyright (0 errors/warnings), source distribution and wheel. Reused successful baseline/config components rather than rerunning unchanged suites. |
+| Final bounded reconciliation | While broad validation was running, annotation acknowledgement classification and typed result decoding were tightened: known owner validation is `not_applied`, uncertain authority/invalid native replies retain `unknown` and the original mutation ID. Final isolated no-extra selection (context contract, annotation authority, mutation API, runs package API) passed **50 tests**; the final config selection covering both authority owners × Unix/HTTPS passed **4 tests** with restart/replay, current-revision conflicts, resulting-size rejection, QUERY denial/read access and CLI parity. Completed/failed identity checks (**2**) and native legacy first-write (**1**) passed; full config and final MCP additionally cover the affected consumers. |
+| Validated tree / delivery | Broad evidence reconciled to `500fb4e0`; concurrent base integration checked at `db610fcd`; R1 correction at `06268984491e15f20c7a8cd84c6a2bf8674944aa` has the focused evidence above. Manager's retirement typing assertions were included in R1's passing full static check. PR #351 remains open for the same reviewer's confirmation; no merge yet. |
+| Evidence logs | `/tmp/loom-stage42-p2-validate.log`; `/tmp/loom-stage42-p2-final-gate-repair.log`; `/tmp/loom-stage42-p2-baseline-final.log`; `/tmp/loom-stage42-p2-reply-classification.log`; `/tmp/loom-stage42-p2-completed-identities.log`; `/tmp/loom-stage42-p2-legacy-native.log` |
+| Scope decision | Resolved 2026-09-25: maintainer approved uniform run-scoped IDs. Run-context Safe Patches And Notes owns the key, digest and cross-run reuse semantics. |
+| Manager base reconciliation | Merged concurrent `develop` PR #350 (`76793120`) into the phase at `db610fcd96b5f4414a0b7dc73feffd8ac67625a9`, without conflicts. Retirement changes touch daemon startup and transport ownership but do not change annotation storage/replay contracts. |
+| Combined-tree checks | On `db610fcd`: isolated locked Python 3.12 no-extra pytest for `tests/integration/queue/test_role_retirement.py tests/unit/loom/queue/test_local_daemon.py` with standard non-optional markers: **64 passed, 5 deselected**. Separate config-extra pytest for entire `tests/integration/queue/test_run_context.py`: **14 passed**. Prior unaffected broad/static/MCP/build evidence remains applicable; subsequent edits only workflow metadata. Diff check passed. |
+| Concurrent-base typing repair | Manager added narrow runtime type assertions in PR #350's `tests/integration/queue/test_role_retirement.py` to resolve five pre-existing Pyright errors, without production edits. The five previously deselected retirement cases were then explicitly run with isolated locked Python 3.12/dev/config pytest: **5 passed in 24.24s**. R1's final full Ruff/Pyright included these exact assertions and passed. |
+| Residual / cleanup | No unresolved implementation or local-validation blocker. Await manager-owned independent review/delivery. No physical dataset/fleet qualification is required. Stage worktree retained; no branch transition or PR work performed by the executor. |

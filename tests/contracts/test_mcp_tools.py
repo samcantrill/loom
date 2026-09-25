@@ -205,6 +205,27 @@ def test_native_mapping_and_default_arguments(tool, arguments, native, args):
             assert kwargs["timeout_seconds"] == 25
 
 
+@pytest.mark.parametrize("tool,operation,payload", [
+    ("loom_patch_run_annotations", "patch_run_annotations", {"run_uri": "file:///run", "mutation_id": "one", "patch": {"expected_revision": 3, "description": None, "set_metadata": {"n": None}}}),
+    ("loom_append_run_note", "append_run_note", {"run_uri": "file:///run", "mutation_id": "two", "text": "observed"}),
+    ("loom_list_run_notes", "list_run_notes", {"run_uri": "file:///run", "limit": 2, "cursor": None}),
+])
+def test_annotation_tools_preserve_native_requests(tool, operation, payload):
+    from mcp import Client
+    spy = Spy()
+
+    async def scenario():
+        async with Client(create_server(client=spy)) as client:
+            result = await client.call_tool(tool, {**payload, "expected_coordinator_id": "coordinator"})
+            assert not result.is_error
+            assert result.structured_content == NativeValue().to_dict()
+    asyncio.run(scenario())
+    assert len(spy.calls) == 1
+    assert spy.calls[0][0] == operation
+    assert spy.calls[0][1] == (payload,)
+    assert spy.calls[0][2]["expected_coordinator_id"] == "coordinator"
+
+
 @pytest.mark.parametrize(
     "tool,arguments",
     [

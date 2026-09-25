@@ -128,6 +128,8 @@ class AuthorityMutationOperation(StrEnum):
     COORDINATOR_OPEN_RUN = "coordinator_open_run"
     INITIALIZE_RUN_ANNOTATIONS = "initialize_run_annotations"
     READ_RUN_ANNOTATIONS = "read_run_annotations"
+    MUTATE_RUN_ANNOTATIONS = "mutate_run_annotations"
+    LIST_RUN_NOTES = "list_run_notes"
     COORDINATOR_TRANSITION_RUN = "coordinator_transition_run"
     COORDINATOR_TRANSITION_STAGE = "coordinator_transition_stage"
     BIND_COORDINATOR_ADMISSION = "bind_coordinator_admission"
@@ -178,6 +180,8 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
         AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
         AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
+        AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS,
+        AuthorityMutationOperation.LIST_RUN_NOTES,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
         AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
@@ -429,6 +433,8 @@ class AuthorityMutationService:
                             AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
                             AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
                             AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
+                            AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS,
+                            AuthorityMutationOperation.LIST_RUN_NOTES,
                             AuthorityMutationOperation.APPEND_AUDIT_EVENT,
                             AuthorityMutationOperation.LIST_AUDIT_EVENTS,
                             AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE,
@@ -621,6 +627,35 @@ class AuthorityMutationService:
                 annotations = self._repository.read_run_annotations(_required_run_uri(request))
                 return _result(service_generation=self._service_generation,
                                body={"annotations": None if annotations is None else annotations.to_dict()})
+            case AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS | AuthorityMutationOperation.LIST_RUN_NOTES:
+                from loom.runs.context import SubmissionContext
+                from loom.runs.annotations import AnnotationConflictError, _UnrepresentableRunNoteError
+
+                body = request.body
+                assert body is not None
+                notes = body.get("legacy_notes", [])
+                if not isinstance(notes, (list, tuple)) or any(not isinstance(note, str) for note in notes):
+                    raise ValueError("invalid legacy notes")
+                legacy_notes = cast(tuple[str, ...], tuple(notes))
+                result: dict[str, PlainData]
+                if operation == AuthorityMutationOperation.LIST_RUN_NOTES:
+                    try:
+                        result = self._repository.list_run_notes(_required_run_uri(request),
+                            cast(int, body.get("limit", 50)), cast(str | None, body.get("cursor")), legacy_notes).to_dict()
+                    except _UnrepresentableRunNoteError as exc:
+                        result = {"unrepresentable_note_id": exc.note_id}
+                else:
+                    context = body.get("legacy_context", {})
+                    change = body.get("change")
+                    if not isinstance(context, Mapping) or not isinstance(change, Mapping):
+                        raise ValueError("invalid annotation mutation")
+                    try:
+                        result = self._repository.mutate_run_annotations(_required_run_uri(request),
+                            cast(str, body.get("principal")), cast(str, body.get("mutation_id")),
+                            cast(str, body.get("operation")), change, SubmissionContext.from_dict(context), legacy_notes).to_dict()
+                    except AnnotationConflictError as exc:
+                        result = {"conflict": str(exc), "current_revision": exc.current_revision}
+                return _result(service_generation=self._service_generation, body={"result": result})
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN:
                 return self._coordinator_transition_run(request)
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE:

@@ -14,7 +14,8 @@ import time
 from typing import cast
 
 from loom.serialization import PlainData
-from loom.runs.context import RunContext
+from loom.runs.context import RunAnnotations, RunContext
+from loom.runs.annotations import RunNote, RunNotePage
 from loom.queue.local_daemon import (
     LocalDaemonOperation,
     LocalDaemonAdmission,
@@ -264,6 +265,39 @@ class CoordinatorClient(NativeCoordinatorClient):
         """Read original intent, current annotations and native evidence without execution."""
         return RunContext.from_dict(self._native_call(
             "get_run_context", {"run_uri": run_uri}, expected_coordinator_id))
+
+    def patch_run_annotations(self, run_uri: str, *, mutation_id: str,
+                              expected_revision: int,
+                              set_tags: Mapping[str, str] | None = None,
+                              remove_tags: tuple[str, ...] = (),
+                              set_metadata: Mapping[str, PlainData] | None = None,
+                              remove_metadata: tuple[str, ...] = (),
+                              expected_coordinator_id: str | None = None,
+                              **description_change: PlainData) -> RunAnnotations:
+        """Apply a CAS patch. Omit description to preserve it; pass null to clear.
+
+        Replay an uncertain response with the same run, mutation ID and request.
+        A conflict reports the current revision; deliberately rebase with a new ID.
+        IDs are scoped to this run and authenticated principal, across both writes.
+        """
+        patch: dict[str, PlainData] = {"expected_revision": expected_revision,
+            "set_tags": dict(set_tags or {}), "remove_tags": list(remove_tags),
+            "set_metadata": dict(set_metadata or {}), "remove_metadata": list(remove_metadata),
+            **description_change}
+        return cast(RunAnnotations, self._native_call("patch_run_annotations",
+            {"run_uri": run_uri, "mutation_id": mutation_id, "patch": patch}, expected_coordinator_id))
+
+    def append_run_note(self, run_uri: str, *, mutation_id: str, text: str,
+                        expected_coordinator_id: str | None = None) -> RunNote:
+        """Append one observation with native author/time; retry the same ID/request."""
+        return cast(RunNote, self._native_call("append_run_note",
+            {"run_uri": run_uri, "mutation_id": mutation_id, "text": text}, expected_coordinator_id))
+
+    def list_run_notes(self, run_uri: str, *, limit: int = 50, cursor: str | None = None,
+                       expected_coordinator_id: str | None = None) -> RunNotePage:
+        """Read up to 50 notes in native UTC time/ID order, legacy unknown times first."""
+        return cast(RunNotePage, self._native_call("list_run_notes",
+            {"run_uri": run_uri, "limit": limit, "cursor": cursor}, expected_coordinator_id))
 
     def inspect_run(
         self, run_uri: str, *, expected_coordinator_id: str | None = None

@@ -15,6 +15,112 @@ from loom.serialization import stable_json_bytes
 pytestmark = pytest.mark.contract
 
 
+def test_annotation_patch_preserves_unrelated_keys_and_distinguishes_null_removal():
+    from loom.runs import AnnotationConflictError, AnnotationPatch, RunAnnotations
+
+    original = RunAnnotations(
+        "file:///run",
+        3,
+        "reason",
+        {"keep": "yes", "drop": "no"},
+        {"keep": [1], "drop": 2, "nullable": 3},
+        "submission",
+        "coordinator",
+    )
+    patch = AnnotationPatch.from_dict(
+        {
+            "expected_revision": 3,
+            "set_tags": {"new": "label"},
+            "remove_tags": ["drop"],
+            "set_metadata": {"nullable": None},
+            "remove_metadata": ["drop"],
+        }
+    )
+    result = patch.apply(original)
+    assert result.revision == 4
+    assert result.description == "reason"
+    assert result.tags == {"keep": "yes", "new": "label"}
+    assert result.metadata == {"keep": (1,), "nullable": None}
+    assert result.initializer_operation_id == "submission"
+    assert AnnotationPatch.from_dict(patch.to_dict()) == patch
+    assert (
+        AnnotationPatch.from_dict({"expected_revision": 4, "description": None})
+        .apply(result)
+        .description
+        is None
+    )
+    with pytest.raises(AnnotationConflictError) as error:
+        patch.apply(result)
+    assert error.value.current_revision == 4
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"set_tags": {"x": "v"}, "remove_tags": ["x"]},
+        {"set_metadata": {"x": None}, "remove_metadata": ["x"]},
+        {"remove_tags": ["x", "x"]},
+        {"remove_metadata": "key"},
+        {"expected_revision": True},
+        {"expected_revision": -1},
+        {"description": "é" * 8193},
+        {"set_metadata": {"n": float("nan")}},
+        {"author": "spoofed"},
+    ],
+)
+def test_annotation_patch_rejects_ambiguous_or_unbounded_changes(fields):
+    from loom.runs import AnnotationPatch
+
+    with pytest.raises(ValueError):
+        AnnotationPatch.from_dict({"expected_revision": 0, **fields})
+
+
+def test_annotation_patch_checks_result_size_not_only_patch_size():
+    from loom.runs import AnnotationPatch, RunAnnotations
+
+    original = RunAnnotations(
+        "file:///run", 1, None, {str(i): "v" for i in range(128)}, {}
+    )
+    with pytest.raises(ValueError, match="128"):
+        AnnotationPatch(1, set_tags={"extra": "v"}).apply(original)
+
+
+def test_note_and_encoded_transport_limits_are_checked_before_dispatch():
+    from loom.queue._coordinator_control import validate_request
+
+    request = {"run_uri": "file:///run", "mutation_id": "note", "text": "é" * 8192}
+    assert validate_request("append_run_note", request)["text"] == request["text"]
+    with pytest.raises(ValueError, match="note text"):
+        validate_request("append_run_note", {**request, "text": request["text"] + "é"})
+    with pytest.raises(ValueError, match="transport budget"):
+        validate_request("patch_run_annotations", {"run_uri": "file:///run", "mutation_id": "patch",
+            "patch": {"expected_revision": 1, "set_metadata": {"escaped": "漢" * 15000}}})
+    for fields in ({"author": "spoof"}, {"created_at": "2000-01-01"}):
+        with pytest.raises(ValueError, match="fields"):
+            validate_request("append_run_note", {**request, **fields})
+    for options in ({"limit": 51, "cursor": None}, {"limit": 1, "cursor": '["file:///other","",""]'}):
+        with pytest.raises(ValueError):
+            validate_request("list_run_notes", {"run_uri": "file:///run", **options})
+
+
+def test_note_pages_bound_encoded_bytes_and_continue_without_loss():
+    from loom.runs import RunNote
+    from loom.runs.annotations import page_notes
+    from loom.queue._coordinator_control import encode_wire, MAX_RESPONSE_BYTES
+
+    notes = tuple(RunNote("file:///run", f"note-{i:03d}", "é" * 8192, "caller", "2026-09-25T01:00:00+00:00") for i in range(50))
+    page = page_notes("file:///run", notes, 50, None)
+    assert 0 < len(page.notes) < 50
+    seen = list(page.notes)
+    while True:
+        assert len(encode_wire({"ok": True, "result": page.to_dict()})) < MAX_RESPONSE_BYTES
+        if page.next_cursor is None:
+            break
+        page = page_notes("file:///run", notes, 50, page.next_cursor)
+        seen.extend(page.notes)
+    assert tuple(seen) == notes
+
+
 def request(context=None):
     return PrepareRunRequest(
         "intent",

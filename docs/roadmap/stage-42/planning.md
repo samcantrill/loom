@@ -166,6 +166,10 @@ oversized authored/runtime labels. The run-context card's Transport And Limits
 section owns the clarified rule; this does not authorize grandfathering or
 truncation. The existing whole-stage execution request remains in force.
 
+The maintainer also selected run-scoped mutation IDs on 2026-09-25. The
+run-context card's Safe Patches And Notes section owns the exact receipt key and
+cross-run reuse rule, keeping effect and receipt within the existing run owner.
+
 No separate hosted tracking/catalog server, dashboard, cross-deployment federation,
 arbitrary SQL/expression execution, semantic/vector search, metric extractor,
 general authorization redesign, automatic rerun/cancellation/deletion, or new

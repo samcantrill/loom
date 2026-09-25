@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .catalog import RunCatalog
 from .context import RunAnnotations, RunContext, SubmissionContext
+from .annotations import AnnotationConflictError, AnnotationPatch, RunNote, RunNotePage
 from .bundles import (
     LOCAL_RUN_BUNDLE_ADAPTER,
     RUN_BUNDLE_MANIFEST_MEMBER,
@@ -106,6 +107,10 @@ from .models import (
 )
 
 __all__ = [
+    "AnnotationConflictError",
+    "AnnotationPatch",
+    "RunNote",
+    "RunNotePage",
     "RunAnnotations",
     "RunContext",
     "SubmissionContext",

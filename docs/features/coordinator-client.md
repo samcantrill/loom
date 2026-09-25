@@ -40,9 +40,9 @@ linked submission. Inspection preserves failed stages alongside committed output
 references; it does not download artifacts or execute work. Missing authority,
 original submission or inspection evidence is reported in `unavailable`.
 Legacy runtime tags may be projected at revision zero with unknown origin;
-reading them does not create writable annotations. Legacy notes and caller
-metadata remain in their existing runtime/user metadata views. Annotation and
-note mutation commands are not part of this submission-context surface.
+reading them does not create writable annotations. Legacy notes also appear in
+the note view with unknown author/time; arbitrary legacy caller metadata remains
+accessible in its existing user metadata view.
 
 Limits advertised by the handshake are 16 KiB UTF-8 description text, 48 KiB
 serialized context, 128 tag keys, 128-byte tag/metadata keys and 1 KiB tag values.
@@ -55,6 +55,58 @@ The complete encoded request must also fit the 64 KiB transport limit. Values
 are rejected, never silently truncated. `RunInspectionHttpClient.get_run_context`
 provides the same read for an enrolled HTTPS QUERY principal; that role cannot
 submit or mutate work.
+
+## Editing Annotations And Appending Notes
+
+```python
+current = client.get_run_context(run_uri).annotations
+updated = client.patch_run_annotations(
+    run_uri, mutation_id="review-17", expected_revision=current.revision,
+    set_tags={"review": "ready"}, remove_tags=("needs_review",),
+    set_metadata={"checked": True, "optional_value": None},
+)
+note = client.append_run_note(
+    run_uri, mutation_id="observation-17", text="Evaluation still pending.",
+)
+page = client.list_run_notes(run_uri, limit=20)
+```
+
+Patches preserve unrelated keys. Metadata sets replace one top-level value;
+setting null retains the key, while `remove_metadata` removes it. Omitting
+`description` preserves it, and `description=None` clears it. Setting and removing
+the same key is invalid. Patch input and resulting annotations obey the advertised
+context limits; native note appends are at most 16 KiB UTF-8. The complete encoded request must
+fit 64 KiB on either transport, including escaping and the control envelope.
+
+Annotation revision is independent of lifecycle revision. A stale revision raises
+`CoordinatorClientError` with `code="conflict"` and `ids.current_revision`.
+Re-read and deliberately rebase with a new mutation ID. For an uncertain response,
+repeat the exact request with the same ID: the durable receipt is checked before
+CAS and returns the original committed result even after later edits. IDs are
+scoped to `(run_uri, authenticated principal)` across both patch and note writes.
+Mutation IDs are nonempty strings of at most 128 UTF-8 bytes.
+Changing the request or switching its operation under the same ID conflicts;
+another run may independently reuse that ID. Receipts persist without expiry.
+
+Notes need no annotation CAS and do not advance its revision. The authority records
+native UTC time and the authenticated caller; caller-supplied author/time fields
+are rejected. Notes are append-only: corrections are new notes. Pages contain at
+most 50 entries and 768 KiB of encoded note records in time/note-ID order,
+with unknown legacy times first. Pass
+`page.next_cursor` to continue the live view. Legacy notes are projected without
+writes; the first mutation retains them and establishes writable legacy labels
+once. First-write patches use the projected revision zero. Existing captured
+configuration, submission intent, lifecycle state, fingerprints and artifacts
+remain unchanged.
+
+Retained legacy note text keeps its full original length and unknown attribution.
+If one encoded legacy note cannot fit the 768-KiB page budget, listing that item
+reports `CoordinatorClientError(code="unrepresentable_note")` with `ids.note_id`. Earlier
+items can still be read in bounded pages. This limitation does not prevent tag
+patches or native note appends, and does not truncate or rewrite legacy evidence.
+
+`RunInspectionHttpClient.list_run_notes` is available to QUERY principals. Writes
+require CLIENT authority; reads never promote a caller or trigger a mutation.
 
 ## Choose A Connection
 

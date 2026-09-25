@@ -22,6 +22,10 @@ RUN_CONTEXT_LIMITS = {
     "tag_keys": 128,
     "key_bytes": 128,
     "tag_value_bytes": 1024,
+    "mutation_id_bytes": 128,
+    "note_page_size": 50,
+    "note_page_bytes": 768 * 1024,
+    "request_bytes": 64 * 1024,
 }
 
 

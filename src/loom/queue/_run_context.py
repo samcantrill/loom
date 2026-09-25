@@ -13,6 +13,29 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemon
 
 
+def annotation_operation(daemon: LocalDaemon, operation: str, value: Mapping[str, object], principal: str) -> object:
+    """Use coordinator-authorized authority ownership, retaining legacy evidence."""
+    from loom.pipeline.stores.local_runs import LocalRunStore
+    from loom.runs.context import SubmissionContext
+
+    run_uri = cast(str, value["run_uri"])
+    context = get_run_context(daemon, run_uri, None)  # Includes the existing ownership check.
+    factory = daemon.config.coordinator_authority_factory
+    if factory is None:
+        raise OSError("annotation authority unavailable")
+    authority = factory(run_uri)
+    runtime = LocalRunStore(daemon.config.run_store_root).read_runtime_metadata(run_uri) or {}
+    notes = runtime.get("notes", ())
+    if not isinstance(notes, (list, tuple)) or any(not isinstance(note, str) for note in notes):
+        raise ValueError("legacy runtime notes are unrepresentable")
+    legacy_notes = cast(tuple[str, ...], tuple(notes))
+    if operation == "list_run_notes":
+        return authority.list_run_notes(run_uri, cast(int, value["limit"]), cast(str | None, value["cursor"]), legacy_notes)
+    legacy = SubmissionContext(tags=cast(Mapping[str, str], runtime.get("tags", {}))) if context.annotations is None or context.annotations.revision == 0 else SubmissionContext()
+    change = cast(Mapping[str, object], value["patch"]) if operation == "patch_run_annotations" else {"text": value["text"]}
+    return authority.mutate_run_annotations(run_uri, principal, cast(str, value["mutation_id"]), operation, change, legacy, legacy_notes)
+
+
 def get_run_context(
     daemon: LocalDaemon,
     run_uri: str,

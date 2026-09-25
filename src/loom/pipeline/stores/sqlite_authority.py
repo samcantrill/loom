@@ -37,6 +37,8 @@ from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 from loom.runs.context import RunAnnotations, SubmissionContext
 
 from ._run_annotations import ANNOTATION_COLUMNS, create_annotations_schema, initialize_annotations, read_annotations
+from ._run_annotations import NOTE_COLUMNS, RECEIPT_COLUMNS, mutate_annotations, read_notes
+from loom.runs.annotations import RunNote, RunNotePage
 
 from .authority import (
     ActionProducerBinding,
@@ -140,6 +142,8 @@ _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
 
 _REQUIRED_SCHEMA_COLUMNS = {
     "run_annotations": ANNOTATION_COLUMNS,
+    "run_annotation_notes": NOTE_COLUMNS,
+    "run_annotation_mutations": RECEIPT_COLUMNS,
     "action_producers": frozenset({"claim_id", "stage_name", "attempt_id", "active"}),
     "action_result_bindings": frozenset({"stage_name", "binding_json", "revision_sequence"}),
     "metadata": frozenset({"key", "value"}),
@@ -499,6 +503,21 @@ class SQLitePerRunAuthorityStore:
             _raise_for_schema(conn)
             _require_run_status(conn)
             return read_annotations(conn, run_uri)
+
+    def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
+                               operation: str, change: Mapping[str, object],
+                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            return mutate_annotations(conn, run_uri, principal, mutation_id, operation, change, legacy_context, legacy_notes)
+
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
+                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            return read_notes(conn, run_uri, limit, cursor, legacy_notes)
 
     def transition_run(
         self,
@@ -3515,10 +3534,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5, 6, 7}:
+    if version not in {1, 2, 3, 4, 5, 6, 7, 8}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
-    historical_columns.pop("run_annotations")
+    historical_columns.pop("run_annotation_notes")
+    historical_columns.pop("run_annotation_mutations")
+    if version < 8:
+        historical_columns.pop("run_annotations")
     if version < 7:
         historical_columns.pop("action_result_bindings")
         historical_columns.pop("action_producers")
@@ -3756,6 +3778,9 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
         except sqlite3.DatabaseError:
             tables = set()
         required_tables = set(_REQUIRED_SCHEMA_COLUMNS)
+        if version < 9:
+            required_tables.discard("run_annotation_notes")
+            required_tables.discard("run_annotation_mutations")
         if version < 8:
             required_tables.discard("run_annotations")
         if version < 3:

@@ -2135,12 +2135,16 @@ class RunInspectionHttpClient:
         """Read context using the configured QUERY principal without write access."""
         return self._read_run("get_run_context", "run-context-v1", run_uri)
 
-    def _read_run(self, operation: str, capability: str, run_uri: str) -> Mapping[str, PlainData]:
+    def list_run_notes(self, run_uri: str, *, limit: int = 50, cursor: str | None = None) -> Mapping[str, PlainData]:
+        """Read a bounded annotation note page using the QUERY principal."""
+        return self._read_run("list_run_notes", "run-context-v1", run_uri, {"limit": limit, "cursor": cursor})
+
+    def _read_run(self, operation: str, capability: str, run_uri: str, options: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
 
         parsed = urlsplit(self._config.url)
         assert parsed.hostname is not None
         body = json.dumps(
-            {"run_uri": run_uri}, sort_keys=True, separators=(",", ":"), allow_nan=False
+            {"run_uri": run_uri, **(options or {})}, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if len(body) > _MAX_BODY_BYTES:
             return _run_inspection_failure("invalid_request")
@@ -6091,10 +6095,10 @@ def _dispatch_application(
             path="authenticated application handshake",
         )
     if role == LocalDaemonRole.QUERY.value:
-        if operation not in {"inspect_run", "get_run_context"} or (operation == "inspect_run" and inspect_run is None):
+        if operation not in {"inspect_run", "get_run_context", "list_run_notes"} or (operation == "inspect_run" and inspect_run is None):
             raise _RunInspectionHttpError("invalid_request", 400)
         try:
-            _exact(value, {"run_uri"})
+            _exact(value, {"run_uri", "limit", "cursor"} if operation == "list_run_notes" else {"run_uri"})
             run_uri = _string(value, "run_uri")
         except QueueError as exc:
             raise _RunInspectionHttpError("invalid_request", 400) from exc
@@ -6113,6 +6117,13 @@ def _dispatch_application(
         except QueueError as exc:
             raise _RunInspectionHttpError("unauthorized", 403) from exc
         try:
+            if operation == "list_run_notes":
+                from ._run_context import annotation_operation
+                from ._coordinator_control import validate_request
+
+                validated = validate_request(operation, value)
+                page = annotation_operation(daemon, operation, validated, principal.subject)
+                return cast(Any, page).to_dict()
             if operation == "get_run_context":
                 from ._run_context import get_run_context
 
