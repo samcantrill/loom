@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open; stage 42 / P4.
+- Status: merged; stage 42 / P4.
 - PR: [#353](https://github.com/samcantrill/loom/pull/353), verified canonical title
   and `develop` target; implementation head `f05ce49a09751142dc3efd0cfb98a4732dcdc90e`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
@@ -160,7 +160,7 @@ Final commands use `uv run --python 3.12 --isolated --locked --group dev`:
 | Validation | Baseline selection above: **260 passed, 2 deselected** in 493.23s. The two deselections are unchanged config-only authority publication/reconciliation cases, outside output selection. Config lane: **9 passed** in 96.46s. MCP lane: **42 passed** in 109.66s. No skipped required cases; no physical runtime claim. |
 | Final-tree follow-up | Added explicit rejection of nonobject cursors and boolean schema versions during the final pass. Final output contract rerun: **15 passed** in 3.09s. Changed-file Ruff passed; changed-file Pyright: **0 errors, 0 warnings**; staged and unstaged diff checks passed. Earlier transport/authority evidence remains applicable; final changes only tighten invalid selector decoding. |
 | Validated tree | `4e5a7c786991d1a990d58c2626ca12c0486e23d4` from `git write-tree`, based on the recorded assignment base. Only this completion receipt changed afterward. Commands/selectors above and committed contract/integration tests are the retained evidence; no sidecars. |
-| Review, PR, merge | Pending manager actual-head independent review and delivery. Executor made no PR, merge or branch transition. |
+| Review, PR, merge | Required independent review found R1; same reviewer confirmed the fix at `8936b0583681b7dc2f6f46b4d7f24c3045548306`, with no remaining blockers. PR #353 remotely squash-merged as `e11ad07ef696761cc66e1aad50e88f8c21be27d1` on 2026-09-25; delivery verified merge and retired the exact remote branch. Transition to coordination passed; publish completion metadata and synchronize before P5. |
 | Residual limits | Live paging is not a snapshot; no retention pin or byte availability guarantee. Whole authority histories use existing readers; oversized metadata produces a bounded explicit outcome. Producer restrictions/unavailability remain visible without hidden provenance. |
 
 ### Review Correction R1
