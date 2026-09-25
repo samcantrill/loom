@@ -2,7 +2,7 @@
 
 Card ID: `PC-42-discovery`.
 Status: detailed implementation design independently reviewed and approved;
-implementation pending.
+implemented in merged P3; execution evidence lives in its phase card.
 Planning manifest: [Stage 42](../planning.md).
 Evidence revision: `220358ed26392f30bb2f36bf09d547607a57d442`.
 Dependencies: [run context](run-context.md).

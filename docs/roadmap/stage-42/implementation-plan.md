@@ -1,14 +1,14 @@
 # Roadmap Stage 42 Implementation Plan
 
-Status: maintainer-approved plan; independent plan readiness review passed;
-implementation authorized; P1 and P2 merged, P3 next.
+Status: all six implementation phases remotely merged; required validation and
+independent reviews passed. Final closeout publication/synchronization recorded below.
 Roadmap stage: 42
 Stage descriptor: Run Discovery, Annotations, Lineage, And Result Access
 Planning document: [planning.md](planning.md)
 Workflow: [roadmap-stage-implementation](../../../.codex/workflows/roadmap-stage-implementation.md)
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: between P2 and P3; publish completion metadata and synchronize.
+Current phase: none; final stage closeout.
 Startup requirements: satisfied on 2026-09-24; explicit whole-stage execution requested.
 
 ## Summary
@@ -23,7 +23,7 @@ The maintainer accepted the intent on 2026-09-24, requested this detailed
 implementation plan and code walkthrough, and then explicitly requested committing
 and merging the packet into `develop`. The [approval record](planning.md#approval-and-publication-handoff)
 owns that publication authorization. A subsequent explicit whole-stage request
-authorized implementation, which is now underway in the recorded stage worktree.
+authorized implementation, now delivered through six independently reviewed phase PRs.
 The [walkthrough](implementation-walkthrough.md) explains the implementation in
 plain language. Contracts live in the indexed planning cards, not the walkthrough.
 
@@ -67,7 +67,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 | P3 | [run-discovery](phases/run-discovery.md) | merged | `agent/stage-42-p3-run-discovery` | #352 | Typed run/submission/job queries, tag vocabulary and bounded live pages | Reconciled full-gate evidence and independent review/R1 confirmation passed |
 | P4 | [output-selection](phases/output-selection.md) | merged | `agent/stage-42-p4-output-selection` | #353 | Exact current/historical output selection with original producer and reuse associations | Targeted validation and independent review/R1 confirmation passed |
 | P5 | [dependency-lineage](phases/dependency-lineage.md) | merged | `agent/stage-42-p5-dependency-lineage` | #354 | Persist exact per-attempt input origins and query generic dependency graphs | Full gate and independent review/R1 confirmation passed |
-| P6 | [artifact-access](phases/artifact-access.md) | pr_open | `agent/stage-42-p6-artifact-access` | #355 | Authorized complete-file retrieval, bounded previews, safe batch materialization and composed agent workflow | Reconciled full gate/real HTTPS acceptance passed; independent review pending |
+| P6 | [artifact-access](phases/artifact-access.md) | merged | `agent/stage-42-p6-artifact-access` | #355 | Authorized complete-file retrieval, bounded previews, safe batch materialization and composed agent workflow | Reconciled full gate/real HTTPS acceptance and independent review/R1 confirmation passed |
 
 Merge order is P1 → P2 → P3 → P4 → P5 → P6. Semantic dependencies: P2 needs P1;
 P3 needs P1/P2; P4 consumes P3 run selection; P5 needs P4 identities; P6 needs P4
@@ -180,7 +180,7 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1–P5 merged; P6 in progress. P5 preserves approved historical
+- Phase statuses: P1–P6 merged. P5 preserves approved historical
   import evidence without identity remapping. P3 reconciled validation and
   independent review/R1 confirmation passed. The maintainer selected per-page
   vocabulary uniqueness with collector deduplication. The maintainer chose
@@ -191,8 +191,11 @@ intent-only documentation review does not cover this expanded design.
   resolved the limit conflict in favor of applying limits to all initial tags.
   The run-context owner records the accepted no-context compatibility exception;
   P1 owns regression coverage and repair of incomplete validation evidence.
-- Stage cleanup and terminal disposition: persistent worktree retained; P1–P5 PRs
-  #349/#351/#352/#353/#354 remotely merged and exact remote phase branches retired by delivery.
+- Stage cleanup and terminal disposition: all six PRs
+  #349/#351/#352/#353/#354/#355 remotely merged and exact remote phase branches
+  retired by delivery. After this closeout is published and synchronization passes,
+  remove the clean stage worktree and verified local phase/coordination refs.
+  No active implementation remains; final handoff reports actual cleanup.
 - Improvement log entries: none.
 
 ## Completion
@@ -204,4 +207,12 @@ intent-only documentation review does not cover this expanded design.
 | P3 | #352 / `c18130472e0f05b83c6cecc479e29f673c6c505f` | Reconciled full-gate evidence and independent review/R1 confirmation passed; see P3 card | Live pages, approved metadata scan cost/per-page vocabulary, unknown event times | Transition passed; stage worktree retained for P4 |
 | P4 | #353 / `e11ad07ef696761cc66e1aad50e88f8c21be27d1` | Required targeted validation and independent review/R1 confirmation passed | Live pages, no retention pin or byte availability claim | Transition passed; stage worktree retained for P5 |
 | P5 | #354 / `f9e4dadfb602dcf99cb31644ce10c18bd58c9abf` | Full gate plus bounded R1 regression and independent confirmation passed | Historical/external gaps, live graph limits, no physical fleet qualification | Transition passed; stage worktree retained for P6 |
-| P6 | Not started | Planned checks are not executed test evidence | See phase card | Not applicable yet |
+| P6 | #355 / `b1cad3d516253a4f3650fba3b0a34719afe55375` | Required gate components, real HTTPS/composed acceptance and independent review/R1 confirmation passed | Legacy integrity limits; no retention pin/resume; Linux no-replace publication; no cloud/physical fleet qualification | Transition passed; final closeout publication/sync precedes exact stage cleanup |
+
+All accepted stage capabilities are delivered. Final runtime validation is owned
+by the P6 card, including its bounded deadline correction and reconciled evidence;
+no extra stage-end suite rerun is required. P5 records the full durable-lineage
+gate. All independent findings were corrected and confirmed before merge.
+P6 logs are preserved at `/tmp/loom-stage42-closeout-pJS3cs/`; P5's full-gate log
+remains `/tmp/loom-stage42-p5-validate-pr-complete.log`. These local logs supplement
+committed evidence and executable tests, not a portable artifact-retention promise.

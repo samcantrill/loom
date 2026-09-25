@@ -3083,12 +3083,10 @@ integration rather than accumulating all cleanup.
 
 ## v42 - Run Discovery, Annotations, Lineage, And Result Access
 
-Status: maintainer-approved detailed interface, durable-format, compatibility and
-six-phase implementation plan, with a plain-language code walkthrough. The
-implementation manifest records the passed complete-packet review; the planning
-manifest records approval and the documentation publication handoff. Product
-implementation is underway; current phase status and validation evidence live in
-the implementation manifest and phase cards.
+Status: all six implementation phases merged into develop on 2026-09-25
+(PRs #349, #351, #352, #353, #354, #355), with required local validation and
+independent reviews passed. The implementation manifest and phase cards record
+exact evidence, approved clarifications, residual limits and stage closeout.
 
 Provide one generic workflow for people and agents: describe submitted work,
 find executions from recorded facts, inspect their state and outputs, traverse

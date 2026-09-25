@@ -2,9 +2,9 @@
 
 Planning layout: `planning-manifest-and-cards-v1`
 
-Status: detailed six-phase plan approved by the maintainer; independent plan
-readiness review passed. Documentation publication is authorized; implementation
-has not started.
+Status: approved plan delivered through all six merged implementation phases.
+The implementation manifest and phase cards own validation, independent review,
+merge and closeout evidence; this packet retains the approved design contracts.
 
 Roadmap source: [v42](../../roadmap.md#v42---run-discovery-annotations-lineage-and-result-access).
 
