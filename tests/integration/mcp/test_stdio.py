@@ -228,6 +228,7 @@ def test_installed_offline_discovery_and_classified_failure(
                         "loom_cancel_job",
                         "loom_cancel_preparation",
                         "loom_patch_run_annotations",
+                        "loom_fetch_artifacts",
                         "loom_append_run_note",
                     }
                 )
