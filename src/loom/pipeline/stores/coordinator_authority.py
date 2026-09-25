@@ -64,6 +64,7 @@ COORDINATOR_AUTHORITY_ROUTE_PREFIX = "/v1/authority/coordinator"
 COORDINATOR_AUTHORITY_SERVICE_HEADER = "X-Loom-Authority-Service"
 COORDINATOR_PUBLISH_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/publish"
 COORDINATOR_OPEN_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/open"
+COORDINATOR_LIST_OUTPUT_COMMITS_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/outputs/list"
 COORDINATOR_BIND_RESULT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/stages/bind-result"
 COORDINATOR_BIND_PRODUCER_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/actions/bind-producer"
 COORDINATOR_RELEASE_PRODUCER_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/actions/release-producer"
@@ -482,6 +483,10 @@ class AuthenticatedCoordinatorAuthority:
         if "unrepresentable_note_id" in value:
             raise _UnrepresentableRunNoteError(cast(str, value["unrepresentable_note_id"]))
         return RunNotePage.from_dict(value)
+
+    def list_output_commits(self, run_uri: str, *, stage_name: str | None = None) -> tuple[OutputCommit, ...]:
+        """Read retained exact commits through the existing scoped authority owner."""
+        return self._call(COORDINATOR_LIST_OUTPUT_COMMITS_PATH, run_uri, stage_name=stage_name).output_commits
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         result = self._call(COORDINATOR_OPEN_RUN_PATH, run_uri)

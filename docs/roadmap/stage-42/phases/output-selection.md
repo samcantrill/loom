@@ -2,13 +2,18 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P4.
+- Status: pr_open; stage 42 / P4.
+- PR: [#353](https://github.com/samcantrill/loom/pull/353), verified canonical title
+  and `develop` target; implementation head `f05ce49a09751142dc3efd0cfb98a4732dcdc90e`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p4-output-selection`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 4: Output Selection
-- Worktree/coordination/base: manifest context; base after P3.
+- Worktree/coordination: manifest context; base after P3 is
+  `a729b71749350c84b45257bf2430589b51724a45`.
 - Dependencies: P3 run selection and P1 native identities.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: none. Blockers: none. P3 #352 remotely merged,
+  completion metadata published, synchronization passed and exact phase branch
+  retired before this branch started.
 
 ## Objective, Scope, And Supported Merge State
 
@@ -102,11 +107,86 @@ would bypass the original producer's policy. Do not fix missing bytes by changin
 the locator. No retention guarantee is offered. Read this card and output
 selection/history contract before implementation.
 
-Workflow preparation/refinement/implementation/validation/independent review/PR:
-not started. Blocker corrections 0/3; improvement entries none.
+Workflow preparation passed; reuse approved manifest readiness and exact
+selection/history contracts. One executor is justified for the coordinated
+authority-history, reuse-resolution and native adapter changes. Write scope is
+P4 source/tests/user documentation and this card, excluding P5/P6 behavior.
+No planning refinement is needed. Preserve every required selection above,
+splitting config and MCP fixtures into their locked optional environments;
+expand authority protocol/repository coverage for shared serialization changes.
+Record final scope and affected static checks before independent actual-head
+review. Implementation and targeted validation complete; manager PR/review pending. Blocker corrections 1/3;
+improvement entries none.
 
 ## Completion Record
 
+Validation selection follows `loom-targeted-validation`: exact/current/history
+authority facts, failed-run results, original-producer authorization, retained
+reuse associations, bounded nested pages, metadata-only access, and native
+Python/CLI/MCP consumers. History already exists in both stores and the versioned
+authority result; P4 adds the missing scoped coordinator-authority read route,
+without changing storage or record schemas. This expands coverage to repository,
+protocol and coordinator-authority contracts. QUERY output requests/responses use
+the existing native JSON decoder because the worker decoder's depth/scalar bounds
+cannot represent nested output histories and floating-point metadata. Existing
+QUERY-role/transport tests and discovery integration therefore remain selected.
+
+Final commands use `uv run --python 3.12 --isolated --locked --group dev`:
+
+- Baseline: `pytest tests/contracts/test_output_selection_contract.py
+  tests/contracts/test_authority_store_contract.py
+  tests/contracts/test_immutable_artifact_semantics_contract.py
+  tests/integration/authority/test_action_result_binding.py
+  tests/contracts/test_authority_repository_contract.py
+  tests/contracts/test_authority_protocol_contract.py
+  tests/integration/authority/test_coordinator_authority_api.py
+  tests/unit/loom/pipeline/stores/test_authority_protocol.py
+  tests/contracts/test_cli_runs_contract.py tests/unit/loom/cli/test_runs.py
+  tests/package/test_runs_api.py tests/unit/loom/queue/test_local_daemon.py
+  tests/integration/queue/test_agent_session_transport.py -m 'not optional_dependency and not slow and not network and not slurm'`.
+- Config lane (`--extra config`): `pytest
+  tests/integration/queue/test_output_selection.py
+  tests/integration/queue/test_run_queries.py`.
+- MCP lane (`--extra config --extra mcp`): `pytest
+  tests/contracts/test_mcp_tools.py tests/integration/mcp/test_stdio.py`.
+- Changed Python files: Ruff and Pyright (config/MCP extras for typing), plus
+  staged and unstaged diff checks. Expand only for failed checks, newly affected
+  consumers, or changes invalidating this evidence. No physical backend is claimed.
+
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation | Inert `OutputLocator`, `SelectedOutput` and `OutputSelection` in `loom.runs`; authorized current/all/exact metadata selection, retained commit history, original producer/reuse associations, literal typed metadata filters, bounded nested live pages and explicit missing/unavailable outcomes. No payload reads, new durable identity/index, or P5/P6 behavior. |
+| Owning paths | `runs/outputs.py`, `queue/_output_selection.py`; existing coordinator client/control, HTTPS QUERY, CLI and MCP adapters; scoped coordinator-authority history route reuses existing result serialization. Feature documentation: `docs/features/output-selection.md` linked from artifacts. |
+| Validation | Baseline selection above: **260 passed, 2 deselected** in 493.23s. The two deselections are unchanged config-only authority publication/reconciliation cases, outside output selection. Config lane: **9 passed** in 96.46s. MCP lane: **42 passed** in 109.66s. No skipped required cases; no physical runtime claim. |
+| Final-tree follow-up | Added explicit rejection of nonobject cursors and boolean schema versions during the final pass. Final output contract rerun: **15 passed** in 3.09s. Changed-file Ruff passed; changed-file Pyright: **0 errors, 0 warnings**; staged and unstaged diff checks passed. Earlier transport/authority evidence remains applicable; final changes only tighten invalid selector decoding. |
+| Validated tree | `4e5a7c786991d1a990d58c2626ca12c0486e23d4` from `git write-tree`, based on the recorded assignment base. Only this completion receipt changed afterward. Commands/selectors above and committed contract/integration tests are the retained evidence; no sidecars. |
+| Review, PR, merge | Pending manager actual-head independent review and delivery. Executor made no PR, merge or branch transition. |
+| Residual limits | Live paging is not a snapshot; no retention pin or byte availability guarantee. Whole authority histories use existing readers; oversized metadata produces a bounded explicit outcome. Producer restrictions/unavailability remain visible without hidden provenance. |
+
+### Review Correction R1
+
+Correction 1/3 accounts for each prospective per-selector warning in the output
+page byte budget before accepting its outcome. This preserves every requested
+selector and its warning while keeping the continuation available when many
+unavailable selectors share a long run URI. The affected contract is bounded
+native output selection/history paging with truthful incomplete coverage; storage,
+authority reads, identities and adapter schemas are unchanged.
+
+The regression exercises 200 explicitly requested stages under an unavailable
+authority and a deep collection URI over both Unix and HTTPS. For both
+`select_outputs` and `list_output_commits`, every encoded response is below the
+1 MiB transport limit, continuations advance, warnings and incomplete coverage
+remain visible, and all 200 stage outcomes arrive exactly once.
+
+Validation on source/test tree `06ecdd1ac58510a4f7b1482a2c3ac47788faa2de`
+(based on `31e3c39a9ec2a0d270812b11eb47f90f84eba3a5`):
+`uv run --python 3.12 --isolated --locked --group dev --extra config pytest
+tests/integration/queue/test_output_selection.py
+tests/contracts/test_output_selection_contract.py` — **19 passed** in 39.46s,
+no skips. Changed-file Ruff passed and Pyright reported **0 errors, 0 warnings**
+for `src/loom/queue/_output_selection.py` and
+`tests/integration/queue/test_output_selection.py`; diff checks passed. Only this
+completion receipt changed afterward. Existing unaffected phase evidence remains
+applicable; expand checks only for failures or newly affected behavior. R1 is
+corrected and awaits the existing reviewer's confirmation; no PR or merge action
+was taken by the refiner.

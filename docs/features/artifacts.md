@@ -4,6 +4,9 @@
 
 Artifacts are the persistent outputs that connect `loom` pipeline stages.
 
+See [published output selection](output-selection.md) for authorized native
+current/history discovery and exact producer locators without reading payloads.
+
 `loom.artifacts` should define `ArtifactRef`, a serializable handle to a produced
 pipeline output. `loom.pipeline.stores.artifact_store` should define the storage
 interface used to save, register, load, locate, and validate artifacts.

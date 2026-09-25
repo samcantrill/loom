@@ -189,6 +189,8 @@ def test_scoped_adapter_rejects_workspace_and_changed_retry_payload(tmp_path) ->
         match="workspace conflicts",
     ):
         authority.open_run(RUN_URI)
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="workspace conflicts"):
+        authority.list_output_commits(RUN_URI)
 
     _repository, valid = _authority(tmp_path / "valid")
     valid_revision = _repository.admit_run(RUN_URI)
@@ -497,6 +499,7 @@ def test_prepared_publication_replays_lost_reply_and_preserves_principal(
     authority.publish_prepared_run(RUN_URI, "checked-publication")
     prepared = authority.open_run(RUN_URI)
     assert prepared.status is RunStatus.PLANNED
+    assert authority.list_output_commits(RUN_URI) == ()
     from loom.runs import SubmissionContext
 
     context = SubmissionContext("launch reason", {"project": "invoice"}, {"revision": 3})
