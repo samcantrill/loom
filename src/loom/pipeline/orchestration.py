@@ -33,6 +33,7 @@ from loom.pipeline.stores.read_models import (
     BackendRevision,
     StageLifecycleSnapshot,
 )
+from loom.pipeline.stores.input_lineage import capture_bindings
 from loom.scheduling import (
     Candidate,
     SchedulingDecision,
@@ -846,6 +847,7 @@ class RunOrchestrator:
                     f"ready stage {stage_plan.stage_name!r} has no resolved placement"
                 )
             record, receipt = self._reconcile_ready(
+                stage_facts=stage_facts,
                 admission_id=admission_id,
                 run_uri=plan.run_uri,
                 readiness=readiness,
@@ -976,6 +978,7 @@ class RunOrchestrator:
     def _reconcile_ready(
         self,
         *,
+        stage_facts: Mapping[str, StageLifecycleSnapshot],
         admission_id: str,
         run_uri: str,
         readiness: AttemptReadiness,
@@ -997,6 +1000,7 @@ class RunOrchestrator:
                 expected_revision=expected_revision,
                 owner_id=self.owner_id,
             )
+            request = replace(request, input_bindings=capture_bindings(readiness.stage_plan, stage_facts))
             intent = PreparationIntent(request=request, ready_at=ready_at)
         else:
             intent = prior_intent

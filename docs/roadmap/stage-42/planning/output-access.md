@@ -501,6 +501,42 @@ producer. Bundle/export/import serializers must either preserve the new records
 and source identity mappings or explicitly report absent lineage on older bundles.
 Do not silently drop version associations while claiming a complete import.
 
+#### Imported Historical Evidence Policy
+
+The maintainer approved historical evidence preservation (Option 1) on
+2026-09-25 after investigation found that portable imports create a new
+historical-only run and offline authority imports synthesize local commits.
+An import is not a new execution of the source attempt.
+
+- Preserve exported input bindings, original run/stage/attempt/commit identities,
+  and nullable start witnesses as explicitly source-owned historical evidence.
+  The importing run's local identity and any rebased payload locations remain
+  separate. Never rewrite an original producer locator into an imported commit
+  or infer a mapping from equal bytes, names, paths, or a shared source run URI.
+- Retain that evidence through supported bundle export/import in the existing
+  bundle/import metadata ownership, and make it inspectable through the existing
+  historical metadata/provenance surface. Version serializers as needed; older
+  bundles expose absent evidence as unknown, not a known empty input set.
+- A source start witness means the exporting authority recorded start; the
+  importing coordinator did not itself acknowledge that execution. Synthesized
+  offline-import attempts/commits must not acquire original native provenance
+  or a local start witness merely because source evidence exists.
+- Native authority-backed lineage and imported historical evidence remain
+  visibly distinct. Preserving history does not make a historical-only import
+  a current authority-backed run. Original references resolve only through
+  independently authorized existing scope; unresolved/out-of-scope references
+  remain explicit unavailable/restricted boundaries, without credential following
+  or hidden-provenance disclosure. Importing another copy never automatically
+  substitutes it for the referenced source.
+- No source-to-imported attempt/commit registry, automatic graph stitching,
+  imported execution authority, or new resume capability is required. A future
+  explicit remapping feature is outside this stage.
+
+Validation must round-trip nonempty bindings and known/unknown start evidence,
+retain exact original identities alongside a different target run URI and copied
+payload paths, distinguish absent older evidence, and show that unavailable
+sources or duplicate imports do not invent local execution or remapped edges.
+
 Cross-run inputs declared using native selectors are retained exactly. A project
 that opens an arbitrary file internally without a declared input has no Loom
 data edge. External inputs remain external unless the caller supplies a native

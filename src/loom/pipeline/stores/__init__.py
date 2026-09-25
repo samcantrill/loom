@@ -1,6 +1,7 @@
 """Pipeline store protocols, implementations, and filesystem helpers."""
 
 from .artifact_store import ArtifactStore, RunArtifactStore, StageArtifactStore
+from .input_lineage import AttemptInputBinding
 from .artifact_backends import (
     ARTIFACT_STORE_BACKEND_CONTRACT_VERSION,
     ArtifactStoreBackendDescriptor,
@@ -348,6 +349,7 @@ from .schema_policy import (
 from .service_coordination import ServiceWorkspaceCoordinationStore
 
 __all__ = [
+    "AttemptInputBinding",
     "ArtifactStore",
     "RunArtifactStore",
     "StageArtifactStore",

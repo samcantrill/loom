@@ -23,6 +23,7 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .capabilities import BackendCapabilitySet
+from .input_lineage import AttemptInputBinding, decode_bindings
 from .config import AuthorityConfig
 from .read_models import (
     ArtifactFactRecord,
@@ -164,8 +165,10 @@ class PreparedAttemptRequest:
     bound_inputs: Mapping[str, PlainData]
     upstream_commits: Mapping[str, str]
     retry_decision_id: str | None = None
+    input_bindings: tuple[AttemptInputBinding, ...] | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "input_bindings", decode_bindings(self.input_bindings))
         for field_name in (
             "operation_id",
             "request_digest",
@@ -200,9 +203,19 @@ class PreparedAttemptRequest:
             "upstream_commits",
             _string_mapping(self.upstream_commits, "upstream_commits"),
         )
+        if self.input_bindings is not None:
+            by_name = {binding.input_name: binding for binding in self.input_bindings}
+            for name, raw in self.bound_inputs.items():
+                binding = by_name.get(name)
+                if (binding is None or not isinstance(raw, Mapping)
+                    or thaw_plain_data(raw.get("artifact_ref")) != binding.artifact.to_dict()
+                    or raw.get("source_stage") != binding.source_stage_name
+                    or raw.get("source_output") != binding.source_output_name):
+                    raise AuthorityStoreError("input bindings differ from prepared bound inputs")
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
+            **({"input_bindings": [b.to_dict() for b in self.input_bindings]} if self.input_bindings is not None else {}),
             "operation_id": self.operation_id,
             "request_digest": self.request_digest,
             "admission_id": self.admission_id,
@@ -241,6 +254,7 @@ class PreparedAttemptRequest:
             "bound_inputs",
             "upstream_commits",
             "retry_decision_id",
+            "input_bindings",
         }
         _reject_unknown(mapping, allowed, "PreparedAttemptRequest")
         status = mapping.get("expected_stage_status")
@@ -282,6 +296,7 @@ class PreparedAttemptRequest:
             retry_decision_id=_optional_string(
                 mapping.get("retry_decision_id"), "retry_decision_id"
             ),
+            input_bindings=decode_bindings(mapping.get("input_bindings")),
         )
 
 

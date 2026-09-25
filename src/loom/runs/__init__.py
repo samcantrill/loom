@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .catalog import RunCatalog
 from .outputs import OutputLocator, OutputSelection, SelectedOutput
+from .lineage import LineageQuery
 from .query import (
     AllOf, AnyOf, AnyStage, CollectionScope, Compare, ContainsText, Exists, Field,
     InvalidCursorError, IsNull, JobQuery, ManagedScope, Missing, Not, Order,
@@ -115,6 +116,7 @@ from .models import (
 )
 
 __all__ = [
+    "LineageQuery",
     "OutputLocator", "OutputSelection", "SelectedOutput",
     "VocabularyCollection", "collect_vocabulary",
     "AllOf", "AnyOf", "AnyStage", "CollectionScope", "Compare", "ContainsText",

@@ -20,6 +20,9 @@ Which facts were captured automatically, and which were supplied by project code
 Provenance should make runs debuggable and reproducible without making `loom`
 depend on domain-specific frameworks.
 
+[Dependency lineage](lineage.md) describes exact retained per-attempt inputs,
+authority start acknowledgements, cross-run reuse and historical bundle evidence.
+
 The central boundary is:
 
 ```text

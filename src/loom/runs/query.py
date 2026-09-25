@@ -16,6 +16,7 @@ from functools import cmp_to_key
 import math
 import re
 from typing import Any
+from loom._output_identity import QueryError
 
 
 QUERY_CAPABILITY = "run-query-v1"
@@ -73,10 +74,6 @@ _COMPARE = {
 _SEMVER = re.compile(
     r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z"
 )
-
-
-class QueryError(ValueError):
-    """Invalid or unsupported query; never an empty search result."""
 
 
 class InvalidCursorError(QueryError):

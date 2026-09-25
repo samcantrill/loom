@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .input_lineage import decode_bindings, validate_bindings
+
 import hashlib
 import json
 import sqlite3
@@ -784,7 +786,10 @@ class SQLitePerRunAuthorityStore:
                 revision=revision,
                 created_at=now,
                 owner=owner_id,
+                start_confirmed=True,
+                start_confirmed_at=now,
             )
+            conn.execute("UPDATE attempts SET start_confirmed = 1, start_confirmed_at = ? WHERE attempt_id = ?", (now, attempt_id))
             return AttemptAllocation(attempt=attempt, lease=lease)
 
     def ensure_prepared_attempt(
@@ -911,6 +916,14 @@ class SQLitePerRunAuthorityStore:
             now = self._now()
             revision = self._next_revision(conn)
             attempt_id = f"{request.stage_name}-{attempt_number}"
+            try:
+                validate_bindings(request.input_bindings, {
+                    name: _stage_snapshot(conn, run_uri=run_uri, stage_name=name, now=now)
+                    for name in {b.source_stage_name for b in request.input_bindings or () if b.producer is not None}
+                    if name is not None
+                })
+            except ValueError as exc:
+                raise AuthorityStoreError(str(exc)) from exc
             conn.execute(
                 """
                 INSERT INTO attempts (
@@ -944,8 +957,11 @@ class SQLitePerRunAuthorityStore:
                 revision=revision,
                 created_at=now,
                 owner=request.owner_id,
+                start_confirmed=False,
+                input_bindings=request.input_bindings,
             )
             receipt = PreparedAttemptReceipt(request, attempt)
+            conn.execute("UPDATE attempts SET start_confirmed = 0, input_bindings_json = ? WHERE attempt_id = ?", (None if request.input_bindings is None else _json_dumps([b.to_dict() for b in request.input_bindings]), attempt_id))
             conn.execute(
                 """
                 INSERT INTO prepared_attempt_receipts (
@@ -1612,8 +1628,8 @@ class SQLitePerRunAuthorityStore:
                 (fence.assignment_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = ?, revision_sequence = ? WHERE attempt_id = ?",
-                (StageStatus.RUNNING.value, revision.sequence, fence.attempt_id),
+                "UPDATE attempts SET status = ?, revision_sequence = ?, start_confirmed = 1, start_confirmed_at = COALESCE(start_confirmed_at, ?) WHERE attempt_id = ?",
+                (StageStatus.RUNNING.value, revision.sequence, self._now(), fence.attempt_id),
             )
             _upsert_stage(
                 conn,
@@ -3243,6 +3259,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
+            input_bindings_json TEXT,
+            start_confirmed INTEGER,
+            start_confirmed_at TEXT,
             UNIQUE(stage_name, attempt_number)
         )
         """,
@@ -3534,7 +3553,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5, 6, 7, 8}:
+    if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
     historical_columns.pop("run_annotation_notes")
@@ -3675,6 +3694,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         claim_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE,
         active INTEGER NOT NULL CHECK(active IN (0, 1)))""")
     create_annotations_schema(conn)
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(attempts)")}
+    for name, kind in (("input_bindings_json", "TEXT"), ("start_confirmed", "INTEGER"), ("start_confirmed_at", "TEXT")):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE attempts ADD COLUMN {name} {kind}")
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -3849,6 +3872,8 @@ def _schema_shape_failure(conn: sqlite3.Connection) -> AuthoritySchemaFailure | 
         if set(_REQUIRED_SCHEMA_COLUMNS) - existing_tables:
             return _invalid_schema_shape_failure()
         for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+            if table_name == "attempts":
+                expected_columns = expected_columns | {"input_bindings_json", "start_confirmed", "start_confirmed_at"}
             columns = {
                 cast(str, row["name"])
                 for row in conn.execute(f"PRAGMA table_info({table_name})")
@@ -4044,6 +4069,9 @@ def _attempt_from_row(
         revision=_revision_for(conn, cast(int, row["revision_sequence"])),
         created_at=cast(str, row["created_at"]),
         owner=cast(str | None, row["owner_id"]),
+        input_bindings=decode_bindings(None if row["input_bindings_json"] is None else _json_loads(row["input_bindings_json"])),
+        start_confirmed=None if row["start_confirmed"] is None else bool(row["start_confirmed"]),
+        start_confirmed_at=row["start_confirmed_at"],
         reason=_reason_from_json(cast(str | None, row["reason_json"])),
     )
 

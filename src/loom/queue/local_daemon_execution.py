@@ -3508,6 +3508,7 @@ class LocalDaemonExecution:
                     stage=stage,
                     stage_plan=stage_plan,
                     produced_outputs=_produced_outputs(snapshot),
+                    input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=_worker_runtime(intent, record.stage_name),
                     metadata={
@@ -3530,6 +3531,8 @@ class LocalDaemonExecution:
                 or worker_request.executor_name != profile.executor_name
             ):
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
+            from loom.pipeline.stores.input_lineage import validate_worker_inputs
+            validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
             from loom.pipeline._project_contracts import validate_admitted_worker
             validate_admitted_worker(self.run_store, worker_request, stage)
             _require_retained_resource_handoff_match(
@@ -5316,6 +5319,7 @@ class LocalDaemonExecution:
                 stage=stage,
                 stage_plan=stage_plan,
                 produced_outputs=produced,
+                input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
                 metadata={
@@ -5339,6 +5343,8 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "managed worker preparation identity differs from authority attempt"
             )
+        from loom.pipeline.stores.input_lineage import validate_worker_inputs
+        validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
         from loom.pipeline._project_contracts import validate_admitted_worker
         validate_admitted_worker(self.run_store, worker_request, stage)
         _require_retained_resource_handoff_match(

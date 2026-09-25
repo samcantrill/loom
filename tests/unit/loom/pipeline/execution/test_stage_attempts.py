@@ -88,6 +88,7 @@ def test_prepare_stage_attempt_writes_durable_request_without_running_stage(
         == request.to_dict()
     )
     assert store.read_stage_inputs(run_uri, "build") == {}
+    assert request.metadata["attempt_input_bindings"] == ()
     fingerprint = cast(StageFingerprintRecord, request.fingerprint)
     assert store.read_stage_fingerprint(run_uri, "build") == fingerprint.to_dict()
     status = store.read_stage_status(run_uri, "build")

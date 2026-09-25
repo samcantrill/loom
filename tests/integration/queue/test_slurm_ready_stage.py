@@ -765,6 +765,9 @@ def _exercise_mixed_route_run(
         assert tuple(runner.calls) == calls_before
         assert not (tmp_path / "compute").exists()
         workspace = SlurmBootstrapWorkspace(tmp_path / "compute", assignment_id)
+        assert "attempt_input_evidence" in delivery.worker_metadata
+        assert "attempt_input_bindings" not in delivery.worker_metadata
+        assert delivery.worker_metadata["attempt_input_evidence"] == SlurmStageDelivery.from_dict(delivery.to_dict()).worker_metadata["attempt_input_evidence"]
         workspace.persist_delivery(delivery)
         for item in delivery.inputs:
             offset = 0

@@ -2,13 +2,20 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P5.
+- Status: pr_open; stage 42 / P5; implementation and validation complete;
+  review R1 corrected; targeted reviewer confirmation pending. Historical import evidence policy approved.
+- PR: [#354](https://github.com/samcantrill/loom/pull/354), canonical title and
+  `develop` target verified; implementation head `ef689126b9dd47a2944ec789d47f0e216e7b03e2`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p5-dependency-lineage`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 5: Dependency Lineage
-- Worktree/coordination/base: manifest context; base after P4.
+- Worktree/coordination: manifest context; base after P4
+  `9534e7699fc49b588c5c81c3bbdd608f869c8b34`.
 - Dependencies: P4 exact output identity and earlier native/query contracts.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: resolved by maintainer approval of historical
+  evidence preservation; see the output-access owner's Imported Historical
+  Evidence Policy. Blockers: none. P4 #353 remotely merged,
+  completion metadata published/synchronized and exact phase branch retired.
 
 ## Objective And Supported Merge State
 
@@ -145,12 +152,32 @@ bundle remapping or a need to reopen execution lifecycle contracts. Unknown
 legacy edges and untracked files opened by application code remain explicit
 limitations, not reconstruction work.
 
-Read this entire card and owning binding/traversal sections. Workflow preparation,
-implementation, validation, independent review and PR: not started. Refiner not
-needed yet; blocker corrections 0/3; improvement entries none.
+Read this entire card and owning binding/traversal sections. Workflow preparation
+passed; reuse approved readiness and retained-start witness design. One executor
+is justified by the tightly coupled preparation, durable authority, bundle and
+graph changes. Its write boundary is P5 source/tests/user docs and this card;
+P6 payload transfer is excluded. No planning refinement needed at admission;
+the explicit bundle-remapping stop remains binding if source investigation finds
+one. Required `make validate-pr`, selected bundle/replay/start/handoff evidence
+and native read-role parity remain obligations. Split optional dependency lanes
+using the existing harness and record real versus controlled backend evidence.
+Implementation and validation complete; PR open and review R1 corrected. Refiner
+used for disconnected historical consumer coverage; blocker corrections 1/3;
+targeted reviewer confirmation pending; improvement entries none.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation | Nullable per-attempt input bindings and monotonic start acknowledgement in both SQLite owners; embedded schema 10/repository schema 11 migrations; replay-compatible absent fields; pending/reused source capture before assignment; original refs checked at preparation and common worker handoff; path-free resident metadata references the retained evidence independently of materialized paths. Native lineage includes exact output/attempt identities, declared/bound/consumed/reuse relationships, scoped sources, live bounded continuation and coverage warnings. Python/CLI/MCP and CLIENT/QUERY share the native reader. |
+| Bundle behavior | Source attempts, bindings, witnesses and commit history retained in versioned bundle metadata and historical import runtime metadata; source identity stays separate from target URI/payload rebasing. Reuse materialization preserves the original commit. Offline-import synthetic attempts remain locally unwitnessed. |
+| Validation selection | Required `make validate-pr` covers source typing/lint, isolated baseline/config/MCP lanes and distributions. Focused contracts cover both authorities, before/after-start failure/cancel and replay, legacy migration, retries, pending/reused inputs and selector validation, historical fan-in/out graphs, filters/limits/cursors/restricted/external boundaries, bundles and native/CLI/QUERY/MCP parity. Existing controlled resident/container/shared/Slurm suites exercise the common handoff; full-gate expansion is required by durable schema/assignment impact. |
+| Current test evidence | Full `make validate-pr` passed on product commit `6c3707d8ea0c891d550b1aee56a5d577165a3ad6`, tree `5474a5d3ee1b7d8fb114d1ae51063a274944f403`. Ruff passed; Pyright 0 errors/warnings; isolated default lane 3,280 passed, 2 skipped, 402 deselected (1,463.06 s); config-extra lane 344 passed, 15 skipped, 3,343 deselected (2,969.69 s); MCP-extra lane 57 passed, 3,627 deselected (106.93 s). Source distribution and wheel built successfully. Full log: `/tmp/loom-stage42-p5-validate-pr-complete.log`. `git diff --check` and cached diff check passed. |
+| Concrete acceptance evidence | Full gate includes both-owner retained-start/migration/replay/retry contracts; pending/reused input capture and exact-selector rejection; nested-metadata binding serialization; current versus historical same-port successor commits; fan-in/out, intermediate filters, live pages, depth/entity bounds, control-only non-consumption and restricted adopted sources; canonical and snapshot-only bundle round trips with no imported graph stitching. Config-extra ran both Unix/HTTPS lineage integration cases, including Python/CLI and QUERY-role parity; MCP-extra ran native tool contracts and real stdio lineage calls. Baseline/config lanes cover common resident/container/shared/Slurm handoff adapters; the focused controlled mixed-route Slurm fixture also passed independently (1 test). |
+| Validation scope and residual risk | Backend launch logic is unchanged. Physical container acceptance was not enabled: config-extra skipped 10 Apptainer timeout/lifecycle cases and 5 real-runtime cases. No real Docker/Apptainer fleet or Slurm cluster qualification is claimed; controlled adapter and transport evidence only. Historical/external gaps, live graph changes, depth/entity/scoped-run budgets and no retention pin are explicit query limits. Build emitted a non-fatal installed-uv/build-requirement version warning; both distributions were produced. |
+| Commit, validated tree, review/PR/merge | Product commit/tree above exactly match the full validated tree. Subsequent executor closeout changes only this phase card's evidence/status; final committed HEAD/tree are supplied in the handoff. Manager owns independent review, PR and merge; none was performed by the executor. |
+| Startup finding | `runs/imports.py::_write_imported_run` creates a historical-only local run with a new run URI, retains only the maximum attempt number and rebased artifact index, and records no source attempt/commit mapping. `authority/_repository.py::_import_offline_stage` synthesizes import commits. Serializing new fields alone would lose lineage or falsely identify imported commits as originals. |
+| Import decision | Maintainer approved Option 1: preserve original lineage as historical source evidence, separate from imported local identity and payload paths. No automatic remapping, local execution claim, authorization promotion or graph stitching. Detailed contract and round-trip/unknown/boundary validation are at the output-access owner. |
+| R1 correction | Downstream bound/consumed queries now include absent input-binding evidence from every authorized acquired attempt in scoped coverage, even when missing bindings disconnect that attempt from traversal. No edges are inferred. Known-empty bindings retain complete no-match behavior; out-of-scope attempts contribute neither identities nor warnings. Correction budget 1/3; targeted reviewer confirmation pending. |
+| R1 validation | Applied `$loom-targeted-validation`: regression reproduced the false `complete=True` for both consumed/bound queries before correction. Isolated locked Python 3.12 dev selection `pytest tests/integration/queue/test_lineage_queries.py -m 'not optional_dependency' -q`: 6 passed, 2 deselected. Ruff and Pyright on the changed source/test files passed (0 typing errors/warnings); diff check passed. Tested source/test content is committed with this record; only evidence prose changed afterward. Existing full-gate evidence above remains the baseline; this bounded graph-warning correction does not change transport, authority serialization, execution or bundle contracts. Broaden checks only for newly affected consumers or failures; optional native transport cases were not rerun. |
+| Current state | P5 implementation complete with the approved historical-evidence policy and review R1 correction. Manifest/planning artifacts and P6 transfer behavior were not edited. Targeted reviewer confirmation is next; correction budget 1/3. |

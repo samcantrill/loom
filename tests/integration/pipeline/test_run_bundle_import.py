@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import path_to_file_uri, uri_to_path
@@ -53,6 +54,12 @@ def test_import_completed_bundle_rebases_payloads_and_refreshes_catalog(
     assert imported_payload.read_bytes() == b"payload"
     assert imported_payload.is_relative_to(target_run_dir / "imported_payloads")
     assert imported_ref.metadata["source_uri"] == path_to_file_uri(source.payload_path)
+    historical = cast(Any, store.read_runtime_metadata(result.target_run_uri))["historical_lineage"]
+    assert historical["source_run_uri"] == source.run_uri
+    assert historical["stages"][0]["attempts"][0]["run_uri"] == source.run_uri
+    assert historical["stages"][0]["attempts"][0]["start_confirmed"] is True
+    assert historical["stages"][0]["attempts"][0]["input_bindings"] is None
+    assert not (target_run_dir / ".loom" / "authority.sqlite3").exists()
     listed = RunCatalog.open(target_collection).list()
     assert [summary.run_uri for summary in listed.summaries] == [result.target_run_uri]
 
@@ -62,6 +69,50 @@ class ExportedBundle:
     bundle_path: Path
     run_uri: str
     payload_path: Path
+
+
+def test_import_preserves_nonempty_source_lineage_without_graph_stitching(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from tests.integration.queue.test_lineage_queries import graph
+    from loom.pipeline.stores import read_completed_run_bundle_metadata
+    from loom.runs import export_completed_run_bundle, CollectionScope, LineageQuery
+    from loom.queue._lineage import lineage_operation
+
+    _, _, consumer, uri, locator = graph(tmp_path)
+    consumer.transition_run(uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED)
+    metadata = read_completed_run_bundle_metadata(consumer, uri)
+    from loom.pipeline.stores import CompletedRunBundleMetadata
+    projected = CompletedRunBundleMetadata.from_snapshot(consumer.snapshot(uri))
+    assert projected.lineage_evidence is not None
+    assert [s["attempts"] for s in cast(Any, projected.lineage_evidence)["stages"]] == [s["attempts"] for s in cast(Any, metadata.lineage_evidence)["stages"]]
+    projected_bundle = tmp_path / "snapshot.tar"
+    assert export_completed_run_bundle(projected, projected_bundle).status is RunExchangeOperationStatus.SUCCEEDED
+    projected_import = import_run_bundle(projected_bundle, tmp_path / "snapshot-import")
+    assert projected_import.target_run_uri is not None
+    assert cast(Any, LocalRunStore(tmp_path / "snapshot-import").read_runtime_metadata(projected_import.target_run_uri))["historical_lineage"] == projected.lineage_evidence
+    bundle = tmp_path / "lineage.tar"
+    assert export_completed_run_bundle(metadata, bundle).status is RunExchangeOperationStatus.SUCCEEDED
+    for root in (tmp_path / "first", tmp_path / "second"):
+        imported = import_run_bundle(bundle, root)
+        assert imported.status is RunExchangeOperationStatus.SUCCEEDED
+        assert imported.target_run_uri is not None
+        local = LocalRunStore(root)
+        history = cast(Any, local.read_runtime_metadata(imported.target_run_uri))["historical_lineage"]
+        assert history == metadata.lineage_evidence
+        transforms = [s for s in history["stages"] if s["stage_name"] == "transform"]
+        binding = transforms[0]["attempts"][0]["input_bindings"][0]
+        assert binding["producer"] == locator.to_dict()
+        assert transforms[0]["attempts"][0]["run_uri"] == uri != imported.target_run_uri
+        daemon = SimpleNamespace(config=SimpleNamespace(run_store_root=root, coordinator_authority_factory=SQLitePerRunAuthorityStore), _require_started=lambda: "coordinator")
+        page = lineage_operation(daemon, LineageQuery(start={"run_uri": imported.target_run_uri}, scope=CollectionScope()).checked())
+        assert not page.items and not page.complete
+        assert any(w["code"] == "authority_unavailable" for w in page.warnings)
+    old_bundle = tmp_path / "old.tar"
+    export_completed_run_bundle(replace(metadata, lineage_evidence=None), old_bundle)
+    imported = import_run_bundle(old_bundle, tmp_path / "old")
+    assert imported.target_run_uri is not None
+    assert cast(Any, LocalRunStore(tmp_path / "old").read_runtime_metadata(imported.target_run_uri))["historical_lineage"] is None
 
 
 def _export_completed_bundle(tmp_path: Path) -> ExportedBundle:

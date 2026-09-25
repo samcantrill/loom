@@ -33,6 +33,7 @@ def test_store_error_inheritance() -> None:
 
 def test_store_error_exports() -> None:
     assert stores.__all__ == [
+        "AttemptInputBinding",
         "ArtifactStore",
         "RunArtifactStore",
         "StageArtifactStore",

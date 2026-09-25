@@ -16,6 +16,7 @@ from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import StageSpec
 from loom.pipeline.status import StageStatus, StageStatusRecord
 from loom.pipeline.stores import LegacyRunStore as RunStore, LocalRunStorePaths
+from loom.pipeline.stores.input_lineage import AttemptInputBinding, binding_evidence, capture_bindings
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
@@ -40,6 +41,7 @@ def prepare_stage_attempt(
     stage: StageSpec,
     stage_plan: StagePlan,
     produced_outputs: Mapping[str, Mapping[str, ArtifactRef]] | None = None,
+    input_bindings: tuple[AttemptInputBinding, ...] | None = None,
     fingerprint_context: FingerprintContext | None = None,
     resolved_runtime: ResolvedStageRuntimeOptions
     | Mapping[str, PlainData]
@@ -81,6 +83,20 @@ def prepare_stage_attempt(
     prepared_at = clock()
     produced = produced_outputs or {}
     inputs = _bind_inputs(stage, stage_plan, produced)
+    if input_bindings is not None:
+        if inputs != {b.input_name: b.artifact for b in input_bindings}:
+            raise PlanExecutionError("worker inputs differ from retained attempt bindings")
+    else:
+        # Legacy preparation has no authority source selectors. Retain refs with
+        # unknown origin; managed preparation supplies the authoritative receipt.
+        from dataclasses import replace
+        from loom.pipeline.planning.models import BoundInput
+
+        resolved = replace(stage_plan, pending_inputs=(), bound_inputs={
+            port.input_name: BoundInput(port.input_name, port.source_stage, port.source_output, inputs[port.input_name])
+            for port in (*stage_plan.bound_inputs.values(), *stage_plan.pending_inputs)
+        })
+        input_bindings = capture_bindings(resolved, {})
     fingerprint = build_stage_fingerprint(
         stage,
         bound_inputs=inputs,
@@ -109,7 +125,9 @@ def prepare_stage_attempt(
             resolved_runtime, stage_name=stage.name
         ),
         executor_metadata=redact_executor_metadata(executor_metadata),
-        metadata={**dict(metadata or {}), **worker_contract_metadata(run_store, run_uri, stage)},
+        metadata={**dict(metadata or {}), **worker_contract_metadata(run_store, run_uri, stage),
+                  "attempt_input_bindings": [binding.to_dict() for binding in input_bindings],
+                  "attempt_input_evidence": binding_evidence(input_bindings)},
     )
 
     run_store.write_stage_inputs(run_uri, stage.name, inputs, attempt=attempt)
