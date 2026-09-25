@@ -2,13 +2,15 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P5.
+- Status: in_progress; stage 42 / P5.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p5-dependency-lineage`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 5: Dependency Lineage
-- Worktree/coordination/base: manifest context; base after P4.
+- Worktree/coordination: manifest context; base after P4
+  `9534e7699fc49b588c5c81c3bbdd608f869c8b34`.
 - Dependencies: P4 exact output identity and earlier native/query contracts.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: none. Blockers: none. P4 #353 remotely merged,
+  completion metadata published/synchronized and exact phase branch retired.
 
 ## Objective And Supported Merge State
 
@@ -145,8 +147,16 @@ bundle remapping or a need to reopen execution lifecycle contracts. Unknown
 legacy edges and untracked files opened by application code remain explicit
 limitations, not reconstruction work.
 
-Read this entire card and owning binding/traversal sections. Workflow preparation,
-implementation, validation, independent review and PR: not started. Refiner not
+Read this entire card and owning binding/traversal sections. Workflow preparation
+passed; reuse approved readiness and retained-start witness design. One executor
+is justified by the tightly coupled preparation, durable authority, bundle and
+graph changes. Its write boundary is P5 source/tests/user docs and this card;
+P6 payload transfer is excluded. No planning refinement needed at admission;
+the explicit bundle-remapping stop remains binding if source investigation finds
+one. Required `make validate-pr`, selected bundle/replay/start/handoff evidence
+and native read-role parity remain obligations. Split optional dependency lanes
+using the existing harness and record real versus controlled backend evidence.
+Implementation, validation, independent review and PR pending. Refiner not
 needed yet; blocker corrections 0/3; improvement entries none.
 
 ## Completion Record

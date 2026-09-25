@@ -66,7 +66,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 | P2 | [run-annotations](phases/run-annotations.md) | merged | `agent/stage-42-p2-run-annotations` | #351 | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | merged | `agent/stage-42-p3-run-discovery` | #352 | Typed run/submission/job queries, tag vocabulary and bounded live pages | Reconciled full-gate evidence and independent review/R1 confirmation passed |
 | P4 | [output-selection](phases/output-selection.md) | merged | `agent/stage-42-p4-output-selection` | #353 | Exact current/historical output selection with original producer and reuse associations | Targeted validation and independent review/R1 confirmation passed |
-| P5 | [dependency-lineage](phases/dependency-lineage.md) | pending | `agent/stage-42-p5-dependency-lineage` | none | Persist exact per-attempt input origins and query generic dependency graphs | Prepared-attempt/worker/store compatibility and multi-run graph; full gate |
+| P5 | [dependency-lineage](phases/dependency-lineage.md) | in_progress | `agent/stage-42-p5-dependency-lineage` | none | Persist exact per-attempt input origins and query generic dependency graphs | Prepared-attempt/worker/store compatibility and multi-run graph; full gate |
 | P6 | [artifact-access](phases/artifact-access.md) | pending | `agent/stage-42-p6-artifact-access` | none | Authorized complete-file retrieval, bounded previews, safe batch materialization and composed agent workflow | Real local/HTTPS transfer, failure/integrity matrix and final full gate |
 
 Merge order is P1 → P2 → P3 → P4 → P5 → P6. Semantic dependencies: P2 needs P1;
@@ -180,7 +180,7 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1–P4 merged; P5–P6 pending. P3 reconciled validation and
+- Phase statuses: P1–P4 merged; P5 in progress; P6 pending. P3 reconciled validation and
   independent review/R1 confirmation passed. The maintainer selected per-page
   vocabulary uniqueness with collector deduplication. The maintainer chose
   run-scoped mutation IDs on 2026-09-25. The run-context contract and matching
