@@ -2,7 +2,9 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P4.
+- Status: pr_open; stage 42 / P4.
+- PR: [#353](https://github.com/samcantrill/loom/pull/353), verified canonical title
+  and `develop` target; implementation head `f05ce49a09751142dc3efd0cfb98a4732dcdc90e`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p4-output-selection`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 4: Output Selection
