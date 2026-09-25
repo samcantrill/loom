@@ -53,6 +53,7 @@ def fleet(tmp_path):
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
+    assert service.agent_server is not None
     http = LocalDaemonAgentHttpServer(daemon, service.agent_server)
     socket = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     http.start()
@@ -105,12 +106,16 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(tmp_path):
         agent = LocalDaemonAgentHttpClient(service.client)
         try:
             handshake = agent.handshake()
+            coordinator_id = handshake["coordinator_id"]
+            coordinator_epoch = handshake["coordinator_epoch"]
+            assert isinstance(coordinator_id, str)
+            assert isinstance(coordinator_epoch, str)
             reg = service.registration
             session = agent.register(
                 AgentRegistration(
                     "register",
-                    handshake["coordinator_id"],
-                    handshake["coordinator_epoch"],
+                    coordinator_id,
+                    coordinator_epoch,
                     agent.agent_root_id,
                     reg.config_revision,
                     reg.inventory_revision,
@@ -136,8 +141,10 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(tmp_path):
         assert retire_outbound_agent(service, **args) == receipt
         with pytest.raises(QueueError):
             retire_outbound_agent(service, **{**args, "expected_session_id": "stale"})
-        with retired_role_guard(service.client.agent_root, receipt):
-            assert service.client.agent_root.is_dir()
+        agent_root = service.client.agent_root
+        assert agent_root is not None
+        with retired_role_guard(agent_root, receipt):
+            assert agent_root.is_dir()
         with pytest.raises(QueueError, match="retired"):
             run_outbound_agent_service(service, stop=Event())
         operator.retire("remove-fleet", session.coordinator_id)
