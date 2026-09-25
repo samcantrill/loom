@@ -2,13 +2,15 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P3.
+- Status: in_progress; stage 42 / P3.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p3-run-discovery`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 3: Run Discovery
-- Worktree/coordination/base: manifest context; base after P2.
+- Worktree/coordination: manifest context; base
+  `1723c85128abc52e07649d6261c2faa255a5186f` after P2 publication/synchronization.
 - Dependencies: P1/P2. Named refinement uncertainty: none.
-- Blockers: stage gates and earlier merges.
+- Blockers: none. P1 #349 and P2 #351 remotely merged; predecessor metadata
+  published, exact phase branches retired, and stage/control/remote synchronized.
 
 ## Objective And Supported Merge State
 
@@ -123,8 +125,18 @@ would require cross-deployment credential discovery. Legacy absent fields and
 non-snapshot pages are accepted, documented limits; repeatable bytes come from
 later exact output selection, not an overstated search snapshot.
 
-Workflow preparation/refinement/implementation/validation/independent review/PR:
-not started. Blocker corrections 0/3; improvement entries none.
+Workflow preparation: passed; reuse manifest readiness and fixed discovery
+contracts. No planning refinement needed. One executor is justified by the
+cross-cutting evaluator, acquisition, pagination and transport integration;
+its write boundary is P3 source/tests/docs and this card, not later phases.
+Independent actual-PR-head review remains a separate required gate.
+
+Validation routing: retain every selection above, splitting baseline tests from
+config-dependent fixtures and MCP-extra tests into their locked environments
+per `tests/README.md`. Cover CLI query translation and both authenticated native
+transports. Apply the stated expansion triggers after inspecting the final diff;
+no physical-runtime qualification is claimed. Implementation and final evidence
+pending. Blocker corrections 0/3; improvement entries none.
 
 ## Completion Record
 
