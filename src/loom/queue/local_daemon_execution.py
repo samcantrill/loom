@@ -3856,7 +3856,48 @@ class LocalDaemonExecution:
         additive_capacity = not local_provider_changed and all(
             atom in replacement_capacity for atom in self.capacity
         )
-        if provider_changed and not additive_capacity:
+        # A fully retired remote namespace can disappear while unrelated
+        # reservations remain. Native policy validation has proved retirement;
+        # this owner separately checks its own exact capacity-holding rows.
+        removed_agents = {
+            rule.agent_id
+            for rule in self.config.agent_policy.agents
+            if not any(
+                other.agent_id == rule.agent_id
+                for other in replacement.agent_policy.agents
+            )
+        }
+        removed_keys = {
+            key
+            for rule in self.config.agent_policy.agents
+            if rule.agent_id in removed_agents
+            for key in (
+                ("cpu", f"{rule.agent_id}:cpu"),
+                ("memory", f"{rule.agent_id}:memory"),
+                *(
+                    ("gpu", f"{rule.agent_id}:{device.device_id}")
+                    for device in rule.gpu_devices
+                ),
+            )
+        }
+        retired_capacity = (
+            not local_provider_changed
+            and bool(removed_agents)
+            and all(
+                atom in replacement_capacity or atom.key in removed_keys
+                for atom in self.capacity
+            )
+        )
+        if retired_capacity:
+            with sqlite3.connect(self.config.execution_database) as conn:
+                retired_capacity = not any(
+                    conn.execute(
+                        "SELECT 1 FROM coordinator_assignments WHERE agent_id=? AND state!='released' LIMIT 1",
+                        (agent,),
+                    ).fetchone()
+                    for agent in removed_agents
+                )
+        if provider_changed and not (additive_capacity or retired_capacity):
             try:
                 retained_claims = (
                     ()

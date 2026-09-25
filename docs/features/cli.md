@@ -45,6 +45,8 @@ See [patch and note semantics](coordinator-client.md#editing-annotations-and-app
 - `queue daemon-*`, `queue agent-*`, `queue role-check`: explicit native service,
   operation and installed-role controls. Use `--help` for the exact current
   operation arguments; root/profile discovery is not a fallback.
+  `queue agent-retire` and `queue daemon-retire` provide
+  [native retirement proofs](role-retirement.md), not file deletion.
 - `authority`: explicit service lifecycle and historical offline evidence import.
 - `plugins`: inspect installed extension descriptors and selected activation.
 

@@ -105,6 +105,47 @@ class CoordinatorLifetime:
             self.retiring = True
             return True
 
+    def retire_explicit(self, operation_id: str, coordinator_id: str) -> dict:
+        """Atomically fence new acceptance and retain an operator removal receipt."""
+        from .errors import QueueConflictError
+        from .retirement import _identifiers, _save, retirement_receipt
+
+        _identifiers(operation_id, coordinator_id)
+        daemon = self.daemon
+        with daemon._cycle_lock:
+            if daemon._require_started() != coordinator_id:
+                raise QueueConflictError("retirement coordinator identity changed")
+            root = daemon.config.coordinator_root
+            prior = retirement_receipt(root)
+            if prior is not None:
+                if prior["operation_id"] != operation_id:
+                    raise QueueConflictError(
+                        "another retirement operation owns this role"
+                    )
+                return prior
+            if daemon.config.agent_root is not None:
+                raise QueueConflictError(
+                    "retire a pure coordinator; embedded agents require separate recovery"
+                )
+            with daemon._connection() as conn:
+                if conn.execute(
+                    "SELECT 1 FROM agent_sessions WHERE state NOT IN ('RETIRED_CLEAN','REPLACED') LIMIT 1"
+                ).fetchone():
+                    raise QueueConflictError("coordinator still has unretired agents")
+            if not self.retire_if_idle():
+                raise QueueConflictError(
+                    "coordinator has retained work or startup attachments"
+                )
+            receipt = {
+                "role": "coordinator",
+                "state": "retired",
+                "operation_id": operation_id,
+                "coordinator_id": coordinator_id,
+                "root_id": coordinator_id,
+            }
+            _save(root, receipt)
+            return receipt
+
 
 def record_process(
     root: Path,

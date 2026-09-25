@@ -1248,8 +1248,10 @@ def test_scheduling_reload_rejects_before_persistence_when_role_prepare_fails(
     restarted.stop()
 
 
-def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
+@pytest.mark.parametrize("remove", [False, True])
+def test_scheduling_reload_changes_agent_capacity_with_retained_local_claims(
     tmp_path: Path,
+    remove: bool,
 ) -> None:
     config = _config(tmp_path)
     replacement = replace(
@@ -1265,6 +1267,8 @@ def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
             ),
         ),
     )
+    if remove:
+        config, replacement = replacement, config
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
     before = daemon.start()
@@ -1324,10 +1328,16 @@ def test_scheduling_reload_adds_agent_capacity_with_retained_local_claims(
         )
         assert receipt["state"] == "applied"
         assert all(execution.providers[k] is v for k, v in old_providers.items())
-        assert all(atom in execution.capacity for atom in old_capacity)
-        assert {atom.key for atom in execution.capacity} - {
-            atom.key for atom in old_capacity
-        } == {("cpu", "new-worker:cpu"), ("memory", "new-worker:memory")}
+        before_keys = {atom.key for atom in old_capacity}
+        after_keys = {atom.key for atom in execution.capacity}
+        if remove:
+            assert after_keys < before_keys
+        else:
+            assert all(atom in execution.capacity for atom in old_capacity)
+        assert before_keys ^ after_keys == {
+            ("cpu", "new-worker:cpu"),
+            ("memory", "new-worker:memory"),
+        }
         assert execution.coordinator.path == old_coordinator.path
         current_provider = execution.providers["cpu"]
         held = current_provider.observe(
