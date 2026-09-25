@@ -110,12 +110,32 @@ client operations even if P3 never ships.
 Workflow preparation passed; no refinement uncertainty. One phase executor is
 selected for the cross-store CAS/receipt and adapter implementation scope, with
 manager-owned validation acceptance and independent actual-PR review/delivery.
-Implementation and expanded local validation complete; review/PR pending. Blocker corrections 0/3;
+Implementation and expanded local validation complete; actual-PR review found R1 below.
+Blocker corrections 1/3 (one scoped refiner correction assigned);
 improvement entries none. Required selected tests need baseline, config-extra
 and MCP-extra environments as their markers require; do not claim deselection
 as adapter coverage. Expand for changed shared migration/protocol consumers.
 
 ## Completion Record
+
+### Independent Review R1: Legacy Note Limits
+
+Review of PR #351 head `7496fc31f57d0a103f0d5b1b3c032184f7af8d24` found one
+product blocker: supported `RunOptions.notes` can contain 16,385-byte text, but
+`RunNote` applies the 16-KiB native append limit to `legacy_runtime` too.
+Shared mutation code converts all legacy notes on every write, so such a note
+breaks listing, unrelated tag patches and valid short native appends. This
+violates preserved legacy evidence and unrelated annotation-write contracts;
+the maintainer's initial-tag decision does not authorize rejecting legacy notes.
+
+Smallest correction: separate native append limits from retained legacy evidence,
+preserve full legacy text/unknown attribution without truncation or rewriting,
+retain bounded listing with an explicit limitation when text cannot fit, and
+prevent legacy projection size from invalidating otherwise valid mutations.
+Extend supported-producer coverage across both durable authority owners. No new
+execution/lifecycle owner or arbitrary scope expansion. Review otherwise found
+the transactions, replay, native attribution and validation evidence consistent.
+Merge remains blocked until correction and the same reviewer's confirmation.
 
 | Item | Result |
 | --- | --- |
