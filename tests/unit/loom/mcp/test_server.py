@@ -65,6 +65,9 @@ def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
         "loom_get_job",
         "loom_inspect_run",
         "loom_run_context",
+        "loom_patch_run_annotations",
+        "loom_append_run_note",
+        "loom_list_run_notes",
         "loom_list_agents",
         "loom_get_agent",
         "loom_submit_run",
@@ -265,6 +268,7 @@ def test_public_deployment_discovery_is_inert_and_has_no_override(tmp_path, monk
         assert tool.annotations.read_only_hint == (tool.name not in {
             "loom_run", "loom_submit_run", "loom_prepare_run", "loom_cancel_job",
             "loom_cancel_preparation", "loom_cancel_run_operation",
+            "loom_patch_run_annotations", "loom_append_run_note",
         })
 
 
