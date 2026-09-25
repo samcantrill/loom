@@ -16,6 +16,11 @@ def test_runs_public_exports_are_stable() -> None:
     import loom.runs as runs
 
     assert runs.__all__ == [
+        "VocabularyCollection", "collect_vocabulary",
+        "AllOf", "AnyOf", "AnyStage", "CollectionScope", "Compare", "ContainsText",
+        "Exists", "Field", "InvalidCursorError", "IsNull", "JobQuery", "ManagedScope",
+        "Missing", "Not", "Order", "QueryError", "RunQuery", "SubmissionQuery",
+        "QueryCollection", "QueryPage", "collect_pages",
         "AnnotationConflictError",
         "AnnotationPatch",
         "RunNote",

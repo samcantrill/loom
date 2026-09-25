@@ -2,14 +2,15 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P3.
+- Status: in_progress; stage 42 / P3; vocabulary semantics approved.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p3-run-discovery`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 3: Run Discovery
 - Worktree/coordination: manifest context; base
   `1723c85128abc52e07649d6261c2faa255a5186f` after P2 publication/synchronization.
 - Dependencies: P1/P2. Named refinement uncertainty: none.
-- Blockers: none. P1 #349 and P2 #351 remotely merged; predecessor metadata
+- Blockers: none; maintainer selected per-page vocabulary uniqueness with a
+  deduplicating collector. P1 #349 and P2 #351 remotely merged; predecessor metadata
   published, exact phase branches retired, and stage/control/remote synchronized.
 
 ## Objective And Supported Merge State
@@ -135,11 +136,30 @@ Validation routing: retain every selection above, splitting baseline tests from
 config-dependent fixtures and MCP-extra tests into their locked environments
 per `tests/README.md`. Cover CLI query translation and both authenticated native
 transports. Apply the stated expansion triggers after inspecting the final diff;
-no physical-runtime qualification is claimed. Implementation and final evidence
-pending. Blocker corrections 0/3; improvement entries none.
+no physical-runtime qualification is claimed. Final evidence follows below.
+Blocker corrections 0/3; improvement entries none.
+
+Execution clarification: the maintainer approved local metadata enumeration
+outside the 500 detailed-candidate budget; the discovery owner records that
+decision. Managed initializing-submission ordering uses journal candidates,
+checks authority initializer identity within the budget, and continues past
+noninitializing reconciled submissions without treating them as new runs.
+Job rows preserve existing admission identity and structured owner associations;
+historical assignment arrays have no implicit scalar predicate. The manager
+accepted that projection interpretation for independent review against FR-Q02.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation state | Implementation and required validation complete; ready for independent actual-head review. No PR/merge or branch transition performed by the executor. |
+| Changed paths | New query/evaluator, page, acquisition and local-collection modules under `src/loom/runs`; native query acquisition under `src/loom/queue`; public catalog/client, Unix/HTTPS control and QUERY, CLI and MCP adapters; query unit/contract/native integration tests, API/MCP regression expectations; `docs/features/run-discovery.md` and catalog routing. |
+| Public choices | Resolved by the maintainer in the discovery owner: metadata enumeration may exceed the detailed-acquisition budget; vocabulary uniqueness is per page and its collector unions observations while preserving coverage. No retained global vocabulary index/state. |
+| Vocabulary implementation | Bounded 500-detail reads, including empty continuing pages; per-run continuation re-reads current annotations; keys/values remain generic. Collector retains page observations and warnings. Unicode-expanded annotations and escaped-value response budgets have discriminating tests. |
+| Baseline expansion | `make validate-pr` ran the full no-extra suite: **3238 passed, 2 skipped, 392 deselected**, with two stale exact capability expectations failing. Updated only those expectations for `run-query-v1`; the exact Unix handshake and HTTPS configured-role regression nodes then passed (**2 passed**, isolated locked Python 3.12/dev). Baseline skips are the existing queue CLI manifest checks requiring dotenv, not P3 obligations. Successful unaffected broad evidence is retained. |
+| Final bounded reconciliation | The final isolated locked Python 3.12/dev selection of query unit/contract, existing catalog contract/direct-scan/SQLite/current-list, and runs package API tests passed **46 tests**. This reconciles the vocabulary byte-budget/Unicode projection changes made while the broad baseline ran, including the subsequently added Unicode case. The command uses the six no-extra paths from this card's final targeted selection plus `tests/package/test_runs_api.py`, with `-m 'not optional_dependency' -q`. |
+| Config/native/CLI coverage | `make lint typecheck test-config-extra test-mcp-extra build` completed config-extra: **336 passed, 15 skipped, 3302 deselected**, including all **5** `tests/integration/queue/test_run_queries.py` cases. These exercise Unix and HTTPS CLIENT, HTTPS QUERY vocabulary/search, CLI search translation, actual admission/assignment links, annotation mutation, unavailable authority under NOT, disconnected scope and reconciled original submissions. Skips are opt-in physical container acceptance, not P3 obligations. |
+| MCP and remaining gate components | The preceding command stopped at one stale MCP SDK tool-name inventory after 54 MCP passes. Updated that expectation for the six new tools; `make lint typecheck test-mcp-extra build` then passed: **55 MCP tests**, project-wide Ruff, Pyright **0 errors/warnings**, source distribution and wheel. It includes the required tool contracts and real stdio selection. `uv lock --check` and staged diff checks pass. No selected P3 obligation is skipped. |
+| Evidence tree | Reconciled validation applies to staged content tree `93adc4c02eb164eca209e4593e7e155ec48f389f`, based on `e1fb5162f17cdefdfef7b2ca32b7f390f9dfa361`; source subtree `8de098c1683a93ae2901b12473e0a6128c97e151`, tests subtree `a6772f9df1e481b5041964eb81adf6a18243b457`. Only this completion receipt changed afterward. No background validation jobs remain. |
+| Remaining work | Manager's actual-head independent review and publication workflow. No public contract choice remains unresolved; no summary rerun is required by this card. |
+| Residual limits | Live pages are not snapshots. Uncaptured run start/finish facts remain unknown; revision/preparation times are not substituted. Job assignment arrays are preserved but not scalar-searchable. No physical runtime qualification is claimed. |

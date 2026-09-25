@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from .catalog import RunCatalog
+from .query import (
+    AllOf, AnyOf, AnyStage, CollectionScope, Compare, ContainsText, Exists, Field,
+    InvalidCursorError, IsNull, JobQuery, ManagedScope, Missing, Not, Order,
+    QueryError, RunQuery, SubmissionQuery,
+)
+from ._query_page import QueryCollection, QueryPage, collect_pages
+from ._query_vocabulary import VocabularyCollection, collect_vocabulary
 from .context import RunAnnotations, RunContext, SubmissionContext
 from .annotations import AnnotationConflictError, AnnotationPatch, RunNote, RunNotePage
 from .bundles import (
@@ -107,6 +114,11 @@ from .models import (
 )
 
 __all__ = [
+    "VocabularyCollection", "collect_vocabulary",
+    "AllOf", "AnyOf", "AnyStage", "CollectionScope", "Compare", "ContainsText",
+    "Exists", "Field", "InvalidCursorError", "IsNull", "JobQuery", "ManagedScope",
+    "Missing", "Not", "Order", "QueryError", "RunQuery", "SubmissionQuery",
+    "QueryCollection", "QueryPage", "collect_pages",
     "AnnotationConflictError",
     "AnnotationPatch",
     "RunNote",

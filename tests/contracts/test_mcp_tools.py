@@ -209,6 +209,12 @@ def test_native_mapping_and_default_arguments(tool, arguments, native, args):
     ("loom_patch_run_annotations", "patch_run_annotations", {"run_uri": "file:///run", "mutation_id": "one", "patch": {"expected_revision": 3, "description": None, "set_metadata": {"n": None}}}),
     ("loom_append_run_note", "append_run_note", {"run_uri": "file:///run", "mutation_id": "two", "text": "observed"}),
     ("loom_list_run_notes", "list_run_notes", {"run_uri": "file:///run", "limit": 2, "cursor": None}),
+    ("loom_search_runs", "search_runs", {"query": {"schema_version": 1}}),
+    ("loom_search_submissions", "search_submissions", {"query": {"schema_version": 1}}),
+    ("loom_search_jobs", "search_jobs", {"query": {"schema_version": 1}}),
+    ("loom_query_fields", "query_fields", {"entity": "runs"}),
+    ("loom_tag_keys", "tag_keys", {"scope": {"kind": "managed"}, "limit": 2, "cursor": None}),
+    ("loom_tag_values", "tag_values", {"scope": {"kind": "managed"}, "key": "literal.key", "limit": 2, "cursor": None}),
 ])
 def test_annotation_tools_preserve_native_requests(tool, operation, payload):
     from mcp import Client

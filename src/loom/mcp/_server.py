@@ -557,6 +557,38 @@ class _Adapter:
             )
 
         @server.tool(annotations=read)
+        async def loom_search_runs(query: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Search explicit run scope; retain coverage warnings and live continuation."""
+            return await self._call("search_runs", lambda deadline: self._native("search_runs", {"query": query}, expected_coordinator_id, deadline), text="Observed run search page.", payload={"query": query})
+
+        @server.tool(annotations=read)
+        async def loom_search_submissions(query: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Search all original submissions, including failed/unbound requests."""
+            return await self._call("search_submissions", lambda deadline: self._native("search_submissions", {"query": query}, expected_coordinator_id, deadline), text="Observed submission search page.", payload={"query": query})
+
+        @server.tool(annotations=read)
+        async def loom_search_jobs(query: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Search native admission views with their existing associations."""
+            return await self._call("search_jobs", lambda deadline: self._native("search_jobs", {"query": query}, expected_coordinator_id, deadline), text="Observed job search page.", payload={"query": query})
+
+        @server.tool(annotations=read)
+        async def loom_query_fields(entity: str = "runs", expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Discover native query fields, operators and bounds."""
+            return await self._call("query_fields", lambda deadline: self._native("query_fields", {"entity": entity}, expected_coordinator_id, deadline), text="Read query capabilities.", payload={"entity": entity})
+
+        @server.tool(annotations=read)
+        async def loom_tag_keys(scope: dict[str, Any], limit: int = 50, cursor: str | None = None, expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Discover bounded distinct current tag keys without registration."""
+            payload: dict[str, PlainData] = {"scope": scope, "limit": limit, "cursor": cursor}
+            return await self._call("tag_keys", lambda deadline: self._native("tag_keys", payload, expected_coordinator_id, deadline), text="Observed tag keys.", payload=dict(payload))
+
+        @server.tool(annotations=read)
+        async def loom_tag_values(scope: dict[str, Any], key: str, limit: int = 50, cursor: str | None = None, expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Discover bounded distinct values of one literal tag key."""
+            payload: dict[str, PlainData] = {"scope": scope, "key": key, "limit": limit, "cursor": cursor}
+            return await self._call("tag_values", lambda deadline: self._native("tag_values", payload, expected_coordinator_id, deadline), text="Observed tag values.", payload=dict(payload))
+
+        @server.tool(annotations=read)
         async def loom_run_context(
             run_uri: str, expected_coordinator_id: str | None = None
         ) -> CallToolResult:

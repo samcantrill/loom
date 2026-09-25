@@ -62,6 +62,12 @@ CONTROL_OPERATIONS = frozenset(
         "patch_run_annotations",
         "append_run_note",
         "list_run_notes",
+        "search_runs",
+        "search_submissions",
+        "search_jobs",
+        "query_fields",
+        "tag_keys",
+        "tag_values",
         "operation",
         "wait_operation",
         "prepare_run",
@@ -400,6 +406,12 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return RunNote.from_dict(value) if operation == "append_run_note" else RunNotePage.from_dict(value)
     if operation in {"inspect_run", "get_run_context"}:
         return value  # The diagnostic union decoder belongs above queue.
+    if operation in {"search_runs", "search_submissions", "search_jobs", "tag_keys", "tag_values"}:
+        from loom.runs._query_page import QueryPage
+
+        return QueryPage.from_dict(value)
+    if operation == "query_fields":
+        return value
     raise ValueError("control result operation is unsupported")
 
 
@@ -428,6 +440,12 @@ def validate_request(
     operation: str, payload: Mapping[str, object], *, legacy: bool = False
 ) -> dict[str, object]:
     """Validate the finite public request before invoking application owners."""
+    from ._run_queries import QUERY_OPERATIONS, validate_query_request
+
+    if operation in QUERY_OPERATIONS:
+        query_payload = dict(payload)
+        query_payload.pop("expected_coordinator_id", None)
+        return validate_query_request(operation, query_payload)
     fields = {
         "handshake": set(),
         "status": set(),
@@ -582,6 +600,7 @@ def dispatch_control(
                 (
                     CONTROL_CAPABILITY,
                     "run-context-v1",
+                    "run-query-v1",
                     *(
                         ("agent-preparation-v1", "reconciled-run-v1")
                         if daemon.preparation_available
@@ -637,6 +656,16 @@ def dispatch_control(
                     expected_revision=cast(int, value["expected_revision"]),
                     timeout=timeout,
                 )
+        elif operation in {"search_runs", "search_submissions", "search_jobs", "query_fields", "tag_keys", "tag_values"}:
+            from ._run_queries import query_operation
+            from loom.runs.query import InvalidCursorError, QueryError
+
+            try:
+                result = query_operation(daemon, operation, value)
+            except InvalidCursorError as exc:
+                raise control_error("invalid_cursor", operation, payload, boundary="coordinator") from exc
+            except QueryError as exc:
+                raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
         elif operation == "get_run_context":
             from ._run_context import get_run_context
 
