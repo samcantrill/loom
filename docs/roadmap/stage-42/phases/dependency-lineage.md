@@ -2,16 +2,16 @@
 
 ## Metadata
 
-- Status: blocked; stage 42 / P5; imported source-identity policy needs approval.
+- Status: in_progress; stage 42 / P5; historical import evidence policy approved.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p5-dependency-lineage`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 5: Dependency Lineage
 - Worktree/coordination: manifest context; base after P4
   `9534e7699fc49b588c5c81c3bbdd608f869c8b34`.
 - Dependencies: P4 exact output identity and earlier native/query contracts.
-- Named refinement uncertainty: imported lineage evidence ownership and identity.
-  Blocker: existing historical imports do not preserve native attempt/commit
-  identity mappings; the explicit bundle stop below applies. P4 #353 remotely merged,
+- Named refinement uncertainty: resolved by maintainer approval of historical
+  evidence preservation; see the output-access owner's Imported Historical
+  Evidence Policy. Blockers: none. P4 #353 remotely merged,
   completion metadata published/synchronized and exact phase branch retired.
 
 ## Objective And Supported Merge State
@@ -167,5 +167,5 @@ needed yet; blocker corrections 0/3; improvement entries none.
 | --- | --- |
 | Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
 | Startup finding | `runs/imports.py::_write_imported_run` creates a historical-only local run with a new run URI, retains only the maximum attempt number and rebased artifact index, and records no source attempt/commit mapping. `authority/_repository.py::_import_offline_stage` synthesizes import commits. Serializing new fields alone would lose lineage or falsely identify imported commits as originals. |
-| Required decision | Choose whether bundle round-trip preserves immutable source lineage as explicitly historical imported evidence (not new local authority/authorization), or introduces a new source-to-imported authority identity and resolution contract. Manager recommends historical evidence retention with original locators unchanged, external/unavailable boundaries for unresolvable source runs, and no implicit credential following or promotion to native production evidence. Detailed owner contract and validation must be fixed after maintainer approval. |
-| Current state | Executor stopped at the approved bundle-remapping condition before source edits or validation; clean implementation base `61c2f1f5db7048eb4b3553540f2c9e427074dba2`. No product commits, PR, background jobs or consumed correction pass. Existing stage worktree retained. |
+| Import decision | Maintainer approved Option 1: preserve original lineage as historical source evidence, separate from imported local identity and payload paths. No automatic remapping, local execution claim, authorization promotion or graph stitching. Detailed contract and round-trip/unknown/boundary validation are at the output-access owner. |
+| Current state | Resuming the same executor after its pre-edit bundle stop; no product changes or validation preceded the decision. Original implementation base `61c2f1f5db7048eb4b3553540f2c9e427074dba2`; manager decision commits now supply the clarified contract. Correction budget remains 0/3. |
