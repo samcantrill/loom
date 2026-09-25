@@ -3,7 +3,7 @@
 ## Metadata
 
 - Status: pr_open; stage 42 / P5; implementation and validation complete;
-  independent review pending. Historical import evidence policy approved.
+  review R1 corrected; targeted reviewer confirmation pending. Historical import evidence policy approved.
 - PR: [#354](https://github.com/samcantrill/loom/pull/354), canonical title and
   `develop` target verified; implementation head `ef689126b9dd47a2944ec789d47f0e216e7b03e2`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
@@ -161,8 +161,9 @@ the explicit bundle-remapping stop remains binding if source investigation finds
 one. Required `make validate-pr`, selected bundle/replay/start/handoff evidence
 and native read-role parity remain obligations. Split optional dependency lanes
 using the existing harness and record real versus controlled backend evidence.
-Implementation and validation complete; independent review and PR pending. Refiner not
-needed yet; blocker corrections 0/3; improvement entries none.
+Implementation and validation complete; PR open and review R1 corrected. Refiner
+used for disconnected historical consumer coverage; blocker corrections 1/3;
+targeted reviewer confirmation pending; improvement entries none.
 
 ## Completion Record
 
@@ -177,4 +178,6 @@ needed yet; blocker corrections 0/3; improvement entries none.
 | Commit, validated tree, review/PR/merge | Product commit/tree above exactly match the full validated tree. Subsequent executor closeout changes only this phase card's evidence/status; final committed HEAD/tree are supplied in the handoff. Manager owns independent review, PR and merge; none was performed by the executor. |
 | Startup finding | `runs/imports.py::_write_imported_run` creates a historical-only local run with a new run URI, retains only the maximum attempt number and rebased artifact index, and records no source attempt/commit mapping. `authority/_repository.py::_import_offline_stage` synthesizes import commits. Serializing new fields alone would lose lineage or falsely identify imported commits as originals. |
 | Import decision | Maintainer approved Option 1: preserve original lineage as historical source evidence, separate from imported local identity and payload paths. No automatic remapping, local execution claim, authorization promotion or graph stitching. Detailed contract and round-trip/unknown/boundary validation are at the output-access owner. |
-| Current state | P5 implementation complete with the approved historical-evidence policy. No unresolved implementation blocker. Manifest/planning artifacts and P6 transfer behavior were not edited. Independent review is next; correction budget remains 0/3. |
+| R1 correction | Downstream bound/consumed queries now include absent input-binding evidence from every authorized acquired attempt in scoped coverage, even when missing bindings disconnect that attempt from traversal. No edges are inferred. Known-empty bindings retain complete no-match behavior; out-of-scope attempts contribute neither identities nor warnings. Correction budget 1/3; targeted reviewer confirmation pending. |
+| R1 validation | Applied `$loom-targeted-validation`: regression reproduced the false `complete=True` for both consumed/bound queries before correction. Isolated locked Python 3.12 dev selection `pytest tests/integration/queue/test_lineage_queries.py -m 'not optional_dependency' -q`: 6 passed, 2 deselected. Ruff and Pyright on the changed source/test files passed (0 typing errors/warnings); diff check passed. Tested source/test content is committed with this record; only evidence prose changed afterward. Existing full-gate evidence above remains the baseline; this bounded graph-warning correction does not change transport, authority serialization, execution or bundle contracts. Broaden checks only for newly affected consumers or failures; optional native transport cases were not rerun. |
+| Current state | P5 implementation complete with the approved historical-evidence policy and review R1 correction. Manifest/planning artifacts and P6 transfer behavior were not edited. Targeted reviewer confirmation is next; correction budget 1/3. |

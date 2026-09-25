@@ -301,6 +301,60 @@ def test_bound_unknown_external_and_restricted_source_are_not_consumed(tmp_path)
     assert locator.run_uri not in json.dumps(restricted_adoption.to_dict())
 
 
+@pytest.mark.parametrize("relation", ["consumed_input", "bound_input"])
+def test_downstream_missing_bindings_report_scoped_coverage(tmp_path, relation):
+    from contextlib import contextmanager
+    import sqlite3
+
+    daemon, _, _, uri, locator = graph(tmp_path)
+    # Known-empty evidence disconnects the consumers without leaving a gap.
+    for database in daemon.config.run_store_root.glob("*/.loom/authority.sqlite3"):
+        with sqlite3.connect(database) as conn:
+            conn.execute("UPDATE attempts SET input_bindings_json='[]'")
+    query = LineageQuery(
+        start=locator.to_dict(),
+        direction="downstream",
+        relations=(relation,),
+        scope=CollectionScope(),
+    ).checked()
+    known_empty = lineage_operation(daemon, query)
+    assert known_empty.complete and not known_empty.warnings
+    assert not any(v["kind"] == "edge" for v in known_empty.items)
+
+    # Historical absence removes the same edges, but cannot prove no consumer.
+    with sqlite3.connect(
+        daemon.config.run_store_root / "consumer" / ".loom" / "authority.sqlite3"
+    ) as conn:
+        conn.execute("UPDATE attempts SET input_bindings_json=NULL")
+    unknown = lineage_operation(daemon, query)
+    assert unknown.items == known_empty.items
+    assert not unknown.complete
+    assert {w["code"] for w in unknown.warnings} == {"input_evidence_unknown"}
+    assert {w["identity"]["stage_name"] for w in unknown.warnings} == {
+        "branch", "transform", "summary"
+    }
+    assert all(w["identity"]["run_uri"] == uri for w in unknown.warnings)
+
+    @contextmanager
+    def connection():
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE preparation_operations(operation_id, principal_id, accepted_at, state, kind, queue_item_id, result_json)"
+        )
+        conn.execute("CREATE TABLE managed_admissions(run_uri)")
+        conn.execute("INSERT INTO managed_admissions VALUES (?)", (locator.run_uri,))
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    daemon._connection = connection
+    restricted = lineage_operation(daemon, replace(query, scope={"kind": "managed"}))
+    assert restricted.complete and not restricted.warnings
+    assert uri not in json.dumps(restricted.to_dict())
+
+
 def test_control_only_dependency_does_not_create_consumed_edge(tmp_path):
     daemon, _, consumer, uri, locator = graph(tmp_path)
     receipt = prepare(consumer, uri, stage="control_only", bindings=(), upstream={"reused": locator.commit_id})

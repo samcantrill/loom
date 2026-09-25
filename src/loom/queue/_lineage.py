@@ -151,9 +151,15 @@ def lineage_operation(daemon: Any, query: LineageQuery) -> QueryPage:
                     if identity == query.start:
                         seeds.add(key)
                     if attempt.input_bindings is None:
-                        issues[key].append(
-                            {"code": "input_evidence_unknown", "identity": identity}
-                        )
+                        issue = {"code": "input_evidence_unknown", "identity": identity}
+                        issues[key].append(issue)
+                        # Missing bindings can disconnect a consumer entirely;
+                        # downstream coverage includes every authorized candidate.
+                        if query.direction == "downstream" and any(
+                            relation in query.relations
+                            for relation in ("bound_input", "consumed_input")
+                        ):
+                            warnings.append(issue)
                     if attempt.start_confirmed is None:
                         issues[key].append(
                             {"code": "start_evidence_unknown", "identity": identity}
