@@ -3,11 +3,85 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from collections.abc import Sequence
+import json
 from dataclasses import dataclass, field
 from typing import cast
 
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from .context import RUN_CONTEXT_LIMITS, RunAnnotations, SubmissionContext, _text
+
+
+def mutation_request(
+    run_uri: str, mutation_id: str, operation: str, change: Mapping[str, object]
+) -> dict[str, PlainData]:
+    if not isinstance(run_uri, str) or not run_uri or len(run_uri.encode()) > 4096:
+        raise ValueError("invalid run_uri")
+    if (
+        not isinstance(mutation_id, str)
+        or not mutation_id
+        or len(mutation_id.encode()) > RUN_CONTEXT_LIMITS["mutation_id_bytes"]
+    ):
+        raise ValueError("mutation_id must be nonempty text of at most 128 UTF-8 bytes")
+    if operation == "patch_run_annotations":
+        value: dict[str, PlainData] = AnnotationPatch.from_dict(change).to_dict()
+    elif operation == "append_run_note" and set(change) == {"text"}:
+        # Native identity and time cannot be assigned by the caller.
+        value = {
+            "text": _text(change["text"], "note text", RUN_CONTEXT_LIMITS["text_bytes"])
+        }
+    else:
+        raise ValueError("invalid annotation operation or note fields")
+    return {
+        "run_uri": run_uri,
+        "mutation_id": mutation_id,
+        "operation": operation,
+        "change": value,
+    }
+
+
+def page_notes(
+    run_uri: str, notes: Sequence[RunNote], limit: int, cursor: str | None
+) -> RunNotePage:
+    if type(limit) is not int or not 1 <= limit <= RUN_CONTEXT_LIMITS["note_page_size"]:
+        raise ValueError("note limit must be between 1 and 50")
+    after = ("", "")
+    if cursor is not None:
+        try:
+            value = json.loads(cursor)
+            if (
+                not isinstance(value, list)
+                or len(value) != 3
+                or value[0] != run_uri
+                or any(not isinstance(item, str) for item in value)
+            ):
+                raise ValueError("invalid note cursor")
+            after = (value[1], value[2])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid note cursor") from exc
+    ordered = sorted(
+        (note for note in notes if (note.created_at or "", note.note_id) > after),
+        key=lambda note: (note.created_at or "", note.note_id),
+    )
+    selected: list[RunNote] = []
+    encoded_bytes = 0
+    for note in ordered[:limit]:
+        size = len(
+            json.dumps(
+                note.to_dict(), ensure_ascii=True, separators=(",", ":")
+            ).encode()
+        )
+        if selected and encoded_bytes + size > RUN_CONTEXT_LIMITS["note_page_bytes"]:
+            break
+        selected.append(note)
+        encoded_bytes += size
+    continuation = None
+    if len(ordered) > len(selected):
+        last = selected[-1]
+        continuation = json.dumps(
+            [run_uri, last.created_at or "", last.note_id], separators=(",", ":")
+        )
+    return RunNotePage(tuple(selected), continuation)
 
 
 class AnnotationConflictError(ValueError):
@@ -16,6 +90,13 @@ class AnnotationConflictError(ValueError):
     def __init__(self, message: str, current_revision: int | None = None) -> None:
         super().__init__(message)
         self.current_revision = current_revision
+
+    def __reduce__(self):
+        return (type(self), (str(self), self.current_revision))
+
+
+class AnnotationValidationError(ValueError):
+    """The owner rejected an annotation before committing any effect."""
 
 
 @dataclass(frozen=True, slots=True)

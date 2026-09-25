@@ -19,6 +19,7 @@ from loom.cli.formatting import (
 )
 from loom.cli.options import OutputFormat, output_format_from_namespace
 from loom.cli.results import CliWarning
+from loom.serialization import PlainData
 
 if TYPE_CHECKING:
     from loom.runs import (
@@ -58,6 +59,24 @@ def register_subparser(
     _add_client_connection_arguments(context_parser)
     _add_output_options(context_parser)
     context_parser.set_defaults(handler=handle_context)
+
+    annotate = actions.add_parser("annotate", help="patch current annotations with an explicit revision and mutation ID")
+    annotate.add_argument("run_uri")
+    annotate.add_argument("--mutation-id", required=True)
+    annotate.add_argument("--patch", required=True, help="JSON object including expected_revision and requested changes")
+    _add_client_connection_arguments(annotate)
+    _add_output_options(annotate)
+    annotate.set_defaults(handler=handle_annotations)
+
+    notes = actions.add_parser("notes", help="list notes or append an observation")
+    notes.add_argument("run_uri")
+    notes.add_argument("--text", help="append this text; requires --mutation-id")
+    notes.add_argument("--mutation-id")
+    notes.add_argument("--limit", type=int, default=50)
+    notes.add_argument("--cursor")
+    _add_client_connection_arguments(notes)
+    _add_output_options(notes)
+    notes.set_defaults(handler=handle_annotations)
 
     index_parser = actions.add_parser("index", help="rebuild a run catalog index")
     index_parser.add_argument("collection", metavar="COLLECTION", help="run collection path")
@@ -185,6 +204,33 @@ def handle_context(namespace: argparse.Namespace) -> int:
     try:
         with _daemon_client(namespace) as client:
             result = client.get_run_context(namespace.run_uri)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_annotations(namespace: argparse.Namespace) -> int:
+    """Keep CAS and receipt semantics at the native coordinator boundary."""
+    import json
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+    from loom.queue._coordinator_control import control_error
+
+    operation = "patch_run_annotations" if namespace.runs_action == "annotate" else "append_run_note" if namespace.text is not None else "list_run_notes"
+    payload: dict[str, PlainData] = {"run_uri": namespace.run_uri}
+    try:
+        if operation == "patch_run_annotations":
+            payload.update(mutation_id=namespace.mutation_id, patch=json.loads(namespace.patch))
+        elif operation == "append_run_note":
+            payload.update(mutation_id=namespace.mutation_id, text=namespace.text)
+        else:
+            if namespace.mutation_id is not None:
+                raise ValueError("--mutation-id requires --text")
+            payload.update(limit=namespace.limit, cursor=namespace.cursor)
+        with _daemon_client(namespace) as client:
+            result = client._native_call(operation, payload, None)
+    except (ValueError, TypeError) as exc:
+        raise _queue_cli_error(control_error("invalid_request", operation, payload)) from exc
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())

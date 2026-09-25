@@ -201,7 +201,7 @@ class NativeCoordinatorClient:
                 requested = envelope.get("request")
                 preparation = requested.get("preparation") if operation == "start_run" and isinstance(requested, Mapping) else requested
                 if ((operation in {"prepare_run", "start_run"} and isinstance(preparation, Mapping) and "context" in preparation)
-                        or operation == "get_run_context") and "run-context-v1" not in description.capabilities:
+                        or operation in {"get_run_context", "patch_run_annotations", "append_run_note", "list_run_notes"}) and "run-context-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
                 if operation == "start_run":
                     requested = envelope.get("request")

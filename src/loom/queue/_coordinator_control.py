@@ -59,6 +59,9 @@ CONTROL_OPERATIONS = frozenset(
         "agent",
         "inspect_run",
         "get_run_context",
+        "patch_run_annotations",
+        "append_run_note",
+        "list_run_notes",
         "operation",
         "wait_operation",
         "prepare_run",
@@ -75,7 +78,7 @@ CONTROL_OPERATIONS = frozenset(
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
 MUTATION_OPERATIONS = frozenset(
-    {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation"}
+    {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation", "patch_run_annotations", "append_run_note"}
 )
 
 
@@ -120,6 +123,7 @@ def request_ids(payload: Mapping[str, object]) -> dict[str, PlainData]:
         "admission_id",
         "queue_item_id",
         "operation_id",
+        "mutation_id",
         "run_uri",
         "expected_coordinator_id",
     ):
@@ -386,6 +390,14 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         )
     if operation in {"startup_attach", "startup_release", "service_lifetime"}:
         return value
+    if operation == "patch_run_annotations":
+        from loom.runs.context import RunAnnotations
+
+        return RunAnnotations.from_dict(value)
+    if operation in {"append_run_note", "list_run_notes"}:
+        from loom.runs.annotations import RunNote, RunNotePage
+
+        return RunNote.from_dict(value) if operation == "append_run_note" else RunNotePage.from_dict(value)
     if operation in {"inspect_run", "get_run_context"}:
         return value  # The diagnostic union decoder belongs above queue.
     raise ValueError("control result operation is unsupported")
@@ -436,6 +448,9 @@ def validate_request(
         "operation": {"operation_id"},
         "inspect_run": {"run_uri"},
         "get_run_context": {"run_uri"},
+        "patch_run_annotations": {"run_uri", "mutation_id", "patch"},
+        "append_run_note": {"run_uri", "mutation_id", "text"},
+        "list_run_notes": {"run_uri", "limit", "cursor"},
         "wait_operation": {"operation_id", "timeout"},
         "wait_admission": {"admission_id", "expected_revision", "timeout"},
     }
@@ -453,6 +468,19 @@ def validate_request(
         value.setdefault("timeout", None)
     if set(value) != fields[operation]:
         raise ValueError("control request fields are invalid")
+    if operation in {"patch_run_annotations", "append_run_note", "list_run_notes"}:
+        from loom.runs.annotations import mutation_request, page_notes
+        from loom.runs.context import RUN_CONTEXT_LIMITS
+        if len(encode_wire({"operation": operation, "daemon_control": CONTROL_CAPABILITY,
+                            **cast(Mapping[str, PlainData], payload)})) > RUN_CONTEXT_LIMITS["request_bytes"]:
+            raise ValueError("annotation request exceeds transport budget")
+        if operation == "list_run_notes":
+            page_notes(cast(str, value["run_uri"]), (), cast(int, value["limit"]), cast(str | None, value["cursor"]))
+        else:
+            change = value["patch"] if operation == "patch_run_annotations" else {"text": value["text"]}
+            if not isinstance(change, Mapping):
+                raise ValueError("annotation patch must be an object")
+            mutation_request(cast(str, value["run_uri"]), cast(str, value["mutation_id"]), operation, change)
     for key in ("admission_id", "queue_item_id", "agent_id", "operation_id", "run_uri"):
         if key in value and (not isinstance(value[key], str) or not value[key]):
             raise ValueError(f"control {key} is invalid")
@@ -613,6 +641,22 @@ def dispatch_control(
             from ._run_context import get_run_context
 
             result = get_run_context(daemon, cast(str, value["run_uri"]), inspect_run)
+        elif operation in {"patch_run_annotations", "append_run_note", "list_run_notes"}:
+            from ._run_context import annotation_operation
+            from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError
+            from loom.pipeline.stores.authority import AuthorityStoreError
+
+            dispatched = operation in MUTATION_OPERATIONS
+            try:
+                result = annotation_operation(daemon, operation, value, principal.subject)
+            except AnnotationConflictError as exc:
+                raise control_error("conflict", operation, payload, boundary="coordinator",
+                    ids={"current_revision": exc.current_revision}) from exc
+            except AnnotationValidationError as exc:
+                raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
+            except AuthorityStoreError as exc:
+                raise control_error("unavailable", operation, payload, boundary="coordinator", dispatched=dispatched) from exc
+            applied = dispatched
         elif operation == "inspect_run":
             if inspect_run is None:
                 raise control_error(

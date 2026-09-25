@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import base64
 import secrets
+import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
 from loom.runs.context import RunAnnotations, SubmissionContext
+from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError, RunNote, RunNotePage
+from ._run_annotations import create_annotations_schema, initialize_annotations, read_annotations, mutate_annotations, read_notes
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
@@ -106,6 +109,8 @@ _EXPOSED = (
     "open_run",
     "initialize_run_annotations",
     "read_run_annotations",
+    "mutate_run_annotations",
+    "list_run_notes",
     "transition_run",
     "transition_stage",
     "allocate_stage_attempt",
@@ -274,6 +279,17 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
     def read_run_annotations(self, run_uri: str) -> RunAnnotations | None:
         value = self._call("read_run_annotations", run_uri)
         return None if value is None else RunAnnotations.from_dict(cast(Mapping[str, object], value))
+
+    def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
+                               operation: str, change: Mapping[str, object],
+                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+        value = cast(Mapping[str, object], self._call("mutate_run_annotations", run_uri, principal,
+            mutation_id, operation, dict(change), legacy_context.to_dict(), legacy_notes))
+        return RunAnnotations.from_dict(value) if operation == "patch_run_annotations" else RunNote.from_dict(value)
+
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
+                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+        return RunNotePage.from_dict(cast(Mapping[str, object], self._call("list_run_notes", run_uri, limit, cursor, legacy_notes)))
 
     def transition_run(
         self,
@@ -702,6 +718,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
             raise AuthorityServiceUnavailable(
                 "authority service is unavailable"
             ) from exc
+        except (AnnotationConflictError, AnnotationValidationError):
+            raise
         except ValueError as exc:
             raise AuthorityStoreError(str(exc)) from exc
 
@@ -814,8 +832,8 @@ class _RunState:
 class _ServiceAuthorityCore:
     def __init__(self) -> None:
         self._runs: dict[str, _RunState] = {}
-        self._annotations: dict[str, RunAnnotations] = {}
-        self._annotation_initializations: dict[str, RunAnnotations] = {}
+        self._annotation_db = sqlite3.connect(":memory:", check_same_thread=False)
+        create_annotations_schema(self._annotation_db)
         self._revision = 0
         self._tick = 0
         self._lease_expiry_ticks: dict[str, int] = {}
@@ -939,23 +957,29 @@ class _ServiceAuthorityCore:
     def initialize_run_annotations(self, run_uri: str, context: Mapping[str, object],
                                    operation_id: str | None, coordinator_id: str | None) -> dict[str, PlainData]:
         value = SubmissionContext.from_dict(context)
-        with self._lock:
+        with self._lock, self._annotation_db:
             self._require_run(run_uri)
-            original = self._annotation_initializations.get(run_uri)
-            if original is not None:
-                if (original.initializer_operation_id, original.initializer_coordinator_id) == (operation_id, coordinator_id):
-                    return original.to_dict()
-                return self._annotations[run_uri].to_dict()
-            result = RunAnnotations(run_uri, 1, value.description, value.tags, value.metadata,
-                                    operation_id, coordinator_id)
-            self._annotations[run_uri] = self._annotation_initializations[run_uri] = result
-            return result.to_dict()
+            return initialize_annotations(self._annotation_db, run_uri, value, operation_id, coordinator_id).to_dict()
 
     def read_run_annotations(self, run_uri: str) -> dict[str, PlainData] | None:
         with self._lock:
             self._require_run(run_uri)
-            result = self._annotations.get(run_uri)
+            result = read_annotations(self._annotation_db, run_uri)
             return None if result is None else result.to_dict()
+
+    def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
+                               operation: str, change: Mapping[str, object],
+                               legacy_context: Mapping[str, object], legacy_notes: tuple[str, ...]) -> dict[str, PlainData]:
+        with self._lock, self._annotation_db:
+            self._require_run(run_uri)
+            return mutate_annotations(self._annotation_db, run_uri, principal, mutation_id, operation,
+                                      change, SubmissionContext.from_dict(legacy_context), legacy_notes).to_dict()
+
+    def list_run_notes(self, run_uri: str, limit: int, cursor: str | None,
+                       legacy_notes: tuple[str, ...]) -> dict[str, PlainData]:
+        with self._lock:
+            self._require_run(run_uri)
+            return read_notes(self._annotation_db, run_uri, limit, cursor, legacy_notes).to_dict()
 
     def transition_run(
         self,

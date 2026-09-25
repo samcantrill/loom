@@ -85,6 +85,42 @@ def test_annotation_patch_checks_result_size_not_only_patch_size():
         AnnotationPatch(1, set_tags={"extra": "v"}).apply(original)
 
 
+def test_note_and_encoded_transport_limits_are_checked_before_dispatch():
+    from loom.queue._coordinator_control import validate_request
+
+    request = {"run_uri": "file:///run", "mutation_id": "note", "text": "é" * 8192}
+    assert validate_request("append_run_note", request)["text"] == request["text"]
+    with pytest.raises(ValueError, match="note text"):
+        validate_request("append_run_note", {**request, "text": request["text"] + "é"})
+    with pytest.raises(ValueError, match="transport budget"):
+        validate_request("patch_run_annotations", {"run_uri": "file:///run", "mutation_id": "patch",
+            "patch": {"expected_revision": 1, "set_metadata": {"escaped": "漢" * 15000}}})
+    for fields in ({"author": "spoof"}, {"created_at": "2000-01-01"}):
+        with pytest.raises(ValueError, match="fields"):
+            validate_request("append_run_note", {**request, **fields})
+    for options in ({"limit": 51, "cursor": None}, {"limit": 1, "cursor": '["file:///other","",""]'}):
+        with pytest.raises(ValueError):
+            validate_request("list_run_notes", {"run_uri": "file:///run", **options})
+
+
+def test_note_pages_bound_encoded_bytes_and_continue_without_loss():
+    from loom.runs import RunNote
+    from loom.runs.annotations import page_notes
+    from loom.queue._coordinator_control import encode_wire, MAX_RESPONSE_BYTES
+
+    notes = tuple(RunNote("file:///run", f"note-{i:03d}", "é" * 8192, "caller", "2026-09-25T01:00:00+00:00") for i in range(50))
+    page = page_notes("file:///run", notes, 50, None)
+    assert 0 < len(page.notes) < 50
+    seen = list(page.notes)
+    while True:
+        assert len(encode_wire({"ok": True, "result": page.to_dict()})) < MAX_RESPONSE_BYTES
+        if page.next_cursor is None:
+            break
+        page = page_notes("file:///run", notes, 50, page.next_cursor)
+        seen.extend(page.notes)
+    assert tuple(seen) == notes
+
+
 def request(context=None):
     return PrepareRunRequest(
         "intent",

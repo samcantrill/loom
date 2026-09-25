@@ -27,6 +27,7 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.serialization import PlainData
 from loom.runs.context import RunAnnotations, SubmissionContext
+from loom.runs.annotations import AnnotationConflictError, AnnotationValidationError, RunNote, RunNotePage
 
 from .authority import (
     ActionProducerBinding,
@@ -455,6 +456,29 @@ class AuthenticatedCoordinatorAuthority:
         result = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/read", run_uri)
         value = _body_required(result, "annotations")
         return None if value is None else RunAnnotations.from_dict(_mapping(value, "annotations"))
+
+    def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
+                               operation: str, change: Mapping[str, object],
+                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+        try:
+            response = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/mutate", run_uri,
+                body={"principal": principal, "mutation_id": mutation_id, "operation": operation,
+                      "change": dict(cast(Mapping[str, PlainData], change)), "legacy_context": legacy_context.to_dict(),
+                      "legacy_notes": list(legacy_notes)})
+        except AuthenticatedCoordinatorAuthorityError as exc:
+            if exc.category == AuthorityProtocolErrorCategory.VALIDATION:
+                raise AnnotationValidationError(str(exc)) from exc
+            raise
+        value = _mapping(_body_required(response, "result"), "result")
+        if "conflict" in value:
+            raise AnnotationConflictError(str(value["conflict"]), cast(int | None, value.get("current_revision")))
+        return RunAnnotations.from_dict(value) if operation == "patch_run_annotations" else RunNote.from_dict(value)
+
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
+                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+        response = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/notes", run_uri,
+            body={"limit": limit, "cursor": cursor, "legacy_notes": list(legacy_notes)})
+        return RunNotePage.from_dict(_mapping(_body_required(response, "result"), "result"))
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         result = self._call(COORDINATOR_OPEN_RUN_PATH, run_uri)

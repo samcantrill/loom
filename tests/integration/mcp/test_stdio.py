@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -37,6 +38,9 @@ TOOLS = {
     "loom_get_job",
     "loom_inspect_run",
     "loom_run_context",
+    "loom_patch_run_annotations",
+    "loom_append_run_note",
+    "loom_list_run_notes",
     "loom_list_agents",
     "loom_get_agent",
     "loom_submit_run",
@@ -72,6 +76,7 @@ def _coordinator(
     https: bool = False,
     large: bool = False,
     inspection: Any = None,
+    authority_factory: Any = None,
 ):
     credentials: dict[str, Path] = {}
     server: Any
@@ -92,10 +97,14 @@ def _coordinator(
                 "actions": [],
                 "agent_ids": [],
                 "pools": [],
-            }
+            },
+            {"credential_id": "query-credential", "principal_id": "reader", "role": "query",
+             "actions": [], "agent_ids": [], "pools": []},
         ]
         path.write_text(json.dumps(authored))
         service = load_coordinator_service_config(path)
+    if authority_factory is not None:
+        service = replace(service, daemon=replace(service.daemon, coordinator_authority_factory=authority_factory))
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     if https:
@@ -120,7 +129,8 @@ def _coordinator(
                 {
                     certificate_fingerprint(
                         credentials["other"].with_suffix(".crt")
-                    ): "client-credential"
+                    ): "client-credential",
+                    certificate_fingerprint(credentials["query"].with_suffix(".crt")): "query-credential",
                 },
             ),
             inspect_run=inspection,
@@ -206,6 +216,8 @@ def test_installed_offline_discovery_and_classified_failure(
                         "loom_submit_run",
                         "loom_cancel_job",
                         "loom_cancel_preparation",
+                        "loom_patch_run_annotations",
+                        "loom_append_run_note",
                     }
                 )
             offline = await client.call_tool("loom_status", {})
@@ -329,6 +341,16 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                 assert context["annotations"]["description"] == "MCP native reason"
                 assert context["annotations"]["metadata"]["revision"] == 3
                 assert context["initializer_submission"]["context"]["tags"] == {"application": "invoices"}
+                updated = await _call(client, "loom_patch_run_annotations", run_uri=admitted["run_uri"], mutation_id="mcp-patch",
+                    patch={"expected_revision": 1, "set_tags": {"review": "ready"}, "set_metadata": {"nullable": None}})
+                assert updated["tags"] == {"application": "invoices", "review": "ready"}
+                note = await _call(client, "loom_append_run_note", run_uri=admitted["run_uri"], mutation_id="mcp-note", text="Observed after completion")
+                assert note["author"] and note["created_at"] and note["source"] == "native"
+                assert await _call(client, "loom_append_run_note", run_uri=admitted["run_uri"], mutation_id="mcp-note", text="Observed after completion") == note
+                notes = await _call(client, "loom_list_run_notes", run_uri=admitted["run_uri"], limit=1)
+                assert notes["notes"] == [note]
+                stale = await client.call_tool("loom_patch_run_annotations", {"run_uri": admitted["run_uri"], "mutation_id": "stale", "patch": {"expected_revision": 1}})
+                assert stale.is_error and stale.structured_content["code"] == "conflict"
                 store = LocalRunStore(service.daemon.run_store_root)
                 worker = StageWorkerResult.from_dict(
                     store.read_stage_worker_result(

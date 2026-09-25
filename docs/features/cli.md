@@ -22,6 +22,17 @@ local socket with `--endpoint PATH`. The result joins immutable submission inten
 current annotations and native inspection, with bounded submission links and
 explicit unavailable evidence. See [context semantics](coordinator-client.md#submission-context).
 
+Edit through the same native owner with
+`loom runs annotate RUN_URI --mutation-id review-17 --patch '{"expected_revision":1,"set_tags":{"review":"ready"}}' --endpoint PATH --format json`.
+Append an observation using
+`loom runs notes RUN_URI --mutation-id note-17 --text 'Evaluation pending' --endpoint PATH --format json`.
+Omit `--text` and `--mutation-id` to list notes, optionally with `--limit` (1–50)
+and `--cursor`. All three commands also accept `--connection` and
+`--expected-coordinator-id`. Mutation IDs are explicit and scoped to the run and
+authenticated caller; repeat the same request after an uncertain reply. Conflict
+output retains the mutation ID and, for stale patches, the current revision.
+See [patch and note semantics](coordinator-client.md#editing-annotations-and-appending-notes).
+
 ## Supported command groups
 
 - `validate`, `plan`, `preflight`: inspect configuration, graph and capability

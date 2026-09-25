@@ -568,6 +568,39 @@ class _Adapter:
                 payload={"run_uri": run_uri, "expected_coordinator_id": expected_coordinator_id},
             )
 
+        @server.tool(annotations=mutate)
+        async def loom_patch_run_annotations(
+            run_uri: str, mutation_id: str, patch: dict[str, Any],
+            expected_coordinator_id: str | None = None,
+        ) -> CallToolResult:
+            """Patch annotations with expected_revision; replay uncertain writes with the same ID and patch."""
+            payload: dict[str, PlainData] = {"run_uri": run_uri, "mutation_id": mutation_id, "patch": patch}
+            return await self._call("patch_run_annotations",
+                lambda deadline: self._native("patch_run_annotations", payload, expected_coordinator_id, deadline),
+                text=f"Patched annotations for {run_uri}.", payload=dict(payload))
+
+        @server.tool(annotations=mutate)
+        async def loom_append_run_note(
+            run_uri: str, mutation_id: str, text: str,
+            expected_coordinator_id: str | None = None,
+        ) -> CallToolResult:
+            """Append a native attributed note. Corrections are new notes; IDs are run-scoped."""
+            payload: dict[str, PlainData] = {"run_uri": run_uri, "mutation_id": mutation_id, "text": text}
+            return await self._call("append_run_note",
+                lambda deadline: self._native("append_run_note", payload, expected_coordinator_id, deadline),
+                text=f"Appended note for {run_uri}.", payload=dict(payload))
+
+        @server.tool(annotations=read)
+        async def loom_list_run_notes(
+            run_uri: str, limit: int = 50, cursor: str | None = None,
+            expected_coordinator_id: str | None = None,
+        ) -> CallToolResult:
+            """Read bounded notes in native time/ID order, retaining unknown legacy attribution."""
+            payload: dict[str, PlainData] = {"run_uri": run_uri, "limit": limit, "cursor": cursor}
+            return await self._call("list_run_notes",
+                lambda deadline: self._native("list_run_notes", payload, expected_coordinator_id, deadline),
+                text=f"Read notes for {run_uri}.", payload=dict(payload))
+
         @server.tool(annotations=read)
         async def loom_inspect_run(
             run_uri: str, expected_coordinator_id: str | None = None

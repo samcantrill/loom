@@ -7,7 +7,8 @@ constructs a database implementation or gains a generic repository view.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from loom.runs.annotations import RunNote, RunNotePage
 from typing import Protocol, runtime_checkable
 
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
@@ -79,6 +80,13 @@ class CoordinatorAuthorityStore(
                                    operation_id: str | None, coordinator_id: str | None) -> RunAnnotations: ...
 
     def read_run_annotations(self, run_uri: str) -> RunAnnotations | None: ...
+
+    def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
+                               operation: str, change: Mapping[str, object],
+                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote: ...
+
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
+                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage: ...
 
     def bind_action_result(
         self, run_uri: str, stage_name: str, binding: ActionResultBinding,
