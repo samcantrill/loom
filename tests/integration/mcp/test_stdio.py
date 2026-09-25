@@ -42,6 +42,7 @@ TOOLS = {
     "loom_append_run_note",
     "loom_list_run_notes",
     "loom_search_runs",
+    "loom_select_outputs",
     "loom_search_submissions",
     "loom_search_jobs",
     "loom_query_fields",
@@ -339,6 +340,10 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                         client, "loom_get_job", admission_id=admitted["admission_id"]
                     )
                 assert observed["admission"]["state"] == "SUCCEEDED", observed
+                outputs = await _call(client, "loom_select_outputs", selection={"run_uris": [admitted["run_uri"]]})
+                assert outputs["items"][0]["locator"]["run_uri"] == admitted["run_uri"]
+                assert outputs["items"][0]["availability"] == "not_checked"
+                assert outputs["items"][0]["outcome"] == "selected"
                 assert (
                     await _call(client, "loom_inspect_run", run_uri=admitted["run_uri"])
                     == inspection

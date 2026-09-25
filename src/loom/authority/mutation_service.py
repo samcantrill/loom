@@ -147,6 +147,7 @@ class AuthorityMutationOperation(StrEnum):
     RECORD_MANAGED_TERMINAL = "record_managed_terminal"
     CLOSE_MANAGED_FENCE = "close_managed_fence"
     RECORD_MANAGED_OUTPUT = "record_managed_output"
+    COORDINATOR_LIST_OUTPUT_COMMITS = "coordinator_list_output_commits"
     WRITE_RELIABILITY_POLICY = "write_reliability_policy"
     LIST_RELIABILITY_POLICIES = "list_reliability_policies"
     WRITE_RELIABILITY_STATUS = "write_reliability_status"
@@ -178,6 +179,7 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.APPEND_AUDIT_EVENT,
         AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+        AuthorityMutationOperation.COORDINATOR_LIST_OUTPUT_COMMITS,
         AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
         AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
         AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS,
@@ -431,6 +433,7 @@ class AuthorityMutationService:
                         allow_prepared=operation
                         in {
                             AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+                            AuthorityMutationOperation.COORDINATOR_LIST_OUTPUT_COMMITS,
                             AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
                             AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
                             AuthorityMutationOperation.MUTATE_RUN_ANNOTATIONS,
@@ -563,7 +566,7 @@ class AuthorityMutationService:
                 return self._finish_stage_attempt(request)
             case AuthorityMutationOperation.RECORD_OUTPUT_COMMIT:
                 return self._record_output_commit(request)
-            case AuthorityMutationOperation.LIST_OUTPUT_COMMITS:
+            case AuthorityMutationOperation.LIST_OUTPUT_COMMITS | AuthorityMutationOperation.COORDINATOR_LIST_OUTPUT_COMMITS:
                 return self._list_output_commits(request)
             case AuthorityMutationOperation.CREATE_WORKSPACE:
                 return self._create_workspace(request)

@@ -18,6 +18,7 @@ from loom.runs.context import RunAnnotations, RunContext
 from loom.runs.annotations import RunNote, RunNotePage
 from loom.runs.query import RunQuery, SubmissionQuery, JobQuery, ManagedScope
 from loom.runs._query_page import QueryPage
+from loom.runs.outputs import OutputSelection
 from loom.queue.local_daemon import (
     LocalDaemonOperation,
     LocalDaemonAdmission,
@@ -267,6 +268,14 @@ class CoordinatorClient(NativeCoordinatorClient):
         """Read original intent, current annotations and native evidence without execution."""
         return RunContext.from_dict(self._native_call(
             "get_run_context", {"run_uri": run_uri}, expected_coordinator_id))
+
+    def select_outputs(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Select exact published metadata, preserving reuse and per-selector outcomes."""
+        return cast(QueryPage, self._native_call("select_outputs", {"selection": selection.to_dict()}, expected_coordinator_id))
+
+    def list_output_commits(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Page retained commits with their matching output facts and associations."""
+        return cast(QueryPage, self._native_call("list_output_commits", {"selection": selection.to_dict()}, expected_coordinator_id))
 
     def search_runs(self, query: RunQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
         """Search one explicit scope, preserving live continuation and coverage."""

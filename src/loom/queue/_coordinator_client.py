@@ -199,6 +199,8 @@ class NativeCoordinatorClient:
                     "handshake", {}, guard, deadline=bound, waiting=waiting
                 )
                 requested = envelope.get("request")
+                if operation in {"select_outputs", "list_output_commits"} and "output-query-v1" not in description.capabilities:
+                    raise control_error("unsupported", operation, payload)
                 if operation in {"search_runs", "search_submissions", "search_jobs", "query_fields", "tag_keys", "tag_values"} and "run-query-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
                 preparation = requested.get("preparation") if operation == "start_run" and isinstance(requested, Mapping) else requested

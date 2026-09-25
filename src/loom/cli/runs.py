@@ -54,6 +54,17 @@ def register_subparser(
 
     from .queue import _add_client_connection_arguments
 
+    outputs = actions.add_parser("outputs", help="select exact committed output metadata")
+    _add_client_connection_arguments(outputs)
+    _add_output_options(outputs)
+    outputs.add_argument("--selection", default="{}", help="native output selection JSON object")
+    outputs.add_argument("--run-uri", action="append")
+    outputs.add_argument("--stage", action="append")
+    outputs.add_argument("--history", choices=("current", "all"))
+    outputs.add_argument("--limit", type=int)
+    outputs.add_argument("--cursor")
+    outputs.set_defaults(handler=handle_outputs)
+
     for action in ("search", "submissions", "jobs", "fields", "tags"):
         query_parser = actions.add_parser(action, help="query native run discovery")
         _add_client_connection_arguments(query_parser)
@@ -207,6 +218,29 @@ def register_subparser(
     )
     _add_output_options(import_parser)
     import_parser.set_defaults(handler=handle_import)
+
+
+def handle_outputs(namespace: argparse.Namespace) -> int:
+    """Project the native output selector without reading artifact content."""
+    import json
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+    from loom.queue._coordinator_control import control_error
+
+    try:
+        selection = json.loads(namespace.selection)
+        if not isinstance(selection, dict):
+            raise ValueError("selection must be an object")
+        for option, key in (("run_uri", "run_uris"), ("stage", "stage_names"), ("history", "history"), ("limit", "limit"), ("cursor", "cursor")):
+            if getattr(namespace, option) is not None:
+                selection[key] = getattr(namespace, option)
+        with _daemon_client(namespace) as client:
+            result = client._native_call("select_outputs", {"selection": selection}, None)
+    except (ValueError, TypeError) as exc:
+        raise _queue_cli_error(control_error("invalid_request", "select_outputs", {})) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_query(namespace: argparse.Namespace) -> int:

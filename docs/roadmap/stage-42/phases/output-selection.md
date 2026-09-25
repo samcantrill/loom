@@ -7,7 +7,7 @@
 - Branch: `agent/stage-42-p4-output-selection`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 4: Output Selection
 - Worktree/coordination: manifest context; base after P3 is
-  `483d9001af7364cfe7cbe22ba192b5fad08774b3`.
+  `a729b71749350c84b45257bf2430589b51724a45`.
 - Dependencies: P3 run selection and P1 native identities.
 - Named refinement uncertainty: none. Blockers: none. P3 #352 remotely merged,
   completion metadata published, synchronization passed and exact phase branch
@@ -113,11 +113,50 @@ No planning refinement is needed. Preserve every required selection above,
 splitting config and MCP fixtures into their locked optional environments;
 expand authority protocol/repository coverage for shared serialization changes.
 Record final scope and affected static checks before independent actual-head
-review. Implementation/validation/PR pending. Blocker corrections 0/3;
+review. Implementation and targeted validation complete; manager PR/review pending. Blocker corrections 0/3;
 improvement entries none.
 
 ## Completion Record
 
+Validation selection follows `loom-targeted-validation`: exact/current/history
+authority facts, failed-run results, original-producer authorization, retained
+reuse associations, bounded nested pages, metadata-only access, and native
+Python/CLI/MCP consumers. History already exists in both stores and the versioned
+authority result; P4 adds the missing scoped coordinator-authority read route,
+without changing storage or record schemas. This expands coverage to repository,
+protocol and coordinator-authority contracts. QUERY output requests/responses use
+the existing native JSON decoder because the worker decoder's depth/scalar bounds
+cannot represent nested output histories and floating-point metadata. Existing
+QUERY-role/transport tests and discovery integration therefore remain selected.
+
+Final commands use `uv run --python 3.12 --isolated --locked --group dev`:
+
+- Baseline: `pytest tests/contracts/test_output_selection_contract.py
+  tests/contracts/test_authority_store_contract.py
+  tests/contracts/test_immutable_artifact_semantics_contract.py
+  tests/integration/authority/test_action_result_binding.py
+  tests/contracts/test_authority_repository_contract.py
+  tests/contracts/test_authority_protocol_contract.py
+  tests/integration/authority/test_coordinator_authority_api.py
+  tests/unit/loom/pipeline/stores/test_authority_protocol.py
+  tests/contracts/test_cli_runs_contract.py tests/unit/loom/cli/test_runs.py
+  tests/package/test_runs_api.py tests/unit/loom/queue/test_local_daemon.py
+  tests/integration/queue/test_agent_session_transport.py -m 'not optional_dependency and not slow and not network and not slurm'`.
+- Config lane (`--extra config`): `pytest
+  tests/integration/queue/test_output_selection.py
+  tests/integration/queue/test_run_queries.py`.
+- MCP lane (`--extra config --extra mcp`): `pytest
+  tests/contracts/test_mcp_tools.py tests/integration/mcp/test_stdio.py`.
+- Changed Python files: Ruff and Pyright (config/MCP extras for typing), plus
+  staged and unstaged diff checks. Expand only for failed checks, newly affected
+  consumers, or changes invalidating this evidence. No physical backend is claimed.
+
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation | Inert `OutputLocator`, `SelectedOutput` and `OutputSelection` in `loom.runs`; authorized current/all/exact metadata selection, retained commit history, original producer/reuse associations, literal typed metadata filters, bounded nested live pages and explicit missing/unavailable outcomes. No payload reads, new durable identity/index, or P5/P6 behavior. |
+| Owning paths | `runs/outputs.py`, `queue/_output_selection.py`; existing coordinator client/control, HTTPS QUERY, CLI and MCP adapters; scoped coordinator-authority history route reuses existing result serialization. Feature documentation: `docs/features/output-selection.md` linked from artifacts. |
+| Validation | Baseline selection above: **260 passed, 2 deselected** in 493.23s. The two deselections are unchanged config-only authority publication/reconciliation cases, outside output selection. Config lane: **9 passed** in 96.46s. MCP lane: **42 passed** in 109.66s. No skipped required cases; no physical runtime claim. |
+| Final-tree follow-up | Added explicit rejection of nonobject cursors and boolean schema versions during the final pass. Final output contract rerun: **15 passed** in 3.09s. Changed-file Ruff passed; changed-file Pyright: **0 errors, 0 warnings**; staged and unstaged diff checks passed. Earlier transport/authority evidence remains applicable; final changes only tighten invalid selector decoding. |
+| Validated tree | `4e5a7c786991d1a990d58c2626ca12c0486e23d4` from `git write-tree`, based on the recorded assignment base. Only this completion receipt changed afterward. Commands/selectors above and committed contract/integration tests are the retained evidence; no sidecars. |
+| Review, PR, merge | Pending manager actual-head independent review and delivery. Executor made no PR, merge or branch transition. |
+| Residual limits | Live paging is not a snapshot; no retention pin or byte availability guarantee. Whole authority histories use existing readers; oversized metadata produces a bounded explicit outcome. Producer restrictions/unavailability remain visible without hidden provenance. |

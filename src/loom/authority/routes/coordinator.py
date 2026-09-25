@@ -45,6 +45,7 @@ _ROUTES = {
     "/events/links/read": AuthorityMutationOperation.READ_EVENT_OBSERVER_LINKS,
     "/runs/publish": AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
     "/runs/open": AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+    "/outputs/list": AuthorityMutationOperation.COORDINATOR_LIST_OUTPUT_COMMITS,
     "/runs/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
     "/stages/transition": AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
     "/stages/bind-result": AuthorityMutationOperation.BIND_ACTION_RESULT,

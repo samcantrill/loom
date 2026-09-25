@@ -557,6 +557,11 @@ class _Adapter:
             )
 
         @server.tool(annotations=read)
+        async def loom_select_outputs(selection: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Select exact output metadata and history; retain outcomes and continuation. Never fetch bytes."""
+            return await self._call("select_outputs", lambda deadline: self._native("select_outputs", {"selection": selection}, expected_coordinator_id, deadline), text="Observed output selection page.", payload={"selection": selection})
+
+        @server.tool(annotations=read)
         async def loom_search_runs(query: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
             """Search explicit run scope; retain coverage warnings and live continuation."""
             return await self._call("search_runs", lambda deadline: self._native("search_runs", {"query": query}, expected_coordinator_id, deadline), text="Observed run search page.", payload={"query": query})
