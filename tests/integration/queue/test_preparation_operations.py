@@ -1293,7 +1293,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 17}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 18}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1305,7 +1305,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 17)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 18)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1498,16 +1498,30 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         daemon.stop()
     store = LocalRunStore(service.daemon.run_store_root)
     target = service.daemon.run_store_root / "target-1"
+    authority_path = Path(".loom/authority.sqlite3")
+    authority_files = {authority_path, Path(str(authority_path) + "-wal"), Path(str(authority_path) + "-shm")}
+
+    def lifecycle_rows():
+        from contextlib import closing
+
+        with closing(sqlite3.connect(target / authority_path)) as conn:
+            return {
+                table: tuple(conn.execute(f'SELECT * FROM "{table}"'))
+                for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                if table != "run_annotations"
+            }
+
+    authority_before = lifecycle_rows() if boundary in {"published", "report_unavailable"} else None
     before = {
         path.relative_to(target): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in target.rglob("*")
-        if path.is_file()
+        if path.is_file() and path.relative_to(target) not in authority_files
     }
     (tmp_path / "projects" / "pipeline.yaml").write_text(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 18
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1551,8 +1565,17 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
             assert {
                 path.relative_to(target): (path.read_bytes(), path.stat().st_mtime_ns)
                 for path in target.rglob("*")
-                if path.is_file()
+                if path.is_file() and path.relative_to(target) not in authority_files
             } == before
+            # Initialization after the lost publication response is the sole
+            # permitted authority change; lifecycle/provenance rows are intact.
+            assert lifecycle_rows() == authority_before
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            annotations = factory(receipt["run_uri"]).read_run_annotations(receipt["run_uri"])
+            assert annotations is not None
+            assert annotations.revision == 1
+            assert annotations.initializer_operation_id == "prepare-1"
         managed_root = CleanupManagedRoot(
             "fixture",
             str(tmp_path),

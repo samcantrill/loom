@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+import sqlite3
 from threading import Event
 from typing import Any, cast
 
@@ -14,9 +15,91 @@ from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.preparation import CoordinatorPreparation
 from loom.queue import LocalDaemon, LocalDaemonSocketServer
 from loom.runs import SubmissionContext
+from loom.io.uris import uri_to_path
 from tests.integration.queue.test_preparation_operations import _service, _request
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+@pytest.mark.parametrize("case", ["authored", "merged", "payload", "boundary"])
+def test_initial_effective_tag_limits_precede_binding_and_execution(tmp_path, case):
+    service = _service(tmp_path)
+    path = tmp_path / "projects" / "pipeline.yaml"
+    config = json.loads(path.read_text())
+    tags = {str(i): "v" for i in range(129 if case == "authored" else 128)}
+    context = SubmissionContext(tags={"extra": "v"}) if case == "merged" else None
+    if case == "payload":
+        tags = {str(i): "x" * 1024 for i in range(48)}
+    elif case == "boundary":
+        tags.pop("127")
+        tags["é" * 64] = "é" * 512
+    config["runtime"]["tags"] = tags
+    path.write_text(json.dumps(config))
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        request = RunRequest(replace(_request(), context=context), "tag-limit-run")
+        daemon.start_run(request, principal_id="caller")
+        operation: Any = daemon.wait_operation(request.preparation.operation_id, timeout=90).operation
+        if case == "boundary":
+            assert operation.state == "applied", operation
+            uri = operation.result["prepared_run"]["run_uri"]
+            factory = service.daemon.coordinator_authority_factory
+            assert factory is not None
+            annotations = factory(uri).read_run_annotations(uri)
+            assert annotations is not None and annotations.tags == tags
+            daemon._wait("tag-limit-run", timeout_seconds=60)
+        else:
+            assert operation.state == "failed", operation
+            assert operation.code == "invalid_context"
+            assert operation.result["prepared_run"] is None
+            assert operation.result.get("binding") is None
+            with daemon._connection() as conn:
+                assert conn.execute("SELECT 1 FROM managed_admissions WHERE queue_item_id = ?", ("tag-limit-run",)).fetchone() is None
+            # Publication can precede validation, but target lifecycle and outputs cannot.
+            uri = (service.daemon.run_store_root / "target-1").as_uri()
+            authority = SQLitePerRunAuthorityStore(uri)
+            assert authority.read_run_annotations(uri) is None
+            assert authority.open_run(uri).status.value in {"CREATED", "PLANNED"}
+            assert all(stage.status.value == "PENDING" for stage in authority.open_run(uri).stages)
+    finally:
+        daemon.stop()
+
+
+def test_oversized_legacy_projection_is_partial_and_nonmutating(tmp_path):
+    from loom.queue._run_context import get_run_context
+
+    service = _service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        request = _request()
+        daemon.prepare_run(request, principal_id="caller")
+        operation: Any = daemon.wait_operation(request.operation_id, timeout=60).operation
+        assert operation.state == "applied", operation
+        uri = operation.result["prepared_run"]["run_uri"]
+        run_dir = uri_to_path(uri)
+        database = run_dir / ".loom" / "authority.sqlite3"
+        with sqlite3.connect(database) as conn:
+            conn.execute("DELETE FROM run_annotations")
+        store = LocalRunStore(service.daemon.run_store_root)
+        legacy = {"tags": {str(i): "value" for i in range(129)}, "notes": ["retained legacy note"]}
+        store.write_runtime_metadata(uri, legacy)
+        runtime_before = (run_dir / "runtime.json").read_bytes()
+        authority_before = SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict()
+        context = get_run_context(daemon, uri, None)
+        assert context.annotations is None
+        assert "legacy_runtime_annotations_unrepresentable" in context.unavailable
+        assert context.initializer_submission is None
+        assert (run_dir / "runtime.json").read_bytes() == runtime_before
+        assert store.read_runtime_metadata(uri) == legacy
+        assert SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict() == authority_before
+        with sqlite3.connect(database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM run_annotations").fetchone()[0] == 0
+    finally:
+        daemon.stop()
 
 
 @pytest.mark.parametrize("late_failure", [False, True])

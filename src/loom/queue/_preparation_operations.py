@@ -54,6 +54,10 @@ _TERMINAL = frozenset({"applied", "failed", "cancelled", "conflict"})
 _LOGGER = logging.getLogger(__name__)
 
 
+class _InvalidInitialContext(ValueError):
+    """Resolved caller annotations cannot be represented within public limits."""
+
+
 class PreparationNotAccepted(QueueServiceError):
     """An acceptance refusal proven to precede the durable transaction commit."""
 
@@ -560,6 +564,8 @@ class CoordinatorPreparations:
                 self._cursor = int(row["sequence"])
                 try:
                     self._advance(row)
+                except _InvalidInitialContext:
+                    self._fail(self._read(str(row["operation_id"])), "invalid_context")
                 except Exception:
                     # A lost result after a durable action is reconciled from
                     # its original claim. It must not starve ordinary jobs or
@@ -1207,8 +1213,11 @@ class CoordinatorPreparations:
         request = PrepareRunRequest.from_dict(_mapping(json.loads(str(row["request_json"]))))
         runtime = LocalRunStore(self.daemon.config.run_store_root).read_runtime_metadata(run_uri) or {}
         context = SubmissionContext() if legacy else request.context or SubmissionContext()
-        effective = SubmissionContext(context.description,
-            {**cast(Mapping[str, str], runtime.get("tags", {})), **context.tags}, context.metadata)
+        try:
+            effective = SubmissionContext(context.description,
+                {**cast(Mapping[str, str], runtime.get("tags", {})), **context.tags}, context.metadata)
+        except ValueError as exc:
+            raise _InvalidInitialContext(str(exc)) from exc
         authority.initialize_run_annotations(run_uri, effective,
             None if legacy else str(row["operation_id"]),
             None if legacy else self.daemon._require_started())

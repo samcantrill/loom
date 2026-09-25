@@ -64,6 +64,7 @@ def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
         "loom_list_jobs",
         "loom_get_job",
         "loom_inspect_run",
+        "loom_run_context",
         "loom_list_agents",
         "loom_get_agent",
         "loom_submit_run",

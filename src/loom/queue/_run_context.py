@@ -56,7 +56,9 @@ def get_run_context(
                     {},
                 )
                 unavailable.append("legacy_runtime_annotations")
-        except (ValueError, OSError, LookupError):
+        except ValueError:
+            unavailable.append("legacy_runtime_annotations_unrepresentable")
+        except (OSError, LookupError):
             unavailable.append("legacy_runtime_unavailable")
     links: list[Mapping[str, PlainData]] = []
     original = None

@@ -46,6 +46,11 @@ note mutation commands are not part of this submission-context surface.
 
 Limits advertised by the handshake are 16 KiB UTF-8 description text, 48 KiB
 serialized context, 128 tag keys, 128-byte tag/metadata keys and 1 KiB tag values.
+These limits apply to all initial effective tags, including authored-only tags
+when context is omitted. Oversized resolved annotations fail preparation with
+`invalid_context` before successful binding or target execution. Legacy evidence
+is never rewritten by inspection: an oversized legacy tag view is omitted with
+`legacy_runtime_annotations_unrepresentable` in `unavailable`.
 The complete encoded request must also fit the 64 KiB transport limit. Values
 are rejected, never silently truncated. `RunInspectionHttpClient.get_run_context`
 provides the same read for an enrolled HTTPS QUERY principal; that role cannot

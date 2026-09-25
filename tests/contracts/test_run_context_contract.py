@@ -107,6 +107,17 @@ def test_explicit_conflicts_rejected_before_submission():
     )
 
 
+def test_context_accepts_exact_utf8_and_payload_boundaries():
+    tags = {str(i): "v" for i in range(127)}
+    tags["é" * 64] = "é" * 512
+    assert len(SubmissionContext("é" * 8192, tags).tags) == 128
+    overhead = len(stable_json_bytes(SubmissionContext(metadata={"x": ""}).to_dict()))
+    context = SubmissionContext(metadata={"x": "a" * (48 * 1024 - overhead)})
+    assert len(stable_json_bytes(context.to_dict())) == 48 * 1024
+    with pytest.raises(ValueError, match="48 KiB"):
+        SubmissionContext(metadata={"x": "a" * (48 * 1024 - overhead + 1)})
+
+
 @pytest.mark.parametrize("backend", ["embedded", "repository", "service"])
 def test_authority_initialization_is_atomic_once_and_separate_from_lifecycle(
     tmp_path, backend

@@ -83,7 +83,8 @@ def _apply_upgrade(conn: sqlite3.Connection) -> None:
         _initialize_preparation_schema(conn, context=False)
     if version < 18:
         conn.execute("ALTER TABLE preparation_operations ADD COLUMN accepted_at TEXT")
-    initialize_action_results(conn)
+    if version < 17:
+        initialize_action_results(conn)
     conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
 
 

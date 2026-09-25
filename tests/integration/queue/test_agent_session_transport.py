@@ -6548,8 +6548,8 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1", "daemon-control-v1"),
-            ["authenticated-application-v1", "daemon-control-v1"],
+            ("authenticated-application-v1", "daemon-control-v1", "run-context-v1"),
+            ["authenticated-application-v1", "daemon-control-v1", "run-context-v1"],
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (
@@ -6796,7 +6796,6 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
         for role, operation, value in (
             ("client", "submit", {"request": {}}),
             ("client", "prepare_run", {"request": {}}),
-            ("query", "prepare_run", {"request": {}}),
             ("client", "cancel", {"queue_item_id": "item"}),
             ("operator", "scheduling_reload", {"request": {}}),
             ("slurm_bootstrap", "register", {}),
@@ -6805,6 +6804,10 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
                 QueueServiceError, match="agent protocol request failed"
             ):
                 mutation_client.call_application(role, operation, value)
+        # The generic application client excludes QUERY roles locally; exercise
+        # the actual authenticated read-only server boundary with its envelope.
+        with pytest.raises(QueueServiceError, match="agent protocol request failed"):
+            mutation_client._call("prepare_run", {"request": {}}, role="query")
         with pytest.raises(QueueServiceError, match="agent protocol request failed"):
             mutation_client.handshake(role="agent")
         assert owner_view_calls == []

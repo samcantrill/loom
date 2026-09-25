@@ -442,7 +442,9 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
         daemon.stop()
         daemon._preparations._reconcile_lock.release()
     with sqlite3.connect(service.daemon.control_database) as conn:
-        operations = conn.execute("SELECT * FROM preparation_operations").fetchall()
+        # Schema 15 predates accepted_at; retain every original column and do
+        # not fabricate a timestamp when upgrading its retained intent.
+        operations = [row[:-1] for row in conn.execute("SELECT * FROM preparation_operations")]
         cancellations = conn.execute(
             "SELECT * FROM preparation_cancellations"
         ).fetchall()
@@ -451,7 +453,7 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
         conn.execute("DROP TABLE action_graph_cancellations")
         conn.execute("DROP TABLE preparation_cancellations")
         conn.execute("DROP TABLE preparation_operations")
-        _initialize_preparation_schema(conn, legacy=True)
+        _initialize_preparation_schema(conn, legacy=True, context=False)
         conn.executemany(
             "INSERT INTO preparation_operations VALUES ("
             + ",".join("?" for _ in operations[0])
@@ -463,11 +465,11 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
             cancellations,
         )
         conn.execute("PRAGMA user_version = 15")
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 17
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 18
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert (
             conn.execute("SELECT * FROM preparation_operations").fetchall()
-            == operations
+            == [row + (None,) for row in operations]
         )
         assert (
             conn.execute("SELECT * FROM preparation_cancellations").fetchall()

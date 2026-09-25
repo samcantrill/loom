@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P1; completing validation after maintainer clarification.
+- Status: in_progress; stage 42 / P1; implementation validated, awaiting manager delivery and independent review.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 1: Submission Context
@@ -138,12 +138,12 @@ or many-to-one submission semantics. Manager preparation passed.
 One phase executor was selected for the cross-cutting store,
 replay and adapter implementation scope; it owns implementation and validation,
 not PR delivery. Pre-submit validation, independent phase review and PR/merge:
-pending completion of validation repairs and limit regression coverage.
-Refiner: not needed yet. Blocker corrections: 0/3. Improvement entries: none.
+pending manager delivery and independent review. Implementation validation is complete.
+Refiner: not needed. Blocker corrections: 1/3. Improvement entries: none.
 
 Execution resumed after the maintainer explicitly selected universal initial-tag
 limits on 2026-09-25. No grandfathering is permitted. One directly related executor
-repair completes the validation failures and adds the clarified limit coverage.
+repair completed the validation failures and added the clarified limit coverage.
 
 ## Completion Record
 
@@ -155,42 +155,58 @@ HTTPS QUERY/client, Python, CLI and MCP adapters. Annotation mutations remain P2
 The scoped coordinator authority protocol owns these organizational operations;
 the worker-facing per-run lifecycle protocol does not gain annotation writes.
 
-Development checks: baseline coordinator unit selection passed 24 tests; initial
-context contract/integration selection with config extras passed 22 tests. The
-expanded final selection is the approved `make validate-pr` across all lanes;
-added coverage also exercises late failure with surviving output references,
-HTTPS lost-response context replay, authenticated authority initialization,
-QUERY read-only access and real MCP stdio context round-trips.
-
-Initial final-gate attempt passed Ruff and stopped at type checking. P1 typing
-issues were corrected. The manager explicitly authorized the narrow pre-existing
+The manager explicitly authorized the narrow pre-existing
 typing repair at `tests/unit/loom/queue/test_gpu_probe.py:93`: assert that retained
 evidence is a mapping before inspecting `claim_retained`, preserving the original
 assertion and production behavior. This is the only non-context repair.
 
-Final-gate checkpoint: `make validate-pr` passed Ruff and Pyright (zero errors),
-then failed the default lane: **3174 passed, 9 failed, 2 skipped, 360 deselected**
-in 1453.94 seconds. Later lanes and build/lock/diff gates were not reached.
-Evidence: `build/stage-42-p1-validate-pr.log` (local, ignored). Validated tree:
-`056aff7f24fbb1703579187b3f3bd5f3f64cf09b`; only this completion record changed
-after that gate. No subsequent runtime corrections or rerun were made because
-the manager directed a blocked handoff after the running gate finished.
+Repair coverage: initial effective tags now fail terminally with `invalid_context`
+when limits are exceeded, rather than remaining in retryable reconciliation.
+Native integration checks authored-only overflow, merged overflow, serialized
+payload overflow, valid UTF-8/key/count boundaries, no successful binding or target
+admission on rejection, and nonmutating partial inspection of oversized legacy
+evidence. The schema-17 migration now preserves its existing action-result tables;
+it previously attempted to create them again. Regression coverage preserves the
+original intent columns, unknown accepted time, backups, retained worker journals,
+and schema-15/16 migration paths. Lost-publication replay tests allow only the new
+annotation initialization while retaining all lifecycle/provenance rows and exact
+non-authority file bytes. Capability/export/MCP expectations match the new surface.
 
-Remaining baseline failures are in
-`tests/integration/queue/test_agent_session_transport.py` (two: exact capability
-set and rejection-message expectation), `tests/package/test_runs_api.py`
-(exports), `tests/unit/loom/authority/test_repository_run_lifecycle.py` (schema
-version), `tests/unit/loom/queue/test_coordinator_upgrade.py` (four: version
-expectations/unsupported-version fixture and schema-16 fixture shape), and
-`tests/unit/loom/queue/test_local_daemon.py` (exact capability set). The MCP unit
-tool-name expectation in `tests/unit/loom/mcp/test_server.py` also still needs
-the new read tool; its lane was not reached. Expanded optional integration/MCP
-coverage is unvalidated at this checkpoint.
+Validation completed on 2026-09-25 using `loom-targeted-validation`, with fresh
+passing evidence reused rather than repeating unaffected lanes:
+
+- Focused affected regressions: 54 tests passed before a new limit-test assertion
+  was corrected; the complete context integration file then passed **10 tests**.
+- Required `make validate-pr` passed Ruff, Pyright and the full default lane:
+  **3185 passed, 2 skipped, 365 deselected**. Config-extra ran completely with
+  **311 passed, 7 failed, 15 skipped, 3237 deselected**. Its seven failures were
+  obsolete schema/fixture and whole-authority-file expectations, not production
+  failures. Evidence: `build/stage-42-p1-repair-validate-pr.log`.
+- Only those two optional test files changed afterward. All seven failing node
+  cases passed together (**7 passed in 55.73s**) via isolated config-extra pytest:
+  `test_preparation_operations.py::test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal`,
+  `test_preparation_operations.py::test_restart_reuses_capture_and_replays_a_claimed_complete_target`
+  (five parameters), and
+  `test_reconciled_runs.py::test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt`.
+  The other 311 config-extra passes and all default-lane evidence remain valid.
+- `make -o test-no-extra -o test-config-extra validate-pr` completed the remaining
+  gate successfully: Ruff, Pyright (**zero errors**), MCP (**46 passed**) and
+  source/wheel builds. Evidence: `build/stage-42-p1-repair-remaining-gate.log`.
+  This is a completed gate with targeted repair/reuse, not a claim of one entirely
+  passing unmodified umbrella invocation. No summary rerun was required.
+- Validated final source/test tree: `d70684ec02a306330d1f72f7727cf4e4a111b16f`.
+  Only this completion record changed afterward; staged diff whitespace passed.
+
+Logs are local ignored build evidence. The 15 config-extra skips are opt-in
+physical container acceptance; the two baseline skips are existing queue CLI
+cases. No physical GPU, scheduler or container-fleet qualification is claimed or
+required by this context-only phase. No remaining implementation blocker is known;
+the actual PR's independent review remains mandatory and manager-owned.
 
 Resolved contract decision: on 2026-09-25 the maintainer explicitly accepted
 the 128-key/48-KiB limits for all initial tags, including authored-only tags.
 The run-context contract owns this intentional compatibility exception.
-Add assertions for rejection before binding/target execution and unchanged
+Assertions cover rejection before binding/target execution and unchanged
 persisted legacy evidence on partial inspection; no truncation or grandfathering.
 
 | Item | Result |
@@ -198,5 +214,5 @@ persisted legacy evidence on partial inspection; no truncation or grandfathering
 | Implementation paths | `src/loom/{runs,queue,authority,pipeline/stores,cli,mcp}`, coordinator facade; new context/annotation helpers and additive schema migrations |
 | Documentation | `docs/features/{coordinator-client,agent-preparation,cli,mcp}.md` |
 | Tests | New context contract/integration files and existing native, authority, Python, MCP/QUERY adapters; narrow authorized GPU-probe typing repair |
-| Completion | Blocked checkpoint; full gate failed; accepted behavior and required evidence not yet complete |
-| Review/PR/merge/cleanup | Not started; manager-owned after contract resolution and passing validation |
+| Completion | Implementation and gate coverage complete with explicit focused repair/reuse above; ready for manager delivery |
+| Review/PR/merge/cleanup | Not started; manager-owned; no phase merge or overall-stage completion claim |

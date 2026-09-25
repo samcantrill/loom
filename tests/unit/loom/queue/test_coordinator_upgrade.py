@@ -65,7 +65,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     worker_database = worker / "control.sqlite"
     worker_before = worker_database.read_bytes()
 
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 17)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 18)
     after = _contents(database)
     assert {name: after[name] for name in before} == before
     assert after["preparation_operations"] == ()
@@ -79,7 +79,7 @@ def test_upgrade_retains_existing_rows_identity_backup_and_worker_root(tmp_path:
     with sqlite3.connect(backups[0]) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     published = database.read_bytes(), database.stat().st_mtime_ns
-    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 17)
+    assert LocalDaemon.upgrade_coordinator_root(config) == (coordinator_id, 18)
     assert (database.read_bytes(), database.stat().st_mtime_ns) == published
     assert tuple(config.coordinator_root.glob("*.schema-12.*.backup")) == backups
 
@@ -119,12 +119,12 @@ def test_upgrade_rolls_back_both_schema_and_marker_and_retries_without_overwriti
     backup, = config.coordinator_root.glob("*.backup")
     original_backup = backup.read_bytes(), backup.stat().st_mtime_ns
     monkeypatch.setattr(upgrade, "_apply_upgrade", original)
-    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 17
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 18
     assert (backup.read_bytes(), backup.stat().st_mtime_ns) == original_backup
     assert len(tuple(config.coordinator_root.glob("*.backup"))) == 2
 
 
-@pytest.mark.parametrize("version", [11, 13, 14, 18])
+@pytest.mark.parametrize("version", [11, 13, 14, 19])
 def test_upgrade_rejects_unsupported_versions_without_repair(
     tmp_path: Path, version: int
 ) -> None:
@@ -157,13 +157,39 @@ def test_upgrade_schema_16_keeps_preparation_owner_and_adds_action_owners(tmp_pa
     config = _predecessor(tmp_path)
     database = config.coordinator_root / "control.sqlite"
     with sqlite3.connect(database) as conn:
-        _initialize_preparation_schema(conn)
+        _initialize_preparation_schema(conn, context=False)
         conn.execute("PRAGMA user_version = 16")
     before = _contents(database)
     with pytest.raises(QueueStorageError, match="offline upgrade"):
         _open_root(config.coordinator_root, role="coordinator")
-    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 17
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 18
     after = _contents(database)
     assert {name: after[name] for name in before} == before
     assert after["action_claims"] == after["action_demands"] == ()
     assert after["action_graph_cancellations"] == ()
+
+
+def test_upgrade_schema_17_retains_original_intent_without_inventing_accepted_time(tmp_path: Path) -> None:
+    from loom.queue.local_daemon import _initialize_preparation_schema
+    from loom.queue._action_results import initialize_action_results
+
+    config = _predecessor(tmp_path)
+    database = config.coordinator_root / "control.sqlite"
+    with sqlite3.connect(database) as conn:
+        _initialize_preparation_schema(conn, context=False)
+        initialize_action_results(conn)
+        conn.execute("PRAGMA user_version = 17")
+        conn.execute(
+            "INSERT INTO preparation_operations (operation_id, principal_id, kind, "
+            "intent_digest, request_json, selected_json, child_name, state, result_json) "
+            "VALUES ('legacy', 'caller', 'prepare_run', 'old-digest', '{}', '{}', 'child', 'failed', '{}')"
+        )
+    before = _contents(database)
+    assert LocalDaemon.upgrade_coordinator_root(config)[1] == 18
+    after = _contents(database)
+    assert {key: value for key, value in after.items() if key != "preparation_operations"} == {
+        key: value for key, value in before.items() if key != "preparation_operations"
+    }
+    assert after["preparation_operations"] == tuple(row + (None,) for row in before["preparation_operations"])
+    backup, = config.coordinator_root.glob("*.schema-17.*.backup")
+    assert _contents(backup) == before
