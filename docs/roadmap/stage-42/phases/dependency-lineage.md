@@ -2,8 +2,8 @@
 
 ## Metadata
 
-- Status: pr_open; stage 42 / P5; implementation and validation complete;
-  review R1 corrected; targeted reviewer confirmation pending. Historical import evidence policy approved.
+- Status: merged; stage 42 / P5; implementation, validation and independent
+  review complete. Historical import evidence policy approved.
 - PR: [#354](https://github.com/samcantrill/loom/pull/354), canonical title and
   `develop` target verified; implementation head `ef689126b9dd47a2944ec789d47f0e216e7b03e2`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
@@ -180,4 +180,5 @@ targeted reviewer confirmation pending; improvement entries none.
 | Import decision | Maintainer approved Option 1: preserve original lineage as historical source evidence, separate from imported local identity and payload paths. No automatic remapping, local execution claim, authorization promotion or graph stitching. Detailed contract and round-trip/unknown/boundary validation are at the output-access owner. |
 | R1 correction | Downstream bound/consumed queries now include absent input-binding evidence from every authorized acquired attempt in scoped coverage, even when missing bindings disconnect that attempt from traversal. No edges are inferred. Known-empty bindings retain complete no-match behavior; out-of-scope attempts contribute neither identities nor warnings. Correction budget 1/3; targeted reviewer confirmation pending. |
 | R1 validation | Applied `$loom-targeted-validation`: regression reproduced the false `complete=True` for both consumed/bound queries before correction. Isolated locked Python 3.12 dev selection `pytest tests/integration/queue/test_lineage_queries.py -m 'not optional_dependency' -q`: 6 passed, 2 deselected. Ruff and Pyright on the changed source/test files passed (0 typing errors/warnings); diff check passed. Tested source/test content is committed with this record; only evidence prose changed afterward. Existing full-gate evidence above remains the baseline; this bounded graph-warning correction does not change transport, authority serialization, execution or bundle contracts. Broaden checks only for newly affected consumers or failures; optional native transport cases were not rerun. |
-| Current state | P5 implementation complete with the approved historical-evidence policy and review R1 correction. Manifest/planning artifacts and P6 transfer behavior were not edited. Targeted reviewer confirmation is next; correction budget 1/3. |
+| Current state | P5 complete with approved historical-evidence policy and R1 correction independently confirmed at `f795e657b929e11153761d0e3651e2760b244fbd`; no remaining qualified findings. Correction budget 1/3. |
+| Delivery | PR #354 remotely squash-merged as `f9e4dadfb602dcf99cb31644ce10c18bd58c9abf` on 2026-09-25. Delivery verified merge and retired the exact remote branch; coordination transition passed. Publish completion metadata and synchronize before P6; retain stage worktree. |

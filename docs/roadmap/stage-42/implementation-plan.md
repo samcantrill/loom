@@ -66,7 +66,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 | P2 | [run-annotations](phases/run-annotations.md) | merged | `agent/stage-42-p2-run-annotations` | #351 | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | merged | `agent/stage-42-p3-run-discovery` | #352 | Typed run/submission/job queries, tag vocabulary and bounded live pages | Reconciled full-gate evidence and independent review/R1 confirmation passed |
 | P4 | [output-selection](phases/output-selection.md) | merged | `agent/stage-42-p4-output-selection` | #353 | Exact current/historical output selection with original producer and reuse associations | Targeted validation and independent review/R1 confirmation passed |
-| P5 | [dependency-lineage](phases/dependency-lineage.md) | pr_open | `agent/stage-42-p5-dependency-lineage` | #354 | Persist exact per-attempt input origins and query generic dependency graphs | Full gate passed; independent actual-head review pending |
+| P5 | [dependency-lineage](phases/dependency-lineage.md) | merged | `agent/stage-42-p5-dependency-lineage` | #354 | Persist exact per-attempt input origins and query generic dependency graphs | Full gate and independent review/R1 confirmation passed |
 | P6 | [artifact-access](phases/artifact-access.md) | pending | `agent/stage-42-p6-artifact-access` | none | Authorized complete-file retrieval, bounded previews, safe batch materialization and composed agent workflow | Real local/HTTPS transfer, failure/integrity matrix and final full gate |
 
 Merge order is P1 → P2 → P3 → P4 → P5 → P6. Semantic dependencies: P2 needs P1;
@@ -180,8 +180,8 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1–P4 merged; P5 resumed after maintainer approval of historical
-  import evidence preservation; P6 pending. P3 reconciled validation and
+- Phase statuses: P1–P5 merged; P6 pending. P5 preserves approved historical
+  import evidence without identity remapping. P3 reconciled validation and
   independent review/R1 confirmation passed. The maintainer selected per-page
   vocabulary uniqueness with collector deduplication. The maintainer chose
   run-scoped mutation IDs on 2026-09-25. The run-context contract and matching
@@ -191,8 +191,8 @@ intent-only documentation review does not cover this expanded design.
   resolved the limit conflict in favor of applying limits to all initial tags.
   The run-context owner records the accepted no-context compatibility exception;
   P1 owns regression coverage and repair of incomplete validation evidence.
-- Stage cleanup and terminal disposition: persistent worktree retained; P1–P4 PRs
-  #349/#351/#352/#353 remotely merged and exact remote phase branches retired by delivery.
+- Stage cleanup and terminal disposition: persistent worktree retained; P1–P5 PRs
+  #349/#351/#352/#353/#354 remotely merged and exact remote phase branches retired by delivery.
 - Improvement log entries: none.
 
 ## Completion
@@ -203,4 +203,5 @@ intent-only documentation review does not cover this expanded design.
 | P2 | #351 / `1282d9d9500bb0924cd5bdf4654919130c95e632` | Expanded gate coverage, base reconciliation and independent review/R1 confirmation passed | Run-scoped IDs approved; bounded legacy-note limitation documented | Phase transition passed; worktree retained for P3 |
 | P3 | #352 / `c18130472e0f05b83c6cecc479e29f673c6c505f` | Reconciled full-gate evidence and independent review/R1 confirmation passed; see P3 card | Live pages, approved metadata scan cost/per-page vocabulary, unknown event times | Transition passed; stage worktree retained for P4 |
 | P4 | #353 / `e11ad07ef696761cc66e1aad50e88f8c21be27d1` | Required targeted validation and independent review/R1 confirmation passed | Live pages, no retention pin or byte availability claim | Transition passed; stage worktree retained for P5 |
-| P5–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |
+| P5 | #354 / `f9e4dadfb602dcf99cb31644ce10c18bd58c9abf` | Full gate plus bounded R1 regression and independent confirmation passed | Historical/external gaps, live graph limits, no physical fleet qualification | Transition passed; stage worktree retained for P6 |
+| P6 | Not started | Planned checks are not executed test evidence | See phase card | Not applicable yet |
