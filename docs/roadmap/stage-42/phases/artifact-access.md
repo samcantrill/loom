@@ -2,7 +2,9 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P6.
+- Status: pr_open; stage 42 / P6.
+- PR: [#355](https://github.com/samcantrill/loom/pull/355), canonical title and
+  `develop` target verified; implementation head `f1f64e452fa3460149f6aee3b722398241bd7bf7`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p6-artifact-access`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 6: Artifact Access
