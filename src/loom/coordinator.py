@@ -270,21 +270,23 @@ class CoordinatorClient(NativeCoordinatorClient):
         return RunContext.from_dict(self._native_call(
             "get_run_context", {"run_uri": run_uri}, expected_coordinator_id))
 
-    def describe_artifact(self, locator: OutputLocator, *, scope: Any = None, cursor: int = 0, limit: int = 100, declaration: str | None = None, expected_coordinator_id: str | None = None) -> dict[str, Any]:
+    def describe_artifact(self, locator: OutputLocator, *, scope: Any = None, cursor: int = 0, limit: int = 100, declaration: str | None = None, expected_coordinator_id: str | None = None, deadline: float | None = None) -> dict[str, Any]:
         """Describe a complete authorized declaration, with bounded member pages.
 
         Pass its declaration identity on subsequent pages and chunk reads.
         Original checksums and unverified legacy content are distinguished.
+        An optional absolute monotonic deadline bounds native I/O.
         """
-        return self._artifact_request("describe_artifact", locator, scope, {"cursor": cursor, "limit": limit, "declaration": declaration}, expected_coordinator_id)
+        return self._artifact_request("describe_artifact", locator, scope, {"cursor": cursor, "limit": limit, "declaration": declaration}, expected_coordinator_id, deadline=deadline)
 
-    def read_artifact_chunk(self, locator: OutputLocator, *, declaration: str, member: str, offset: int, length: int = 256 * 1024, scope: Any = None, expected_coordinator_id: str | None = None) -> dict[str, Any]:
+    def read_artifact_chunk(self, locator: OutputLocator, *, declaration: str, member: str, offset: int, length: int = 256 * 1024, scope: Any = None, expected_coordinator_id: str | None = None, deadline: float | None = None) -> dict[str, Any]:
         """Read at most 256 KiB at a byte offset; data is base64 in the response.
 
         Repeating the exact request is side-effect free. Membership, authorization,
         and declaration identity are checked again; no current-head substitution.
+        An optional absolute monotonic deadline bounds native I/O.
         """
-        return self._artifact_request("read_artifact_chunk", locator, scope, {"declaration": declaration, "member": member, "offset": offset, "length": length}, expected_coordinator_id)
+        return self._artifact_request("read_artifact_chunk", locator, scope, {"declaration": declaration, "member": member, "offset": offset, "length": length}, expected_coordinator_id, deadline=deadline)
 
     def read_artifact(self, locator: OutputLocator, *, format: str = "text", limit: int = 256 * 1024, member: str | None = None, scope: Any = None, expected_coordinator_id: str | None = None) -> dict[str, Any]:
         """Preview UTF-8 text, whole JSON, or base64 bytes, bounded by raw bytes.
@@ -294,19 +296,22 @@ class CoordinatorClient(NativeCoordinatorClient):
         """
         return self._artifact_request("read_artifact", locator, scope, {"format": format, "limit": limit, "member": member}, expected_coordinator_id)
 
-    def _artifact_request(self, operation: str, locator: OutputLocator, scope: Any, options: dict[str, Any], expected: str | None) -> dict[str, Any]:
+    def _artifact_request(self, operation: str, locator: OutputLocator, scope: Any, options: dict[str, Any], expected: str | None, *, deadline: float | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {"locator": locator.to_dict(), "scope": scope.to_dict() if hasattr(scope, "to_dict") else scope or {"kind": "managed"}, **options}
-        return cast(dict[str, Any], self._native_call(operation, payload, expected))
+        return cast(dict[str, Any], self._native_call(operation, payload, expected, deadline=deadline))
 
-    def fetch_artifacts(self, selections: Any, destination: str | Path, *, scope: Any = None, expected_coordinator_id: str | None = None) -> dict[str, Any]:
+    def fetch_artifacts(self, selections: Any, destination: str | Path, *, scope: Any = None, expected_coordinator_id: str | None = None, deadline: float | None = None) -> dict[str, Any]:
         """Fetch complete declarations into new directories on this client's host.
 
         Preserve input associations and outcomes in order, deduplicating bytes.
         Complete means every input was processed, not that each succeeded. Existing
         directories are never replaced. Linux atomic publication is required.
+        An optional absolute monotonic deadline is shared by all native calls.
+        Expiry fails unfinished items, cleans owned temporary files and prevents
+        further publication; previously published items remain successful.
         """
         from loom._artifact_fetch import fetch_artifacts
-        return fetch_artifacts(self, selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id)
+        return fetch_artifacts(self, selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id, deadline=deadline)
 
     def select_outputs(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
         """Select exact published metadata, preserving reuse and per-selector outcomes."""

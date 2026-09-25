@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any
 
 from loom.pipeline.stores.shared_artifacts import relative
@@ -45,11 +46,18 @@ def fetch_artifacts(
     *,
     scope: Any,
     expected_coordinator_id: str | None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
+    def check_deadline() -> None:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("artifact fetch deadline exceeded")
+
     root = Path(destination).absolute()
     results: list[dict[str, Any]] = []
     completed: dict[str, dict[str, Any]] = {}
     options = {"scope": scope, "expected_coordinator_id": expected_coordinator_id}
+    if deadline is not None:
+        options["deadline"] = deadline
     for selection in selections:
         row = selection.to_dict() if hasattr(selection, "to_dict") else dict(selection)
         result = {**row, "verification": "not_verified"}
@@ -60,7 +68,9 @@ def fetch_artifacts(
                 continue
             locator = OutputLocator.from_dict(row.get("locator", row))
             result["locator"] = locator.to_dict()
+            check_deadline()
             description = client.describe_artifact(locator, **options)
+            check_deadline()
             result.update(
                 {
                     k: v
@@ -82,14 +92,17 @@ def fetch_artifacts(
             members = list(description["members"])
             cursor = description["next_cursor"]
             while cursor is not None:
+                check_deadline()
                 page = client.describe_artifact(
                     locator, cursor=cursor, declaration=declaration, **options
                 )
+                check_deadline()
                 if page["outcome"] != "available":
                     result["outcome"] = page["outcome"]
                     raise _TransferFailure
                 members.extend(page["members"])
                 cursor = page["next_cursor"]
+            check_deadline()
             root.mkdir(parents=True, exist_ok=True)
             target = root / declaration
             if target.exists() or target.is_symlink():
@@ -97,6 +110,7 @@ def fetch_artifacts(
             pending = Path(tempfile.mkdtemp(prefix=".loom-fetch-", dir=root))
             seen: set[str] = set()
             for member in members:
+                check_deadline()
                 name = relative(member["path"])
                 if name in seen:
                     raise ValueError("duplicate declaration member")
@@ -111,6 +125,7 @@ def fetch_artifacts(
                         chunk: dict[str, Any] = {}
                         for retry in range(2):
                             try:
+                                check_deadline()
                                 chunk = client.read_artifact_chunk(
                                     locator,
                                     declaration=declaration,
@@ -127,6 +142,7 @@ def fetch_artifacts(
                                     "transport_error",
                                 }:
                                     raise
+                        check_deadline()
                         if chunk["outcome"] != "available":
                             result["outcome"] = chunk["outcome"]
                             raise _TransferFailure
@@ -138,6 +154,7 @@ def fetch_artifacts(
                         ):
                             result["outcome"] = "integrity_failed"
                             raise _TransferFailure
+                        check_deadline()
                         sink.write(data)
                         digest.update(data)
                         offset += len(data)
@@ -147,6 +164,7 @@ def fetch_artifacts(
                 ):
                     result["outcome"] = "integrity_failed"
                     raise _TransferFailure
+            check_deadline()
             _publish(pending, target)
             pending = None
             local = {

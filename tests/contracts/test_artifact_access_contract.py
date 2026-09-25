@@ -124,6 +124,37 @@ class LocalClient(CoordinatorClient):
         )
 
 
+def test_fetch_expiry_during_verification_prevents_publication(tmp_path, monkeypatch):
+    from loom import _artifact_fetch
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, _ = local_ref(uri)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    now = [100.0]
+    monkeypatch.setattr(_artifact_fetch, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    class ExpiringDigest:
+        def __init__(self):
+            self.digest = hashlib.sha256()
+
+        def update(self, data):
+            self.digest.update(data)
+
+        def hexdigest(self):
+            now[0] = 130.0
+            return self.digest.hexdigest()
+
+    monkeypatch.setattr(_artifact_fetch, "hashlib", SimpleNamespace(sha256=ExpiringDigest))
+    destination = tmp_path / "fetch"
+    result = client.fetch_artifacts(
+        [{"locator": locator.to_dict()}], destination, scope=SCOPE, deadline=130.0
+    )
+    assert result["items"][0]["outcome"] == "failed"
+    assert result["success_count"] == 0
+    assert list(destination.iterdir()) == []
+
+
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
 def test_local_exact_preview_corruption_legacy_and_authorization(tmp_path, backend):
     daemon, authority, uri = fixture(tmp_path, backend)

@@ -244,6 +244,79 @@ def test_invalid_mutation_keeps_native_not_applied_outcome() -> None:
     assert detail["mutation_outcome"] == "not_applied"
 
 
+@pytest.mark.parametrize("budget", [1, 2, 3, 4, 6, 30])
+def test_fetch_shares_deadline_across_pages_chunks_and_items(tmp_path, monkeypatch, budget):
+    import base64
+    from types import SimpleNamespace
+    from loom import _artifact_fetch
+    from loom.coordinator import CoordinatorClient
+    from loom.mcp import _server
+
+    now = [100.0]
+    clock = SimpleNamespace(monotonic=lambda: now[0])
+    monkeypatch.setattr(_server, "time", clock)
+    monkeypatch.setattr(_artifact_fetch, "time", clock)
+    monkeypatch.setattr(_server, "REQUEST_BUDGET_SECONDS", budget)
+    calls = []
+
+    class Client(CoordinatorClient):
+        def __init__(self):
+            pass
+
+        def close(self):
+            pass
+
+        def _native_call(self, operation, payload, expected=None, *, deadline=None, **kwargs):
+            assert deadline is not None
+            assert now[0] < deadline
+            assert expected == "owner-one"
+            calls.append((operation, deadline))
+            now[0] += 1
+            declaration = payload["locator"]["commit_id"]
+            if operation == "describe_artifact":
+                return {
+                    "outcome": "available", "declaration": declaration,
+                    "primary": "data", "verification": "original_integrity_unverified",
+                    "members": [] if payload["cursor"] else [
+                        {"path": "data", "size_bytes": 256 * 1024 + 1, "digest": None}
+                    ],
+                    "next_cursor": None if payload["cursor"] else 1,
+                }
+            assert operation == "read_artifact_chunk"
+            return {
+                "outcome": "available", "declaration": declaration,
+                "offset": payload["offset"],
+                "data": base64.b64encode(b"x" * payload["length"]).decode(),
+            }
+
+    destination = tmp_path / "fetch"
+    selections = [
+        {"locator": {"run_uri": "file:///run", "stage_name": "produce",
+                     "commit_id": commit, "output_name": "out"}}
+        for commit in ("first", "second")
+    ]
+    response = asyncio.run(create_server(client=Client()).call_tool(
+        "loom_fetch_artifacts", {"selections": selections, "destination": str(destination),
+                                 "expected_coordinator_id": "owner-one"}))
+    assert not getattr(response, "is_error")
+    result = getattr(response, "structured_content")
+    successes = 2 if budget == 30 else int(budget > 4)
+    assert result["complete"] is True
+    assert result["success_count"] == successes
+    assert result["failure_count"] == 2 - successes
+    assert [item["outcome"] for item in result["items"]] == (
+        ["available"] * successes + ["failed"] * (2 - successes)
+    )
+    assert all(deadline == 100 + budget for _, deadline in calls)
+    assert len(calls) == min(budget, 8)
+    assert list(destination.glob(".loom-fetch-*")) == []
+    assert destination.exists() is (budget > 2)
+    for index, commit in enumerate(("first", "second")):
+        assert (destination / commit).exists() is (index < successes)
+        if index < successes:
+            assert (destination / commit / "data").read_bytes() == b"x" * (256 * 1024 + 1)
+
+
 def create_server(*, client):
     """Substitute native resolution only; public deployment binding has real tests."""
     from contextlib import contextmanager

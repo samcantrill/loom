@@ -576,7 +576,7 @@ class _Adapter:
             """Write complete files on the MCP process host, not the assistant user's laptop. Preserve every outcome; never overwrite."""
             def fetch(deadline: float) -> Any:
                 with self._connect() as client:
-                    result = client.fetch_artifacts(selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id)
+                    result = client.fetch_artifacts(selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id, deadline=deadline)
                     result["location_context"] = "mcp_process_filesystem"
                     return result
             return await self._call("fetch_artifacts", fetch, text="Processed artifact fetch on the MCP process filesystem.", payload={"destination": destination})

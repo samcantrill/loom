@@ -105,6 +105,9 @@ and native I/O share one 30-second request budget. Synchronous calls run outside
 the SDK event loop with bounded outstanding work and reserved ordinary-call
 capacity while waits are active. Codex's 60-second timeout leaves room around
 that bound. A wait timeout requests no cancellation.
+Artifact fetch shares this deadline across all items, inventory pages, chunks and
+retries. Expiry marks unfinished selected items failed and removes owned temporary
+downloads before releasing capacity; completed destinations remain successful.
 
 `structuredContent` carries the complete native result. Short text highlights
 identifiers, state and useful evidence. A well-formed call that fails uses
