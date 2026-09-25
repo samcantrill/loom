@@ -536,6 +536,7 @@ def _completed_metadata_from_dict(data: object) -> "CompletedRunBundleMetadata":
     if not isinstance(data, Mapping):
         raise CatalogValidationError("completed_run must be a mapping")
     return CompletedRunBundleMetadata(
+        lineage_evidence=_historical_lineage(data.get("lineage_evidence")),
         run_uri=_required_str(data, "run_uri"),
         status=RunStatus(_required_str(data, "status")),
         schema_version=_required_int(data, "schema_version"),
@@ -574,6 +575,24 @@ def _completed_metadata_from_dict(data: object) -> "CompletedRunBundleMetadata":
             for item in _sequence(data.get("warnings", ()), "warnings")
         ),
     )
+
+
+def _historical_lineage(value: object) -> Mapping[str, PlainData] | None:
+    """Validate source evidence without converting it into importing authority."""
+    if value is None:
+        return None
+    from loom.pipeline.stores import StageLifecycleSnapshot
+    from loom.pipeline.stores.authority import OutputCommit
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version", "source_run_uri", "evidence_kind", "stages", "output_commits"
+    } or type(value["schema_version"]) is not int or value["schema_version"] != 1 or value["evidence_kind"] != "source_authority_history":
+        raise CatalogValidationError("invalid historical lineage evidence")
+    _required_str(value, "source_run_uri")
+    for stage in _sequence(value["stages"], "stages"):
+        StageLifecycleSnapshot.from_dict(stage)
+    for commit in _sequence(value["output_commits"], "output_commits"):
+        OutputCommit.from_dict(commit)
+    return cast(Mapping[str, PlainData], value)
 
 
 def _required_str(data: Mapping[object, object], field_name: str) -> str:
@@ -721,6 +740,7 @@ def _write_imported_run(
         "portable_run_import": dict(import_provenance),
         "source_run_uri": metadata.run_uri,
         "historical_only": True,
+        "historical_lineage": None if metadata.lineage_evidence is None else dict(metadata.lineage_evidence),
     }
     payload_root = target_dir / _IMPORT_PAYLOAD_ROOT
     staging_dir: Path | None = None
@@ -763,6 +783,7 @@ def _write_imported_run(
             target_run_uri,
             {
                 "executor": "portable-run-import",
+                "historical_lineage": None if metadata.lineage_evidence is None else dict(metadata.lineage_evidence),
                 "backend": "local-bundle",
                 "historical_only": True,
                 "source_run_uri": metadata.run_uri,

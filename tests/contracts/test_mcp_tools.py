@@ -211,6 +211,7 @@ def test_native_mapping_and_default_arguments(tool, arguments, native, args):
     ("loom_list_run_notes", "list_run_notes", {"run_uri": "file:///run", "limit": 2, "cursor": None}),
     ("loom_search_runs", "search_runs", {"query": {"schema_version": 1}}),
     ("loom_select_outputs", "select_outputs", {"selection": {"run_uris": ["file:///run"], "history": "all"}}),
+    ("loom_trace_lineage", "trace_lineage", {"query": {"start": {"run_uri": "file:///run"}}}),
     ("loom_search_submissions", "search_submissions", {"query": {"schema_version": 1}}),
     ("loom_search_jobs", "search_jobs", {"query": {"schema_version": 1}}),
     ("loom_query_fields", "query_fields", {"entity": "runs"}),

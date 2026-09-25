@@ -19,6 +19,7 @@ from loom.runs.annotations import RunNote, RunNotePage
 from loom.runs.query import RunQuery, SubmissionQuery, JobQuery, ManagedScope
 from loom.runs._query_page import QueryPage
 from loom.runs.outputs import OutputSelection
+from loom.runs.lineage import LineageQuery
 from loom.queue.local_daemon import (
     LocalDaemonOperation,
     LocalDaemonAdmission,
@@ -276,6 +277,10 @@ class CoordinatorClient(NativeCoordinatorClient):
     def list_output_commits(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
         """Page retained commits with their matching output facts and associations."""
         return cast(QueryPage, self._native_call("list_output_commits", {"selection": selection.to_dict()}, expected_coordinator_id))
+
+    def trace_lineage(self, query: LineageQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Trace exact assigned inputs, acknowledged starts and reuse within scope."""
+        return cast(QueryPage, self._native_call("trace_lineage", {"query": query.to_dict()}, expected_coordinator_id))
 
     def search_runs(self, query: RunQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
         """Search one explicit scope, preserving live continuation and coverage."""

@@ -21,7 +21,7 @@ RUN_URI = "file:///runs/unit-r1"
 
 
 def test_repository_schema_version_includes_coordinator_authority() -> None:
-    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 10
+    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 11
 
 
 def test_coordinator_admission_binds_authenticated_service_principal(tmp_path) -> None:

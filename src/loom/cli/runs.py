@@ -54,6 +54,12 @@ def register_subparser(
 
     from .queue import _add_client_connection_arguments
 
+    lineage = actions.add_parser("lineage", help="trace retained native dependency evidence")
+    _add_client_connection_arguments(lineage)
+    _add_output_options(lineage)
+    lineage.add_argument("--query", required=True, help="native lineage query JSON object")
+    lineage.set_defaults(handler=handle_lineage)
+
     outputs = actions.add_parser("outputs", help="select exact committed output metadata")
     _add_client_connection_arguments(outputs)
     _add_output_options(outputs)
@@ -218,6 +224,23 @@ def register_subparser(
     )
     _add_output_options(import_parser)
     import_parser.set_defaults(handler=handle_import)
+
+
+def handle_lineage(namespace: argparse.Namespace) -> int:
+    """Render the native bounded graph without opening any artifact payload."""
+    import json
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+    from loom.queue._coordinator_control import control_error
+    try:
+        query = json.loads(namespace.query)
+        with _daemon_client(namespace) as client:
+            result = client._native_call("trace_lineage", {"query": query}, None)
+    except (ValueError, TypeError) as exc:
+        raise _queue_cli_error(control_error("invalid_request", "trace_lineage", {})) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_outputs(namespace: argparse.Namespace) -> int:

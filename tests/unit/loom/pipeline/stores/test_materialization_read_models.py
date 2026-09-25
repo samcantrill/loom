@@ -63,6 +63,16 @@ class _SnapshotStore:
         self.snapshot_calls += 1
         return self._snapshot
 
+    def list_output_commits(self, run_uri: str, *, stage_name: str):
+        from loom.pipeline.stores.authority import OutputCommit
+
+        assert run_uri == self._snapshot.run_uri
+        return tuple(
+            OutputCommit(stage.latest_commit, stage.artifact_facts)
+            for stage in self._snapshot.stages
+            if stage.stage_name == stage_name and stage.latest_commit is not None
+        )
+
 
 def _committed_store(
     run_uri: str,

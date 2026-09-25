@@ -979,8 +979,11 @@ class _ResidentAssignmentBundle:
             raise QueueServiceError(
                 "resident work must start from a prepared worker request"
             )
+        if "attempt_input_bindings" in worker_request.metadata:
+            from loom.pipeline.stores.input_lineage import decode_bindings, validate_worker_inputs
+            validate_worker_inputs(worker_request, decode_bindings(worker_request.metadata["attempt_input_bindings"]))
         safe_metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
-            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.execution_binding")
+            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.execution_binding", "attempt_input_evidence")
             if key in worker_request.metadata}
         from ._execution_binding import execution_binding
         from loom.pipeline._project_contracts import EXECUTION

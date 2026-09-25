@@ -250,7 +250,7 @@ machine-readable unsupported-capability diagnostics. Capability declarations are
 correctness inputs for later explicit parallel, shared-filesystem, remote, or
 cross-run coordination requests.
 
-`loom.pipeline.stores.schema_policy` defines the v9 active-state schema policy:
+`loom.pipeline.stores.schema_policy` defines the v10 active-state schema policy:
 current schema is accepted, unsupported older and newer active-state schemas
 fail loudly, and automatic destructive migration is out of scope until a future
 roadmap phase explicitly designs it.

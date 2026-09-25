@@ -72,6 +72,8 @@ def test_sdk_registers_native_tool_names_and_forwards_guard() -> None:
         "loom_search_submissions",
         "loom_search_jobs",
         "loom_query_fields",
+        "loom_select_outputs",
+        "loom_trace_lineage",
         "loom_tag_keys",
         "loom_tag_values",
         "loom_list_agents",

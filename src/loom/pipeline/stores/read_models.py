@@ -23,6 +23,7 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp
+from .input_lineage import AttemptInputBinding, decode_bindings
 
 
 class AuthorityModelError(ValueError):
@@ -158,6 +159,9 @@ class StageAttempt:
     created_at: str
     owner: str | None = None
     reason: LifecycleReason | None = None
+    input_bindings: tuple[AttemptInputBinding, ...] | None = None
+    start_confirmed: bool | None = None
+    start_confirmed_at: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
@@ -171,6 +175,13 @@ class StageAttempt:
         object.__setattr__(self, "status", _stage_status(self.status))
         _revision(self.revision)
         _timestamp(self.created_at, "created_at")
+        object.__setattr__(self, "input_bindings", decode_bindings(self.input_bindings))
+        if self.start_confirmed is not None and type(self.start_confirmed) is not bool:
+            raise AuthorityModelError("start_confirmed must be boolean or null")
+        if self.start_confirmed is True:
+            _timestamp(self.start_confirmed_at, "start_confirmed_at")
+        elif self.start_confirmed_at is not None:
+            raise AuthorityModelError("unconfirmed start cannot have a timestamp")
         if self.owner is not None:
             object.__setattr__(self, "owner", _non_empty_string(self.owner, "owner"))
         if self.reason is not None and not isinstance(self.reason, LifecycleReason):
@@ -185,6 +196,9 @@ class StageAttempt:
             "status": self.status.value,
             "revision": self.revision.to_dict(),
             "created_at": self.created_at,
+            "input_bindings": None if self.input_bindings is None else [b.to_dict() for b in self.input_bindings],
+            "start_confirmed": self.start_confirmed,
+            "start_confirmed_at": self.start_confirmed_at,
             "owner": self.owner,
             "reason": None if self.reason is None else self.reason.to_dict(),
         }
@@ -202,6 +216,9 @@ class StageAttempt:
                 "status",
                 "revision",
                 "created_at",
+                "input_bindings",
+                "start_confirmed",
+                "start_confirmed_at",
                 "owner",
                 "reason",
             },
@@ -219,6 +236,9 @@ class StageAttempt:
             status=_stage_status(_required(mapping, "status")),
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
             created_at=_timestamp(_required(mapping, "created_at"), "created_at"),
+            input_bindings=decode_bindings(mapping.get("input_bindings")),
+            start_confirmed=cast(bool | None, mapping.get("start_confirmed")),
+            start_confirmed_at=_optional_string(mapping.get("start_confirmed_at"), "start_confirmed_at"),
             owner=_optional_string(mapping.get("owner"), "owner"),
             reason=_optional_reason(mapping.get("reason")),
         )

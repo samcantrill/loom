@@ -16,7 +16,7 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
 from ._paths import VALID_CONFIG_SNAPSHOTS, VALID_LOG_STREAMS, VALID_PROVENANCE_NAMES
-from .authority import PerRunAuthorityStore
+from .authority import OutputCommit, PerRunAuthorityStore
 from .read_models import (
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
@@ -96,6 +96,7 @@ class CompletedRunBundleMetadata:
     materialized_refs: tuple[MaterializedRef, ...] = ()
     reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
+    lineage_evidence: Mapping[str, PlainData] | None = None
 
     @classmethod
     def from_snapshot(
@@ -115,10 +116,21 @@ class CompletedRunBundleMetadata:
             materialized_refs=snapshot.materialized_refs,
             reliability_policy_facts=snapshot.reliability_policy_facts,
             warnings=snapshot.warnings,
+            lineage_evidence={
+                "schema_version": 1,
+                "source_run_uri": snapshot.run_uri,
+                "evidence_kind": "source_authority_history",
+                "stages": [stage.to_dict() for stage in snapshot.stages],
+                "output_commits": [
+                    OutputCommit(stage.latest_commit, stage.artifact_facts).to_dict()
+                    for stage in snapshot.stages if stage.latest_commit is not None
+                ],
+            },
         )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
+            "lineage_evidence": None if self.lineage_evidence is None else dict(self.lineage_evidence),
             "run_uri": self.run_uri,
             "status": self.status.value,
             "schema_version": self.schema_version,
@@ -269,7 +281,14 @@ def read_completed_run_bundle_metadata(
         local_paths=local_paths,
         local_materialization=local_materialization,
     )
-    return CompletedRunBundleMetadata.from_snapshot(snapshot)
+    return replace(CompletedRunBundleMetadata.from_snapshot(snapshot), lineage_evidence={
+        "schema_version": 1,
+        "source_run_uri": run_uri,
+        "evidence_kind": "source_authority_history",
+        "stages": [stage.to_dict() for stage in snapshot.stages],
+        "output_commits": [commit.to_dict() for stage in snapshot.stages
+                           for commit in store.list_output_commits(run_uri, stage_name=stage.stage_name)],
+    })
 
 
 def artifact_payload_ref(
@@ -405,7 +424,7 @@ def _materialized_snapshot_refs(
 def _replace_commit_refs(
     stage: StageLifecycleSnapshot, refs: tuple[MaterializedRef, ...]
 ) -> StageLifecycleSnapshot:
-    if stage.latest_commit is None:
+    if stage.latest_commit is None or stage.result_binding is not None:
         return stage
     commit = OutputCommitRecord(
         commit_id=stage.latest_commit.commit_id,
@@ -416,6 +435,7 @@ def _replace_commit_refs(
         revision=stage.latest_commit.revision,
         output_names=stage.latest_commit.output_names,
         materialized_refs=refs,
+        supersedes_commit_id=stage.latest_commit.supersedes_commit_id,
     )
     return replace(stage, latest_commit=commit)
 

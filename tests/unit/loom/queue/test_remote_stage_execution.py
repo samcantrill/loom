@@ -174,6 +174,9 @@ def _request(
             "resource_selection": {"account_for": [], "enforce": []},
         },
     )
+    from loom.pipeline.stores.input_lineage import AttemptInputBinding, binding_evidence
+    retained = (AttemptInputBinding("source", "seed", "data", worker.inputs["source"], None, "external"),)
+    worker = replace(worker, metadata={"attempt_input_bindings": [b.to_dict() for b in retained], "attempt_input_evidence": binding_evidence(retained)})
     data = b"input"
     atom = CapacityAtom(
         "cpu", "agent-1:cpu", ExactQuantity(1), "count", ExactQuantity(1)
@@ -224,6 +227,8 @@ def test_remote_request_excludes_coordinator_paths_and_derives_agent_paths(
     assert worker.run_uri == "loom-agent:assignment-1"
     assert str(tmp_path / "assignments" / "assignment-1") in worker.stdout_path
     assert "/coordinator" not in worker.stdout_path
+    assert worker.metadata["attempt_input_evidence"] == request.worker_metadata["attempt_input_evidence"]
+    assert "attempt_input_bindings" not in worker.metadata
 
 
 def test_remote_workspace_rejects_parent_directory_identity(tmp_path: Path) -> None:
@@ -1226,6 +1231,7 @@ def test_local_container_launch_reopens_without_recursive_worker_materialization
     assert worker.resolved_runtime == request.resolved_runtime
     assert worker.fingerprint == scoped
     assert worker.inputs["source"].uri == reopened.input_path("source").as_uri()
+    assert worker.metadata["attempt_input_evidence"] == request.worker_metadata["attempt_input_evidence"]
     # A reachable profile reload cannot replace the retained local binding.
     changed = replace(profile, preparation_shared_roots={"data": tmp_path / "different"})
     with pytest.raises(QueueConflictError, match="binding identity"):

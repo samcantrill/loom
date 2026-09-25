@@ -15,6 +15,7 @@ def test_pipeline_store_public_exports() -> None:
 
     assert stores
     assert set(stores.__all__) == {
+        "AttemptInputBinding",
         "ArtifactStore",
         "RunArtifactStore",
         "StageArtifactStore",

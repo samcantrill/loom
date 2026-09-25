@@ -587,6 +587,8 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     snapshot = authority.snapshot(run_uri)
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == receipt.output_commit.commit
+    assert snapshot.stages[0].attempts[-1].start_confirmed is True
+    assert snapshot.stages[0].attempts[-1].start_confirmed_at is not None
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id).value == "released"
     assert (

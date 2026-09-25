@@ -2147,6 +2147,10 @@ class RunInspectionHttpClient:
         """Select authorized exact output metadata with the QUERY role."""
         return self._read_query("select_outputs", "output-query-v1", {"selection": selection.to_dict()})
 
+    def trace_lineage(self, query) -> Mapping[str, PlainData]:
+        """Trace exact lineage with the same QUERY scope as output selection."""
+        return self._read_query("trace_lineage", "lineage-query-v1", {"query": query.to_dict()})
+
     def list_output_commits(self, selection) -> Mapping[str, PlainData]:
         """Read output history using the same QUERY scope and authority."""
         return self._read_query("list_output_commits", "output-query-v1", {"selection": selection.to_dict()})
@@ -2255,7 +2259,7 @@ class RunInspectionHttpClient:
         if response.getheader("Content-Type") != "application/json":
             return _run_inspection_failure("unavailable")
         try:
-            payload = (decode_wire(raw) if operation in {"select_outputs", "list_output_commits"}
+            payload = (decode_wire(raw) if operation in {"trace_lineage", "select_outputs", "list_output_commits"}
                        else _decode_run_inspection_response(raw))
             _exact(payload, {"ok", "result"})
         except (QueueError, ValueError, TypeError, RecursionError):
@@ -5610,7 +5614,7 @@ class _Handler(BaseHTTPRequestHandler):
                     raise control_error(
                         "invalid_request", operation, {}, boundary="client_protocol"
                     ) from exc
-            elif role_name == "query" and operation in {"select_outputs", "list_output_commits"}:
+            elif role_name == "query" and operation in {"trace_lineage", "select_outputs", "list_output_commits"}:
                 try:
                     payload = dict(decode_wire(raw))
                 except (ValueError, TypeError, RecursionError) as exc:
@@ -6128,6 +6132,7 @@ def _dispatch_application(
             capabilities.append("run-context-v1")
             capabilities.append("run-query-v1")
             capabilities.append("output-query-v1")
+            capabilities.append("lineage-query-v1")
         result: dict[str, PlainData] = {
             "protocol_version": "1",
             "capabilities": capabilities,
@@ -6142,6 +6147,17 @@ def _dispatch_application(
     if role == LocalDaemonRole.QUERY.value:
         from ._run_queries import QUERY_OPERATIONS, query_operation, validate_query_request
         from ._output_selection import OUTPUT_OPERATIONS, output_operation, validate_output_request
+
+        if operation == "trace_lineage":
+            from ._lineage import lineage_operation, validate_lineage_request
+            from loom.runs.query import InvalidCursorError
+            daemon._require_view_role(principal, LocalDaemonRole.QUERY)
+            try:
+                return lineage_operation(daemon, validate_lineage_request(value)["query"]).to_dict()
+            except InvalidCursorError:
+                return {"schema_version": 1, "code": "invalid_cursor"}
+            except (ValueError, TypeError):
+                return {"schema_version": 1, "code": "invalid_request"}
 
         if operation in OUTPUT_OPERATIONS:
             daemon._require_view_role(principal, LocalDaemonRole.QUERY)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.pipeline.stores.input_lineage import decode_bindings, validate_bindings
+
 import hashlib
 import json
 import sqlite3
@@ -96,7 +98,7 @@ from loom.pipeline.stores._run_annotations import NOTE_COLUMNS, RECEIPT_COLUMNS,
 from loom.runs.annotations import RunNote, RunNotePage
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 10
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 11
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
@@ -509,6 +511,7 @@ class AuthorityRepository:
                     _migrate_v7_action_bindings(conn, current_version=self.schema_version)
                     _migrate_v8_run_annotations(conn, current_version=self.schema_version)
                     _migrate_v9_annotation_mutations(conn, current_version=self.schema_version)
+                    _migrate_v10_input_lineage(conn, current_version=self.schema_version)
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -838,7 +841,10 @@ class AuthorityRepository:
                 revision=revision,
                 created_at=now,
                 owner=owner_id,
+                start_confirmed=True,
+                start_confirmed_at=now,
             )
+            conn.execute("UPDATE stage_attempts SET start_confirmed = 1, start_confirmed_at = ? WHERE run_uri = ? AND attempt_id = ?", (now, run_uri, attempt_id))
             return AttemptAllocation(attempt=attempt, lease=lease)
 
     def ensure_prepared_attempt(
@@ -976,6 +982,14 @@ class AuthorityRepository:
             now = self._now()
             revision = self._next_revision(conn)
             attempt_id = f"{request.stage_name}-{attempt_number}"
+            try:
+                validate_bindings(request.input_bindings, {
+                    name: _stage_snapshot(conn, run_uri=run_uri, stage_name=name, now=now)
+                    for name in {b.source_stage_name for b in request.input_bindings or () if b.producer is not None}
+                    if name is not None
+                })
+            except ValueError as exc:
+                raise AuthorityRepositoryError(str(exc)) from exc
             conn.execute(
                 """
                 INSERT INTO stage_attempts (
@@ -1011,8 +1025,11 @@ class AuthorityRepository:
                 revision=revision,
                 created_at=now,
                 owner=request.owner_id,
+                start_confirmed=False,
+                input_bindings=request.input_bindings,
             )
             receipt = PreparedAttemptReceipt(request, attempt)
+            conn.execute("UPDATE stage_attempts SET start_confirmed = 0, input_bindings_json = ? WHERE run_uri = ? AND attempt_id = ?", (None if request.input_bindings is None else _json_dumps([b.to_dict() for b in request.input_bindings]), run_uri, attempt_id))
             conn.execute(
                 """
                 INSERT INTO prepared_attempt_receipts (
@@ -1745,14 +1762,9 @@ class AuthorityRepository:
                 (run_uri, fence.assignment_id),
             )
             conn.execute(
-                "UPDATE stage_attempts SET status = ?, revision_sequence = ? "
+                "UPDATE stage_attempts SET status = ?, revision_sequence = ?, start_confirmed = 1, start_confirmed_at = COALESCE(start_confirmed_at, ?) "
                 "WHERE run_uri = ? AND attempt_id = ?",
-                (
-                    StageStatus.RUNNING.value,
-                    revision.sequence,
-                    run_uri,
-                    fence.attempt_id,
-                ),
+                (StageStatus.RUNNING.value, revision.sequence, self._now(), run_uri, fence.attempt_id),
             )
             _upsert_stage(
                 conn,
@@ -3345,6 +3357,7 @@ class AuthorityRepository:
                 _plain_mapping(run_status.get("metadata", {}), "metadata")
             )
             run_metadata["authority_import"] = import_provenance
+            run_metadata["historical_lineage"] = (manifest.runtime or {}).get("historical_lineage")
             run_revision = self._next_revision(conn)
             conn.execute(
                 """
@@ -4508,7 +4521,7 @@ def _migrate_v5_coordinator_principals(
 
 
 def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {8, 9, 10}:
+    if current_version not in {8, 9, 10, 11}:
         return
     tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
     if _METADATA_TABLE not in tables:
@@ -4530,7 +4543,7 @@ def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: in
 
 
 def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {9, 10}:
+    if current_version not in {9, 10, 11}:
         return
     if conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
                     (_METADATA_TABLE,)).fetchone() is None:
@@ -4550,7 +4563,7 @@ def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: in
 
 
 def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version != 10:
+    if current_version not in {10, 11}:
         return
     if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
         return
@@ -4565,6 +4578,25 @@ def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_versio
             raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v9 schema is incomplete", current_version=current_version))
     create_annotation_mutation_schema(conn)
     conn.execute(f"UPDATE {_METADATA_TABLE} SET value='10' WHERE key='schema_version'")
+
+
+def _migrate_v10_input_lineage(conn: sqlite3.Connection, *, current_version: int) -> None:
+    if current_version != 11:
+        return
+    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
+        return
+    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key='schema_version'").fetchone()
+    if row is None or row["value"] != "10":
+        return
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns.issubset(actual):
+            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v10 schema is incomplete", current_version=current_version))
+    columns = {str(info["name"]) for info in conn.execute("PRAGMA table_info(stage_attempts)")}
+    for name, kind in (("input_bindings_json", "TEXT"), ("start_confirmed", "INTEGER"), ("start_confirmed_at", "TEXT")):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE stage_attempts ADD COLUMN {name} {kind}")
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value='11' WHERE key='schema_version'")
 
 
 def _initialize_schema(
@@ -4729,6 +4761,9 @@ def _initialize_schema(
             created_at TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
+            input_bindings_json TEXT,
+            start_confirmed INTEGER,
+            start_confirmed_at TEXT,
             PRIMARY KEY (run_uri, attempt_id),
             UNIQUE (run_uri, stage_name, attempt_number)
         )
@@ -5091,6 +5126,8 @@ def _schema_shape_failure(
 ) -> AuthorityRepositoryCompatibilityFailure | None:
     try:
         for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+            if table_name == "stage_attempts" and current_version >= 11:
+                expected_columns = expected_columns | {"input_bindings_json", "start_confirmed", "start_confirmed_at"}
             columns = {
                 cast(str, row["name"])
                 for row in conn.execute(f"PRAGMA table_info({table_name})")
@@ -5783,6 +5820,9 @@ def _attempt_from_row(row: sqlite3.Row, *, conn: sqlite3.Connection) -> StageAtt
         revision=_revision_for(conn, cast(int, row["revision_sequence"])),
         created_at=cast(str, row["created_at"]),
         owner=cast(str | None, row["owner_id"]),
+        input_bindings=decode_bindings(None if row["input_bindings_json"] is None else _json_loads(row["input_bindings_json"])),
+        start_confirmed=None if row["start_confirmed"] is None else bool(row["start_confirmed"]),
+        start_confirmed_at=row["start_confirmed_at"],
         reason=_reason_from_json(cast(str | None, row["reason_json"])),
     )
 
