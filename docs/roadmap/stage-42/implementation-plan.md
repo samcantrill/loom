@@ -1,14 +1,14 @@
 # Roadmap Stage 42 Implementation Plan
 
 Status: maintainer-approved plan; independent plan readiness review passed;
-implementation authorized; P1 in progress after maintainer limit clarification.
+implementation authorized; P1 merged, P2 next.
 Roadmap stage: 42
 Stage descriptor: Run Discovery, Annotations, Lineage, And Result Access
 Planning document: [planning.md](planning.md)
 Workflow: [roadmap-stage-implementation](../../../.codex/workflows/roadmap-stage-implementation.md)
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: P1, submission context.
+Current phase: between P1 and P2; publish completion metadata and synchronize.
 Startup requirements: satisfied on 2026-09-24; explicit whole-stage execution requested.
 
 ## Summary
@@ -62,7 +62,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 
 | Phase | Slug / plan | Status | Branch | PR | Ownership and usable outcome | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | [submission-context](phases/submission-context.md) | pr_open | `agent/stage-42-p1-submission-context` | #349 | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
+| P1 | [submission-context](phases/submission-context.md) | merged | `agent/stage-42-p1-submission-context` | #349 | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
 | P2 | [run-annotations](phases/run-annotations.md) | pending | `agent/stage-42-p2-run-annotations` | none | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | pending | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Evaluator truth tables, scope/coverage, pagination and adapter parity |
 | P4 | [output-selection](phases/output-selection.md) | pending | `agent/stage-42-p4-output-selection` | none | Exact current/historical output selection with original producer and reuse associations | Authority commit/reuse/history contracts and metadata-only guarantees |
@@ -171,16 +171,17 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1 in_progress; P2–P6 pending. On 2026-09-25 the maintainer
+- Phase statuses: P1 merged; P2–P6 pending. On 2026-09-25 the maintainer
   resolved the limit conflict in favor of applying limits to all initial tags.
   The run-context owner records the accepted no-context compatibility exception;
   P1 owns regression coverage and repair of incomplete validation evidence.
-- Stage cleanup and terminal disposition: persistent worktree retained; P1 PR #349 open.
+- Stage cleanup and terminal disposition: persistent worktree retained; P1 PR #349
+  remotely merged and remote phase branch retired by the delivery gate.
 - Improvement log entries: none.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| P1 | Ready for PR at `ff39754c` | Required gate coverage passed with documented focused repair/reuse; see P1 card | Universal initial-tag limits explicitly approved; independent PR review pending | Worktree retained, no cleanup |
+| P1 | #349 / `ea4dba287c3d620c7be59356def76bd8d2bc53ad` | Required gate coverage and independent actual-head review passed; see P1 card | Universal initial-tag limits explicitly approved; no physical qualification required | Phase transition passed; worktree retained for P2 |
 | P2–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |

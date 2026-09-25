@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open; stage 42 / P1; implementation validated, awaiting independent review.
+- Status: merged; stage 42 / P1.
 - PR: [#349](https://github.com/samcantrill/loom/pull/349), target `develop`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
@@ -139,7 +139,7 @@ or many-to-one submission semantics. Manager preparation passed.
 One phase executor was selected for the cross-cutting store,
 replay and adapter implementation scope; it owns implementation and validation,
 not PR delivery. Pre-submit validation, independent phase review and PR/merge:
-pending manager delivery and independent review. Implementation validation is complete.
+passed. Independent review found no required corrections; delivery verified remote merge.
 Refiner: not needed. Blocker corrections: 1/3. Improvement entries: none.
 
 Execution resumed after the maintainer explicitly selected universal initial-tag
@@ -202,7 +202,9 @@ Logs are local ignored build evidence. The 15 config-extra skips are opt-in
 physical container acceptance; the two baseline skips are existing queue CLI
 cases. No physical GPU, scheduler or container-fleet qualification is claimed or
 required by this context-only phase. No remaining implementation blocker is known;
-the actual PR's independent review remains mandatory and manager-owned.
+the independent actual-head review passed at `0812f83fd8abdae48e5100a52c20fb0ad8f01310`
+with no required findings. PR #349 squash-merged into `develop` as
+`ea4dba287c3d620c7be59356def76bd8d2bc53ad` on 2026-09-25.
 
 Resolved contract decision: on 2026-09-25 the maintainer explicitly accepted
 the 128-key/48-KiB limits for all initial tags, including authored-only tags.
@@ -216,4 +218,4 @@ persisted legacy evidence on partial inspection; no truncation or grandfathering
 | Documentation | `docs/features/{coordinator-client,agent-preparation,cli,mcp}.md` |
 | Tests | New context contract/integration files and existing native, authority, Python, MCP/QUERY adapters; narrow authorized GPU-probe typing repair |
 | Completion | Implementation and gate coverage complete with explicit focused repair/reuse above; ready for manager delivery |
-| Review/PR/merge/cleanup | PR #349 opened; required independent actual-head review pending; no merge or cleanup yet |
+| Review/PR/merge/cleanup | PR #349 independently approved and remotely merged; delivery deleted the exact remote phase branch; transition to coordination passed; persistent worktree retained for P2 |
