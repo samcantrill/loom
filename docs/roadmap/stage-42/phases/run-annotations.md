@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P2.
+- Status: blocked; stage 42 / P2.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p2-run-annotations`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 2: Run Annotations
 - Worktree/coordination: manifest execution context; base `27d32d86040ccd7379361715656ba46b8133dde2`.
 - Dependencies: P1. Named refinement uncertainty: none.
-- Blockers: none; P1 PR #349 remotely merged, completion metadata published and synchronization passed.
+- Blockers: mutation-ID scope needs maintainer resolution; P1 PR #349 remotely merged, completion metadata published and synchronization passed.
 
 ## Objective, Scope, And Reuse
 
@@ -108,7 +108,7 @@ client operations even if P3 never ships.
 Workflow preparation passed; no refinement uncertainty. One phase executor is
 selected for the cross-store CAS/receipt and adapter implementation scope, with
 manager-owned validation acceptance and independent actual-PR review/delivery.
-Implementation/validation/review/PR pending. Blocker corrections 0/3;
+Implementation checkpoint only; validation/review/PR pending. Blocker corrections 0/3;
 improvement entries none. Required selected tests need baseline, config-extra
 and MCP-extra environments as their markers require; do not claim deselection
 as adapter coverage. Expand for changed shared migration/protocol consumers.
@@ -117,4 +117,9 @@ as adapter coverage. Expand for changed shared migration/protocol consumers.
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Changed paths | Inert `runs/annotations.py` patch/note values, public exports, and focused patch contract assertions only; no authority or adapter implementation |
+| Validation | Not run. Manager requested a checkpoint and no test launch while the mutation-ID scope decision is unresolved. Assertions are proposed coverage, not passing evidence. |
+| Validated tree / delivery | None; no phase validation, review, PR or merge. Checkpoint starts from `79c398c4c21fd8bbdd399256496f1ae750111510`. |
+| Blocker | The accepted receipt key is principal + mutation ID, with target run retained in the receipt/digest. The shared service repository can enforce this across runs, but `SQLitePerRunAuthorityStore._bind_run_uri` and `_transaction` own a separate database per run. Reusing one principal/ID on another run cannot be detected in that embedded owner transaction. Silently making receipts run-scoped would diverge from the literal contract; adding a cross-run transaction owner exceeds the accepted existing-owner design. |
+| Required resolution | Maintainer must choose uniform run-scoped IDs or global principal-scoped IDs with an approved cross-run ownership design. Manager requested that decision; no authority writes proceed before resolution. |
+| Residual / cleanup | Entire durable mutation, migration, native transport, adapter and acceptance implementation remains pending; stage worktree retained with a coherent inert-model checkpoint. |

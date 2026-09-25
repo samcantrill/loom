@@ -15,6 +15,76 @@ from loom.serialization import stable_json_bytes
 pytestmark = pytest.mark.contract
 
 
+def test_annotation_patch_preserves_unrelated_keys_and_distinguishes_null_removal():
+    from loom.runs import AnnotationConflictError, AnnotationPatch, RunAnnotations
+
+    original = RunAnnotations(
+        "file:///run",
+        3,
+        "reason",
+        {"keep": "yes", "drop": "no"},
+        {"keep": [1], "drop": 2, "nullable": 3},
+        "submission",
+        "coordinator",
+    )
+    patch = AnnotationPatch.from_dict(
+        {
+            "expected_revision": 3,
+            "set_tags": {"new": "label"},
+            "remove_tags": ["drop"],
+            "set_metadata": {"nullable": None},
+            "remove_metadata": ["drop"],
+        }
+    )
+    result = patch.apply(original)
+    assert result.revision == 4
+    assert result.description == "reason"
+    assert result.tags == {"keep": "yes", "new": "label"}
+    assert result.metadata == {"keep": (1,), "nullable": None}
+    assert result.initializer_operation_id == "submission"
+    assert AnnotationPatch.from_dict(patch.to_dict()) == patch
+    assert (
+        AnnotationPatch.from_dict({"expected_revision": 4, "description": None})
+        .apply(result)
+        .description
+        is None
+    )
+    with pytest.raises(AnnotationConflictError) as error:
+        patch.apply(result)
+    assert error.value.current_revision == 4
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"set_tags": {"x": "v"}, "remove_tags": ["x"]},
+        {"set_metadata": {"x": None}, "remove_metadata": ["x"]},
+        {"remove_tags": ["x", "x"]},
+        {"remove_metadata": "key"},
+        {"expected_revision": True},
+        {"expected_revision": -1},
+        {"description": "é" * 8193},
+        {"set_metadata": {"n": float("nan")}},
+        {"author": "spoofed"},
+    ],
+)
+def test_annotation_patch_rejects_ambiguous_or_unbounded_changes(fields):
+    from loom.runs import AnnotationPatch
+
+    with pytest.raises(ValueError):
+        AnnotationPatch.from_dict({"expected_revision": 0, **fields})
+
+
+def test_annotation_patch_checks_result_size_not_only_patch_size():
+    from loom.runs import AnnotationPatch, RunAnnotations
+
+    original = RunAnnotations(
+        "file:///run", 1, None, {str(i): "v" for i in range(128)}, {}
+    )
+    with pytest.raises(ValueError, match="128"):
+        AnnotationPatch(1, set_tags={"extra": "v"}).apply(original)
+
+
 def request(context=None):
     return PrepareRunRequest(
         "intent",
