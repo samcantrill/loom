@@ -21,9 +21,75 @@ from loom.runs import (
     RunQuery,
     SubmissionContext,
     SubmissionQuery,
+    collect_pages,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+@pytest.mark.parametrize(
+    "store, axes, diagnostic",
+    [
+        (
+            "execution_database",
+            {"scheduling", "assignment", "slurm"},
+            "execution_store_unavailable",
+        ),
+        ("agent_journal", {"execution"}, "agent_journal_unavailable"),
+    ],
+)
+def test_job_query_retains_unavailable_owner_coverage(
+    tmp_path, monkeypatch, store, axes, diagnostic
+):
+    from tests.integration.mcp.test_stdio import _coordinator
+    from tests.integration.queue.test_preparation_operations import _request
+
+    with _coordinator(tmp_path) as (service, daemon, _):
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            request = RunRequest(_request(), "owner-coverage")
+            client.start_run(request)
+            operation = daemon.wait_operation(
+                request.preparation.operation_id, timeout=90
+            ).operation
+            assert operation.state == "applied", operation
+            daemon._wait("owner-coverage", timeout_seconds=60)
+            query = JobQuery()
+            healthy = client.search_jobs(query)
+            assert healthy.items
+            assert healthy.complete and not healthy.warnings
+            admission_ids = {item["identity"] for item in healthy.items}
+            corrupt = tmp_path / "corrupt-owner.sqlite"
+            corrupt.write_bytes(b"not a sqlite database")
+            with monkeypatch.context() as patch:
+                patch.setattr(type(daemon.config), store, property(lambda self: corrupt))
+                assert client.search_runs(RunQuery()).complete
+                collection = collect_pages(
+                    lambda q: client.search_jobs(cast(JobQuery, q)), query
+                )
+            page = collection.pages[0]
+            assert page.next_cursor is None
+            assert not page.complete and not collection.complete
+            assert collection.warnings == page.warnings
+            assert {warning["admission_id"] for warning in page.warnings} == admission_ids
+            assert {warning["axis"] for warning in page.warnings} == axes | {"service"}
+            for warning in page.warnings:
+                assert warning == {
+                    "code": "job_associations_unavailable",
+                    "admission_id": warning["admission_id"],
+                    "axis": warning["axis"],
+                    "diagnostic": (
+                        "owner_status_unavailable"
+                        if warning["axis"] == "service"
+                        else diagnostic
+                    ),
+                }
+            owners = page.items[0]["sources"]["job_associations"]
+            assert owners["authority"]["availability"] == "available"
+            for axis in axes:
+                assert owners[axis]["availability"] == "unavailable"
+                assert owners[axis]["diagnostic"] == diagnostic
+            if store == "execution_database":
+                assert owners["assignment"]["assignments"] == []
 
 
 @pytest.mark.parametrize("https", [False, True])

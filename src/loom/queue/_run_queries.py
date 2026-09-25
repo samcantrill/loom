@@ -229,7 +229,21 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
         elif query.entity == "jobs":
             try:
                 detail = daemon.admission(candidate["admission_id"])
-                record.sources["job_associations"] = detail.to_dict()["owners"]
+                owners = detail.to_dict()["owners"]
+                record.sources["job_associations"] = owners
+                for axis, observation in owners.items():
+                    if (
+                        isinstance(observation, dict)
+                        and observation.get("availability") == "unavailable"
+                    ):
+                        record.warnings.append(
+                            {
+                                "code": "job_associations_unavailable",
+                                "admission_id": candidate["admission_id"],
+                                "axis": axis,
+                                "diagnostic": observation.get("diagnostic"),
+                            }
+                        )
             except (OSError, ValueError, LookupError, QueueError):
                 record.warnings.append(
                     {
