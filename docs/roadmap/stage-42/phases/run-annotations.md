@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P2.
+- Status: in_progress; stage 42 / P2.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p2-run-annotations`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 2: Run Annotations
-- Worktree/coordination/base: manifest execution context; base after P1.
+- Worktree/coordination: manifest execution context; base `27d32d86040ccd7379361715656ba46b8133dde2`.
 - Dependencies: P1. Named refinement uncertainty: none.
-- Blockers: stage gates and P1 merge.
+- Blockers: none; P1 PR #349 remotely merged, completion metadata published and synchronization passed.
 
 ## Objective, Scope, And Reuse
 
@@ -17,7 +17,10 @@ attributed notes. This is independently valuable before search ships. P3 consume
 the same authority-owned view. Own `FR-42-C04/C05/C06`, `EX-42-C02`,
 `VAL-42-C03/C04`, `DQ-42-C02/C03`; P1 already owns submission replay.
 
-Reuse P1 models, authority owners and native context route. Extend
+Reuse P1 models, authority owners and native context route. Organizational
+authority methods now live in `queue/coordinator_authority.py`,
+`pipeline/stores/coordinator_authority.py` and `_run_annotations.py`; extend that
+scoped owner rather than adding worker-facing lifecycle methods. Extend
 `src/loom/pipeline/stores/{authority.py,read_models.py,sqlite_authority.py,authority_protocol.py,authority_client.py,service_authority.py}`,
 `src/loom/authority/_repository.py` and routes, native coordinator client/control,
 `src/loom/cli/runs.py`, and `src/loom/mcp/_server.py`. Do not write legacy runtime
@@ -102,8 +105,13 @@ the owner instead. Durable generic audit history beyond notes/current annotation
 is deferred until there is a consumer. Supported merge state includes all four
 client operations even if P3 never ships.
 
-Workflow preparation/refinement/implementation/validation/independent review/PR:
-not started. Blocker corrections 0/3; improvement entries none.
+Workflow preparation passed; no refinement uncertainty. One phase executor is
+selected for the cross-store CAS/receipt and adapter implementation scope, with
+manager-owned validation acceptance and independent actual-PR review/delivery.
+Implementation/validation/review/PR pending. Blocker corrections 0/3;
+improvement entries none. Required selected tests need baseline, config-extra
+and MCP-extra environments as their markers require; do not claim deselection
+as adapter coverage. Expand for changed shared migration/protocol consumers.
 
 ## Completion Record
 
