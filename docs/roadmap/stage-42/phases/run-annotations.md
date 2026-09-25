@@ -2,7 +2,8 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P2.
+- Status: pr_open; stage 42 / P2.
+- PR: [#351](https://github.com/samcantrill/loom/pull/351), target `develop`; independent actual-head review pending.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p2-run-annotations`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 2: Run Annotations
