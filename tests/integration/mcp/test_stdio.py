@@ -44,6 +44,9 @@ TOOLS = {
     "loom_search_runs",
     "loom_select_outputs",
     "loom_trace_lineage",
+    "loom_describe_artifact",
+    "loom_read_artifact",
+    "loom_fetch_artifacts",
     "loom_search_submissions",
     "loom_search_jobs",
     "loom_query_fields",
@@ -225,6 +228,7 @@ def test_installed_offline_discovery_and_classified_failure(
                         "loom_cancel_job",
                         "loom_cancel_preparation",
                         "loom_patch_run_annotations",
+                        "loom_fetch_artifacts",
                         "loom_append_run_note",
                     }
                 )
@@ -347,6 +351,15 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                 assert outputs["items"][0]["locator"]["run_uri"] == admitted["run_uri"]
                 assert outputs["items"][0]["availability"] == "not_checked"
                 assert outputs["items"][0]["outcome"] == "selected"
+                locator = outputs["items"][0]["locator"]
+                description = await _call(client, "loom_describe_artifact", request={"locator": locator})
+                assert description["outcome"] == "available"
+                preview = await _call(client, "loom_read_artifact", request={"locator": locator, "format": "json"})
+                assert preview["outcome"] == "available" and not preview["truncated"]
+                fetched = await _call(client, "loom_fetch_artifacts", selections=outputs["items"], destination=str(tmp_path / "mcp-fetch"))
+                assert fetched["success_count"] == 1, fetched
+                assert fetched["location_context"] == "mcp_process_filesystem"
+                assert Path(fetched["items"][0]["primary_path"]).is_file()
                 assert (
                     await _call(client, "loom_inspect_run", run_uri=admitted["run_uri"])
                     == inspection

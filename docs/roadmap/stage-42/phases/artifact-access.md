@@ -2,13 +2,17 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P6.
+- Status: pr_open; stage 42 / P6.
+- PR: [#355](https://github.com/samcantrill/loom/pull/355), canonical title and
+  `develop` target verified; implementation head `f1f64e452fa3460149f6aee3b722398241bd7bf7`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p6-artifact-access`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 6: Artifact Access
-- Worktree/coordination/base: manifest context; base after P5.
+- Worktree/coordination: manifest context; base after P5
+  `fce1c5b174980783046b63cb5a321bbd458b8f27`.
 - Dependencies: P4 selection; P3/P5 discovery and graph for composed acceptance.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: none. Blockers: none. P5 #354 remotely merged,
+  completion metadata published/synchronized and exact phase branch retired.
 
 ## Objective And Supported Merge State
 
@@ -140,11 +144,30 @@ credential service. Report the supported failure; do not infer files or claim a
 fake backend proves the real path. No retention pin or durable partial-download
 session is promised. Read all detailed access sections and the composed example.
 
-Workflow preparation/implementation/validation/independent review/PR: not started.
-Refiner not needed yet; blocker corrections 0/3; improvement entries none.
+Workflow preparation passed; reuse approved access matrix and predecessor
+contracts. One executor is justified by the coupled server authorization,
+bounded transport, client filesystem publication and composed workflow. Its
+write boundary is P6 source/tests/user docs and this card; no additional backend
+or credential service is authorized. Preserve full `make validate-pr` and real
+HTTPS multi-file transfer acceptance, with concrete failure/containment/overwrite
+checks above. Existing legacy limits remain explicit outcomes rather than new
+scope. Implementation and required validation complete; independent review and PR pending.
+R1 deadline refinement completed; blocker corrections 1/3; improvement entries none.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Changed paths, tests, validated tree, review/PR/merge, residual risk and cleanup | Pending implementation |
+| Implementation | Native exact-locator declaration/chunk/preview resolver; flat Python methods, CLIENT/QUERY Unix/HTTPS routes, CLI and MCP; client-owned verified temporary downloads and atomic no-replace publication |
+| Changed paths | `src/loom/queue/_artifact_access.py`, `_coordinator_control.py`, `_coordinator_client.py`, `agent_session_transport.py`; `src/loom/_artifact_fetch.py`, `coordinator.py`, `cli/artifacts.py`, `mcp/_server.py`; artifact-access contract/native/composed tests, existing transport/MCP capability tests; `docs/features/artifact-access.md`, artifacts index |
+| Affected contracts and consumers | Exact authority identity and scope per call; contained regular-file/receipt membership; complete inventories; bounded inert preview; stream integrity and client destination ownership; native/Python/CLI/MCP parity and explicit source annotation |
+| Focused evidence | Isolated locked Python 3.12 config lane: artifact access contracts, native Unix/real mutual-TLS HTTPS transfer, two-vocabulary workflow, existing materialization and shared publication: 15 passed. Isolated config+MCP lane: existing stdio reconnect workflow extended with describe/read/fetch on Unix and HTTPS: 2 passed, 8 deselected. Subsequent assertions and preview verification are covered by the final gate below |
+| Selected final checks and expansion triggers | Required `make validate-pr` covers baseline, config, MCP, Ruff, Pyright, builds including the real HTTPS lane. Expand only for failures, source changes invalidating evidence, or a newly affected owner. No additional backend, cloud, physical fleet, or mapped-local optimization is claimed |
+| Validated revision/tree and final gate | All `make validate-pr` components passed. Runtime source and baseline/config/static evidence: `d5edfc7b62c669a55a4fa21c85ca9f85925e8cc0`, tree `bf230e4c24721e7ce00e950156e5277c08b95d44`. MCP inventory/write-hint expectation correction only: `45205d75ed53fafc18cb428438a12b5067ae42bc`, tree `de3947f7ac910b578ada3a2fd0d0b2f9d0603792`; affected Ruff, full MCP lane and sdist/wheel builds passed there. Subsequent changes are this evidence record only |
+| Gate results and skips | Ruff/Pyright passed (0 type errors). Baseline 3,288 passed / 2 skipped / 406 deselected; config-extra 348 passed / 15 skipped / 3,351 deselected; MCP-extra 57 passed / 3,639 deselected. Baseline skips are existing config-dependent queue CLI cases; config skips are opt-in physical container acceptance. No P6 acceptance case was skipped; no cloud, container/fleet or Slurm qualification is claimed |
+| Gate recovery and evidence paths | Initial `make validate-pr` exited 137 during config-extra after baseline/static success, without a reported test failure or diagnosed termination cause. Its one surviving fixture supervisor was stopped and exit verified. Resumed unchanged dependencies with `make -o lint -o typecheck -o test-no-extra validate-pr`; config passed, MCP exposed four stale expected tool-name/write-hint assertions. Corrected only those assertions and finished with `make -o lint -o typecheck -o test-no-extra -o test-config-extra validate-pr` (exit 0). Logs: `build/p6-validate-pr.log`, `build/p6-validate-pr-resume.log`, `build/p6-validate-pr-mcp.log`; no passed lane was repeated |
+| Executable access matrix | Embedded and authenticated authority local-file contracts; CLIENT Unix and actual mutually authenticated HTTPS complete-tree transfer without client source mapping; QUERY HTTPS declaration/chunk/preview parity; CLI describe/read/fetch and MCP Unix/HTTPS describe/read/fetch. Real transfer: three declared members, 350,020 payload bytes with nested layout and full byte comparison, including a member spanning chunks. Contract inventory: 205 declared members; native reuse association preserved with one published download |
+| Review/PR/merge | Manager-owned; pending |
+| R1 correction | MCP fetch now passes its capacity-admission deadline through the Python fetch, declaration pages and chunk native calls. Expiry stops further reads/writes/publication, cleans owned temporary directories, preserves completed destinations and reports remaining selected items failed. This uses `loom-targeted-validation` for bounded MCP/client fetch and native transport coverage; no protocol or authority contract changed |
+| R1 validation | On base `a2eafc47a6b0eacedb534dab33884681edffbf80`, corrected source/test tree `2b1eb9f550c290d8021a0a49b6ba9a3da12a748f`: isolated locked Python 3.12 with dev/config/MCP extras, `pytest tests/unit/loom/mcp/test_server.py tests/contracts/test_mcp_tools.py tests/contracts/test_artifact_access_contract.py tests/integration/queue/test_artifact_access.py tests/integration/mcp/test_stdio.py tests/unit/loom/test_coordinator.py -q`: 97 passed, no skips. Includes six deterministic MCP shared-budget cases (inventory/pages/chunks, mixed completed/expired items), verification-time expiry, native Unix/real mutual-TLS HTTPS fetch and existing cancellation/capacity checks. Full Pyright, affected-file Ruff and diff checks passed. Test-only signature/type narrowing corrected after the combined run; affected six cases rerun successfully. Prior full-gate evidence above remains scoped to its recorded tree; this correction has targeted evidence. Expand only for a failed check or newly affected consumer; required manager review/delivery gates remain unchanged |
+| Residual limitations | No retention pin or durable partial resume; legacy original bytes remain unverified without checksum. Atomic non-replacing directory publication requires Linux/filesystem `renameat2` support; unsupported hosts fail without overwriting. No inferred application closure or external reader |

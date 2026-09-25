@@ -562,6 +562,26 @@ class _Adapter:
             return await self._call("select_outputs", lambda deadline: self._native("select_outputs", {"selection": selection}, expected_coordinator_id, deadline), text="Observed output selection page.", payload={"selection": selection})
 
         @server.tool(annotations=read)
+        async def loom_describe_artifact(request: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Describe complete declared files for an exact locator; follow inventory pages."""
+            return await self._call("describe_artifact", lambda deadline: self._native("describe_artifact", request, expected_coordinator_id, deadline), text="Observed artifact declaration.", payload=request)
+
+        @server.tool(annotations=read)
+        async def loom_read_artifact(request: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Preview bounded text, JSON or bytes for an exact locator without executing codecs."""
+            return await self._call("read_artifact", lambda deadline: self._native("read_artifact", request, expected_coordinator_id, deadline), text="Read bounded artifact content.", payload=request)
+
+        @server.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False))
+        async def loom_fetch_artifacts(selections: list[dict[str, Any]], destination: str, scope: dict[str, Any] | None = None, expected_coordinator_id: str | None = None) -> CallToolResult:
+            """Write complete files on the MCP process host, not the assistant user's laptop. Preserve every outcome; never overwrite."""
+            def fetch(deadline: float) -> Any:
+                with self._connect() as client:
+                    result = client.fetch_artifacts(selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id, deadline=deadline)
+                    result["location_context"] = "mcp_process_filesystem"
+                    return result
+            return await self._call("fetch_artifacts", fetch, text="Processed artifact fetch on the MCP process filesystem.", payload={"destination": destination})
+
+        @server.tool(annotations=read)
         async def loom_trace_lineage(query: dict[str, Any], expected_coordinator_id: str | None = None) -> CallToolResult:
             """Trace retained native dependencies; preserve identities, coverage and continuation."""
             return await self._call("trace_lineage", lambda deadline: self._native("trace_lineage", {"query": query}, expected_coordinator_id, deadline), text="Observed lineage page.", payload={"query": query})

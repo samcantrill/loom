@@ -31,6 +31,14 @@ def register_subparser(
     actions = parser.add_subparsers(dest="artifact_action", metavar="ACTION")
     actions.required = True
 
+    from .queue import _add_client_connection_arguments
+    for action in ("describe", "read", "fetch"):
+        native = actions.add_parser(action, help=f"{action} exact native artifacts")
+        _add_client_connection_arguments(native)
+        _add_output_options(native)
+        native.add_argument("--request", required=True, help="JSON native request; fetch uses selections and destination")
+        native.set_defaults(handler=handle_access)
+
     list_parser = actions.add_parser("list", help="list recorded artifact metadata")
     list_parser.add_argument("run_uri", metavar="RUN_URI", help="run URI to inspect")
     _add_output_options(list_parser)
@@ -45,6 +53,24 @@ def register_subparser(
     )
     _add_output_options(show_parser)
     show_parser.set_defaults(handler=handle_show)
+
+
+def handle_access(namespace: argparse.Namespace) -> int:
+    """Use the same exact locator, bounded read, and local fetch contracts."""
+    import json
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+    from loom.queue._coordinator_control import control_error
+    operation = {"describe": "describe_artifact", "read": "read_artifact", "fetch": "fetch_artifacts"}[namespace.artifact_action]
+    try:
+        request = json.loads(namespace.request)
+        with _daemon_client(namespace) as client:
+            result = client.fetch_artifacts(**request) if operation == "fetch_artifacts" else client._native_call(operation, request, None)
+    except (ValueError, TypeError) as exc:
+        raise _queue_cli_error(control_error("invalid_request", operation, {})) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
 
 
 def handle_list(namespace: argparse.Namespace) -> int:

@@ -199,6 +199,8 @@ class NativeCoordinatorClient:
                     "handshake", {}, guard, deadline=bound, waiting=waiting
                 )
                 requested = envelope.get("request")
+                if operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"} and "artifact-read-v1" not in description.capabilities:
+                    raise control_error("unsupported", operation, payload)
                 if operation == "trace_lineage" and "lineage-query-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
                 if operation in {"select_outputs", "list_output_commits"} and "output-query-v1" not in description.capabilities:
