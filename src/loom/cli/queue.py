@@ -104,6 +104,24 @@ def register_subparser(
     _add_role_config_arguments(agent_serve)
     _add_output_options(agent_serve)
     agent_serve.set_defaults(handler=handle_agent_serve)
+    retirement = queue_subparsers.add_parser(
+        "agent-retire",
+        help="retire an already stopped, drained agent; never delete files",
+    )
+    _add_role_config_arguments(retirement)
+    retirement.add_argument("--operation-id", required=True)
+    retirement.add_argument("--expected-coordinator-id", required=True)
+    retirement.add_argument("--session-id", required=True)
+    retirement.set_defaults(handler=handle_agent_retire)
+    _add_output_options(retirement)
+    retirement = queue_subparsers.add_parser(
+        "daemon-retire", help="permanently fence an idle pure coordinator for removal"
+    )
+    retirement.add_argument("--endpoint", required=True, type=Path)
+    retirement.add_argument("--operation-id", required=True)
+    retirement.add_argument("--expected-coordinator-id", required=True)
+    retirement.set_defaults(handler=handle_daemon_retire)
+    _add_output_options(retirement)
     for command, help_text, handler in (
         ("daemon-submit", "submit one persisted run", handle_daemon_submit),
         ("daemon-status", "inspect daemon status", handle_daemon_status),
@@ -392,6 +410,38 @@ def handle_agent_recover_reboot(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result)
+
+
+def handle_agent_retire(namespace: argparse.Namespace) -> int:
+    from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue.retirement import retire_outbound_agent
+
+    try:
+        receipt = retire_outbound_agent(
+            load_outbound_agent_service_config(
+                namespace.config, env_file=namespace.env_file
+            ),
+            operation_id=namespace.operation_id,
+            expected_coordinator_id=namespace.expected_coordinator_id,
+            expected_session_id=namespace.session_id,
+        )
+        _emit_daemon_payload(namespace, receipt)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return int(ExitCode.SUCCESS)
+
+
+def handle_daemon_retire(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        receipt = LocalDaemonSocketClient(namespace.endpoint).retire(
+            namespace.operation_id, namespace.expected_coordinator_id
+        )
+        _emit_daemon_payload(namespace, receipt)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return int(ExitCode.SUCCESS)
 
 
 def handle_agent_serve(namespace: argparse.Namespace) -> int:

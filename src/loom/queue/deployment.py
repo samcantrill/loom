@@ -599,6 +599,9 @@ def run_outbound_agent_service(
 
     generation = str(uuid4())
     active = config
+    from .retirement import require_unretired
+    if active.client.agent_root is not None:
+        require_unretired(active.client.agent_root)
     pending: OutboundAgentServiceConfig | None = None
 
     def load_client() -> AgentTlsClientConfig:

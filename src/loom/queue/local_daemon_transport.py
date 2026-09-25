@@ -191,6 +191,29 @@ class LocalDaemonSocketServer:
                 if not isinstance(control, Mapping):
                     raise QueueServiceError("agent control must be a mapping")
                 result = dict(operator.control_agent(AgentControl.from_value(control)))
+            elif operation == "retire":
+                if set(payload) != {"operation_id", "expected_coordinator_id"}:
+                    raise QueueServiceError("retirement request fields are invalid")
+                if not all(isinstance(v, str) for v in payload.values()):
+                    raise QueueServiceError("retirement request identities are invalid")
+                result = dict(
+                    operator.retire(
+                        cast(str, payload["operation_id"]),
+                        cast(str, payload["expected_coordinator_id"]),
+                    )
+                )
+            elif operation == "agent_retirement_ready":
+                if set(payload) != {"agent_id", "session_id"}:
+                    raise QueueServiceError(
+                        "agent retirement request fields are invalid"
+                    )
+                if not all(isinstance(v, str) for v in payload.values()):
+                    raise QueueServiceError("agent retirement identities are invalid")
+                result = {
+                    "ready": operator.agent_retirement_ready(
+                        cast(str, payload["agent_id"]), cast(str, payload["session_id"])
+                    )
+                }
             elif operation == "scheduling_reload":
                 request = payload.get("request")
                 if not isinstance(request, Mapping):
@@ -311,6 +334,34 @@ class LocalDaemonSocketClient:
             Mapping[str, PlainData],
             self._call({"operation": "agent_control", "control": control.value()}),
         )
+
+    def retire(
+        self, operation_id: str, expected_coordinator_id: str
+    ) -> Mapping[str, PlainData]:
+        """Fence an idle coordinator permanently; does not stop or delete it."""
+        return cast(
+            Mapping[str, PlainData],
+            self._call(
+                {
+                    "operation": "retire",
+                    "operation_id": operation_id,
+                    "expected_coordinator_id": expected_coordinator_id,
+                }
+            ),
+        )
+
+    def agent_retirement_ready(self, agent_id: str, session_id: str) -> bool:
+        """Return only coordinator reference readiness, not local shutdown proof."""
+        result = self._call(
+            {
+                "operation": "agent_retirement_ready",
+                "agent_id": agent_id,
+                "session_id": session_id,
+            }
+        )
+        if not isinstance(result.get("ready"), bool):
+            raise QueueServiceError("agent retirement readiness response is invalid")
+        return cast(bool, result["ready"])
 
     def reload_scheduling(
         self, request: CoordinatorSchedulingReload

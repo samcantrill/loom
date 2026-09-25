@@ -2276,6 +2276,7 @@ class AgentSessionService:
 
     @_serialized_session_operation
     def register(self, request: AgentRegistration) -> AgentSession:
+        self._daemon._lifetime.require_accepting()
         rule, policy_revision = self._authorize("register")
         coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]

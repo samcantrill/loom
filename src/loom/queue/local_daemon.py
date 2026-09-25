@@ -1761,6 +1761,8 @@ class LocalDaemon:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
+            from .retirement import require_unretired
+            require_unretired(self.config.coordinator_root)
             # Additive delivery migration retains all historical inline bytes.
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -3658,12 +3660,21 @@ class LocalDaemon:
                 current = self._agent_policy
                 candidate = replacement.agent_policy
                 current_agents = {rule.agent_id for rule in current.agents}
+                removed = [rule for rule in current.agents if rule not in candidate.agents]
+                retired = set()
+                with self._connection() as conn:
+                    for rule in removed:
+                        states = [row[0] for row in conn.execute(
+                            "SELECT state FROM agent_sessions WHERE agent_id=?", (rule.agent_id,)
+                        )]
+                        if states and "RETIRED_CLEAN" in states and all(state in {"RETIRED_CLEAN", "REPLACED"} for state in states):
+                            retired.add(rule.agent_id)
                 # Policy revisions fence sessions and retained proofs. Enrollment
-                # may add a distinct worker without changing that generation or
-                # any existing worker's credentials, pools or capabilities.
+                # may add a distinct worker or revoke a cleanly retired one,
+                # without changing that generation or any live worker's rule.
                 additive = (
                     candidate.revision == current.revision
-                    and all(rule in candidate.agents for rule in current.agents)
+                    and all(rule in candidate.agents or rule.agent_id in retired for rule in current.agents)
                     and all(
                         rule in current.agents or rule.agent_id not in current_agents
                         for rule in candidate.agents
@@ -4175,6 +4186,32 @@ class LocalDaemonOperatorView:
     def status(self) -> DaemonStatus:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.status()
+
+    def retire(
+        self, operation_id: str, expected_coordinator_id: str
+    ) -> Mapping[str, PlainData]:
+        """Permanently fence an idle pure coordinator for operator removal."""
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        self._daemon._authorizer().require_operator(
+            self._principal, "scheduling_reload"
+        )
+        return self._daemon._lifetime.retire_explicit(
+            operation_id, expected_coordinator_id
+        )
+
+    def agent_retirement_ready(self, agent_id: str, session_id: str) -> bool:
+        """Observe coordinator-owned references; local owners still need proof."""
+        from .agent_sessions import _coordinator_references_empty
+
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        self._daemon._authorizer().require_operator(
+            self._principal, "drain", agent_id=agent_id
+        )
+        with self._daemon._cycle_lock:
+            if self._daemon.agent(agent_id).session_id != session_id:
+                raise QueueConflictError("agent retirement session changed")
+            with self._daemon._connection() as conn:
+                return _coordinator_references_empty(conn, session_id)
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)

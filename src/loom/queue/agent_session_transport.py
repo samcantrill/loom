@@ -2617,6 +2617,9 @@ class LocalDaemonAgentHttpClient:
             PREPARATION_INPUT_CAPABILITY,
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
+        from .retirement import require_unretired
+        if self._config.agent_root is not None:
+            require_unretired(self._config.agent_root)
 
         from ._shared_assignment import CAPABILITY
         from .shared_execution import SHARED_EXECUTION_CAPABILITY, qualifications
