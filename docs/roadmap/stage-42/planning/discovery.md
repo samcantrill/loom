@@ -395,6 +395,14 @@ membership at an earlier instant.
 
 Proposed defaults: 50 results per page, at most 200, at most 64 predicate nodes and
 depth 8, 100 values per `in`, and at most 500 candidates examined per request.
+The maintainer clarified on 2026-09-25 that this candidate budget limits detailed
+run/authority acquisition and predicate evaluation. Collection metadata enumeration
+needed to establish immutable ordering may scan more than 500 entries; it must
+not read artifact payloads or refresh every run's authority as part of that scan.
+The existing request deadline still applies. This is not a bound on total metadata
+filesystem reads or total collection-scan cost, and does not require a new
+incrementally maintained index. Tests distinguish metadata enumeration from
+detailed candidate acquisition and verify the latter remains bounded.
 Existing native deadline and 1 MiB response limits still apply. Cursor tracks the
 last examined candidate, so a page can contain no matches and still have more
 candidates. Bound projected text and explicitly mark excerpts/truncation; a

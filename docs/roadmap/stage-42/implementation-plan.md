@@ -139,7 +139,12 @@ intent-only documentation review does not cover this expanded design.
   owner records that exception; P1 regression coverage and actual-head phase
   review assess its implementation. P2's run-scoped mutation identity was likewise
   explicitly selected by the maintainer; the contract and walkthrough now name
-  the run scope, with implementation verification in P2. Other contracts are unchanged.
+  the run scope, with implementation verification in P2. On 2026-09-25 the
+  maintainer clarified that P3's 500-candidate budget caps detailed run/authority
+  reads and evaluation, while allowing collection metadata enumeration to establish
+  immutable ordering. The discovery owner records the scan-cost limitation;
+  P3 validation and actual-head independent review assess that boundary. Other
+  contracts are unchanged.
 - Landing-base drift check through `e0892b350fde1e1def92531af591510890aa5072`:
   PR #346 adds remote prelaunch construction-failure reporting; PR #347 adds
   supervisor-backed rejection of unaccepted assignments during recovery. Their
