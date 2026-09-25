@@ -314,7 +314,7 @@ Logical durable fields (table layout is private):
 | Submission context | Existing coordinator operation ID + principal, accepted time, immutable submitted context, binding receipt/run URI |
 | Run annotations | `run_uri`, annotation revision, description/tags/metadata, initializer operation/coordinator reference |
 | Note | `run_uri`, stable note ID, text, native author/time, optional unknown legacy attribution |
-| Mutation receipt | Principal + caller mutation ID, request digest, target run, committed result/revision; same owner transaction as effect |
+| Mutation receipt | Target run + principal + caller mutation ID, request digest, committed result/revision; same owner transaction as effect |
 
 Empty/omitted `context` preserves old request serialization byte-for-byte for
 native digest purposes: do not inject a new default key into historical replay.
@@ -337,6 +337,16 @@ this plan does not redefine historical configuration hashing. Later annotations
 do not rewrite any captured fingerprint.
 
 ### Safe Patches And Notes
+
+Maintainer clarification (2026-09-25): mutation IDs are **run-scoped** in both
+authority backends. Receipt identity is `(run_uri, principal, mutation_id)`;
+the digest includes the operation kind and target run as well as the submitted
+change. The same principal/ID can be used independently on another run. Within
+one run and principal, a different request (including patch versus note) with
+that ID conflicts. The embedded per-run database provides the run scope; the
+shared repository includes it explicitly. No cross-run transaction owner or
+global mutation-ID registry is introduced. Tests demonstrate identical same-run
+replay, same-run changed-content conflict, and independent cross-run reuse.
 
 `patch_run_annotations` accepts a caller `mutation_id`, `run_uri`, required
 `expected_revision`, key-wise tag/metadata sets and removals, and an optional
@@ -364,14 +374,14 @@ revision, and stores the mutation result. Lifecycle revision is a separate value
 def commit_annotation_patch(store, principal, mutation_id, request_digest,
                             run_uri, expected_revision, patch):
     with store.transaction():
-        replay = store.find_mutation(principal, mutation_id)
+        replay = store.find_mutation(run_uri, principal, mutation_id)
         if replay is not None:
             return require_same_digest(replay, request_digest)
         current = store.read_annotations(run_uri)
         require_revision(current.revision, expected_revision)
         updated = apply_patch(current, patch)  # preserve unrelated keys
         store.write_annotations(updated)
-        store.record_mutation(principal, mutation_id, request_digest, updated)
+        store.record_mutation(run_uri, principal, mutation_id, request_digest, updated)
         return updated
 ```
 

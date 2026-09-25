@@ -118,14 +118,14 @@ Inside the owning database, the important ordering is:
 ```python
 def apply_annotation_request(store, request, principal):
     with store.transaction():
-        replay = store.find_mutation(principal, request.mutation_id)
+        replay = store.find_mutation(request.run_uri, principal, request.mutation_id)
         if replay is not None:
             return verify_same_request_and_return(replay, request)
         current = store.read_annotations(request.run_uri)
         require_revision(current.revision, request.expected_revision)
         updated = patch_requested_fields_only(current, request)
         store.write_annotations(updated)
-        store.record_mutation(principal, request, updated)
+        store.record_mutation(request.run_uri, principal, request, updated)
         return updated
 ```
 
