@@ -62,7 +62,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 
 | Phase | Slug / plan | Status | Branch | PR | Ownership and usable outcome | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | [submission-context](phases/submission-context.md) | in_progress | `agent/stage-42-p1-submission-context` | none | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
+| P1 | [submission-context](phases/submission-context.md) | pr_open | `agent/stage-42-p1-submission-context` | #349 | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
 | P2 | [run-annotations](phases/run-annotations.md) | pending | `agent/stage-42-p2-run-annotations` | none | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
 | P3 | [run-discovery](phases/run-discovery.md) | pending | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Evaluator truth tables, scope/coverage, pagination and adapter parity |
 | P4 | [output-selection](phases/output-selection.md) | pending | `agent/stage-42-p4-output-selection` | none | Exact current/historical output selection with original producer and reuse associations | Authority commit/reuse/history contracts and metadata-only guarantees |
@@ -175,7 +175,7 @@ intent-only documentation review does not cover this expanded design.
   resolved the limit conflict in favor of applying limits to all initial tags.
   The run-context owner records the accepted no-context compatibility exception;
   P1 owns regression coverage and repair of incomplete validation evidence.
-- Stage cleanup and terminal disposition: persistent worktree created; no phase PR yet.
+- Stage cleanup and terminal disposition: persistent worktree retained; P1 PR #349 open.
 - Improvement log entries: none.
 
 ## Completion

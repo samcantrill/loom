@@ -2,7 +2,8 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P1; implementation validated, awaiting manager delivery and independent review.
+- Status: pr_open; stage 42 / P1; implementation validated, awaiting independent review.
+- PR: [#349](https://github.com/samcantrill/loom/pull/349), target `develop`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p1-submission-context`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 1: Submission Context
@@ -215,4 +216,4 @@ persisted legacy evidence on partial inspection; no truncation or grandfathering
 | Documentation | `docs/features/{coordinator-client,agent-preparation,cli,mcp}.md` |
 | Tests | New context contract/integration files and existing native, authority, Python, MCP/QUERY adapters; narrow authorized GPU-probe typing repair |
 | Completion | Implementation and gate coverage complete with explicit focused repair/reuse above; ready for manager delivery |
-| Review/PR/merge/cleanup | Not started; manager-owned; no phase merge or overall-stage completion claim |
+| Review/PR/merge/cleanup | PR #349 opened; required independent actual-head review pending; no merge or cleanup yet |
