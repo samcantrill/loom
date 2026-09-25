@@ -123,6 +123,12 @@ class Spy:
             ["inspect_run"],
             [("file:///runs/one",)],
         ),
+        (
+            "loom_run_context",
+            {"run_uri": "file:///runs/one"},
+            ["get_run_context"],
+            [("file:///runs/one",)],
+        ),
         ("loom_list_agents", {}, ["agents"], [(20, None)]),
         ("loom_get_agent", {"agent_id": "worker-one"}, ["agent"], [("worker-one",)]),
         (
@@ -177,6 +183,7 @@ def test_native_mapping_and_default_arguments(tool, arguments, native, args):
         if name == "wait_admission":
             return {"admission_id": values[0], "expected_revision": values[1]}
         key = {
+            "get_run_context": "run_uri",
             "operation": "operation_id",
             "wait_operation": "operation_id",
             "cancel_preparation": "operation_id",

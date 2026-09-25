@@ -14,6 +14,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
+from loom.runs.context import RunAnnotations, SubmissionContext
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
@@ -103,6 +104,8 @@ _EXPOSED = (
     "create_run",
     "health",
     "open_run",
+    "initialize_run_annotations",
+    "read_run_annotations",
     "transition_run",
     "transition_stage",
     "allocate_stage_attempt",
@@ -262,6 +265,15 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return AuthoritativeRunSnapshot.from_dict(self._call("open_run", run_uri))
+
+    def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
+                                   operation_id: str | None, coordinator_id: str | None) -> RunAnnotations:
+        return RunAnnotations.from_dict(cast(Mapping[str, object], self._call("initialize_run_annotations", run_uri,
+            context.to_dict(), operation_id, coordinator_id)))
+
+    def read_run_annotations(self, run_uri: str) -> RunAnnotations | None:
+        value = self._call("read_run_annotations", run_uri)
+        return None if value is None else RunAnnotations.from_dict(cast(Mapping[str, object], value))
 
     def transition_run(
         self,
@@ -802,6 +814,8 @@ class _RunState:
 class _ServiceAuthorityCore:
     def __init__(self) -> None:
         self._runs: dict[str, _RunState] = {}
+        self._annotations: dict[str, RunAnnotations] = {}
+        self._annotation_initializations: dict[str, RunAnnotations] = {}
         self._revision = 0
         self._tick = 0
         self._lease_expiry_ticks: dict[str, int] = {}
@@ -921,6 +935,27 @@ class _ServiceAuthorityCore:
 
     def open_run(self, run_uri: str) -> dict[str, PlainData]:
         return self.snapshot(run_uri)
+
+    def initialize_run_annotations(self, run_uri: str, context: Mapping[str, object],
+                                   operation_id: str | None, coordinator_id: str | None) -> dict[str, PlainData]:
+        value = SubmissionContext.from_dict(context)
+        with self._lock:
+            self._require_run(run_uri)
+            original = self._annotation_initializations.get(run_uri)
+            if original is not None:
+                if (original.initializer_operation_id, original.initializer_coordinator_id) == (operation_id, coordinator_id):
+                    return original.to_dict()
+                return self._annotations[run_uri].to_dict()
+            result = RunAnnotations(run_uri, 1, value.description, value.tags, value.metadata,
+                                    operation_id, coordinator_id)
+            self._annotations[run_uri] = self._annotation_initializations[run_uri] = result
+            return result.to_dict()
+
+    def read_run_annotations(self, run_uri: str) -> dict[str, PlainData] | None:
+        with self._lock:
+            self._require_run(run_uri)
+            result = self._annotations.get(run_uri)
+            return None if result is None else result.to_dict()
 
     def transition_run(
         self,

@@ -26,6 +26,7 @@ from loom.pipeline.reliability import (
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.serialization import PlainData
+from loom.runs.context import RunAnnotations, SubmissionContext
 
 from .authority import (
     ActionProducerBinding,
@@ -442,6 +443,18 @@ class AuthenticatedCoordinatorAuthority:
             if published
             else None
         )
+
+    def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
+                                   operation_id: str | None, coordinator_id: str | None) -> RunAnnotations:
+        result = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/initialize", run_uri,
+                            body={"context": context.to_dict(), "operation_id": operation_id,
+                                  "coordinator_id": coordinator_id})
+        return RunAnnotations.from_dict(_mapping(_body_required(result, "annotations"), "annotations"))
+
+    def read_run_annotations(self, run_uri: str) -> RunAnnotations | None:
+        result = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/read", run_uri)
+        value = _body_required(result, "annotations")
+        return None if value is None else RunAnnotations.from_dict(_mapping(value, "annotations"))
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         result = self._call(COORDINATOR_OPEN_RUN_PATH, run_uri)

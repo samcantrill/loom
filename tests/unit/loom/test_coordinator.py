@@ -104,6 +104,22 @@ def test_factory_is_lazy_and_connection_failure_preserves_submission_identity(
     assert not endpoint.parent.exists()
 
 
+def test_old_coordinator_rejects_context_before_sending_submission(tmp_path: Path) -> None:
+    from loom.queue.preparation import PreparationSource, PrepareRunRequest
+    from loom.runs import SubmissionContext
+
+    endpoint = tmp_path / "old.sock"
+    request = PrepareRunRequest("operation", "run", PreparationSource("shared", "project", ".", ("pipeline.yaml",)),
+                                "pipeline.yaml", "profile", context=SubmissionContext("reason"))
+    with _peer(endpoint, lambda *_: pytest.fail("submission reached an old server")) as requests:
+        with CoordinatorClient.from_unix_socket(endpoint) as client:
+            with pytest.raises(CoordinatorClientError) as error:
+                client.prepare_run(request)
+            assert error.value.code == "unsupported"
+            assert error.value.mutation_outcome == "not_applied"
+        assert [item["operation"] for item in requests] == ["handshake"]
+
+
 @pytest.mark.parametrize("duration", [-1, 26, float("nan"), float("inf"), True, None])
 def test_invalid_observation_is_rejected_before_connection(
     tmp_path: Path, duration: object

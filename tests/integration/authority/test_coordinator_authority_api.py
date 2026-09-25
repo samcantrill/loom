@@ -497,6 +497,14 @@ def test_prepared_publication_replays_lost_reply_and_preserves_principal(
     authority.publish_prepared_run(RUN_URI, "checked-publication")
     prepared = authority.open_run(RUN_URI)
     assert prepared.status is RunStatus.PLANNED
+    from loom.runs import SubmissionContext
+
+    context = SubmissionContext("launch reason", {"project": "invoice"}, {"revision": 3})
+    annotations = authority.initialize_run_annotations(RUN_URI, context, "submission", "coordinator")
+    assert authority.read_run_annotations(RUN_URI) == annotations
+    assert authority.initialize_run_annotations(RUN_URI, context, "submission", "coordinator") == annotations
+    assert authority.initialize_run_annotations(RUN_URI, SubmissionContext("later reason"), "later", "coordinator") == annotations
+    assert authority.open_run(RUN_URI).revision == prepared.revision
     authority.publish_prepared_run(RUN_URI, "checked-publication")
     assert authority.open_run(RUN_URI).revision == prepared.revision
     with pytest.raises(AuthenticatedCoordinatorAuthorityError):

@@ -34,6 +34,9 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
+from loom.runs.context import RunAnnotations, SubmissionContext
+
+from ._run_annotations import ANNOTATION_COLUMNS, create_annotations_schema, initialize_annotations, read_annotations
 
 from .authority import (
     ActionProducerBinding,
@@ -136,6 +139,7 @@ _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
 )
 
 _REQUIRED_SCHEMA_COLUMNS = {
+    "run_annotations": ANNOTATION_COLUMNS,
     "action_producers": frozenset({"claim_id", "stage_name", "attempt_id", "active"}),
     "action_result_bindings": frozenset({"stage_name", "binding_json", "revision_sequence"}),
     "metadata": frozenset({"key", "value"}),
@@ -480,6 +484,21 @@ class SQLitePerRunAuthorityStore:
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return self.snapshot(run_uri)
+
+    def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
+                                   operation_id: str | None, coordinator_id: str | None) -> RunAnnotations:
+        """Initialize once, independently of lifecycle revisions or worker leases."""
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            return initialize_annotations(conn, run_uri, context, operation_id, coordinator_id)
+
+    def read_run_annotations(self, run_uri: str) -> RunAnnotations | None:
+        """Read annotations; absent legacy context remains explicitly unknown."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            return read_annotations(conn, run_uri)
 
     def transition_run(
         self,
@@ -3460,6 +3479,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
     for statement in schema_statements:
         conn.execute(statement)
+    create_annotations_schema(conn)
     _ensure_audit_event_json_column(conn)
     _migrate_schema(conn)
     conn.execute(
@@ -3495,11 +3515,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5, 6}:
+    if version not in {1, 2, 3, 4, 5, 6, 7}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
-    historical_columns.pop("action_result_bindings")
-    historical_columns.pop("action_producers")
+    historical_columns.pop("run_annotations")
+    if version < 7:
+        historical_columns.pop("action_result_bindings")
+        historical_columns.pop("action_producers")
     if version < 3:
         historical_columns.pop("prepared_attempt_receipts")
     if version < 4:
@@ -3630,6 +3652,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS action_producers (
         claim_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE,
         active INTEGER NOT NULL CHECK(active IN (0, 1)))""")
+    create_annotations_schema(conn)
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -3733,6 +3756,8 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
         except sqlite3.DatabaseError:
             tables = set()
         required_tables = set(_REQUIRED_SCHEMA_COLUMNS)
+        if version < 8:
+            required_tables.discard("run_annotations")
         if version < 3:
             required_tables.discard("prepared_attempt_receipts")
         if version < 4:

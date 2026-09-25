@@ -37,7 +37,7 @@ def upgrade_coordinator_root(config: LocalDaemonConfig) -> tuple[str, int]:
         try:
             with sqlite3.connect(database) as conn:
                 version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-                if version not in {12, 15, 16, _COORDINATOR_SCHEMA_VERSION}:
+                if version not in {12, 15, 16, 17, _COORDINATOR_SCHEMA_VERSION}:
                     raise QueueStorageError("coordinator root schema cannot be upgraded")
                 coordinator_id = _open_root(root, role="coordinator", schema_version=version)
                 _validate_deployment_binding(config, coordinator_id=coordinator_id)
@@ -74,14 +74,17 @@ def _apply_upgrade(conn: sqlite3.Connection) -> None:
         # and cancellation receipts before replacing the old uniqueness layout.
         conn.execute("ALTER TABLE preparation_cancellations RENAME TO old_cancellations")
         conn.execute("ALTER TABLE preparation_operations RENAME TO old_operations")
-        _initialize_preparation_schema(conn)
+        _initialize_preparation_schema(conn, context=False)
         conn.execute("INSERT INTO preparation_operations SELECT * FROM old_operations")
         conn.execute("INSERT INTO preparation_cancellations SELECT * FROM old_cancellations")
         conn.execute("DROP TABLE old_cancellations")
         conn.execute("DROP TABLE old_operations")
     elif version == 12:
-        _initialize_preparation_schema(conn)
-    initialize_action_results(conn)
+        _initialize_preparation_schema(conn, context=False)
+    if version < 18:
+        conn.execute("ALTER TABLE preparation_operations ADD COLUMN accepted_at TEXT")
+    if version < 17:
+        initialize_action_results(conn)
     conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
 
 

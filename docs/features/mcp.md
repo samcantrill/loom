@@ -76,13 +76,14 @@ Tool annotations describe read versus mutation behavior and grant no authority.
 | `loom_run` | Native `request` | Durable run acceptance plus native cleanup evidence |
 | `loom_cancel_run_operation` | `operation_id` | Native cancellation control operation |
 | `loom_status` | None | Connection description plus current native status |
-| `loom_prepare_run` | `operation_id`, `run_name`, `source`, `config_path`, `preparation_profile`, ordered `overlays`/`overrides`, sparse `run_options` | Asynchronous native operation |
+| `loom_prepare_run` | `operation_id`, `run_name`, `source`, `config_path`, `preparation_profile`, ordered `overlays`/`overrides`, sparse `run_options`, optional `context` | Asynchronous native operation |
 | `loom_get_operation` | `operation_id` | Native operation and preparation evidence |
 | `loom_wait_for_operation` | `operation_id`, `timeout_seconds=25` | TERMINAL or TIMEOUT observation |
 | `loom_cancel_preparation` | `operation_id` | Preparation cancellation request/result |
 | `loom_list_jobs` | `limit=20`, `cursor=null` | Native admission page, including preparation children |
 | `loom_get_job` | Exactly one of `admission_id` or `queue_item_id` | Native admission detail; queue mode first resolves the ID |
 | `loom_inspect_run` | `run_uri` | Native diagnostic success/failure union for an admitted run |
+| `loom_run_context` | `run_uri` | Original submission, current annotations, bounded submission links and native inspection; no execution or payload download |
 | `loom_list_agents` | `limit=20`, `cursor=null` | Native agent page |
 | `loom_get_agent` | `agent_id` | Native availability/freshness projection |
 | `loom_submit_run` | `run_uri`, `queue_item_id`, optional explicit `retry_failed_revision` | Native admission |

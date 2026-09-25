@@ -338,6 +338,7 @@ class _Adapter:
             overlays: list[str] | None = None,
             overrides: list[str] | None = None,
             run_options: dict[str, object] | None = None,
+            context: dict[str, object] | None = None,
             expected_coordinator_id: str | None = None,
         ) -> CallToolResult:
             """Durably request native preparation from an authored source and profile."""
@@ -350,6 +351,7 @@ class _Adapter:
                 "overlays": [] if overlays is None else overlays,
                 "overrides": [] if overrides is None else overrides,
                 "run_options": {} if run_options is None else run_options,
+                **({"context": context} if context is not None else {}),
             }
             return await self._call(
                 "prepare_run",
@@ -552,6 +554,18 @@ class _Adapter:
                     "admission_id": admission_id,
                     "expected_coordinator_id": expected_coordinator_id,
                 },
+            )
+
+        @server.tool(annotations=read)
+        async def loom_run_context(
+            run_uri: str, expected_coordinator_id: str | None = None
+        ) -> CallToolResult:
+            """Read original submission intent, current annotations and native evidence."""
+            return await self._call(
+                "get_run_context",
+                lambda deadline: self._native("get_run_context", {"run_uri": run_uri}, expected_coordinator_id, deadline),
+                text=f"Observed run context for {run_uri}.",
+                payload={"run_uri": run_uri, "expected_coordinator_id": expected_coordinator_id},
             )
 
         @server.tool(annotations=read)

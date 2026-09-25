@@ -36,6 +36,7 @@ TOOLS = {
     "loom_list_jobs",
     "loom_get_job",
     "loom_inspect_run",
+    "loom_run_context",
     "loom_list_agents",
     "loom_get_agent",
     "loom_submit_run",
@@ -234,7 +235,9 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                 status = await _call(client, "loom_status")
                 assert status["status"]["coordinator_id"]
                 accepted = await _call(
-                    client, "loom_prepare_run", **_request(mode).to_dict()
+                    client, "loom_prepare_run", **_request(mode).to_dict(),
+                    context={"description": "MCP native reason", "tags": {"application": "invoices"},
+                             "metadata": {"revision": 3, "status": "caller-only"}},
                 )
                 assert accepted["operation_id"] == "prepare-1"
             # SDK EOF leaves coordinator-owned preparation intact.
@@ -322,6 +325,10 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                     await _call(client, "loom_inspect_run", run_uri=admitted["run_uri"])
                     == inspection
                 )
+                context = await _call(client, "loom_run_context", run_uri=admitted["run_uri"])
+                assert context["annotations"]["description"] == "MCP native reason"
+                assert context["annotations"]["metadata"]["revision"] == 3
+                assert context["initializer_submission"]["context"]["tags"] == {"application": "invoices"}
                 store = LocalRunStore(service.daemon.run_store_root)
                 worker = StageWorkerResult.from_dict(
                     store.read_stage_worker_result(

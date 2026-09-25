@@ -32,6 +32,8 @@ router = APIRouter(
 )
 
 _ROUTES = {
+    "/annotations/initialize": AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
+    "/annotations/read": AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
     "/events/capability": AuthorityMutationOperation.COORDINATOR_OBSERVERS_CAPABILITY,
     "/events/append": AuthorityMutationOperation.APPEND_AUDIT_EVENT,
     "/events/list": AuthorityMutationOperation.LIST_AUDIT_EVENTS,

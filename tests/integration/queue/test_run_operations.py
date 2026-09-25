@@ -163,7 +163,9 @@ def test_lost_run_acceptance_detach_reconnect_and_two_stage_settlement(
             original(handler, status, value)
 
         monkeypatch.setattr(https._Handler, "_reply", reply)
-    request = RunRequest(_request(), "target-admission")
+    from loom.runs import SubmissionContext
+
+    request = RunRequest(replace(_request(), context=SubmissionContext("reconnect reason", {"project": "example"})), "target-admission")
     try:
         with factory() as client:
             owner = client.describe_connection().coordinator_id
@@ -203,6 +205,9 @@ def test_lost_run_acceptance_detach_reconnect_and_two_stage_settlement(
                 and completed.admission.state.value == "SUCCEEDED"
             ), completed
             assert completed.inspection is not None
+            context: Any = client.get_run_context(completed.admission.run_uri)
+            assert context.annotations.description == "reconnect reason"
+            assert context.initializer_submission["context"]["tags"] == {"project": "example"}
             assert client.start_run(request) == completed.operation
             cancelled = client.cancel_run_operation("prepare-1")
             assert (

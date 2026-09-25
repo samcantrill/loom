@@ -16,6 +16,9 @@ def test_runs_public_exports_are_stable() -> None:
     import loom.runs as runs
 
     assert runs.__all__ == [
+        "RunAnnotations",
+        "RunContext",
+        "SubmissionContext",
         "RunCatalog",
         "LOCAL_RUN_BUNDLE_ADAPTER",
         "RUN_BUNDLE_MANIFEST_MEMBER",

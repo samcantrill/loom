@@ -2129,6 +2129,14 @@ class RunInspectionHttpClient:
     def inspect_run(self, run_uri: str) -> Mapping[str, PlainData]:
         """Return the exact server result envelope or fail closed on transport."""
 
+        return self._read_run("inspect_run", "run-inspection-v1", run_uri)
+
+    def get_run_context(self, run_uri: str) -> Mapping[str, PlainData]:
+        """Read context using the configured QUERY principal without write access."""
+        return self._read_run("get_run_context", "run-context-v1", run_uri)
+
+    def _read_run(self, operation: str, capability: str, run_uri: str) -> Mapping[str, PlainData]:
+
         parsed = urlsplit(self._config.url)
         assert parsed.hostname is not None
         body = json.dumps(
@@ -2185,12 +2193,12 @@ class RunInspectionHttpClient:
                 or handshake_value.get("ok") is not True
                 or not isinstance(capabilities, Sequence)
                 or isinstance(capabilities, (str, bytes))
-                or "run-inspection-v1" not in capabilities
+                or capability not in capabilities
             ):
                 return _run_inspection_failure("unavailable")
             connection.request(
                 "POST",
-                "/v1/query/inspect_run",
+                f"/v1/query/{operation}",
                 body=body,
                 headers={"Content-Type": "application/json"},
             )
@@ -6066,6 +6074,8 @@ def _dispatch_application(
         capabilities: list[PlainData] = ["authenticated-application-v1"]
         if role == LocalDaemonRole.QUERY.value and inspect_run is not None:
             capabilities.append("run-inspection-v1")
+        if role == LocalDaemonRole.QUERY.value:
+            capabilities.append("run-context-v1")
         result: dict[str, PlainData] = {
             "protocol_version": "1",
             "capabilities": capabilities,
@@ -6078,7 +6088,7 @@ def _dispatch_application(
             path="authenticated application handshake",
         )
     if role == LocalDaemonRole.QUERY.value:
-        if operation != "inspect_run" or inspect_run is None:
+        if operation not in {"inspect_run", "get_run_context"} or (operation == "inspect_run" and inspect_run is None):
             raise _RunInspectionHttpError("invalid_request", 400)
         try:
             _exact(value, {"run_uri"})
@@ -6100,12 +6110,17 @@ def _dispatch_application(
         except QueueError as exc:
             raise _RunInspectionHttpError("unauthorized", 403) from exc
         try:
+            if operation == "get_run_context":
+                from ._run_context import get_run_context
+
+                return get_run_context(daemon, run_uri, inspect_run).to_dict()
             daemon.admission_for_run_uri(run_uri)
         except (AdmissionNotFoundError, FileNotFoundError, LookupError):
             return {"schema_version": 1, "code": "not_found"}
         except Exception:
             return {"schema_version": 1, "code": "unavailable"}
         try:
+            assert inspect_run is not None
             return inspect_run(run_uri)
         except Exception:
             return {"schema_version": 1, "code": "unavailable"}

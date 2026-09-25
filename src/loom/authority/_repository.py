@@ -90,15 +90,18 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
+from loom.runs.context import RunAnnotations, SubmissionContext
+from loom.pipeline.stores._run_annotations import ANNOTATION_COLUMNS, create_annotations_schema, initialize_annotations, read_annotations
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 8
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 9
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _ADMISSION_IDEMPOTENCY_METADATA_KEY = "_loom_admission_idempotency_key"
 _METADATA_TABLE = "repository_metadata"
 _REQUIRED_SCHEMA_COLUMNS = {
+    "run_annotations": ANNOTATION_COLUMNS,
     "action_producers": frozenset({"run_uri", "claim_id", "stage_name", "attempt_id", "active"}),
     "action_result_bindings": frozenset({"run_uri", "stage_name", "binding_json", "revision_sequence"}),
     _METADATA_TABLE: frozenset({"key", "value"}),
@@ -500,6 +503,7 @@ class AuthorityRepository:
                         conn, current_version=self.schema_version
                     )
                     _migrate_v7_action_bindings(conn, current_version=self.schema_version)
+                    _migrate_v8_run_annotations(conn, current_version=self.schema_version)
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -586,6 +590,19 @@ class AuthorityRepository:
                 schema_version=self.schema_version,
                 now=self._now(),
             )
+
+    def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
+                                   operation_id: str | None, coordinator_id: str | None) -> RunAnnotations:
+        """Initialize annotations in the authority transaction without a lease."""
+        with self.transaction() as conn:
+            _current_run_revision(conn, run_uri)
+            return initialize_annotations(conn, run_uri, context, operation_id, coordinator_id)
+
+    def read_run_annotations(self, run_uri: str) -> RunAnnotations | None:
+        """Return current annotations, retaining unknown legacy origin as absence."""
+        with self._read_connection() as conn:
+            _current_run_revision(conn, run_uri)
+            return read_annotations(conn, run_uri)
 
     def transition_run(
         self,
@@ -4319,7 +4336,7 @@ def _migrate_v3_output_commits(
     if version != 3:
         return
 
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers"} - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers", "run_annotations"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4328,7 +4345,7 @@ def _migrate_v3_output_commits(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table_name in {"action_result_bindings", "action_producers"}:
+        if table_name in {"action_result_bindings", "action_producers", "run_annotations"}:
             continue
         v3_columns = (
             expected_columns - {"supersedes_commit_id"}
@@ -4425,7 +4442,7 @@ def _migrate_v5_coordinator_principals(
         return
     if version != 5:
         return
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers"} - tables
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers", "run_annotations"} - tables
     if missing_tables:
         raise AuthorityRepositoryCompatibilityError(
             _corrupt_failure(
@@ -4434,7 +4451,7 @@ def _migrate_v5_coordinator_principals(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table_name in {"action_result_bindings", "action_producers"}:
+        if table_name in {"action_result_bindings", "action_producers", "run_annotations"}:
             continue
         v5_columns = (
             expected_columns - {"service_principal"}
@@ -4473,7 +4490,7 @@ def _migrate_v5_coordinator_principals(
 
 
 def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version != 8:
+    if current_version not in {8, 9}:
         return
     tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
     if _METADATA_TABLE not in tables:
@@ -4482,7 +4499,7 @@ def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: in
     if row is None or row["value"] != "7":
         return
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table in {"action_result_bindings", "action_producers"}:
+        if table in {"action_result_bindings", "action_producers", "run_annotations"}:
             continue
         actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
         if not columns.issubset(actual):
@@ -4491,7 +4508,27 @@ def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: in
         run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
         binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
         PRIMARY KEY (run_uri, stage_name))""")
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'", (str(current_version),))
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = '8' WHERE key = 'schema_version'")
+
+
+def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: int) -> None:
+    if current_version != 9:
+        return
+    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
+                    (_METADATA_TABLE,)).fetchone() is None:
+        return
+    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'").fetchone()
+    if row is None or row["value"] != "8":
+        return
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "run_annotations":
+            continue
+        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns.issubset(actual):
+            raise AuthorityRepositoryCompatibilityError(_corrupt_failure(
+                "authority repository v8 schema is incomplete", current_version=current_version))
+    create_annotations_schema(conn)
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = '9' WHERE key = 'schema_version'")
 
 
 def _initialize_schema(
@@ -4899,6 +4936,7 @@ def _initialize_schema(
     )
     for statement in schema_statements:
         conn.execute(statement)
+    create_annotations_schema(conn)
     _ensure_audit_event_json_column(conn)
     _insert_metadata_if_missing(conn, "schema_version", str(schema_version))
     _insert_metadata_if_missing(conn, "service_generation", service_generation)

@@ -126,6 +126,8 @@ class AuthorityMutationOperation(StrEnum):
     COORDINATOR_OBSERVERS_CAPABILITY = "coordinator_observers_capability"
     COORDINATOR_PUBLISH_RUN = "coordinator_publish_run"
     COORDINATOR_OPEN_RUN = "coordinator_open_run"
+    INITIALIZE_RUN_ANNOTATIONS = "initialize_run_annotations"
+    READ_RUN_ANNOTATIONS = "read_run_annotations"
     COORDINATOR_TRANSITION_RUN = "coordinator_transition_run"
     COORDINATOR_TRANSITION_STAGE = "coordinator_transition_stage"
     BIND_COORDINATOR_ADMISSION = "bind_coordinator_admission"
@@ -174,6 +176,8 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.APPEND_AUDIT_EVENT,
         AuthorityMutationOperation.COORDINATOR_PUBLISH_RUN,
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+        AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
+        AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
         AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
         AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
@@ -423,6 +427,8 @@ class AuthorityMutationService:
                         allow_prepared=operation
                         in {
                             AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+                            AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS,
+                            AuthorityMutationOperation.READ_RUN_ANNOTATIONS,
                             AuthorityMutationOperation.APPEND_AUDIT_EVENT,
                             AuthorityMutationOperation.LIST_AUDIT_EVENTS,
                             AuthorityMutationOperation.APPEND_EVENT_SINK_FAILURE,
@@ -599,6 +605,22 @@ class AuthorityMutationService:
                 )
             case AuthorityMutationOperation.COORDINATOR_OPEN_RUN:
                 return self._coordinator_open_run(request)
+            case AuthorityMutationOperation.INITIALIZE_RUN_ANNOTATIONS:
+                from loom.runs.context import SubmissionContext
+
+                value = _required_body_value(request, "context")
+                if not isinstance(value, Mapping):
+                    raise AuthorityMutationValidationError("annotation context is invalid")
+                annotations = self._repository.initialize_run_annotations(
+                    _required_run_uri(request), SubmissionContext.from_dict(value),
+                    cast(str, _required_body_value(request, "operation_id")),
+                    cast(str, _required_body_value(request, "coordinator_id")))
+                return _result(service_generation=self._service_generation,
+                               body={"annotations": annotations.to_dict()})
+            case AuthorityMutationOperation.READ_RUN_ANNOTATIONS:
+                annotations = self._repository.read_run_annotations(_required_run_uri(request))
+                return _result(service_generation=self._service_generation,
+                               body={"annotations": None if annotations is None else annotations.to_dict()})
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN:
                 return self._coordinator_transition_run(request)
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE:

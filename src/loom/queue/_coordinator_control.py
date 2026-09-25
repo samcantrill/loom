@@ -58,6 +58,7 @@ CONTROL_OPERATIONS = frozenset(
         "agents",
         "agent",
         "inspect_run",
+        "get_run_context",
         "operation",
         "wait_operation",
         "prepare_run",
@@ -174,6 +175,7 @@ class CoordinatorConnectionDescription:
     source_modes: tuple[str, ...]
     preparation_profiles: tuple[str, ...]
     source_roots: tuple[str, ...]
+    context_limits: Mapping[str, int] | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> CoordinatorConnectionDescription:
@@ -205,6 +207,7 @@ class CoordinatorConnectionDescription:
             sequences[1],
             sequences[2],
             sequences[3],
+            cast(Mapping[str, int] | None, value.get("context_limits")),
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -217,6 +220,7 @@ class CoordinatorConnectionDescription:
             "source_modes": list(self.source_modes),
             "preparation_profiles": list(self.preparation_profiles),
             "source_roots": list(self.source_roots),
+            **({"context_limits": dict(self.context_limits)} if self.context_limits is not None else {}),
         }
 
 
@@ -382,7 +386,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         )
     if operation in {"startup_attach", "startup_release", "service_lifetime"}:
         return value
-    if operation == "inspect_run":
+    if operation in {"inspect_run", "get_run_context"}:
         return value  # The diagnostic union decoder belongs above queue.
     raise ValueError("control result operation is unsupported")
 
@@ -431,6 +435,7 @@ def validate_request(
         "agent": {"agent_id"},
         "operation": {"operation_id"},
         "inspect_run": {"run_uri"},
+        "get_run_context": {"run_uri"},
         "wait_operation": {"operation_id", "timeout"},
         "wait_admission": {"admission_id", "expected_revision", "timeout"},
     }
@@ -533,6 +538,8 @@ def dispatch_control(
         view = daemon.client_view(principal)
         result: Any
         if operation == "handshake":
+            from loom.runs.context import RUN_CONTEXT_LIMITS
+
             status = view.status()
             preparation = (
                 daemon.config.preparation_policy
@@ -546,6 +553,7 @@ def dispatch_control(
                 status.coordinator_epoch,
                 (
                     CONTROL_CAPABILITY,
+                    "run-context-v1",
                     *(
                         ("agent-preparation-v1", "reconciled-run-v1")
                         if daemon.preparation_available
@@ -555,6 +563,7 @@ def dispatch_control(
                 (() if preparation is None else preparation.effective_modes),
                 (() if preparation is None else preparation.effective_profiles),
                 (() if preparation is None else preparation.effective_roots),
+                RUN_CONTEXT_LIMITS,
             )
         elif operation == "startup_attach":
             result = daemon._lifetime.attach(cast(str, value["attachment_id"]), cast(float, value["expires_at"]))
@@ -600,6 +609,10 @@ def dispatch_control(
                     expected_revision=cast(int, value["expected_revision"]),
                     timeout=timeout,
                 )
+        elif operation == "get_run_context":
+            from ._run_context import get_run_context
+
+            result = get_run_context(daemon, cast(str, value["run_uri"]), inspect_run)
         elif operation == "inspect_run":
             if inspect_run is None:
                 raise control_error(

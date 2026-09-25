@@ -315,7 +315,7 @@ def test_coordinator_client_unix_handshake_and_identity_guard(tmp_path: Path) ->
         description = client.describe_connection()
         assert description.transport == "unix"
         assert description.coordinator_id == daemon._coordinator_id
-        assert description.capabilities == ("daemon-control-v1",)
+        assert description.capabilities == ("daemon-control-v1", "run-context-v1")
         assert client.status().coordinator_id == daemon._coordinator_id
         with pytest.raises(CoordinatorClientError) as raised:
             CoordinatorClient.from_unix_socket(

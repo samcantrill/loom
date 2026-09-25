@@ -9,6 +9,53 @@ results. A client host needs no worker root, agent registration or supervisor.
 Closing a client releases its local resources. Submitted work continues under
 the coordinator and workers. Cancellation is a separate, explicit operation.
 
+## Submission Context
+
+Pass an optional `loom.runs.SubmissionContext(description=..., tags=...,
+metadata=...)` as `PrepareRunRequest.context`; `RunRequest` carries that same
+preparation request. Metadata is deeply immutable finite JSON data. String,
+numeric, boolean and null values retain their types. Application keys such as
+`status`, `commit` or `_target_` remain caller data and neither replace native
+evidence nor import code.
+
+The original context stays in the coordinator operation. Its `result.submission`
+includes the native accepted time and authenticated principal. A failed
+preparation keeps that identity and original reason even without a run URI.
+Replaying the same operation preserves these facts; changed nonempty context
+conflicts. Omitted and empty contexts preserve historical request digests.
+Clients require the `run-context-v1` capability before sending context.
+
+Before acknowledging publication/binding or admitting target work, the authority
+initializes annotations once. Effective authored runtime tags provide the baseline;
+explicit context tags win per key. Conflicting values supplied explicitly through
+both `run_options.tags` and context are rejected before submission. Later
+reconciled submissions retain their own reasons and link to the same run without
+replacing its initial annotations. Context does not enter stage or artifact
+fingerprints, worker arguments, or captured configuration.
+
+`client.get_run_context(run_uri)` returns `RunContext`: current annotations,
+the initializing submission, at most 20 native submission links, their retained
+total count, and existing run inspection. Use native operation lookup for each
+linked submission. Inspection preserves failed stages alongside committed output
+references; it does not download artifacts or execute work. Missing authority,
+original submission or inspection evidence is reported in `unavailable`.
+Legacy runtime tags may be projected at revision zero with unknown origin;
+reading them does not create writable annotations. Legacy notes and caller
+metadata remain in their existing runtime/user metadata views. Annotation and
+note mutation commands are not part of this submission-context surface.
+
+Limits advertised by the handshake are 16 KiB UTF-8 description text, 48 KiB
+serialized context, 128 tag keys, 128-byte tag/metadata keys and 1 KiB tag values.
+These limits apply to all initial effective tags, including authored-only tags
+when context is omitted. Oversized resolved annotations fail preparation with
+`invalid_context` before successful binding or target execution. Legacy evidence
+is never rewritten by inspection: an oversized legacy tag view is omitted with
+`legacy_runtime_annotations_unrepresentable` in `unavailable`.
+The complete encoded request must also fit the 64 KiB transport limit. Values
+are rejected, never silently truncated. `RunInspectionHttpClient.get_run_context`
+provides the same read for an enrolled HTTPS QUERY principal; that role cannot
+submit or mutate work.
+
 ## Choose A Connection
 
 ```python

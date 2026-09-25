@@ -13,6 +13,15 @@ consumers. Native admission and operation commands control existing services;
 closing an observation does not cancel a run. Explicit cancellation reports its
 operation separately from eventual worker settlement.
 
+`loom run pipeline.yaml --deployment deployment.yaml --context context.json`
+accepts an explicit JSON object with optional `description`, `tags` and `metadata`.
+Existing `--tag` invocation values must agree with any duplicate explicit context
+tag. Inspect without starting services using
+`loom runs context RUN_URI --connection client.yaml --format json`, or select a
+local socket with `--endpoint PATH`. The result joins immutable submission intent,
+current annotations and native inspection, with bounded submission links and
+explicit unavailable evidence. See [context semantics](coordinator-client.md#submission-context).
+
 ## Supported command groups
 
 - `validate`, `plan`, `preflight`: inspect configuration, graph and capability

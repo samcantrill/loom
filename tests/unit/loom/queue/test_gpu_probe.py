@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 import sqlite3
 
@@ -90,7 +91,9 @@ def test_owned_gpu_probe_projects_claim_and_releases_after_containment(
         # rather than silently launching without GPU enforcement.
         assert calls == []
     assert result.status == ("PASS" if returncode == 0 else "FAIL")
-    assert result.details["evidence"]["claim_retained"] is False
+    evidence = result.details["evidence"]
+    assert isinstance(evidence, Mapping)
+    assert evidence["claim_retained"] is False
     assert journal.retained_claim_commands() == ()
     with sqlite3.connect(journal.path) as connection:
         assert connection.execute("SELECT state FROM diagnostic_probes").fetchall() == [
