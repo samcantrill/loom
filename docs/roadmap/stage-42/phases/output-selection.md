@@ -2,13 +2,16 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P4.
+- Status: in_progress; stage 42 / P4.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p4-output-selection`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 4: Output Selection
-- Worktree/coordination/base: manifest context; base after P3.
+- Worktree/coordination: manifest context; base after P3 is
+  `483d9001af7364cfe7cbe22ba192b5fad08774b3`.
 - Dependencies: P3 run selection and P1 native identities.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: none. Blockers: none. P3 #352 remotely merged,
+  completion metadata published, synchronization passed and exact phase branch
+  retired before this branch started.
 
 ## Objective, Scope, And Supported Merge State
 
@@ -102,8 +105,16 @@ would bypass the original producer's policy. Do not fix missing bytes by changin
 the locator. No retention guarantee is offered. Read this card and output
 selection/history contract before implementation.
 
-Workflow preparation/refinement/implementation/validation/independent review/PR:
-not started. Blocker corrections 0/3; improvement entries none.
+Workflow preparation passed; reuse approved manifest readiness and exact
+selection/history contracts. One executor is justified for the coordinated
+authority-history, reuse-resolution and native adapter changes. Write scope is
+P4 source/tests/user documentation and this card, excluding P5/P6 behavior.
+No planning refinement is needed. Preserve every required selection above,
+splitting config and MCP fixtures into their locked optional environments;
+expand authority protocol/repository coverage for shared serialization changes.
+Record final scope and affected static checks before independent actual-head
+review. Implementation/validation/PR pending. Blocker corrections 0/3;
+improvement entries none.
 
 ## Completion Record
 
