@@ -2,8 +2,10 @@
 
 ## Metadata
 
-- Status: in_progress; stage 42 / P5; implementation and validation complete;
+- Status: pr_open; stage 42 / P5; implementation and validation complete;
   independent review pending. Historical import evidence policy approved.
+- PR: [#354](https://github.com/samcantrill/loom/pull/354), canonical title and
+  `develop` target verified; implementation head `ef689126b9dd47a2944ec789d47f0e216e7b03e2`.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p5-dependency-lineage`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 5: Dependency Lineage
