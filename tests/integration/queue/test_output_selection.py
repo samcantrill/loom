@@ -7,9 +7,61 @@ from typing import Any, cast
 import pytest
 
 from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest
-from loom.runs import OutputLocator, OutputSelection, RunQuery, Compare, Field
+from loom.runs import CollectionScope, OutputLocator, OutputSelection, RunQuery, Compare, Field
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+@pytest.mark.parametrize("https", [False, True])
+def test_warning_heavy_output_pages_retain_every_selector(tmp_path, https, monkeypatch):
+    from tests.integration.mcp.test_stdio import _coordinator
+    from loom.queue._coordinator_control import MAX_RESPONSE_BYTES, encode_wire
+
+    def unavailable(_):
+        raise OSError("authority offline")
+
+    with _coordinator(tmp_path, https=https) as (service, daemon, _):
+        # A valid deep collection path amplifies each per-selector warning.
+        root = tmp_path.joinpath(*("r" * 200 for _ in range(17)))
+        uri = (root / "producer").as_uri()
+        monkeypatch.setattr(
+            daemon,
+            "config",
+            replace(
+                daemon.config,
+                run_store_root=root,
+                coordinator_authority_factory=unavailable,
+            ),
+        )
+        client = (
+            CoordinatorClient.from_connection_file(tmp_path / "client.json")
+            if https
+            else CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+        )
+        stages = tuple(f"stage-{index:03}" for index in range(200))
+        with client:
+            for operation in (client.select_outputs, client.list_output_commits):
+                selection = OutputSelection(
+                    run_uris=(uri,), stage_names=stages, scope=CollectionScope(), limit=200
+                )
+                outcomes = []
+                cursors = set()
+                while True:
+                    page = operation(selection)
+                    assert len(encode_wire({"ok": True, "result": page.to_dict()})) <= MAX_RESPONSE_BYTES
+                    assert page.items and not page.complete
+                    assert all(row["outcome"] == "authority_unavailable" for row in page.items)
+                    assert all(row["matched_run_uri"] == uri for row in page.items)
+                    assert page.warnings
+                    assert all(warning == {"code": "authority_unavailable", "run_uri": uri} for warning in page.warnings)
+                    outcomes.extend(row["matched_stage_name"] for row in page.items)
+                    if page.next_cursor is None:
+                        break
+                    assert page.next_cursor not in cursors
+                    cursors.add(page.next_cursor)
+                    selection = replace(selection, cursor=page.next_cursor)
+                assert cursors
+                assert outcomes == list(stages)
 
 
 @pytest.mark.parametrize("https", [False, True])

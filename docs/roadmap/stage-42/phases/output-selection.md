@@ -115,7 +115,7 @@ No planning refinement is needed. Preserve every required selection above,
 splitting config and MCP fixtures into their locked optional environments;
 expand authority protocol/repository coverage for shared serialization changes.
 Record final scope and affected static checks before independent actual-head
-review. Implementation and targeted validation complete; manager PR/review pending. Blocker corrections 0/3;
+review. Implementation and targeted validation complete; manager PR/review pending. Blocker corrections 1/3;
 improvement entries none.
 
 ## Completion Record
@@ -162,3 +162,31 @@ Final commands use `uv run --python 3.12 --isolated --locked --group dev`:
 | Validated tree | `4e5a7c786991d1a990d58c2626ca12c0486e23d4` from `git write-tree`, based on the recorded assignment base. Only this completion receipt changed afterward. Commands/selectors above and committed contract/integration tests are the retained evidence; no sidecars. |
 | Review, PR, merge | Pending manager actual-head independent review and delivery. Executor made no PR, merge or branch transition. |
 | Residual limits | Live paging is not a snapshot; no retention pin or byte availability guarantee. Whole authority histories use existing readers; oversized metadata produces a bounded explicit outcome. Producer restrictions/unavailability remain visible without hidden provenance. |
+
+### Review Correction R1
+
+Correction 1/3 accounts for each prospective per-selector warning in the output
+page byte budget before accepting its outcome. This preserves every requested
+selector and its warning while keeping the continuation available when many
+unavailable selectors share a long run URI. The affected contract is bounded
+native output selection/history paging with truthful incomplete coverage; storage,
+authority reads, identities and adapter schemas are unchanged.
+
+The regression exercises 200 explicitly requested stages under an unavailable
+authority and a deep collection URI over both Unix and HTTPS. For both
+`select_outputs` and `list_output_commits`, every encoded response is below the
+1 MiB transport limit, continuations advance, warnings and incomplete coverage
+remain visible, and all 200 stage outcomes arrive exactly once.
+
+Validation on source/test tree `06ecdd1ac58510a4f7b1482a2c3ac47788faa2de`
+(based on `31e3c39a9ec2a0d270812b11eb47f90f84eba3a5`):
+`uv run --python 3.12 --isolated --locked --group dev --extra config pytest
+tests/integration/queue/test_output_selection.py
+tests/contracts/test_output_selection_contract.py` — **19 passed** in 39.46s,
+no skips. Changed-file Ruff passed and Pyright reported **0 errors, 0 warnings**
+for `src/loom/queue/_output_selection.py` and
+`tests/integration/queue/test_output_selection.py`; diff checks passed. Only this
+completion receipt changed afterward. Existing unaffected phase evidence remains
+applicable; expand checks only for failures or newly affected behavior. R1 is
+corrected and awaits the existing reviewer's confirmation; no PR or merge action
+was taken by the refiner.

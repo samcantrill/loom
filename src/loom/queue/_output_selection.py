@@ -350,14 +350,21 @@ def output_operation(daemon: Any, operation: str, value: dict[str, Any]) -> Quer
                 "selection_key": list(_key(row)),
             }
             cost = len(_bytes(row))
+        warning = (
+            {"code": row["outcome"], "run_uri": uri}
+            if row["outcome"] not in {"selected", "no_matching_output", "run_not_found"}
+            else None
+        )
+        if warning is not None:
+            cost += len(_bytes(warning))
         if items and (len(items) == selection.limit or size + cost > 640 * 1024):
             next_state = {**state, "after": list(_key(rows[index - 1]))}
             break
         items.append(row)
         size += cost
-        if row["outcome"] not in {"selected", "no_matching_output", "run_not_found"}:
+        if warning is not None:
             complete = False
-            warnings.append({"code": row["outcome"], "run_uri": uri})
+            warnings.append(warning)
     cursor = (
         None
         if next_state is None
