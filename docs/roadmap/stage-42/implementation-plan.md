@@ -64,7 +64,7 @@ Durable/wire meanings and compatibility obligations are fixed for this approved 
 | --- | --- | --- | --- | --- | --- | --- |
 | P1 | [submission-context](phases/submission-context.md) | merged | `agent/stage-42-p1-submission-context` | #349 | Capture submission context, initialize authority annotations once, inspect context and native associations | Submission/replay/schema/native-client contracts; full cross-cutting gate |
 | P2 | [run-annotations](phases/run-annotations.md) | merged | `agent/stage-42-p2-run-annotations` | #351 | Revision-safe label/description/metadata changes and idempotent append-only notes | Both authority owners, concurrency/replay, read-only role rejection |
-| P3 | [run-discovery](phases/run-discovery.md) | in_progress | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Evaluator truth tables, scope/coverage, pagination and adapter parity |
+| P3 | [run-discovery](phases/run-discovery.md) | in_progress | `agent/stage-42-p3-run-discovery` | none | Typed run/submission/job queries, tag vocabulary and bounded live pages | Per-page vocabulary uniqueness approved; preliminary search checks passed, final gate pending |
 | P4 | [output-selection](phases/output-selection.md) | pending | `agent/stage-42-p4-output-selection` | none | Exact current/historical output selection with original producer and reuse associations | Authority commit/reuse/history contracts and metadata-only guarantees |
 | P5 | [dependency-lineage](phases/dependency-lineage.md) | pending | `agent/stage-42-p5-dependency-lineage` | none | Persist exact per-attempt input origins and query generic dependency graphs | Prepared-attempt/worker/store compatibility and multi-run graph; full gate |
 | P6 | [artifact-access](phases/artifact-access.md) | pending | `agent/stage-42-p6-artifact-access` | none | Authorized complete-file retrieval, bounded previews, safe batch materialization and composed agent workflow | Real local/HTTPS transfer, failure/integrity matrix and final full gate |
@@ -143,7 +143,9 @@ intent-only documentation review does not cover this expanded design.
   maintainer clarified that P3's 500-candidate budget caps detailed run/authority
   reads and evaluation, while allowing collection metadata enumeration to establish
   immutable ordering. The discovery owner records the scan-cost limitation;
-  P3 validation and actual-head independent review assess that boundary. Other
+  The maintainer also chose per-page vocabulary uniqueness with a deduplicating,
+  coverage-preserving collector, as recorded at the discovery owner.
+  P3 validation and actual-head independent review assess these boundaries. Other
   contracts are unchanged.
 - Landing-base drift check through `e0892b350fde1e1def92531af591510890aa5072`:
   PR #346 adds remote prelaunch construction-failure reporting; PR #347 adds
@@ -178,7 +180,10 @@ intent-only documentation review does not cover this expanded design.
 - Startup drift check and readiness reuse: passed at P1 base; exact packet comparison clean.
 - Automatic merge mode: only under the approved implementation workflow after
   its local validation and independent review gates; authorized by explicit execution request.
-- Phase statuses: P1 and P2 merged; P3 in progress; P4–P6 pending. The maintainer chose
+- Phase statuses: P1 and P2 merged; P3 in progress after the maintainer selected
+  per-page vocabulary uniqueness with collector deduplication; P4–P6 pending.
+  Partial P3 implementation remains in the stage worktree; no P3 PR or final
+  validation claim. The maintainer chose
   run-scoped mutation IDs on 2026-09-25. The run-context contract and matching
   walkthrough now explicitly include the run in the receipt key; P2 regression
   coverage and independent actual-head review assess the implementation.

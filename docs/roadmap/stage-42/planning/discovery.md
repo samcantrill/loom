@@ -303,6 +303,14 @@ authoritative evaluator and tested against it.
 | `query_fields(entity)` | Finite native field/operator/sort schema plus available sources/limits |
 | `tag_keys(scope, ...)`, `tag_values(scope, key, ...)` | Distinct current annotation vocabulary with bounded pages and normal coverage |
 
+The maintainer clarified on 2026-09-25 that tag-vocabulary uniqueness is per
+page. Continuation scans bounded run candidates and may observe the same key or
+value on later pages. The vocabulary collector unions those observations into
+one unique result while retaining every page's warnings and final coverage.
+No globally unique cross-page ordering, retained seen-value state, or new index
+is required. Large individual vocabularies must remain resumable within page
+limits; cursor data is not an authoritative replacement for current annotations.
+
 Native managed scope is the connected coordinator's accessible admissions and
 associated runs/submission operations. Collection scope explicitly selects
 `{"kind":"collection","name":"run_store"}`, the configured run-store root;
