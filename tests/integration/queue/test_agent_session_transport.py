@@ -6548,8 +6548,8 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1", "daemon-control-v1", "run-context-v1"),
-            ["authenticated-application-v1", "daemon-control-v1", "run-context-v1"],
+            ("authenticated-application-v1", "daemon-control-v1", "run-context-v1", "run-query-v1"),
+            ["authenticated-application-v1", "daemon-control-v1", "run-context-v1", "run-query-v1"],
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (

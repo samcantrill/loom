@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .models import CatalogIndexResult, ListRunsResult, RunComparison, RunFilter
+from .query import RunQuery
+from ._query_page import QueryPage
 
 
 class RunCatalog:
@@ -63,6 +65,16 @@ class RunCatalog:
             right_run_uri=right,
             warnings=current.warnings,
         )
+
+    def search(self, query: RunQuery) -> QueryPage:
+        """Search this explicit local collection with bounded live pages and coverage.
+
+        Requires CollectionScope; authority absence stays unavailable rather than
+        promoting materialized lifecycle state into current truth.
+        """
+        from ._query_local import search_collection
+
+        return search_collection(self.collection_path, query)
 
 
 __all__ = ["RunCatalog"]

@@ -1,5 +1,9 @@
 # loom Run Catalog, Comparison, and Export Specification
 
+Structured native queries, current annotations and bounded live pages are
+documented in [run discovery](run-discovery.md). Existing exact-filter,
+unpaginated catalog APIs retain their envelopes and behavior.
+
 ## Purpose
 
 The run catalog is a lightweight index over many local `loom` run directories.
@@ -201,8 +205,9 @@ executor
 backend
 ```
 
-Time-range filters, pagination, sorting controls, and a general query language
-are deferred.
+This exact-filter API remains unpaginated. Time predicates, immutable sorting,
+bounded pages and the finite structured predicate language are available through
+the separate [discovery query API](run-discovery.md).
 
 ## Catalog Consistency
 

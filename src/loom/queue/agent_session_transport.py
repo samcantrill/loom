@@ -2141,10 +2141,38 @@ class RunInspectionHttpClient:
 
     def _read_run(self, operation: str, capability: str, run_uri: str, options: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
 
+        return self._read_query(operation, capability, {"run_uri": run_uri, **(options or {})})
+
+    def search_runs(self, query) -> Mapping[str, PlainData]:
+        """Search current scope with the configured read-only QUERY identity."""
+        return self._read_query("search_runs", "run-query-v1", {"query": query.to_dict()})
+
+    def search_submissions(self, query) -> Mapping[str, PlainData]:
+        """Search original request records without write access."""
+        return self._read_query("search_submissions", "run-query-v1", {"query": query.to_dict()})
+
+    def search_jobs(self, query) -> Mapping[str, PlainData]:
+        """Search native admission views without write access."""
+        return self._read_query("search_jobs", "run-query-v1", {"query": query.to_dict()})
+
+    def query_fields(self, entity: str = "runs") -> Mapping[str, PlainData]:
+        """Discover supported query fields."""
+        return self._read_query("query_fields", "run-query-v1", {"entity": entity})
+
+    def tag_keys(self, scope, *, limit: int = 50, cursor: str | None = None) -> Mapping[str, PlainData]:
+        from loom.runs.query import _plain
+        return self._read_query("tag_keys", "run-query-v1", {"scope": _plain(scope), "limit": limit, "cursor": cursor})
+
+    def tag_values(self, scope, key: str, *, limit: int = 50, cursor: str | None = None) -> Mapping[str, PlainData]:
+        from loom.runs.query import _plain
+        return self._read_query("tag_values", "run-query-v1", {"scope": _plain(scope), "key": key, "limit": limit, "cursor": cursor})
+
+    def _read_query(self, operation: str, capability: str, request: Mapping[str, PlainData]) -> Mapping[str, PlainData]:
+
         parsed = urlsplit(self._config.url)
         assert parsed.hostname is not None
         body = json.dumps(
-            {"run_uri": run_uri, **(options or {})}, sort_keys=True, separators=(",", ":"), allow_nan=False
+            request, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if len(body) > _MAX_BODY_BYTES:
             return _run_inspection_failure("invalid_request")
@@ -2252,7 +2280,7 @@ def _is_run_inspection_failure(value: object) -> bool:
         and value.get("schema_version") == 1
         and isinstance(code, str)
         and code
-        in {"invalid_request", "not_found", "unauthorized", "unavailable", "internal"}
+        in {"invalid_request", "invalid_cursor", "not_found", "unauthorized", "unavailable", "internal"}
         and set(value) == {"schema_version", "code"}
     )
 
@@ -2261,6 +2289,7 @@ def _run_inspection_http_status(value: Mapping[str, object]) -> int:
     code = value.get("code")
     return {
         "invalid_request": 400,
+        "invalid_cursor": 400,
         "not_found": 404,
         "unauthorized": 403,
         "unavailable": 503,
@@ -6083,6 +6112,7 @@ def _dispatch_application(
             capabilities.append("run-inspection-v1")
         if role == LocalDaemonRole.QUERY.value:
             capabilities.append("run-context-v1")
+            capabilities.append("run-query-v1")
         result: dict[str, PlainData] = {
             "protocol_version": "1",
             "capabilities": capabilities,
@@ -6095,6 +6125,18 @@ def _dispatch_application(
             path="authenticated application handshake",
         )
     if role == LocalDaemonRole.QUERY.value:
+        from ._run_queries import QUERY_OPERATIONS, query_operation, validate_query_request
+
+        if operation in QUERY_OPERATIONS:
+            daemon._require_view_role(principal, LocalDaemonRole.QUERY)
+            from loom.runs.query import InvalidCursorError
+            try:
+                query_result = query_operation(daemon, operation, validate_query_request(operation, value))
+                return query_result.to_dict() if hasattr(query_result, "to_dict") else query_result
+            except InvalidCursorError:
+                return {"schema_version": 1, "code": "invalid_cursor"}
+            except (ValueError, TypeError):
+                return {"schema_version": 1, "code": "invalid_request"}
         if operation not in {"inspect_run", "get_run_context", "list_run_notes"} or (operation == "inspect_run" and inspect_run is None):
             raise _RunInspectionHttpError("invalid_request", 400)
         try:

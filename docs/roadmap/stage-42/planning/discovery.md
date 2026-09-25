@@ -303,6 +303,14 @@ authoritative evaluator and tested against it.
 | `query_fields(entity)` | Finite native field/operator/sort schema plus available sources/limits |
 | `tag_keys(scope, ...)`, `tag_values(scope, key, ...)` | Distinct current annotation vocabulary with bounded pages and normal coverage |
 
+The maintainer clarified on 2026-09-25 that tag-vocabulary uniqueness is per
+page. Continuation scans bounded run candidates and may observe the same key or
+value on later pages. The vocabulary collector unions those observations into
+one unique result while retaining every page's warnings and final coverage.
+No globally unique cross-page ordering, retained seen-value state, or new index
+is required. Large individual vocabularies must remain resumable within page
+limits; cursor data is not an authoritative replacement for current annotations.
+
 Native managed scope is the connected coordinator's accessible admissions and
 associated runs/submission operations. Collection scope explicitly selects
 `{"kind":"collection","name":"run_store"}`, the configured run-store root;
@@ -395,6 +403,14 @@ membership at an earlier instant.
 
 Proposed defaults: 50 results per page, at most 200, at most 64 predicate nodes and
 depth 8, 100 values per `in`, and at most 500 candidates examined per request.
+The maintainer clarified on 2026-09-25 that this candidate budget limits detailed
+run/authority acquisition and predicate evaluation. Collection metadata enumeration
+needed to establish immutable ordering may scan more than 500 entries; it must
+not read artifact payloads or refresh every run's authority as part of that scan.
+The existing request deadline still applies. This is not a bound on total metadata
+filesystem reads or total collection-scan cost, and does not require a new
+incrementally maintained index. Tests distinguish metadata enumeration from
+detailed candidate acquisition and verify the latter remains bounded.
 Existing native deadline and 1 MiB response limits still apply. Cursor tracks the
 last examined candidate, so a page can contain no matches and still have more
 candidates. Bound projected text and explicitly mark excerpts/truncation; a

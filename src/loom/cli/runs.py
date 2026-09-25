@@ -54,6 +54,19 @@ def register_subparser(
 
     from .queue import _add_client_connection_arguments
 
+    for action in ("search", "submissions", "jobs", "fields", "tags"):
+        query_parser = actions.add_parser(action, help="query native run discovery")
+        _add_client_connection_arguments(query_parser)
+        _add_output_options(query_parser)
+        query_parser.add_argument("--query", default='{"schema_version":1}', help="structured query JSON object")
+        query_parser.add_argument("--scope", choices=("managed", "collection"))
+        query_parser.add_argument("--limit", type=int)
+        query_parser.add_argument("--cursor")
+        query_parser.add_argument("--tag", action="append", type=_required_key_value, default=[])
+        query_parser.add_argument("--entity", choices=("runs", "submissions", "jobs"), default="runs")
+        query_parser.add_argument("--key", help="literal tag key whose values to discover")
+        query_parser.set_defaults(handler=handle_query)
+
     context_parser = actions.add_parser("context", help="read native submission context and annotations")
     context_parser.add_argument("run_uri")
     _add_client_connection_arguments(context_parser)
@@ -194,6 +207,44 @@ def register_subparser(
     )
     _add_output_options(import_parser)
     import_parser.set_defaults(handler=handle_import)
+
+
+def handle_query(namespace: argparse.Namespace) -> int:
+    """Translate JSON and simple literal tag conveniences to one native query."""
+    import json
+    from .queue import _daemon_client, _emit_daemon_payload, _queue_cli_error
+    from loom.queue.errors import QueueError
+    from loom.queue._coordinator_control import control_error
+
+    operation = {"search": "search_runs", "submissions": "search_submissions", "jobs": "search_jobs", "fields": "query_fields", "tags": "tag_keys"}[namespace.runs_action]
+    try:
+        query = json.loads(namespace.query)
+        if not isinstance(query, dict):
+            raise ValueError("query must be an object")
+        if namespace.scope:
+            query["scope"] = {"kind": "managed"} if namespace.scope == "managed" else {"kind": "collection", "name": "run_store"}
+        for key in ("limit", "cursor"):
+            if getattr(namespace, key) is not None:
+                query[key] = getattr(namespace, key)
+        if namespace.tag:
+            terms = [query.get("where", {"kind": "all", "terms": []})]
+            terms.extend({"kind": "compare", "field": {"source": "tags", "path": [key]}, "op": "eq", "value": value} for key, value in namespace.tag)
+            query["where"] = {"kind": "all", "terms": terms}
+        payload = {"query": query}
+        if namespace.runs_action == "fields":
+            payload = {"entity": namespace.entity}
+        elif namespace.runs_action == "tags":
+            payload = {"scope": query.get("scope", {"kind": "managed"}), "limit": query.get("limit", 50), "cursor": query.get("cursor")}
+            if namespace.key is not None:
+                operation = "tag_values"
+                payload["key"] = namespace.key
+        with _daemon_client(namespace) as client:
+            result = client._native_call(operation, payload, None)
+    except (ValueError, TypeError) as exc:
+        raise _queue_cli_error(control_error("invalid_request", operation, {})) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict() if hasattr(result, "to_dict") else result)
 
 
 def handle_context(namespace: argparse.Namespace) -> int:

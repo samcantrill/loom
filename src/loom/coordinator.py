@@ -16,6 +16,8 @@ from typing import cast
 from loom.serialization import PlainData
 from loom.runs.context import RunAnnotations, RunContext
 from loom.runs.annotations import RunNote, RunNotePage
+from loom.runs.query import RunQuery, SubmissionQuery, JobQuery, ManagedScope
+from loom.runs._query_page import QueryPage
 from loom.queue.local_daemon import (
     LocalDaemonOperation,
     LocalDaemonAdmission,
@@ -265,6 +267,34 @@ class CoordinatorClient(NativeCoordinatorClient):
         """Read original intent, current annotations and native evidence without execution."""
         return RunContext.from_dict(self._native_call(
             "get_run_context", {"run_uri": run_uri}, expected_coordinator_id))
+
+    def search_runs(self, query: RunQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Search one explicit scope, preserving live continuation and coverage."""
+        return cast(QueryPage, self._native_call("search_runs", {"query": query.to_dict()}, expected_coordinator_id))
+
+    def search_submissions(self, query: SubmissionQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Search original requests, including failed and not-yet-bound operations."""
+        return cast(QueryPage, self._native_call("search_submissions", {"query": query.to_dict()}, expected_coordinator_id))
+
+    def search_jobs(self, query: JobQuery, *, expected_coordinator_id: str | None = None) -> QueryPage:
+        """Search admissions with their native run, queue and assignment associations."""
+        return cast(QueryPage, self._native_call("search_jobs", {"query": query.to_dict()}, expected_coordinator_id))
+
+    def query_fields(self, entity: str = "runs", *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Discover the finite supported fields, operators, scopes and limits."""
+        return cast(Mapping[str, PlainData], self._native_call("query_fields", {"entity": entity}, expected_coordinator_id))
+
+    def tag_keys(self, scope: object = ManagedScope(), *, limit: int = 50, cursor: str | None = None,
+                 expected_coordinator_id: str | None = None) -> QueryPage:
+        """Read bounded distinct current label keys in the selected scope."""
+        from loom.runs.query import _plain
+        return cast(QueryPage, self._native_call("tag_keys", {"scope": _plain(scope), "limit": limit, "cursor": cursor}, expected_coordinator_id))
+
+    def tag_values(self, scope: object, key: str, *, limit: int = 50, cursor: str | None = None,
+                   expected_coordinator_id: str | None = None) -> QueryPage:
+        """Read bounded distinct values for one literal label key."""
+        from loom.runs.query import _plain
+        return cast(QueryPage, self._native_call("tag_values", {"scope": _plain(scope), "key": key, "limit": limit, "cursor": cursor}, expected_coordinator_id))
 
     def patch_run_annotations(self, run_uri: str, *, mutation_id: str,
                               expected_revision: int,
