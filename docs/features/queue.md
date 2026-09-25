@@ -5,6 +5,9 @@ The public user interface is the [coordinator client](coordinator-client.md).
 Installed service configuration and preparation are described in
 [agent preparation](agent-preparation.md), and [execution](execution.md) owns
 lifecycle and incompatible-version cutover guidance.
+For permanent removal, [explicit role retirement](role-retirement.md) owns the
+native quiescence proof and irreversible reuse fence; downstream tooling owns
+service stopping, credential revocation and filesystem cleanup.
 
 The old whole-run queue service, client, controller and dispatch adapters have
 been removed. Historical queue records remain read-only inspection evidence.
