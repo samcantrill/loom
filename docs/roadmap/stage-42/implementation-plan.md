@@ -22,7 +22,8 @@ entity, service, domain vocabulary, or execution identity is introduced.
 The maintainer accepted the intent on 2026-09-24, requested this detailed
 implementation plan and code walkthrough, and then explicitly requested committing
 and merging the packet into `develop`. The [approval record](planning.md#approval-and-publication-handoff)
-owns that authorization. It does not start product implementation.
+owns that publication authorization. A subsequent explicit whole-stage request
+authorized implementation, which is now underway in the recorded stage worktree.
 The [walkthrough](implementation-walkthrough.md) explains the implementation in
 plain language. Contracts live in the indexed planning cards, not the walkthrough.
 
@@ -132,8 +133,11 @@ intent-only documentation review does not cover this expanded design.
   limited by recorded digests. Drift at these owners reopens the affected review.
 - Relevant post-review changes and affected verification: R1 in output-access,
   P5 and walkthrough received targeted confirmation. Subsequent edits only record
-  this receipt/checks, maintainer approval/publication and planning/card status,
-  not product contracts.
+  this receipt/checks, maintainer approval/publication and planning/card status.
+  On 2026-09-25 the maintainer explicitly chose limits for all initial tags,
+  resolving the conflicting no-context compatibility promise. The run-context
+  owner records that exception; P1 regression coverage and actual-head phase
+  review assess its implementation. Other reviewed contracts are unchanged.
 - Landing-base drift check through `e0892b350fde1e1def92531af591510890aa5072`:
   PR #346 adds remote prelaunch construction-failure reporting; PR #347 adds
   supervisor-backed rejection of unaccepted assignments during recovery. Their
@@ -178,5 +182,5 @@ intent-only documentation review does not cover this expanded design.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| P1 | No PR; checkpoint `810de61d` | Implementation checkpoint; Ruff/Pyright pass, baseline 3174 passed / 9 failed; later lanes not reached | Legacy tag-limit decision and validation failures; see P1 card | Worktree retained, no cleanup |
+| P1 | Ready for PR at `ff39754c` | Required gate coverage passed with documented focused repair/reuse; see P1 card | Universal initial-tag limits explicitly approved; independent PR review pending | Worktree retained, no cleanup |
 | P2–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |

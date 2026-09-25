@@ -3087,7 +3087,8 @@ Status: maintainer-approved detailed interface, durable-format, compatibility an
 six-phase implementation plan, with a plain-language code walkthrough. The
 implementation manifest records the passed complete-packet review; the planning
 manifest records approval and the documentation publication handoff. Product
-implementation has not started and is separate from this documentation task.
+implementation is underway; current phase status and validation evidence live in
+the implementation manifest and phase cards.
 
 Provide one generic workflow for people and agents: describe submitted work,
 find executions from recorded facts, inspect their state and outputs, traverse
