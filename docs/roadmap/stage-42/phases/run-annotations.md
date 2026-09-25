@@ -109,7 +109,7 @@ client operations even if P3 never ships.
 Workflow preparation passed; no refinement uncertainty. One phase executor is
 selected for the cross-store CAS/receipt and adapter implementation scope, with
 manager-owned validation acceptance and independent actual-PR review/delivery.
-Implementation checkpoint only; validation/review/PR pending. Blocker corrections 0/3;
+Implementation and expanded local validation complete; review/PR pending. Blocker corrections 0/3;
 improvement entries none. Required selected tests need baseline, config-extra
 and MCP-extra environments as their markers require; do not claim deselection
 as adapter coverage. Expand for changed shared migration/protocol consumers.
@@ -118,9 +118,13 @@ as adapter coverage. Expand for changed shared migration/protocol consumers.
 
 | Item | Result |
 | --- | --- |
-| Changed paths | Inert `runs/annotations.py` patch/note values, public exports, and focused patch contract assertions only; no authority or adapter implementation |
-| Validation | Not run. Manager requested a checkpoint and no test launch while the mutation-ID scope decision is unresolved. Assertions are proposed coverage, not passing evidence. |
-| Validated tree / delivery | None; no phase validation, review, PR or merge. Checkpoint starts from `79c398c4c21fd8bbdd399256496f1ae750111510`. |
+| Changed paths | Inert run values/limits; shared annotation SQL owner and additive embedded/repository migrations; coordinator-scoped authority adapters and service fixture; native control/Unix/HTTPS/query, Python, CLI and MCP; corresponding contracts, integration/package/schema tests and feature docs |
+| Implementation | `e125ab95b6e05b873c1748373a381a4953ef1dec`: atomic run-scoped receipts before annotation CAS, current-field patches, attributed append-only notes, bounded live pages, legacy first-write preservation, classified uncertain acknowledgements and adapter parity |
+| Validation selection | Expanded to `make validate-pr` because both authority schemas and shared native decoding changed. Required context/annotation, mutation API, config-backed native/CLI and MCP selectors are included in their separate locked dependency lanes; no selected adapter coverage is inferred from deselection. |
+| Broad baseline / config evidence | `make validate-pr`: default **3206 passed, 2 skipped, 372 deselected**; config-extra **322 passed, 15 skipped, 3261 deselected**, including all 14 run-context integration cases. Baseline skips are the two existing queue CLI manifest checks needing `dotenv`; config skips are the 15 opt-in container acceptance cases. None is a P2 obligation. |
+| MCP and remaining full-gate components | The broad command stopped on two stale MCP discovery assertions, after 47 MCP passes. Updated only their expected tool names/mutation hints in `500fb4e09ec2b82049332620e980c7e570805d7c`; `make lint typecheck test-mcp-extra build` then passed: **49 MCP tests**, project-wide Ruff, Pyright (0 errors/warnings), source distribution and wheel. Reused successful baseline/config components rather than rerunning unchanged suites. |
+| Final bounded reconciliation | While broad validation was running, annotation acknowledgement classification and typed result decoding were tightened: known owner validation is `not_applied`, uncertain authority/invalid native replies retain `unknown` and the original mutation ID. Final isolated no-extra selection (context contract, annotation authority, mutation API, runs package API) passed **50 tests**; the final config selection covering both authority owners × Unix/HTTPS passed **4 tests** with restart/replay, current-revision conflicts, resulting-size rejection, QUERY denial/read access and CLI parity. Completed/failed identity checks (**2**) and native legacy first-write (**1**) passed; full config and final MCP additionally cover the affected consumers. |
+| Validated tree / delivery | Reconciled source/test revision: `500fb4e09ec2b82049332620e980c7e570805d7c` (product source is `e125ab95b6e05b873c1748373a381a4953ef1dec`; later commit changes only the four MCP expectation lines). Subsequent changes are this completion record only. `git diff --check` passes. No independent phase review, PR or merge has occurred. |
+| Evidence logs | `/tmp/loom-stage42-p2-validate.log`; `/tmp/loom-stage42-p2-final-gate-repair.log`; `/tmp/loom-stage42-p2-baseline-final.log`; `/tmp/loom-stage42-p2-reply-classification.log`; `/tmp/loom-stage42-p2-completed-identities.log`; `/tmp/loom-stage42-p2-legacy-native.log` |
 | Scope decision | Resolved 2026-09-25: maintainer approved uniform run-scoped IDs. Run-context Safe Patches And Notes owns the key, digest and cross-run reuse semantics. |
-| Resumption | Continue the existing executor once after clarification; durable implementation and validation may proceed under the approved contract. |
-| Residual / cleanup | Entire durable mutation, migration, native transport, adapter and acceptance implementation remains pending; stage worktree retained with a coherent inert-model checkpoint. |
+| Residual / cleanup | No unresolved implementation or local-validation blocker. Await manager-owned independent review/delivery. No physical dataset/fleet qualification is required. Stage worktree retained; no branch transition or PR work performed by the executor. |
