@@ -2,13 +2,15 @@
 
 ## Metadata
 
-- Status: pending; stage 42 / P6.
+- Status: in_progress; stage 42 / P6.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p6-artifact-access`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 6: Artifact Access
-- Worktree/coordination/base: manifest context; base after P5.
+- Worktree/coordination: manifest context; base after P5
+  `fce1c5b174980783046b63cb5a321bbd458b8f27`.
 - Dependencies: P4 selection; P3/P5 discovery and graph for composed acceptance.
-- Named refinement uncertainty: none. Blockers: stage gates/earlier merges.
+- Named refinement uncertainty: none. Blockers: none. P5 #354 remotely merged,
+  completion metadata published/synchronized and exact phase branch retired.
 
 ## Objective And Supported Merge State
 
@@ -140,7 +142,14 @@ credential service. Report the supported failure; do not infer files or claim a
 fake backend proves the real path. No retention pin or durable partial-download
 session is promised. Read all detailed access sections and the composed example.
 
-Workflow preparation/implementation/validation/independent review/PR: not started.
+Workflow preparation passed; reuse approved access matrix and predecessor
+contracts. One executor is justified by the coupled server authorization,
+bounded transport, client filesystem publication and composed workflow. Its
+write boundary is P6 source/tests/user docs and this card; no additional backend
+or credential service is authorized. Preserve full `make validate-pr` and real
+HTTPS multi-file transfer acceptance, with concrete failure/containment/overwrite
+checks above. Existing legacy limits remain explicit outcomes rather than new
+scope. Implementation/validation/independent review/PR pending.
 Refiner not needed yet; blocker corrections 0/3; improvement entries none.
 
 ## Completion Record
