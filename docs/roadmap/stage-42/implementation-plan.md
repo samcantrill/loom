@@ -137,7 +137,9 @@ intent-only documentation review does not cover this expanded design.
   On 2026-09-25 the maintainer explicitly chose limits for all initial tags,
   resolving the conflicting no-context compatibility promise. The run-context
   owner records that exception; P1 regression coverage and actual-head phase
-  review assess its implementation. Other reviewed contracts are unchanged.
+  review assess its implementation. P2's run-scoped mutation identity was likewise
+  explicitly selected by the maintainer; the contract and walkthrough now name
+  the run scope, with implementation verification in P2. Other contracts are unchanged.
 - Landing-base drift check through `e0892b350fde1e1def92531af591510890aa5072`:
   PR #346 adds remote prelaunch construction-failure reporting; PR #347 adds
   supervisor-backed rejection of unaccepted assignments during recovery. Their
@@ -188,5 +190,5 @@ intent-only documentation review does not cover this expanded design.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | P1 | #349 / `ea4dba287c3d620c7be59356def76bd8d2bc53ad` | Required gate coverage and independent actual-head review passed; see P1 card | Universal initial-tag limits explicitly approved; no physical qualification required | Phase transition passed; worktree retained for P2 |
-| P2 | No PR; checkpoint `05664c36` | Inert model/test checkpoint only; no test execution or authority/adapter implementation | Mutation-ID scope decision required | Clean stage worktree retained |
+| P2 | Ready for PR | Implementation and expanded gate coverage complete; concurrent develop integration checked; see P2 card | Run-scoped IDs approved; independent review pending | Stage worktree retained |
 | P3–P6 | Not started | Planned checks are not executed test evidence | See phase cards | Not applicable yet |
