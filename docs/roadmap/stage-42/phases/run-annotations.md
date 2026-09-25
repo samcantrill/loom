@@ -2,8 +2,8 @@
 
 ## Metadata
 
-- Status: pr_open; stage 42 / P2.
-- PR: [#351](https://github.com/samcantrill/loom/pull/351), target `develop`; independent actual-head review pending.
+- Status: merged; stage 42 / P2.
+- PR: [#351](https://github.com/samcantrill/loom/pull/351), target `develop`; independently approved and remotely merged.
 - Manifest: [implementation-plan.md](../implementation-plan.md).
 - Branch: `agent/stage-42-p2-run-annotations`; PR target: `develop`.
 - PR title: Stage 42 Run Discovery, Annotations, Lineage, And Result Access - Phase 2: Run Annotations
@@ -110,7 +110,7 @@ client operations even if P3 never ships.
 Workflow preparation passed; no refinement uncertainty. One phase executor is
 selected for the cross-store CAS/receipt and adapter implementation scope, with
 manager-owned validation acceptance and independent actual-PR review/delivery.
-Implementation and expanded local validation complete; actual-PR review found R1 below.
+Implementation and expanded local validation complete; actual-PR review and R1 confirmation passed.
 Blocker corrections 1/3 (one scoped refiner correction completed);
 improvement entries none. Required selected tests need baseline, config-extra
 and MCP-extra environments as their markers require; do not claim deselection
@@ -135,7 +135,9 @@ prevent legacy projection size from invalidating otherwise valid mutations.
 Extend supported-producer coverage across both durable authority owners. No new
 execution/lifecycle owner or arbitrary scope expansion. Review otherwise found
 the transactions, replay, native attribution and validation evidence consistent.
-Merge remains blocked until correction and the same reviewer's confirmation.
+The same reviewer confirmed R1 resolved at `7f523f112b9e27b5fc0abf83ec980894a108b106`
+with no remaining product blocker. Delivery verified PR #351 squash-merged as
+`1282d9d9500bb0924cd5bdf4654919130c95e632` on 2026-09-25.
 
 R1 correction: native append validation retains the 16-KiB limit, while retained
 legacy `RunNote` text has no retrospective append limit. Both durable owners keep
@@ -154,7 +156,7 @@ append rejection. Expanded to existing authority mutation/coordinator API tests
 and all native run-context tests because the error crosses those boundaries.
 Further expansion is required only for changed shared decoding, schema, or
 unrelated mutation behavior; none changed. Unaffected broad/MCP/build evidence
-below is reused. The same reviewer's R1 confirmation remains pending.
+below is reused. The same reviewer's R1 confirmation passed.
 
 R1 evidence on the correction tree based on `40a7b82b` (subsequent edits only this
 record): isolated locked Python 3.12/dev pytest for
@@ -185,4 +187,4 @@ unchanged. Correction budget remains **1/3**, and the sole refiner is consumed.
 | Manager base reconciliation | Merged concurrent `develop` PR #350 (`76793120`) into the phase at `db610fcd96b5f4414a0b7dc73feffd8ac67625a9`, without conflicts. Retirement changes touch daemon startup and transport ownership but do not change annotation storage/replay contracts. |
 | Combined-tree checks | On `db610fcd`: isolated locked Python 3.12 no-extra pytest for `tests/integration/queue/test_role_retirement.py tests/unit/loom/queue/test_local_daemon.py` with standard non-optional markers: **64 passed, 5 deselected**. Separate config-extra pytest for entire `tests/integration/queue/test_run_context.py`: **14 passed**. Prior unaffected broad/static/MCP/build evidence remains applicable; subsequent edits only workflow metadata. Diff check passed. |
 | Concurrent-base typing repair | Manager added narrow runtime type assertions in PR #350's `tests/integration/queue/test_role_retirement.py` to resolve five pre-existing Pyright errors, without production edits. The five previously deselected retirement cases were then explicitly run with isolated locked Python 3.12/dev/config pytest: **5 passed in 24.24s**. R1's final full Ruff/Pyright included these exact assertions and passed. |
-| Residual / cleanup | No unresolved implementation or local-validation blocker. Await manager-owned independent review/delivery. No physical dataset/fleet qualification is required. Stage worktree retained; no branch transition or PR work performed by the executor. |
+| Residual / cleanup | Validation and independent review passed; PR #351 remotely merged. Individual oversized legacy notes explicitly stop listing at that item while retaining all evidence and permitting unrelated writes. Delivery retired the exact remote phase branch and transition to coordination passed; persistent stage worktree retained for P3. |
