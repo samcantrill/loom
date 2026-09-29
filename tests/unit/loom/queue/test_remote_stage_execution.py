@@ -806,6 +806,127 @@ def test_input_publish_before_commit_replay_adopts_only_exact_target(
         ).fetchone() == (len(first), 0)
 
 
+@pytest.mark.parametrize(
+    ("ceiling", "last_state"),
+    [
+        (1, "BOUND"),
+        (2, "BOUND"),
+        (6, "BOUND"),
+        (2, "GRANTED"),
+        (2, "RUNNING"),
+        (2, "RESULT_RETAINED"),
+        (2, "TERMINAL"),
+    ],
+)
+def test_target_ceiling_counts_unreleased_work_and_preserves_replay(
+    tmp_path: Path, ceiling: int, last_state: str
+) -> None:
+    from tests.unit.loom.queue.test_agent_sessions import _config, _policy, _view
+
+    profile = _profile(tmp_path)
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = _policy()
+    policy = replace(
+        policy, agents=(replace(policy.agents[0], capabilities=capabilities),)
+    )
+    config = replace(_config(tmp_path, policy), remote_profiles=(profile.descriptor,))
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        view = _view(daemon)
+        hello = view.handshake()
+        session = view.register(
+            AgentRegistration(
+                "register-ceiling",
+                str(hello["coordinator_id"]),
+                str(hello["coordinator_epoch"]),
+                "root-ceiling",
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+                retirement_verifier="01" * 32,
+            )
+        )
+        offer = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            8,
+            8 * 1024**3,
+            30,
+            _agent_provider_descriptors("cpu", "memory"),
+            resident_profiles=(profile.descriptor,),
+            max_concurrent_assignments=ceiling,
+        )
+        view.publish_offer(offer, idempotency_key="offer-ceiling")
+        source = tmp_path / "input"
+        source.write_bytes(b"input")
+        requests = [
+            replace(
+                _request(profile),
+                assignment_id=f"assignment-{index}",
+                attempt_id=f"attempt-{index}",
+                stage_work_id=f"work-{index}",
+                claim_id=f"claim-{index}",
+            )
+            for index in range(ceiling + 1)
+        ]
+
+        def target(request):
+            _target_remote_delivery(
+                daemon,
+                session_id=session.session_id,
+                availability_revision="availability-1",
+                request=request,
+                run_uri="file:///run",
+                input_paths={"input-1": source},
+            )
+
+        for request in requests[:-1]:
+            target(request)
+        with sqlite3.connect(config.control_database) as conn:
+            # These are native lifecycle states: only acknowledged release frees a slot.
+            conn.execute(
+                "UPDATE remote_assignments SET state = ? WHERE assignment_id = ?",
+                (last_state, requests[-2].assignment_id),
+            )
+        target(requests[0])
+        with pytest.raises(QueueConflictError, match="ceiling is exhausted"):
+            target(requests[-1])
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0]
+                == ceiling
+            )
+            assert (
+                conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0]
+                == ceiling
+            )
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RELEASED' WHERE assignment_id = ?",
+                (requests[-2].assignment_id,),
+            )
+        target(requests[-1])
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM remote_assignments WHERE state != 'RELEASED'"
+                ).fetchone()[0]
+                == ceiling
+            )
+    finally:
+        daemon.stop()
+
+
 def test_targeted_current_poll_delivers_only_the_exact_durable_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

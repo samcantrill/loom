@@ -1609,6 +1609,38 @@ def test_offer_wire_shape_uses_bounded_exact_capacity_atoms() -> None:
     ]
 
 
+@pytest.mark.parametrize("ceiling", [1, 2, 1024])
+def test_offer_assignment_ceiling_preserves_default_wire_and_decision(
+    ceiling: int,
+) -> None:
+    original = _offer("session-1", "epoch-1")
+    historical = original.value()
+    assert "max_concurrent_assignments" not in historical
+    assert AgentOffer.from_value(historical).max_concurrent_assignments == 1
+    explicit = {**historical, "max_concurrent_assignments": ceiling}
+    decoded = AgentOffer.from_value(explicit)
+    assert decoded == replace(original, max_concurrent_assignments=ceiling)
+    if ceiling == 1:
+        assert json.dumps(decoded.value(), sort_keys=True) == json.dumps(
+            historical, sort_keys=True
+        )
+        assert decoded.decision_value() == original.decision_value()
+    else:
+        assert decoded.value() == explicit
+        assert decoded.decision_value()["max_concurrent_assignments"] == ceiling
+
+
+@pytest.mark.parametrize("value", [None, True, 0, -1, 1.5, "2", 1025])
+def test_offer_assignment_ceiling_rejects_invalid_wire(value: object) -> None:
+    with pytest.raises(QueueServiceError, match="max_concurrent_assignments"):
+        AgentOffer.from_value(
+            {
+                **_offer("session-1", "epoch-1").value(),
+                "max_concurrent_assignments": value,
+            }
+        )
+
+
 def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> None:
     device = GpuDeviceDescriptor(
         "safe-gpu", "large", 80 * 1024**3, fabric_group="fabric-a"

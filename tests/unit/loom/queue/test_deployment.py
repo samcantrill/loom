@@ -1059,6 +1059,48 @@ def test_outbound_qualification_spelling_does_not_change_observed_binding(
     )
 
 
+@pytest.mark.parametrize("ceiling", [1, 2, 1024])
+def test_outbound_assignment_ceiling_is_active_configuration(
+    tmp_path: Path, ceiling: int
+) -> None:
+    source = _agent_config(tmp_path)
+    original = load_outbound_agent_service_config(source)
+    assert original.client.max_concurrent_assignments == 1
+    payload = json.loads(source.read_text())
+    payload["max_concurrent_assignments"] = ceiling
+    _write_protected(source, payload)
+    changed = load_outbound_agent_service_config(source)
+    assert changed.client.max_concurrent_assignments == ceiling
+    assert changed.immutable_fingerprint == original.immutable_fingerprint
+    assert (changed.active_fingerprint == original.active_fingerprint) == (ceiling == 1)
+
+
+@pytest.mark.parametrize("value", [None, True, 0, -1, 1.5, "2", 1025])
+def test_outbound_assignment_ceiling_rejects_before_effects(
+    tmp_path: Path, value: object
+) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["max_concurrent_assignments"] = value
+    # A target with effects must never be constructed for an invalid scalar.
+    payload["provider_factory"] = {"_target_": "builtins.object"}
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="max_concurrent_assignments"):
+        load_outbound_agent_service_config(source)
+    assert not (tmp_path / "remote-agent").exists()
+
+
+def test_outbound_assignment_ceiling_rejects_slurm_before_profile_loading(
+    tmp_path: Path,
+) -> None:
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload.update(max_concurrent_assignments=2, slurm_profiles=[{}])
+    _write_protected(source, payload)
+    with pytest.raises(QueueConfigError, match="unsupported with slurm_profiles"):
+        load_outbound_agent_service_config(source)
+
+
 def test_outbound_fingerprints_exclude_paths_and_include_provider_composition(
     tmp_path: Path,
 ) -> None:

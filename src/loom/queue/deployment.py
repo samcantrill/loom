@@ -427,10 +427,28 @@ def load_outbound_agent_service_config(
             "registration",
             "reconnect_seconds",
         },
-        {"provider_factory", "resources", "slurm_profiles"},
+        {
+            "provider_factory",
+            "resources",
+            "slurm_profiles",
+            "max_concurrent_assignments",
+        },
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
+    max_concurrent_assignments = payload.get("max_concurrent_assignments", 1)
+    if (
+        isinstance(max_concurrent_assignments, bool)
+        or not isinstance(max_concurrent_assignments, int)
+        or not 1 <= max_concurrent_assignments <= 1024
+    ):
+        raise QueueConfigError(
+            "max_concurrent_assignments must be an integer from 1 through 1024"
+        )
+    if payload.get("slurm_profiles") and max_concurrent_assignments > 1:
+        raise QueueConfigError(
+            "max_concurrent_assignments above one is unsupported with slurm_profiles"
+        )
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
     capabilities = _strings(
@@ -524,6 +542,7 @@ def load_outbound_agent_service_config(
         if not callable(provider_factory):
             raise QueueConfigError("remote provider factory target is invalid")
     client = AgentTlsClientConfig(
+        max_concurrent_assignments=max_concurrent_assignments,
         url=_string(payload, "url"),
         server_ca_path=_path(payload, "server_ca_path", base),
         certificate_path=_path(payload, "certificate_path", base),
@@ -1569,6 +1588,15 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "resident_profiles": profiles,
                 "provider_factory": payload.get("provider_factory"),
                 "slurm_profiles": payload.get("slurm_profiles"),
+                **(
+                    {
+                        "max_concurrent_assignments": payload[
+                            "max_concurrent_assignments"
+                        ]
+                    }
+                    if payload.get("max_concurrent_assignments", 1) != 1
+                    else {}
+                ),
             }
         ),
     )

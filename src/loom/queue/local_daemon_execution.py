@@ -4835,6 +4835,12 @@ class LocalDaemonExecution:
                 )
             )
             pending_claims: dict[str, set[str]] = {}
+            outstanding = dict(
+                conn.execute(
+                    "SELECT session_id, COUNT(*) FROM remote_assignments "
+                    "WHERE state != 'RELEASED' GROUP BY session_id"
+                )
+            )
             for pending in conn.execute(
                 "SELECT a.session_id, d.request_json FROM remote_assignments a "
                 "JOIN agent_deliveries d ON d.assignment_id = a.assignment_id "
@@ -4849,6 +4855,11 @@ class LocalDaemonExecution:
             if str(row["expires_at"]) < accepted_time:
                 continue
             offer = AgentOffer.from_value(json.loads(str(row["offer_json"])))
+            if (
+                outstanding.get(str(row["session_id"]), 0)
+                >= offer.max_concurrent_assignments
+            ):
+                continue
             # A successor observation never consumes an unresolved admission.
             # Once reflected, provider availability already excludes that claim.
             if pending_claims.get(str(row["session_id"]), set()) - set(
