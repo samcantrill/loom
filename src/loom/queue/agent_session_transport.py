@@ -2471,6 +2471,9 @@ class LocalDaemonAgentHttpClient:
             # fails.
             try:
                 self._restart_with_retained_work = self._has_retained_agent_work()
+                self._service_recovery_admission = self._restart_with_retained_work
+                self._ownership_observation_generation = 0
+                self._joined_starts: set[str] = set()
             except ManagedLocalError as exc:
                 raise QueueServiceError(
                     "remote retained-work proof is unavailable"
@@ -3017,11 +3020,15 @@ class LocalDaemonAgentHttpClient:
         """Refresh cached host facts and report one serial, replayable resource view."""
         journal = self._require_journal()
         session = journal.active_session()
-        if session is None or self._drained or self._restart_with_retained_work:
+        if session is None or self._drained:
+            return None
+        if self._restart_with_retained_work and not self._service_progress:
             return None
         (yield from _steps(self._replay_pending_resource_mutation, session.session_id))
         session = journal.session(session.session_id)
         if not self._config.resident_profiles:
+            if not (yield from _steps(self._qualify_service_admission)):
+                return None
             profile = None
             descriptors, atoms, claims, statuses = (), (), (), ()
         else:
@@ -3037,6 +3044,8 @@ class LocalDaemonAgentHttpClient:
                                                            monitor._observer, monitor.selected_uuids,
                                                            monitor._utc_clock, monitor._monotonic_clock)
                             monitor._apply_snapshot(snapshot)
+            if not (yield from _steps(self._qualify_service_admission)):
+                return None
             descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
                 session_id=session.session_id,
                 availability_revision=session.availability_revision,
@@ -3179,6 +3188,8 @@ class LocalDaemonAgentHttpClient:
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._drained:
             raise QueueConflictError("drained agent cannot poll for new work")
+        if self._service_progress and not (yield from _steps(self._qualify_service_admission)):
+            return {"result": "idle"}
         if self._restart_with_retained_work:
             raise QueueConflictError(
                 "restarted agent with retained remote work cannot poll for new work"
@@ -3513,6 +3524,204 @@ class LocalDaemonAgentHttpClient:
             )
         )
 
+    def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
+        if receipt.state is SupervisorLaunchState.UNKNOWN:
+            # Observation application is manager-owned, but can interleave with
+            # another assignment's asynchronous admission query without a write.
+            self._ownership_observation_generation += 1
+            self._restart_with_retained_work = True
+            self._service_recovery_admission = True
+
+    def _admission_inventory(self):
+        """Read the existing owners, including facts without a delivery view."""
+        journal = self._require_journal()
+        execution = self._execution_journal
+        assert execution is not None
+        references = journal.unresolved_assignment_references()
+        with execution._transaction() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT assignment_id, identity_json, request_json, claims_json, "
+                    "state, grant_fence, process_execution_id, result_json, availability_revision "
+                    "FROM assignments ORDER BY assignment_id"
+                )
+            )
+        with journal._connection() as conn:
+            pending = tuple(
+                tuple(row)
+                for row in conn.execute(
+                    "SELECT operation, operation_id, request_json FROM agent_mutation_intents "
+                    "WHERE result_json IS NULL ORDER BY operation, operation_id"
+                )
+            )
+        return (
+            references,
+            rows,
+            pending,
+            journal.active_session(),
+            journal.pending_poll(),
+            journal.next_unacknowledged_control(),
+            journal.next_received_assignment_control(),
+            journal.next_unacknowledged_assignment_control(),
+        )
+
+    @_cooperative
+    @_serialized("_mutation_gate")
+    def _qualify_service_admission(self) -> Generator[_Progress, Any, bool]:
+        """Prove current recovery ownership without joining the workers' exit.
+
+        Only the concurrent service can use this proof. The ordered mutation
+        gate holds releases/session changes until the offer is prepared; local
+        preparation and start completions invalidate the inventory across queries.
+        No capacity snapshot or eligibility record survives this assessment.
+        """
+        if (
+            self._service_progress
+            and self._suspend_requested is not None
+            and self._suspend_requested()
+        ):
+            return False
+        if not self._service_progress or not self._service_recovery_admission:
+            return not self._restart_with_retained_work
+        self._restart_with_retained_work = True
+        if self._drained or self._epoch_reconciliation_pending:
+            return False
+        if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
+            return False
+        if not self._config.resident_profiles:
+            self._restart_with_retained_work = self._has_retained_agent_work()
+            return not self._restart_with_retained_work
+        execution = self._execution_journal
+        supervisor = self._supervisor
+        if execution is None or supervisor is None:
+            return False
+        observation_generation = self._ownership_observation_generation
+        inventory = self._admission_inventory()
+        references, rows, pending, session, poll, control, received, acknowledgement = (
+            inventory
+        )
+        if pending or poll or control or received or acknowledgement or session is None:
+            return False
+        ids = {assignment_id for _, assignment_id in references}
+        states = {row["assignment_id"]: AssignmentState(row["state"]) for row in rows}
+        if any(
+            state is not AssignmentState.RELEASED and key not in ids
+            for key, state in states.items()
+        ):
+            return False
+        # A detached launch is not omitted just because its delivery disappeared.
+        with sqlite3.connect(supervisor._root / "supervisor.sqlite") as conn:
+            launches = tuple(conn.execute("SELECT launch_json, state FROM launches"))
+        for encoded, state in launches:
+            launch = _launch_from_value(json.loads(encoded))
+            if launch.assignment_id not in ids and (
+                state != SupervisorLaunchState.CONTAINED.value
+                or states.get(launch.assignment_id) is not AssignmentState.RELEASED
+            ):
+                return False
+        root = cast(Path, self._config.agent_root)
+        for path in (root / "assignments").glob("*/resident.sqlite"):
+            if (
+                path.parent.name not in ids
+                and states.get(path.parent.name) is not AssignmentState.RELEASED
+            ):
+                return False
+        retained = execution.retained_claim_commands()
+        if any(command.assignment.assignment_id not in ids for command in retained):
+            return False
+        self._runtime_owners(session)
+        for session_id, assignment_id in references:
+            if session_id != session.session_id:
+                return False
+            workspace = _ResidentAssignmentWorkspace(root, assignment_id)
+            if not workspace.has_request():
+                return False
+            request = workspace.request()
+            request.validate_remote_transport()
+            if self._profile_for_descriptor(request.profile) is None:
+                return False
+            from ._shared_assignment import reference, verify_bundle
+
+            ref = reference(
+                self._require_journal().delivery_request(session_id, assignment_id)
+            )
+            if ref is not None:
+                verify_bundle(ref, request, session_id=session_id)
+            row = next(
+                (row for row in rows if row["assignment_id"] == assignment_id), None
+            )
+            if row is None or json.loads(row["request_json"]) != request.to_dict():
+                return False
+            state = states[assignment_id]
+            # Terminal acknowledgement precedes individual provider releases.
+            # After interruption it cannot distinguish all-held from a partial
+            # release; the existing release driver must finish that boundary.
+            if state in {
+                AssignmentState.PREPARE_UNKNOWN,
+                AssignmentState.ACTIVATION_UNKNOWN,
+                AssignmentState.TERMINAL_ACKNOWLEDGED,
+                AssignmentState.PROVIDERS_RELEASED,
+                AssignmentState.RELEASED,
+            }:
+                return False
+            if (
+                state is AssignmentState.REQUEST_DURABLE
+                and row["claims_json"] is not None
+            ):
+                # A yielded partial preparation has not established its outcome.
+                return False
+            encoded = workspace.supervisor_launch_json()
+            if encoded is None:
+                if state in {
+                    AssignmentState.REQUEST_DURABLE,
+                    AssignmentState.PREPARED,
+                    AssignmentState.ACCEPTED,
+                    AssignmentState.GRANTED,
+                    AssignmentState.ACTIVE,
+                    AssignmentState.DECLINED,
+                }:
+                    continue
+                if execution.definitive_start_failed(assignment_id):
+                    continue
+                return False
+            launch = _launch_from_value(json.loads(encoded))
+            if (
+                launch.assignment_id != assignment_id
+                or launch.session_id != session_id
+                or launch.execution_fence != row["grant_fence"]
+                or launch.continuity_epoch != supervisor.continuity_epoch
+            ):
+                return False
+            try:
+                receipt = yield from _external("control", supervisor.query, launch)
+                self._observe_supervisor_ownership(receipt)
+            except AgentProcessSupervisorError:
+                return False
+            if receipt.state not in {
+                SupervisorLaunchState.STARTING,
+                SupervisorLaunchState.RUNNING,
+                SupervisorLaunchState.CONTAINED,
+            }:
+                return False
+            if (
+                receipt.started
+                and receipt.state is not SupervisorLaunchState.CONTAINED
+                and assignment_id not in self._joined_starts
+            ):
+                return False
+        if (
+            self._drained
+            or self._epoch_reconciliation_pending
+            or (self._suspend_requested is not None and self._suspend_requested())
+            or inventory != self._admission_inventory()
+            or observation_generation != self._ownership_observation_generation
+        ):
+            return False
+        self._restart_with_retained_work = False
+        if not references:
+            self._service_recovery_admission = False
+        return True
+
     def _reset_runtime_providers(self) -> None:
         self._configured_provider_members = None
         self._configured_provider_agent_id = None
@@ -3538,6 +3747,7 @@ class LocalDaemonAgentHttpClient:
                 launch = _launch_from_value(json.loads(encoded_launch))
                 (yield from _external("bulk", supervisor.request_stop_wait, launch))
                 receipt = (yield from _external("bulk", supervisor.contain, launch))
+                self._observe_supervisor_ownership(receipt)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
                 continue
@@ -3828,6 +4038,7 @@ class LocalDaemonAgentHttpClient:
                     return "unknown", None
                 (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
                 contained = (yield from _external("bulk", self._supervisor.contain, launch))
+                self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
             if contained.state is not SupervisorLaunchState.CONTAINED:
@@ -3877,7 +4088,7 @@ class LocalDaemonAgentHttpClient:
         fence: str,
         process_execution_id: str,
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        return (yield from _steps(self._call,
+        result = (yield from _steps(self._call,
             "started",
             {
                 "session_id": session_id,
@@ -3886,6 +4097,8 @@ class LocalDaemonAgentHttpClient:
                 "process_execution_id": process_execution_id,
             },
         ))
+        self._joined_starts.add(assignment_id)
+        return result
 
     @_cooperative
     def report_event(
@@ -4080,6 +4293,7 @@ class LocalDaemonAgentHttpClient:
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
                 receipt = (yield from _external("bulk", self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
+                self._observe_supervisor_ownership(receipt)
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(
                         workspace.worker_request(),
@@ -4465,6 +4679,7 @@ class LocalDaemonAgentHttpClient:
                     )
                 )
                 receipt = (yield from _external("bulk", supervisor.launch, launch))
+                self._observe_supervisor_ownership(receipt)
                 if (
                     receipt.state
                     in {
@@ -4601,6 +4816,7 @@ class LocalDaemonAgentHttpClient:
             while True:
                 _raise_if_application_suspended(suspend_requested)
                 receipt = (yield from _external("control", supervisor.query, launch))
+                self._observe_supervisor_ownership(receipt)
                 if receipt.state in {
                     SupervisorLaunchState.EXITED,
                     SupervisorLaunchState.CONTAINED,
@@ -4801,9 +5017,9 @@ class LocalDaemonAgentHttpClient:
                     AssignmentState.ACTIVE,
                 }
             ):
-                # Continue this exact delivery; startup still forbids a new
-                # poll or offer while retained work is unresolved. Commands
-                # may not yet exist when the interruption was during input.
+                # Continue this exact delivery. The service separately proves
+                # the whole inventory before admission; commands may not yet
+                # exist when the interruption was during input.
                 completed.append(
                     (yield from _steps(self._execute_delivered_assignment,
                         session_id, request, suspend_requested=suspend_requested
@@ -4898,6 +5114,7 @@ class LocalDaemonAgentHttpClient:
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = (yield from _external("bulk", supervisor.query_wait, launch))
+            self._observe_supervisor_ownership(receipt)
             if (
                 launch.continuity_epoch in supervisor.reboot_generations
                 and receipt.exit_code is None
@@ -4939,6 +5156,7 @@ class LocalDaemonAgentHttpClient:
                     _raise_if_application_suspended(suspend_requested)
                     yield from _delay(0.01)
                 receipt = (yield from _external("bulk", supervisor.launch, launch))
+                self._observe_supervisor_ownership(receipt)
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
             needs_start_join = execution_journal.read_state(assignment_id) in {
@@ -4964,6 +5182,7 @@ class LocalDaemonAgentHttpClient:
                 (yield from _steps(self.poll_assignment_control, session_id))
                 (yield from _delay(0.05))
                 receipt = (yield from _external("control", supervisor.query, launch))
+                self._observe_supervisor_ownership(receipt)
                 if needs_start_join and receipt.started:
                     (yield from _steps(self._join_retained_supervised_start,
                         session,
@@ -5041,6 +5260,7 @@ class LocalDaemonAgentHttpClient:
                     ).encode(),
                 )
         contained = (yield from _external("bulk", supervisor.contain, launch))
+        self._observe_supervisor_ownership(contained)
         if contained.state is not SupervisorLaunchState.CONTAINED:
             return False
         if (
@@ -5133,6 +5353,7 @@ class LocalDaemonAgentHttpClient:
                 if self._supervisor is None:
                     raise QueueConflictError("remote completion lost its supervisor")
                 evidence = (yield from _external("bulk", self._supervisor.query_wait, launch))
+                self._observe_supervisor_ownership(evidence)
                 if evidence.state is not SupervisorLaunchState.CONTAINED:
                     raise QueueConflictError("remote completion lacks containment")
                 if (
@@ -5237,6 +5458,7 @@ class LocalDaemonAgentHttpClient:
         self._next_resource_maintenance = 0
         self._cancelled_assignments.discard(request.assignment_id)
         self._received_cancellations.discard(request.assignment_id)
+        self._joined_starts.discard(request.assignment_id)
         return freeze_plain_data(
             {
                 "result": "assignment",

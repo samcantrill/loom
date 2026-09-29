@@ -763,8 +763,8 @@ def _outbound_service_steps(
             observing[0] = client
             recovery = yield _Spawn(repair_session())
             journal = client._require_journal()
-            # Every known startup owner progresses independently. Fresh work
-            # waits for the complete population, including recovered poll work.
+            # Every known startup owner progresses independently. Poll recovery
+            # closes the inventory; admission then proves ownership, not exit.
             while not stop.is_set():
                 for reference in journal.unresolved_assignment_references():
                     if reference not in assignments:
@@ -777,8 +777,7 @@ def _outbound_service_steps(
                 if recovery.complete:
                     if recovery.error is not None:
                         raise recovery.error
-                    if not assignments:
-                        break
+                    break
                 yield from _delay(0.01)
             if stop.is_set():
                 return
@@ -829,9 +828,6 @@ def _outbound_service_steps(
                     return
                 yield from _steps(client.drive_slurm_jobs)
                 yield from _delay(0.05)
-            client._restart_with_retained_work = client._has_retained_agent_work()
-            if client._restart_with_retained_work:
-                raise QueueConflictError("retained ownership remains unresolved")
             if lifetime != "run" and active.client.agent_root is not None:
                 record_process(
                     active.client.agent_root,
@@ -902,7 +898,7 @@ def _outbound_service_steps(
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 yield from _steps(client.drive_slurm_jobs)
-                if client._drained or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
+                if client._drained or client._restart_with_retained_work or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
                     continue
                 sequence = client.next_poll_sequence(session.session_id)
