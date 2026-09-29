@@ -7,10 +7,10 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
-from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
+from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor, _sample_gpu_occupancy
 from ._managed_local import ResourceAvailabilityStatus
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from uuid import uuid4
 import fcntl
@@ -27,7 +27,7 @@ import ssl
 import stat
 from threading import BoundedSemaphore, RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from time import monotonic, sleep
+from time import monotonic
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -124,6 +124,7 @@ from ._coordinator_control import (
     error_envelope,
 )
 from ._coordinator_transport import https_connection
+from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay
 from .local_daemon import (
     AdmissionNotFoundError,
     CoordinatorSchedulingReload,
@@ -1683,6 +1684,15 @@ class _RemoteAgentJournal:
             conn.commit()
         return None
 
+    def next_received_assignment_control(self) -> AgentAssignmentControl | None:
+        """Read intent retained by receipt handling before its physical effect."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json FROM remote_assignment_controls_local "
+                "WHERE acknowledged = 0 AND result_code IS NULL ORDER BY operation_id LIMIT 1"
+            ).fetchone()
+        return None if row is None else AgentAssignmentControl.from_value(json.loads(str(row[0])))
+
     def record_assignment_control_result(
         self,
         control: AgentAssignmentControl,
@@ -2411,6 +2421,9 @@ class LocalDaemonAgentHttpClient:
         self._trusted_config_loader = trusted_config_loader
         self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
+        self._closed = False
+        self._service_progress = False
+        self._suspend_requested: Callable[[], bool] | None = None
         self._slurm_agent = (
             AgentSlurmJobs(Path(config.agent_root), config.slurm_profiles)
             if config.agent_root is not None and config.slurm_profiles
@@ -2476,6 +2489,7 @@ class LocalDaemonAgentHttpClient:
                 if self._journal is not None
                 else ()
             )
+            self._received_cancellations: set[str] = set()
             if self._journal is not None:
                 self._journal.recover_pending_reload(config)
             self._drained = (
@@ -2693,6 +2707,7 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(str(exc)) from exc
 
     def close(self) -> None:
+        self._closed = True
         self._close_connection()
         if self._journal is not None:
             self._journal.close()
@@ -2717,10 +2732,11 @@ class LocalDaemonAgentHttpClient:
             self._connection.close()
         self._connection = None
 
-    def handshake(self, *, role: str = "agent") -> Mapping[str, PlainData]:
+    @_cooperative
+    def handshake(self, *, role: str = "agent") -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if role not in {"agent", "client", "operator", "slurm_bootstrap"}:
             raise QueueServiceError("authenticated application role is invalid")
-        result = self._call("handshake", {}, role=role)
+        result = (yield from _steps(self._call, "handshake", {}, role=role))
         if role == "agent":
             capabilities = result.get("capabilities")
             if (
@@ -2744,7 +2760,8 @@ class LocalDaemonAgentHttpClient:
                 )
         return result
 
-    def register(self, request: AgentRegistration) -> AgentSession:
+    @_cooperative
+    def register(self, request: AgentRegistration) -> Generator[_Progress, Any, AgentSession]:
         from .preparation import (
             PREPARATION_INPUT_CAPABILITY,
             PREPARATION_STAGED_INPUT_CAPABILITY,
@@ -2756,7 +2773,7 @@ class LocalDaemonAgentHttpClient:
         from ._shared_assignment import CAPABILITY
         from .shared_execution import SHARED_EXECUTION_CAPABILITY, qualifications
         if CAPABILITY in request.declared_capabilities:
-            if CAPABILITY not in cast(Sequence[str], self.handshake()["capabilities"]):
+            if CAPABILITY not in cast(Sequence[str], (yield from _steps(self.handshake))["capabilities"]):
                 raise QueueServiceError("coordinator lacks shared-assignment-reference-v1")
             if SHARED_EXECUTION_CAPABILITY not in request.declared_capabilities:
                 raise QueueServiceError("shared assignment references require shared execution")
@@ -2773,7 +2790,7 @@ class LocalDaemonAgentHttpClient:
                     raise QueueServiceError("selected installation lacks shared execution qualification")
                 if any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values()) and not any(check.check_id == "packages.shared_publication" and check.status.value == "PASS" for check in profile.readiness_result.checks):
                     raise QueueServiceError("selected installation lacks shared publication qualification")
-                if qualifications(profile.shared_roots) != profile.descriptor.shared_roots:
+                if (yield from _external("bulk", qualifications, profile.shared_roots)) != profile.descriptor.shared_roots:
                     raise QueueServiceError("shared execution root qualification changed")
         staged = PREPARATION_STAGED_INPUT_CAPABILITY in request.declared_capabilities
         if (
@@ -2792,17 +2809,18 @@ class LocalDaemonAgentHttpClient:
             )
         journal = self._require_journal()
         persisted = journal.persist_registration_intent(request)
-        session = _session_from_value(self._call("register", persisted.value()))
+        session = _session_from_value((yield from _steps(self._call, "register", persisted.value())))
         journal.persist_session(persisted.idempotency_key, persisted.value(), session)
         return session
 
+    @_cooperative
     def reconcile(
         self,
         session_id: str,
         coordinator_epoch: str,
         *,
         idempotency_key: str,
-    ) -> AgentSession:
+    ) -> Generator[_Progress, Any, AgentSession]:
         journal = self._require_journal()
         expected = journal.session(session_id)
         request: dict[str, PlainData] = {
@@ -2811,11 +2829,12 @@ class LocalDaemonAgentHttpClient:
             "idempotency_key": idempotency_key,
         }
         journal._persist_mutation("reconcile", idempotency_key, request)
-        session = _session_from_value(self._call("reconcile", request))
+        session = _session_from_value((yield from _steps(self._call, "reconcile", request)))
         journal.complete_mutation("reconcile", idempotency_key, session.value())
         journal.persist_reconciled_session(session)
         return session
 
+    @_cooperative
     def publish_offer(
         self,
         offer: AgentOffer,
@@ -2823,7 +2842,7 @@ class LocalDaemonAgentHttpClient:
         idempotency_key: str,
         expected_availability_revision: str | None = None,
         _observed_snapshot: bool = False,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._drained:
             raise QueueConflictError("drained agent cannot advertise capacity")
         if self._restart_with_retained_work:
@@ -2908,18 +2927,19 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("offer names an unavailable SLURM profile")
         journal = self._require_journal()
         journal.prepare_offer(offer, idempotency_key, expected_availability_revision)
-        result = self._call(
+        result = (yield from _steps(self._call,
             "offer",
             {
                 "offer": offer.value(),
                 "idempotency_key": idempotency_key,
                 "expected_availability_revision": expected_availability_revision,
             },
-        )
+        ))
         journal.complete_mutation("offer", idempotency_key, result)
         return result
 
-    def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
+    @_cooperative
+    def renew_offer(self, renewal: AgentOfferRenewal) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._drained or self._restart_with_retained_work:
             raise QueueConflictError("agent cannot renew executable capacity")
         journal = self._require_journal()
@@ -2929,20 +2949,21 @@ class LocalDaemonAgentHttpClient:
         if replay is not None:
             journal.complete_mutation("renew", operation_id, replay)
             return replay
-        result = self._call("renew", {"renewal": renewal.value()})
+        result = (yield from _steps(self._call, "renew", {"renewal": renewal.value()}))
         journal.complete_offer_renewal(renewal, result)
         journal.complete_mutation("renew", operation_id, result)
         return result
 
+    @_cooperative
     def refresh_resource_offer(
         self, *, ttl_seconds: int = 30
-    ) -> Mapping[str, PlainData] | None:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
         """Refresh cached host facts and report one serial, replayable resource view."""
         journal = self._require_journal()
         session = journal.active_session()
         if session is None or self._drained or self._restart_with_retained_work:
             return None
-        self._replay_pending_resource_mutation(session.session_id)
+        (yield from _steps(self._replay_pending_resource_mutation, session.session_id))
         session = journal.session(session.session_id)
         if not self._config.resident_profiles:
             profile = None
@@ -2952,7 +2973,14 @@ class LocalDaemonAgentHttpClient:
             self._provider_composition(session.agent_id, profile)
             for provider in self._configured_provider_members or ():
                 if isinstance(provider, GpuResourceProvider):
-                    provider.refresh_occupancy()
+                    monitor = provider._occupancy_monitor
+                    if monitor is not None:
+                        cached = monitor.cached_snapshot()
+                        if cached is None or not cached.is_fresh(monitor._monotonic_clock(), monitor.policy.poll_interval_seconds):
+                            snapshot = yield from _external("bulk", _sample_gpu_occupancy,
+                                                           monitor._observer, monitor.selected_uuids,
+                                                           monitor._utc_clock, monitor._monotonic_clock)
+                            monitor._apply_snapshot(snapshot)
             descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
                 session_id=session.session_id,
                 availability_revision=session.availability_revision,
@@ -3001,19 +3029,20 @@ class LocalDaemonAgentHttpClient:
             and current.decision_value() == offer.decision_value()
             and renewal is not None
         ):
-            return self.renew_offer(replace(renewal, resource_status=statuses))
+            return (yield from _steps(self.renew_offer, replace(renewal, resource_status=statuses)))
         expected = None
         if current is not None:
             expected = session.availability_revision
             offer = replace(offer, availability_revision=f"availability-{uuid4()}")
-        return self.publish_offer(
+        return (yield from _steps(self.publish_offer,
             offer,
             idempotency_key=f"offer-{uuid4()}",
             expected_availability_revision=expected,
             _observed_snapshot=True,
-        )
+        ))
 
-    def _replay_pending_resource_mutation(self, session_id: str) -> None:
+    @_cooperative
+    def _replay_pending_resource_mutation(self, session_id: str) -> Generator[_Progress, Any, None]:
         """Resolve the exact report before another operation changes session state."""
         journal = self._require_journal()
         pending = journal.pending_resource_mutation(session_id)
@@ -3023,18 +3052,18 @@ class LocalDaemonAgentHttpClient:
         try:
             if operation == "renew":
                 renewal = AgentOfferRenewal.from_value(value)
-                result = self._call("renew", {"renewal": renewal.value()})
+                result = (yield from _steps(self._call, "renew", {"renewal": renewal.value()}))
             else:
                 offered = dict(value)
                 expected = offered.pop("expected_availability_revision", None)
-                result = self._call(
+                result = (yield from _steps(self._call,
                     "offer",
                     {
                         "offer": offered,
                         "idempotency_key": operation_id,
                         "expected_availability_revision": expected,
                     },
-                )
+                ))
         except _IndeterminateAgentProtocolError:
             raise
         except (QueueConflictError, QueueServiceError):
@@ -3057,7 +3086,8 @@ class LocalDaemonAgentHttpClient:
             journal.complete_offer_renewal(AgentOfferRenewal.from_value(value), result)
         journal.complete_mutation(operation, operation_id, result)
 
-    def _maintain_resource_offer(self) -> None:
+    @_cooperative
+    def _maintain_resource_offer(self) -> Generator[_Progress, Any, None]:
         """Keep control/supervision running when a report response is unavailable."""
         if not self._resource_maintenance_enabled:
             return
@@ -3068,15 +3098,20 @@ class LocalDaemonAgentHttpClient:
         interval = 5.0 if policy is None else policy.poll_interval_seconds
         self._next_resource_maintenance = now + interval
         try:
-            self.refresh_resource_offer()
+            session = self.active_session()
+            if session is not None:
+                yield from _steps(self.poll_control, session.session_id)
+            (yield from _steps(self.refresh_resource_offer))
         except QueueError:
             # Its exact pending mutation is retried; no worker is released.
             pass
 
-    def renew_current_offer(self, session_id: str) -> Mapping[str, PlainData] | None:
+    @_cooperative
+    def renew_current_offer(self, session_id: str) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
         renewal = self._require_journal().next_offer_renewal(session_id)
-        return None if renewal is None else self.renew_offer(renewal)
+        return None if renewal is None else (yield from _steps(self.renew_offer, renewal))
 
+    @_cooperative
     def wait_for_work(
         self,
         session_id: str,
@@ -3084,7 +3119,7 @@ class LocalDaemonAgentHttpClient:
         *,
         sequence: int,
         wait_timeout_ms: int,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._drained:
             raise QueueConflictError("drained agent cannot poll for new work")
         if self._restart_with_retained_work:
@@ -3104,7 +3139,7 @@ class LocalDaemonAgentHttpClient:
         if replay is not None:
             return replay
         try:
-            result = self._call("poll", value)
+            result = (yield from _steps(self._call, "poll", value))
         except AgentPollActiveError:
             # The original held request still owns this exact poll identity.
             # Preserve the local intent so the same identity can be retried.
@@ -3120,8 +3155,9 @@ class LocalDaemonAgentHttpClient:
         journal.complete_poll(session_id, sequence, result)
         return result
 
-    def poll_control(self, session_id: str) -> AgentControl | None:
-        self._replay_pending_resource_mutation(session_id)
+    @_cooperative
+    def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
+        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
         pending = journal.next_unacknowledged_control()
         if pending is not None:
@@ -3130,13 +3166,13 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError(
                     "retained agent control belongs to another session"
                 )
-            self._call(
+            (yield from _steps(self._call,
                 "control_ack",
                 {"session_id": session_id, "effect": effect.value()},
-            )
+            ))
             journal.acknowledge_control(control.operation_id)
             return control
-        result = self._call("control", {"session_id": session_id})
+        result = (yield from _steps(self._call, "control", {"session_id": session_id}))
         raw = result.get("control")
         if raw is None:
             return None
@@ -3151,7 +3187,7 @@ class LocalDaemonAgentHttpClient:
             with self._control_lock:
                 if control.cancel_active:
                     cancellation_prepared = True
-                    if not self._cancel_active_assignments():
+                    if not (yield from _steps(self._cancel_active_assignments)):
                         prepared_error = "unknown_work"
                 if prepared_error is None:
                     if self._trusted_config_loader is None:
@@ -3171,20 +3207,21 @@ class LocalDaemonAgentHttpClient:
                 ),
             )
         if effect is None:
-            effect = self._apply_agent_control(
+            effect = (yield from _steps(self._apply_agent_control,
                 control,
                 prepared_reload=prepared_reload,
                 prepared_error=prepared_error,
                 cancellation_prepared=cancellation_prepared,
-            )
+            ))
             journal.record_control_effect(control, effect)
-        self._call(
+        (yield from _steps(self._call,
             "control_ack",
             {"session_id": session_id, "effect": effect.value()},
-        )
+        ))
         journal.acknowledge_control(control.operation_id)
         return control
 
+    @_cooperative
     def _apply_agent_control(
         self,
         control: AgentControl,
@@ -3192,7 +3229,7 @@ class LocalDaemonAgentHttpClient:
         prepared_reload: _PreparedAgentReload | None = None,
         prepared_error: str | None = None,
         cancellation_prepared: bool = False,
-    ) -> AgentControlEffect:
+    ) -> Generator[_Progress, Any, AgentControlEffect]:
         """Apply an inert command using only trusted owner-local configuration."""
 
         session = self._require_journal().session(control.expected_session_id)
@@ -3204,7 +3241,7 @@ class LocalDaemonAgentHttpClient:
             if (
                 control.cancel_active
                 and not cancellation_prepared
-                and not self._cancel_active_assignments()
+                and not (yield from _steps(self._cancel_active_assignments))
             ):
                 return self._unchanged_control_effect(control, session, "unknown_work")
             if control.kind.value == "reload":
@@ -3418,7 +3455,8 @@ class LocalDaemonAgentHttpClient:
         self._runtime_provider_key = None
         self._providers = {}
 
-    def _cancel_active_assignments(self) -> bool:
+    @_cooperative
+    def _cancel_active_assignments(self) -> Generator[_Progress, Any, bool]:
         journal = self._journal
         supervisor = self._supervisor
         if journal is None or supervisor is None:
@@ -3433,8 +3471,8 @@ class LocalDaemonAgentHttpClient:
                 continue
             try:
                 launch = _launch_from_value(json.loads(encoded_launch))
-                supervisor.request_stop_wait(launch)
-                receipt = supervisor.contain(launch)
+                (yield from _external("bulk", supervisor.request_stop_wait, launch))
+                receipt = (yield from _external("bulk", supervisor.contain, launch))
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
                 continue
@@ -3463,38 +3501,44 @@ class LocalDaemonAgentHttpClient:
             )
         self._cancelled_assignments.add(workspace.assignment_id)
 
-    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+    @_cooperative
+    def control_agent(self, control: AgentControl) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Issue the same typed operator command over authenticated HTTP."""
-        return self._call(
+        return (yield from _steps(self._call,
             "agent_control", {"control": control.value()}, role="operator"
-        )
+        ))
 
+    @_cooperative
     def reload_scheduling(
         self, request: CoordinatorSchedulingReload
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "scheduling_reload", {"request": request.to_dict()}, role="operator"
-        )
+        ))
 
+    @_cooperative
     def recover_unknown(
         self, request: RecoverUnknownAssignment
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "recover_unknown", {"request": request.to_dict()}, role="operator"
-        )
+        ))
 
-    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+    @_cooperative
+    def recover_time(self, request: TimeRecoveryRequest) -> Generator[_Progress, Any, TimeRecoveryReceipt]:
         return TimeRecoveryReceipt.from_dict(
-            self._call("recover_time", {"request": request.to_dict()}, role="operator")
+            (yield from _steps(self._call, "recover_time", {"request": request.to_dict()}, role="operator"))
         )
 
+    @_cooperative
     def replace_agent_session(
         self, request: SessionReplacementRequest
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "replace_agent_session", {"request": request.to_dict()}, role="operator"
-        )
+        ))
 
+    @_cooperative
     def authorize_transfers(
         self,
         session_id: str,
@@ -3502,8 +3546,8 @@ class LocalDaemonAgentHttpClient:
         *,
         expected_revision: int,
         operation_id: str,
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "authorize",
             {
                 "session_id": session_id,
@@ -3511,8 +3555,9 @@ class LocalDaemonAgentHttpClient:
                 "expected_revision": expected_revision,
                 "operation_id": operation_id,
             },
-        )
+        ))
 
+    @_cooperative
     def read_input_chunk(
         self,
         session_id: str,
@@ -3522,8 +3567,8 @@ class LocalDaemonAgentHttpClient:
         offset: int,
         authorization_id: str,
         authorization_revision: int,
-    ) -> tuple[bytes, int, bool]:
-        result = self._call(
+    ) -> Generator[_Progress, Any, tuple[bytes, int, bool]]:
+        result = (yield from _steps(self._call,
             "input",
             {
                 "session_id": session_id,
@@ -3533,7 +3578,7 @@ class LocalDaemonAgentHttpClient:
                 "authorization_id": authorization_id,
                 "authorization_revision": authorization_revision,
             },
-        )
+        ))
         data = _decode_chunk(result.get("data"))
         next_offset = result.get("next_offset")
         final = result.get("final")
@@ -3546,37 +3591,40 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError("remote input chunk response is invalid")
         return data, next_offset, final
 
+    @_cooperative
     def accept_assignment(
         self,
         session_id: str,
         assignment_id: str,
         *,
         request_digest: str,
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "accept",
             {
                 "session_id": session_id,
                 "assignment_id": assignment_id,
                 "request_digest": request_digest,
             },
-        )
+        ))
 
-    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
-        result = self._call(
+    @_cooperative
+    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> Generator[_Progress, Any, bool]:
+        result = (yield from _steps(self._call,
             "start_permit",
             {
                 "session_id": session_id,
                 "assignment_id": assignment_id,
                 "fence": fence,
             },
-        )
+        ))
         permitted = result.get("permitted")
         if not isinstance(permitted, bool):
             raise QueueServiceError("remote start permit response is invalid")
         return permitted
 
-    def poll_assignment_control(self, session_id: str) -> AgentAssignmentControl | None:
+    @_cooperative
+    def poll_assignment_control(self, session_id: str) -> Generator[_Progress, Any, AgentAssignmentControl | None]:
         journal = self._require_journal()
         pending = journal.next_unacknowledged_assignment_control()
         if pending is not None:
@@ -3587,33 +3635,41 @@ class LocalDaemonAgentHttpClient:
                 )
             if code == "contained":
                 self._cancelled_assignments.add(control.assignment_id)
-            self._acknowledge_assignment_control(session_id, control, code, evidence)
+            (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
             return control
-        result = self._call("assignment_control", {"session_id": session_id})
-        raw = result.get("control")
+        received = journal.next_received_assignment_control()
+        if received is None:
+            result = (yield from _steps(self._call, "assignment_control", {"session_id": session_id}))
+            raw = result.get("control")
+        else:
+            raw = received.value()
         if raw is None:
             return None
         if not isinstance(raw, Mapping):
             raise QueueServiceError("assignment control response is invalid")
         control = AgentAssignmentControl.from_value(raw)
+        if control.session_id != session_id:
+            raise QueueConflictError("retained assignment control belongs to another session")
+        self._received_cancellations.add(control.assignment_id)
         prior = journal.prepare_assignment_control(control)
         if prior is not None:
             code, evidence = prior
-            self._acknowledge_assignment_control(session_id, control, code, evidence)
+            (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
             return control
-        code, evidence = self._apply_assignment_control(control)
+        code, evidence = (yield from _steps(self._apply_assignment_control, control))
         journal.record_assignment_control_result(control, code, evidence)
-        self._acknowledge_assignment_control(session_id, control, code, evidence)
+        (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
         return control
 
+    @_cooperative
     def _acknowledge_assignment_control(
         self,
         session_id: str,
         control: AgentAssignmentControl,
         code: str,
         evidence: Mapping[str, PlainData] | None,
-    ) -> None:
-        self._call(
+    ) -> Generator[_Progress, Any, None]:
+        (yield from _steps(self._call,
             "assignment_control_ack",
             {
                 "session_id": session_id,
@@ -3621,20 +3677,21 @@ class LocalDaemonAgentHttpClient:
                 "code": code,
                 "evidence": None if evidence is None else dict(evidence),
             },
-        )
+        ))
         workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), control.assignment_id)
         if (code == "never_started" and not workspace.has_request()
             and self._execution_journal is not None
             and self._execution_journal.find_state(control.assignment_id) is None):
             session = self._require_journal().session(session_id)
             providers, _ = self._runtime_owners(session)
-            self.decline_assignment(session_id, control.assignment_id,
-                availability_revision=self._availability_revision(session, control.assignment_id, providers))
+            (yield from _steps(self.decline_assignment, session_id, control.assignment_id,
+                availability_revision=self._availability_revision(session, control.assignment_id, providers)))
         self._require_journal().acknowledge_assignment_control(control.operation_id)
 
+    @_cooperative
     def _apply_assignment_control(
         self, control: AgentAssignmentControl
-    ) -> tuple[str, Mapping[str, PlainData] | None]:
+    ) -> Generator[_Progress, Any, tuple[str, Mapping[str, PlainData] | None]]:
         with self._control_lock:
             journal = self._execution_journal
             if journal is None:
@@ -3663,6 +3720,11 @@ class LocalDaemonAgentHttpClient:
                     AssignmentState.PROVIDERS_RELEASED,
                     AssignmentState.RELEASED,
                 }:
+                    result = journal.read_result(control.assignment_id)
+                    if result is not None and result.status is StageStatus.CANCELLED:
+                        # With no persisted launch, this result can only come
+                        # from the native ACTIVE/no-start cancellation transition.
+                        return "never_started", None
                     return "terminal", None
                 if state in {
                     AssignmentState.REQUEST_DURABLE,
@@ -3692,8 +3754,8 @@ class LocalDaemonAgentHttpClient:
                     or launch.execution_fence != control.fence
                 ):
                     return "unknown", None
-                self._supervisor.request_stop_wait(launch)
-                contained = self._supervisor.contain(launch)
+                (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
+                contained = (yield from _external("bulk", self._supervisor.contain, launch))
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
             if contained.state is not SupervisorLaunchState.CONTAINED:
@@ -3706,6 +3768,7 @@ class LocalDaemonAgentHttpClient:
                 contained, agent_id=target_agent_id
             )
 
+    @_cooperative
     def decline_assignment(
         self,
         session_id: str,
@@ -3713,10 +3776,10 @@ class LocalDaemonAgentHttpClient:
         *,
         availability_revision: str,
         reason_code: str | None = None,
-    ) -> AgentSession:
-        self._replay_pending_resource_mutation(session_id)
+    ) -> Generator[_Progress, Any, AgentSession]:
+        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         session = _session_from_value(
-            self._call(
+            (yield from _steps(self._call,
                 "decline",
                 {
                     "session_id": session_id,
@@ -3724,13 +3787,14 @@ class LocalDaemonAgentHttpClient:
                     "availability_revision": availability_revision,
                     "reason_code": reason_code,
                 },
-            )
+            ))
         )
         journal = self._require_journal()
         journal.persist_reconciled_session(session)
         journal.resolve_assignment_reference(session_id, assignment_id)
         return session
 
+    @_cooperative
     def confirm_started(
         self,
         session_id: str,
@@ -3738,8 +3802,8 @@ class LocalDaemonAgentHttpClient:
         *,
         fence: str,
         process_execution_id: str,
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "started",
             {
                 "session_id": session_id,
@@ -3747,8 +3811,9 @@ class LocalDaemonAgentHttpClient:
                 "fence": fence,
                 "process_execution_id": process_execution_id,
             },
-        )
+        ))
 
+    @_cooperative
     def report_event(
         self,
         session_id: str,
@@ -3757,8 +3822,8 @@ class LocalDaemonAgentHttpClient:
         sequence: int,
         event_id: str,
         payload: Mapping[str, PlainData],
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "event",
             {
                 "session_id": session_id,
@@ -3767,8 +3832,9 @@ class LocalDaemonAgentHttpClient:
                 "event_id": event_id,
                 "payload": thaw_plain_data(payload, path="remote event"),
             },
-        )
+        ))
 
+    @_cooperative
     def declare_outputs(
         self,
         session_id: str,
@@ -3778,8 +3844,8 @@ class LocalDaemonAgentHttpClient:
         authorization_id: str,
         authorization_revision: int,
         report: _RemoteExecutionReport,
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "output_manifest",
             {
                 "session_id": session_id,
@@ -3789,8 +3855,9 @@ class LocalDaemonAgentHttpClient:
                 "authorization_revision": authorization_revision,
                 "report": report.to_dict(),
             },
-        )
+        ))
 
+    @_cooperative
     def upload_output_chunk(
         self,
         session_id: str,
@@ -3802,8 +3869,8 @@ class LocalDaemonAgentHttpClient:
         final: bool,
         authorization_id: str,
         authorization_revision: int,
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "output",
             {
                 "session_id": session_id,
@@ -3815,20 +3882,22 @@ class LocalDaemonAgentHttpClient:
                 "authorization_id": authorization_id,
                 "authorization_revision": authorization_revision,
             },
-        )
+        ))
 
+    @_cooperative
     def commit_result(
         self, session_id: str, assignment_id: str, *, fence: str
-    ) -> Mapping[str, PlainData]:
-        return self._call(
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        return (yield from _steps(self._call,
             "result",
             {
                 "session_id": session_id,
                 "assignment_id": assignment_id,
                 "fence": fence,
             },
-        )
+        ))
 
+    @_cooperative
     def release_assignment(
         self,
         session_id: str,
@@ -3836,8 +3905,8 @@ class LocalDaemonAgentHttpClient:
         *,
         fence: str,
         availability_revision: str,
-    ) -> AgentSession:
-        self._replay_pending_resource_mutation(session_id)
+    ) -> Generator[_Progress, Any, AgentSession]:
+        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
         execution_journal = self._execution_journal
         if execution_journal is None:
@@ -3851,7 +3920,7 @@ class LocalDaemonAgentHttpClient:
         ):
             raise QueueConflictError("remote provider release proof is stale")
         session = _session_from_value(
-            self._call(
+            (yield from _steps(self._call,
                 "release",
                 {
                     "session_id": session_id,
@@ -3860,29 +3929,30 @@ class LocalDaemonAgentHttpClient:
                     "availability_revision": availability_revision,
                     "provider_release_proof": proof.value(),
                 },
-            )
+            ))
         )
         if session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
         journal.complete_assignment_release(session, assignment_id)
         return session
 
+    @_cooperative
     def release_contained_assignment(
         self, session_id: str, assignment_id: str, *, fence: str
-    ) -> AgentSession:
+    ) -> Generator[_Progress, Any, AgentSession]:
         """Release providers from the old root after guarded containment closes."""
 
         journal = self._require_journal()
         session = journal.session(session_id)
         journal.contained_assignment_control(session_id, assignment_id, fence)
-        readiness = self._call(
+        readiness = (yield from _steps(self._call,
             "recovery_release_ready",
             {
                 "session_id": session_id,
                 "assignment_id": assignment_id,
                 "fence": fence,
             },
-        )
+        ))
         if readiness.get("ready") is not True:
             raise QueueConflictError("contained assignment authority close is pending")
         workspace = _ResidentAssignmentWorkspace(
@@ -3932,14 +4002,14 @@ class LocalDaemonAgentHttpClient:
                 encoded = workspace.supervisor_launch_json()
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
-                receipt = self._supervisor.query_wait(_launch_from_value(json.loads(encoded)))
+                receipt = (yield from _external("bulk", self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(
                         workspace.worker_request(),
                         ManagedLocalError("worker backend success is unqualified"),
                         process_exit_code=receipt.exit_code,
                     )
-            workspace.persist_worker_result(result)
+            (yield from _external("bulk", workspace.persist_worker_result, result))
             execution_journal.record_result(assignment_id, result.to_dict())
         elif state not in {
             AssignmentState.RESULT_DURABLE,
@@ -3955,14 +4025,15 @@ class LocalDaemonAgentHttpClient:
             providers,
             execution_journal,
         )
-        return self.release_assignment(
+        return (yield from _steps(self.release_assignment,
             session_id,
             assignment_id,
             fence=fence,
             availability_revision=availability_revision,
-        )
+        ))
 
-    def drive_slurm_jobs(self) -> None:
+    @_cooperative
+    def drive_slurm_jobs(self) -> Generator[_Progress, Any, None]:
         if self._slurm_agent is None:
             return
         session = self.active_session()
@@ -3978,7 +4049,7 @@ class LocalDaemonAgentHttpClient:
                 "slurm_work", {**binding, "evidence": dict(evidence)}
             )
         )
-        response = self._call("slurm_work", {**binding, "evidence": None})
+        response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
         cursor = response.get("next_cursor")
         if cursor is not None and not isinstance(cursor, str):
             raise QueueServiceError("SLURM task cursor is invalid")
@@ -3996,6 +4067,7 @@ class LocalDaemonAgentHttpClient:
                 ),
             )
 
+    @_cooperative
     def execute_one(
         self,
         session_id: str,
@@ -4004,7 +4076,7 @@ class LocalDaemonAgentHttpClient:
         sequence: int,
         wait_timeout_ms: int,
         suspend_requested: Callable[[], bool] | None = None,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Poll and drive one resident assignment to ordered release.
 
         A suspension callback stops application observation at a durable replay
@@ -4013,28 +4085,81 @@ class LocalDaemonAgentHttpClient:
         owner before suspension. Poll/network calls retain their bounded waits.
         """
 
-        self.drive_slurm_jobs()
+        (yield from _steps(self.drive_slurm_jobs))
         _raise_if_application_suspended(suspend_requested)
-        delivery = self.wait_for_work(
+        delivery = (yield from _steps(self.wait_for_work,
             session_id,
             availability_revision,
             sequence=sequence,
             wait_timeout_ms=wait_timeout_ms,
-        )
+        ))
         if delivery.get("result") != "assignment":
             return delivery
         try:
-            request = self._resolve_delivery(session_id, delivery.get("request"))
+            request = (yield from _steps(self._resolve_delivery, session_id, delivery.get("request")))
         except (QueueError, OSError):
             # No provider claim exists yet to subtract this unresolved delivery
             # from an offer. Reuse the native retained-work startup barrier.
             self._restart_with_retained_work = True
             raise
-        return self._execute_delivered_assignment(
+        _raise_if_application_suspended(suspend_requested)
+        return (yield from _steps(self._execute_delivered_assignment,
             session_id, request, suspend_requested=suspend_requested
-        )
+        ))
 
-    def _resolve_delivery(self, session_id: str, raw: object) -> _ResidentAssignmentBundle:
+    def _receive_service_controls(self) -> Generator[_Progress, Any, None]:
+        """Retain control intent without joining containment or changing sessions.
+
+        The serial lifecycle applies/acknowledges effects at its next boundary.
+        This separate receipt path can request an exact stop while that lifecycle
+        owns an input/publication operation. It never writes that workspace.
+        """
+        journal = self._journal
+        if journal is None:
+            return
+        session = journal.active_session()
+        if session is None:
+            return
+        response = yield from _steps(self._call, "assignment_control", {"session_id": session.session_id})
+        if self._closed or journal is not self._journal:
+            return
+        raw = response.get("control")
+        if raw is not None:
+            control = AgentAssignmentControl.from_value(raw)
+            journal.prepare_assignment_control(control)
+            self._received_cancellations.add(control.assignment_id)
+            encoded = _ResidentAssignmentWorkspace.read_supervisor_launch_json(
+                cast(Path, self._config.agent_root), control.assignment_id)
+            if encoded is not None and self._supervisor is not None:
+                launch = _launch_from_value(json.loads(encoded))
+                if (launch.session_id == control.session_id
+                    and launch.assignment_id == control.assignment_id
+                    and launch.execution_fence == control.fence
+                    and control.process_execution_id in {None, launch.process_execution_id}):
+                    yield from _external("control", self._supervisor.request_stop, launch)
+        # Native drain preparation fences polls, so it must wait for exact poll
+        # settlement. Receipt of a late delivery is never replaced by withdrawal.
+        if self._closed or journal.pending_poll() is not None:
+            return
+        response = yield from _steps(self._call, "control", {"session_id": session.session_id})
+        if self._closed or journal is not self._journal or journal.pending_poll() is not None:
+            return
+        raw = response.get("control")
+        if raw is not None:
+            control = AgentControl.from_value(raw)
+            journal.prepare_control(control)
+            if control.kind.value in {"drain", "reload"}:
+                self._drained = True
+            if control.cancel_active:
+                for _, assignment_id in journal.unresolved_assignment_references():
+                    self._received_cancellations.add(assignment_id)
+                    encoded = _ResidentAssignmentWorkspace.read_supervisor_launch_json(
+                        cast(Path, self._config.agent_root), assignment_id)
+                    if encoded is not None and self._supervisor is not None:
+                        yield from _external("control", self._supervisor.request_stop, _launch_from_value(json.loads(encoded)))
+
+    @_cooperative
+    def _resolve_delivery(self, session_id: str, raw: object) -> Generator[_Progress, Any, _ResidentAssignmentBundle]:
         from ._shared_assignment import reference, resolve, verify_bundle
         ref = reference(raw)
         if ref is None:
@@ -4049,17 +4174,18 @@ class LocalDaemonAgentHttpClient:
             request = workspace.request()
             verify_bundle(ref, request, session_id=session_id)
             return request
-        request = resolve(ref, profile, session_id=session_id)
-        workspace.persist_request(request, profile)
+        request = (yield from _external("bulk", resolve, ref, profile, session_id=session_id))
+        (yield from _external("bulk", workspace.persist_request, request, profile))
         return request
 
+    @_cooperative
     def _execute_delivered_assignment(
         self,
         session_id: str,
         request: _ResidentAssignmentBundle,
         *,
         suspend_requested: Callable[[], bool] | None = None,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Drive one already durable delivery through the native input/grant path."""
         profile = self._profile_for_descriptor(request.profile)
         if profile is None:
@@ -4070,7 +4196,7 @@ class LocalDaemonAgentHttpClient:
         workspace = _ResidentAssignmentWorkspace(
             cast(Path, self._config.agent_root), request.assignment_id
         )
-        workspace.persist_request(request, profile)
+        (yield from _external("bulk", workspace.persist_request, request, profile))
         self._require_journal().retain_assignment_reference(
             session_id, request.assignment_id
         )
@@ -4100,22 +4226,22 @@ class LocalDaemonAgentHttpClient:
             for index, claim in enumerate(request.claims)
         )
         execution_journal.persist_request(assignment, request.to_dict())
-        cancelled = self._cancel_pregrant_if_requested(
+        cancelled = (yield from _steps(self._cancel_pregrant_if_requested,
             session,
             request.assignment_id,
             assignment,
             commands,
             providers,
             execution_journal,
-        )
+        ))
         if cancelled is not None:
             return cancelled
 
-        authorization = self._fresh_transfer_authorization(
+        authorization = (yield from _steps(self._fresh_transfer_authorization,
             session_id=session_id,
             assignment_id=request.assignment_id,
             expected_revision=0,
-        )
+        ))
         authorization_id = cast(str, authorization["authorization_id"])
         authorization_revision = cast(int, authorization["revision"])
         for item in request.inputs:
@@ -4125,13 +4251,13 @@ class LocalDaemonAgentHttpClient:
             offset = 0
             while True:
                 response, authorization_id, authorization_revision = (
-                    self._authorized_transfer_call(
+                    (yield from _steps(self._authorized_transfer_call,
                         session_id=session_id,
                         assignment_id=request.assignment_id,
                         authorization_id=authorization_id,
                         authorization_revision=authorization_revision,
                         operation=lambda current_id, current_revision: (
-                            self.read_input_chunk(
+                            _steps(self.read_input_chunk,
                                 session_id,
                                 request.assignment_id,
                                 item.transfer_id,
@@ -4140,20 +4266,21 @@ class LocalDaemonAgentHttpClient:
                                 authorization_revision=current_revision,
                             )
                         ),
-                    )
+                    ))
                 )
                 data, next_offset, final = cast(tuple[bytes, int, bool], response)
-                workspace.stage_input_chunk(
+                (yield from _external("bulk", workspace.stage_input_chunk,
                     item.transfer_id,
                     offset,
                     data,
                     final=final,
-                )
+                ))
+                _raise_if_application_suspended(suspend_requested)
                 offset = next_offset
-                self._maintain_resource_offer()
+                (yield from _steps(self._maintain_resource_offer))
                 if final:
                     break
-        workspace.accept()
+        (yield from _external("bulk", workspace.accept))
         prepared = execution_journal.prepare_composite(assignment, commands, providers)
         if prepared is AssignmentState.DECLINED:
             reason_code = execution_journal.read_decline_reason(
@@ -4165,16 +4292,16 @@ class LocalDaemonAgentHttpClient:
             execution_journal.release_declined(assignment.assignment_id, next_revision)
             released_session = cast(
                 AgentSession,
-                self._assignment_call(
+                (yield from _steps(self._assignment_call,
                     session_id,
                     request.assignment_id,
-                    lambda: self.decline_assignment(
+                    lambda: _steps(self.decline_assignment,
                         session_id,
                         request.assignment_id,
                         availability_revision=next_revision,
                         reason_code=reason_code,
                     ),
-                ),
+                )),
             )
             return freeze_plain_data(
                 {
@@ -4200,14 +4327,14 @@ class LocalDaemonAgentHttpClient:
             f"{request.assignment_id}:request-inputs-durable",
             {"kind": "request_and_inputs_durable"},
         )
-        cancelled = self._cancel_pregrant_if_requested(
+        cancelled = (yield from _steps(self._cancel_pregrant_if_requested,
             session,
             request.assignment_id,
             assignment,
             commands,
             providers,
             execution_journal,
-        )
+        ))
         if cancelled is not None:
             return cancelled
         request_json = json.dumps(
@@ -4216,32 +4343,32 @@ class LocalDaemonAgentHttpClient:
         try:
             grant = cast(
                 Mapping[str, PlainData],
-                self._assignment_call(
+                (yield from _steps(self._assignment_call,
                     session_id,
                     request.assignment_id,
-                    lambda: self.accept_assignment(
+                    lambda: _steps(self.accept_assignment,
                         session_id,
                         request.assignment_id,
                         request_digest=hashlib.sha256(
                             request_json.encode()
                         ).hexdigest(),
                     ),
-                ),
+                )),
             )
         except QueueConflictError as conflict:
             deadline = monotonic() + 5
             while monotonic() < deadline:
-                cancelled = self._cancel_pregrant_if_requested(
+                cancelled = (yield from _steps(self._cancel_pregrant_if_requested,
                     session,
                     request.assignment_id,
                     assignment,
                     commands,
                     providers,
                     execution_journal,
-                )
+                ))
                 if cancelled is not None:
                     return cancelled
-                sleep(0.05)
+                (yield from _delay(0.05))
             raise conflict
         fence = cast(str, grant["fence"])
         execution_journal.grant(assignment.assignment_id, fence)
@@ -4267,7 +4394,7 @@ class LocalDaemonAgentHttpClient:
             AssignmentState.ACTIVE,
         }:
 
-            def start_supervisor_launch() -> str:
+            def start_supervisor_launch() -> Generator[_Progress, Any, str]:
                 nonlocal launch
                 try:
                     launch = build_supervisor_launch()
@@ -4280,7 +4407,7 @@ class LocalDaemonAgentHttpClient:
                         _launch_value(launch), sort_keys=True, separators=(",", ":")
                     )
                 )
-                receipt = supervisor.launch(launch)
+                receipt = (yield from _external("bulk", supervisor.launch, launch))
                 if (
                     receipt.state
                     in {
@@ -4327,16 +4454,22 @@ class LocalDaemonAgentHttpClient:
                 )
 
             with self._control_lock:
+                _raise_if_application_suspended(suspend_requested)
                 permitted = cast(
                     bool,
-                    self._assignment_call(
+                    (yield from _steps(self._assignment_call,
                         session_id,
                         request.assignment_id,
-                        lambda: self.start_permit(
+                        lambda: _steps(self.start_permit,
                             session_id, request.assignment_id, fence=fence
                         ),
-                    ),
+                    )),
                 )
+                if permitted and request.assignment_id in self._received_cancellations:
+                    rejected = yield from _external("control", supervisor.reject_unstarted_assignment, request.assignment_id)
+                    if not rejected:
+                        raise QueueConflictError("cancelled assignment start ownership is unresolved")
+                    permitted = False
                 if not permitted:
                     result = _cancelled_worker_result(workspace.worker_request())
                     atomic_write_bytes(
@@ -4355,7 +4488,8 @@ class LocalDaemonAgentHttpClient:
                     completed_before_start = True
                 else:
                     try:
-                        execution_journal.start_once(
+                        yield from _start_once_steps(
+                            execution_journal,
                             assignment.assignment_id,
                             execution_id,
                             start_supervisor_launch,
@@ -4390,18 +4524,18 @@ class LocalDaemonAgentHttpClient:
                             f"{request.assignment_id}:agent-process-started",
                             {"kind": "process_started"},
                         )
-                        self._assignment_call(
+                        (yield from _steps(self._assignment_call,
                             session_id,
                             request.assignment_id,
-                            lambda: self.confirm_started(
+                            lambda: _steps(self.confirm_started,
                                 session_id,
                                 request.assignment_id,
                                 fence=fence,
                                 process_execution_id=execution_id,
                             ),
-                        )
+                        ))
         if not completed_before_start:
-            self._flush_workspace_events(session_id, workspace)
+            (yield from _steps(self._flush_workspace_events, session_id, workspace))
         if launch is None:
             retained_launch = workspace.supervisor_launch_json()
             if retained_launch is not None:
@@ -4409,7 +4543,7 @@ class LocalDaemonAgentHttpClient:
         if launch is not None:
             while True:
                 _raise_if_application_suspended(suspend_requested)
-                receipt = supervisor.query(launch)
+                receipt = (yield from _external("control", supervisor.query, launch))
                 if receipt.state in {
                     SupervisorLaunchState.EXITED,
                     SupervisorLaunchState.CONTAINED,
@@ -4417,16 +4551,16 @@ class LocalDaemonAgentHttpClient:
                     break
                 if receipt.state is SupervisorLaunchState.UNKNOWN:
                     raise QueueConflictError("remote supervisor continuity is unknown")
-                self.poll_assignment_control(session_id)
-                self._maintain_resource_offer()
-                sleep(0.05)
-            if not self._settle_supervised_worker_result(workspace, launch, receipt):
+                (yield from _steps(self.poll_assignment_control, session_id))
+                (yield from _steps(self._maintain_resource_offer))
+                (yield from _delay(0.05))
+            if not (yield from _steps(self._settle_supervised_worker_result, workspace, launch, receipt)):
                 raise QueueConflictError("remote process group containment is unknown")
         elif not result_path.is_file():
             raise QueueConflictError(
                 "remote process outcome is unknown and cannot be relaunched"
             )
-        return self._complete_remote_result_and_release(
+        return (yield from _steps(self._complete_remote_result_and_release,
             session,
             request,
             workspace,
@@ -4440,14 +4574,15 @@ class LocalDaemonAgentHttpClient:
             result_path_label="remote execution completion",
             # A proven no-start outcome completes without a supervisor to join.
             suspend_requested=suspend_requested if launch is not None else None,
-        )
+        ))
 
+    @_cooperative
     def _resume_pending_poll(
         self,
         *,
         wait_timeout_ms: int,
         suspend_requested: Callable[[], bool] | None = None,
-    ) -> None:
+    ) -> Generator[_Progress, Any, None]:
         """Replay the service's exact outstanding delivery before new capacity.
 
         The retained request digest validates the configured timeout as well as
@@ -4469,10 +4604,10 @@ class LocalDaemonAgentHttpClient:
         }
         journal.prepare_poll(session_id, revision, sequence, value)
         prior_epoch = journal.session(session_id).coordinator_epoch
-        if self.handshake()["coordinator_epoch"] != prior_epoch:
-            recovery = self._call(
+        if (yield from _steps(self.handshake))["coordinator_epoch"] != prior_epoch:
+            recovery = (yield from _steps(self._call,
                 "recover_poll", {**value, "coordinator_epoch": prior_epoch}
-            )
+            ))
             if recovery.get("state") == "absent":
                 journal.discard_absent_poll(session_id, sequence)
                 return
@@ -4484,20 +4619,21 @@ class LocalDaemonAgentHttpClient:
             result = {key: item for key, item in recovery.items() if key != "state"}
         else:
             try:
-                result = self._call("poll", value)
+                result = (yield from _steps(self._call, "poll", value))
             except AgentPollFencedError:
                 journal.fence_poll(session_id, sequence)
                 return
         journal.complete_poll(session_id, sequence, result)
         if result.get("result") == "assignment":
-            request = self._resolve_delivery(session_id, result.get("request"))
-            self._execute_delivered_assignment(
+            request = (yield from _steps(self._resolve_delivery, session_id, result.get("request")))
+            (yield from _steps(self._execute_delivered_assignment,
                 session_id, request, suspend_requested=suspend_requested
-            )
+            ))
 
+    @_cooperative
     def resume_retained_work(
         self, *, suspend_requested: Callable[[], bool] | None = None
-    ) -> tuple[Mapping[str, PlainData], ...]:
+    ) -> Generator[_Progress, Any, tuple[Mapping[str, PlainData], ...]]:
         """Join continuous supervisor receipts before releasing startup capacity.
 
         This is deliberately an explicit application-start step: no offer or
@@ -4531,11 +4667,11 @@ class LocalDaemonAgentHttpClient:
             if not workspace.has_request():
                 if raw_delivery is None:
                     raise QueueConflictError("retained assignment delivery is unavailable")
-                self._assignment_call(session_id, assignment_id, lambda: self.poll_assignment_control(session_id))
+                (yield from _steps(self._assignment_call, session_id, assignment_id, lambda: _steps(self.poll_assignment_control, session_id)))
                 if (session_id, assignment_id) not in journal.unresolved_assignment_references():
                     continue
-                request = self._resolve_delivery(session_id, raw_delivery)
-                completed.append(self._execute_delivered_assignment(session_id, request, suspend_requested=suspend_requested))
+                request = (yield from _steps(self._resolve_delivery, session_id, raw_delivery))
+                completed.append((yield from _steps(self._execute_delivered_assignment, session_id, request, suspend_requested=suspend_requested)))
                 continue
             request = workspace.request()
             if raw_delivery is not None:
@@ -4566,11 +4702,11 @@ class LocalDaemonAgentHttpClient:
             if execution_journal.read_state(assignment_id) is AssignmentState.RELEASED:
                 # The release reply may be lost after coordinator acceptance.
                 # Replay its retained proof, not an already committed output manifest.
-                released = self.release_assignment(
+                released = (yield from _steps(self.release_assignment,
                     session_id, assignment_id,
                     fence=cast(str, execution_journal.read_grant_fence(assignment_id)),
                     availability_revision=cast(str, execution_journal.read_availability_revision(assignment_id)),
-                )
+                ))
                 completed.append(freeze_plain_data({
                     "result": "assignment", "assignment_id": assignment_id,
                     "state": "RELEASED", "session": released.value(),
@@ -4591,9 +4727,9 @@ class LocalDaemonAgentHttpClient:
                 # poll or offer while retained work is unresolved. Commands
                 # may not yet exist when the interruption was during input.
                 completed.append(
-                    self._execute_delivered_assignment(
+                    (yield from _steps(self._execute_delivered_assignment,
                         session_id, request, suspend_requested=suspend_requested
-                    )
+                    ))
                 )
                 continue
             commands = execution_journal.assignment_claim_commands(assignment_id)
@@ -4609,7 +4745,7 @@ class LocalDaemonAgentHttpClient:
                     ):
                         # The supervisor atomically checks historical acceptance
                         # and fences all future launches. Absence alone is not proof.
-                        if not supervisor.reject_unstarted_assignment(assignment_id):
+                        if not (yield from _external("bulk", supervisor.reject_unstarted_assignment, assignment_id)):
                             continue
                         execution_journal.record_supervisor_rejected_start(
                             assignment_id, fence=retained_fence,
@@ -4666,7 +4802,7 @@ class LocalDaemonAgentHttpClient:
                     # Absence of a launch alone cannot establish safe release.
                     continue
                 completed.append(
-                    self._complete_remote_result_and_release(
+                    (yield from _steps(self._complete_remote_result_and_release,
                         session,
                         request,
                         workspace,
@@ -4679,26 +4815,26 @@ class LocalDaemonAgentHttpClient:
                         persist_result=False,
                         result_path_label="remote no-start restart completion",
                         suspend_requested=suspend_requested,
-                    )
+                    ))
                 )
                 continue
             launch = _launch_from_value(json.loads(launch_json))
-            receipt = supervisor.query_wait(launch)
+            receipt = (yield from _external("bulk", supervisor.query_wait, launch))
             if (
                 launch.continuity_epoch in supervisor.reboot_generations
                 and receipt.exit_code is None
             ):
                 # A reboot proves containment, never a scientific terminal result.
                 # Keep capacity withheld until the operator's guarded close wins.
-                self._assignment_call(
+                (yield from _steps(self._assignment_call,
                     session_id,
                     assignment_id,
-                    lambda: self.poll_assignment_control(session_id),
-                )
-                ready = self._assignment_call(
+                    lambda: _steps(self.poll_assignment_control, session_id),
+                ))
+                ready = (yield from _steps(self._assignment_call,
                     session_id,
                     assignment_id,
-                    lambda: self._call(
+                    lambda: _steps(self._call,
                         "recovery_release_ready",
                         {
                             "session_id": session_id,
@@ -4706,22 +4842,22 @@ class LocalDaemonAgentHttpClient:
                             "fence": launch.execution_fence,
                         },
                     ),
-                )
+                ))
                 if ready.get("ready") is True:
-                    self._assignment_call(
+                    (yield from _steps(self._assignment_call,
                         session_id,
                         assignment_id,
-                        lambda: self.release_contained_assignment(
+                        lambda: _steps(self.release_contained_assignment,
                             session_id,
                             assignment_id,
                             fence=launch.execution_fence,
                         ),
-                    )
+                    ))
                 continue
             if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
                 # The complete exact operation was journaled before the service
                 # call. Submitting that operation is replay, never relaunch.
-                receipt = supervisor.launch(launch)
+                receipt = (yield from _external("bulk", supervisor.launch, launch))
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
             needs_start_join = execution_journal.read_state(assignment_id) in {
@@ -4730,41 +4866,41 @@ class LocalDaemonAgentHttpClient:
                 AssignmentState.PROCESS_STARTED,
             }
             if needs_start_join and receipt.started:
-                self._join_retained_supervised_start(
+                (yield from _steps(self._join_retained_supervised_start,
                     session,
                     request,
                     workspace,
                     execution_journal,
                     launch,
                     receipt.process_id,
-                )
+                ))
                 needs_start_join = False
             while receipt.state in {
                 SupervisorLaunchState.STARTING,
                 SupervisorLaunchState.RUNNING,
             }:
                 _raise_if_application_suspended(suspend_requested)
-                self.poll_assignment_control(session_id)
-                sleep(0.05)
-                receipt = supervisor.query(launch)
+                (yield from _steps(self.poll_assignment_control, session_id))
+                (yield from _delay(0.05))
+                receipt = (yield from _external("control", supervisor.query, launch))
                 if needs_start_join and receipt.started:
-                    self._join_retained_supervised_start(
+                    (yield from _steps(self._join_retained_supervised_start,
                         session,
                         request,
                         workspace,
                         execution_journal,
                         launch,
                         receipt.process_id,
-                    )
+                    ))
                     needs_start_join = False
                 if receipt.state is SupervisorLaunchState.UNKNOWN:
                     break
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
-            if not self._settle_supervised_worker_result(workspace, launch, receipt):
+            if not (yield from _steps(self._settle_supervised_worker_result, workspace, launch, receipt)):
                 continue
             completed.append(
-                self._complete_remote_result_and_release(
+                (yield from _steps(self._complete_remote_result_and_release,
                     session,
                     request,
                     workspace,
@@ -4777,17 +4913,18 @@ class LocalDaemonAgentHttpClient:
                     persist_result=True,
                     result_path_label="remote restart completion",
                     suspend_requested=suspend_requested,
-                )
+                ))
             )
         self._restart_with_retained_work = self._has_retained_agent_work()
         return tuple(completed)
 
+    @_cooperative
     def _settle_supervised_worker_result(
         self,
         workspace: _ResidentAssignmentWorkspace,
         launch: ResidentWorkerLaunch,
         receipt: SupervisorReceipt,
-    ) -> bool:
+    ) -> Generator[_Progress, Any, bool]:
         """Close a known root exit only with continuous group/result evidence."""
 
         if receipt.state not in {
@@ -4798,6 +4935,8 @@ class LocalDaemonAgentHttpClient:
         supervisor = self._supervisor
         if supervisor is None:
             raise QueueConflictError("remote completion has no process owner")
+        if workspace.assignment_id in self._received_cancellations:
+            yield from _steps(self.poll_assignment_control, launch.session_id)
         result_path = workspace.root / "worker-result.json"
         if not result_path.is_file():
             if workspace.assignment_id in self._cancelled_assignments:
@@ -4819,7 +4958,7 @@ class LocalDaemonAgentHttpClient:
                         allow_nan=False,
                     ).encode(),
                 )
-        contained = supervisor.contain(launch)
+        contained = (yield from _external("bulk", supervisor.contain, launch))
         if contained.state is not SupervisorLaunchState.CONTAINED:
             return False
         if (
@@ -4831,6 +4970,7 @@ class LocalDaemonAgentHttpClient:
             )
         return True
 
+    @_cooperative
     def _join_retained_supervised_start(
         self,
         session: AgentSession,
@@ -4839,7 +4979,7 @@ class LocalDaemonAgentHttpClient:
         execution_journal: SQLiteAgentJournal,
         launch: ResidentWorkerLaunch,
         process_id: int | None,
-    ) -> None:
+    ) -> Generator[_Progress, Any, None]:
         """Join one exact accepted launch across the application crash barrier."""
 
         workspace.mark_process_started(launch.process_execution_id, process_id)
@@ -4850,18 +4990,19 @@ class LocalDaemonAgentHttpClient:
             f"{request.assignment_id}:agent-process-started",
             {"kind": "process_started"},
         )
-        self._assignment_call(
+        (yield from _steps(self._assignment_call,
             session.session_id,
             request.assignment_id,
-            lambda: self.confirm_started(
+            lambda: _steps(self.confirm_started,
                 session.session_id,
                 request.assignment_id,
                 fence=launch.execution_fence,
                 process_execution_id=launch.process_execution_id,
             ),
-        )
-        self._flush_workspace_events(session.session_id, workspace)
+        ))
+        (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
 
+    @_cooperative
     def _complete_remote_result_and_release(
         self,
         session: AgentSession,
@@ -4877,9 +5018,11 @@ class LocalDaemonAgentHttpClient:
         persist_result: bool,
         result_path_label: str,
         suspend_requested: Callable[[], bool] | None = None,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Own normal and restart result/output/outbox completion ordering."""
 
+        yield from _steps(self._assignment_call, session.session_id, request.assignment_id,
+                          lambda: _steps(self.poll_assignment_control, session.session_id))
         result_path = workspace.root / "worker-result.json"
         result = (
             StageWorkerResult.from_dict(json.loads(result_path.read_text()))
@@ -4907,7 +5050,7 @@ class LocalDaemonAgentHttpClient:
                 )
                 if self._supervisor is None:
                     raise QueueConflictError("remote completion lost its supervisor")
-                evidence = self._supervisor.query_wait(launch)
+                evidence = (yield from _external("bulk", self._supervisor.query_wait, launch))
                 if evidence.state is not SupervisorLaunchState.CONTAINED:
                     raise QueueConflictError("remote completion lacks containment")
                 if (
@@ -4929,29 +5072,29 @@ class LocalDaemonAgentHttpClient:
                         else "managed_successful_exit"
                     ] = evidence.qualified_success
                 result = replace(result, executor_metadata=metadata)
-            workspace.persist_worker_result(result)
+            (yield from _external("bulk", workspace.persist_worker_result, result))
             result = cast(StageWorkerResult, workspace.worker_result())
             execution_journal.record_result(assignment.assignment_id, result.to_dict())
-        report = workspace.retain_outputs()
+        report = (yield from _external("bulk", workspace.retain_outputs))
         workspace.append_event(
             f"{request.assignment_id}:result-output-durable",
             {"kind": "result_and_output_durable", "status": report.status.value},
         )
         if not completed_before_start:
-            self._flush_workspace_events(session.session_id, workspace)
-        authorization = self._fresh_transfer_authorization(
+            (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
+        authorization = (yield from _steps(self._fresh_transfer_authorization,
             session_id=session.session_id,
             assignment_id=request.assignment_id,
             expected_revision=authorization_revision,
-        )
+        ))
         authorization_id = cast(str, authorization["authorization_id"])
         authorization_revision = cast(int, authorization["revision"])
-        _, authorization_id, authorization_revision = self._authorized_transfer_call(
+        _, authorization_id, authorization_revision = (yield from _steps(self._authorized_transfer_call,
             session_id=session.session_id,
             assignment_id=request.assignment_id,
             authorization_id=authorization_id,
             authorization_revision=authorization_revision,
-            operation=lambda current_id, current_revision: self.declare_outputs(
+            operation=lambda current_id, current_revision: _steps(self.declare_outputs,
                 session.session_id,
                 request.assignment_id,
                 fence=fence,
@@ -4959,7 +5102,7 @@ class LocalDaemonAgentHttpClient:
                 authorization_revision=current_revision,
                 report=report,
             ),
-        )
+        ))
         for item in report.outputs:
             from loom.pipeline.stores.shared_artifacts import binding
             if binding(item.metadata) is not None:
@@ -4967,15 +5110,15 @@ class LocalDaemonAgentHttpClient:
             offset = 0
             while True:
                 _raise_if_application_suspended(suspend_requested)
-                data, final = workspace.output_chunk(item.transfer_id, offset)
+                data, final = (yield from _external("bulk", workspace.output_chunk, item.transfer_id, offset))
                 response, authorization_id, authorization_revision = (
-                    self._authorized_transfer_call(
+                    (yield from _steps(self._authorized_transfer_call,
                         session_id=session.session_id,
                         assignment_id=request.assignment_id,
                         authorization_id=authorization_id,
                         authorization_revision=authorization_revision,
                         operation=lambda current_id, current_revision: (
-                            self.upload_output_chunk(
+                            _steps(self.upload_output_chunk,
                                 session.session_id,
                                 request.assignment_id,
                                 item.transfer_id,
@@ -4986,24 +5129,25 @@ class LocalDaemonAgentHttpClient:
                                 authorization_revision=current_revision,
                             )
                         ),
-                    )
+                    ))
                 )
                 offset = cast(
                     int, cast(Mapping[str, PlainData], response)["received_bytes"]
                 )
-                self._maintain_resource_offer()
+                (yield from _steps(self._maintain_resource_offer))
                 if final:
                     break
         _raise_if_application_suspended(suspend_requested)
-        self._assignment_call(
+        yield from _steps(self.poll_assignment_control, session.session_id)
+        (yield from _steps(self._assignment_call,
             session.session_id,
             request.assignment_id,
-            lambda: self.commit_result(
+            lambda: _steps(self.commit_result,
                 session.session_id, request.assignment_id, fence=fence
             ),
-        )
+        ))
         if completed_before_start:
-            self._flush_workspace_events(session.session_id, workspace)
+            (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
         next_revision = self._release_provider_claims(
             session,
             assignment,
@@ -5013,18 +5157,19 @@ class LocalDaemonAgentHttpClient:
         )
         released_session = cast(
             AgentSession,
-            self._assignment_call(
+            (yield from _steps(self._assignment_call,
                 session.session_id,
                 request.assignment_id,
-                lambda: self.release_assignment(
+                lambda: _steps(self.release_assignment,
                     session.session_id,
                     request.assignment_id,
                     fence=fence,
                     availability_revision=next_revision,
                 ),
-            ),
+            )),
         )
         self._cancelled_assignments.discard(request.assignment_id)
+        self._received_cancellations.discard(request.assignment_id)
         return freeze_plain_data(
             {
                 "result": "assignment",
@@ -5035,6 +5180,7 @@ class LocalDaemonAgentHttpClient:
             path=result_path_label,
         )
 
+    @_cooperative
     def _cancel_pregrant_if_requested(
         self,
         session: AgentSession,
@@ -5043,13 +5189,13 @@ class LocalDaemonAgentHttpClient:
         commands: tuple[ClaimCommand, ...],
         providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
-    ) -> Mapping[str, PlainData] | None:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
         for _ in range(32):
-            control = self._assignment_call(
+            control = (yield from _steps(self._assignment_call,
                 session.session_id,
                 assignment_id,
-                lambda: self.poll_assignment_control(session.session_id),
-            )
+                lambda: _steps(self.poll_assignment_control, session.session_id),
+            ))
             if control is None:
                 return None
             if control.assignment_id != assignment_id:
@@ -5065,11 +5211,11 @@ class LocalDaemonAgentHttpClient:
                 session, assignment_id, providers
             )
             execution_journal.release_declined(assignment_id, next_revision)
-            released_session = self.decline_assignment(
+            released_session = (yield from _steps(self.decline_assignment,
                 session.session_id,
                 assignment.assignment_id,
                 availability_revision=next_revision,
-            )
+            ))
             return freeze_plain_data(
                 {
                     "result": "assignment",
@@ -5154,13 +5300,14 @@ class LocalDaemonAgentHttpClient:
             ).hexdigest()
         )
 
+    @_cooperative
     def _fresh_transfer_authorization(
         self,
         *,
         session_id: str,
         assignment_id: str,
         expected_revision: int,
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Renew until the authorization belongs to the reconciled epoch."""
 
         revision = expected_revision
@@ -5168,16 +5315,16 @@ class LocalDaemonAgentHttpClient:
             operation_id = f"{assignment_id}:authorize:{revision + 1}"
             result = cast(
                 Mapping[str, PlainData],
-                self._assignment_call(
+                (yield from _steps(self._assignment_call,
                     session_id,
                     assignment_id,
-                    lambda: self.authorize_transfers(
+                    lambda: _steps(self.authorize_transfers,
                         session_id,
                         assignment_id,
                         expected_revision=revision,
                         operation_id=operation_id,
                     ),
-                ),
+                )),
             )
             returned_revision = result.get("revision")
             returned_epoch = result.get("coordinator_epoch")
@@ -5197,6 +5344,7 @@ class LocalDaemonAgentHttpClient:
             ):
                 return result
 
+    @_cooperative
     def _authorized_transfer_call(
         self,
         *,
@@ -5205,70 +5353,72 @@ class LocalDaemonAgentHttpClient:
         authorization_id: str,
         authorization_revision: int,
         operation: Callable[[str, int], Any],
-    ) -> tuple[Any, str, int]:
+    ) -> Generator[_Progress, Any, tuple[Any, str, int]]:
         """Run one transfer operation, renewing only a proven-stale grant."""
 
         current_id = authorization_id
         current_revision = authorization_revision
         for _ in range(_MAX_TRANSFER_AUTHORIZATION_RENEWALS + 1):
             try:
-                result = self._assignment_call(
+                result = (yield from _steps(self._assignment_call,
                     session_id,
                     assignment_id,
-                    lambda: operation(current_id, current_revision),
-                )
+                    lambda: _steps(operation, current_id, current_revision),
+                ))
                 return result, current_id, current_revision
             except AgentTransferAuthorizationStaleError:
-                renewed = self._fresh_transfer_authorization(
+                renewed = (yield from _steps(self._fresh_transfer_authorization,
                     session_id=session_id,
                     assignment_id=assignment_id,
                     expected_revision=current_revision,
-                )
+                ))
                 current_id = cast(str, renewed["authorization_id"])
                 current_revision = cast(int, renewed["revision"])
         raise QueueConflictError(
             "remote transfer authorization renewal exceeded its bound"
         )
 
+    @_cooperative
     def _assignment_call(
         self,
         session_id: str,
         assignment_id: str,
         operation: Callable[[], Any],
-    ) -> Any:
+    ) -> Generator[_Progress, Any, Any]:
         """Retry one exact assignment operation across coordinator restart."""
 
         deadline = monotonic() + _ASSIGNMENT_RECONCILIATION_SECONDS
         while True:
             try:
-                return operation()
+                return (yield from _steps(operation))
             except QueueConflictError as conflict:
                 prior = self._require_journal().session(session_id)
-                current = self.handshake()
+                current = (yield from _steps(self.handshake))
                 epoch = current.get("coordinator_epoch")
                 if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
                     raise conflict
-                self.reconcile(
+                (yield from _steps(self.reconcile,
                     session_id,
                     epoch,
                     idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                )
+                ))
             except _IndeterminateAgentProtocolError:
+                _raise_if_application_suspended(getattr(self, "_suspend_requested", None))
                 if monotonic() >= deadline:
                     raise
                 try:
-                    current = self.handshake()
+                    current = (yield from _steps(self.handshake))
                     epoch = current.get("coordinator_epoch")
                     prior = self._require_journal().session(session_id)
                     if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
-                        self.reconcile(
+                        (yield from _steps(self.reconcile,
                             session_id,
                             epoch,
                             idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                        )
+                        ))
                 except _IndeterminateAgentProtocolError:
                     pass
-                sleep(0.05)
+                (yield from _delay(0.05))
 
     def _runtime_owners(
         self, session: AgentSession
@@ -5426,32 +5576,34 @@ class LocalDaemonAgentHttpClient:
             None,
         )
 
+    @_cooperative
     def _flush_workspace_events(
         self, session_id: str, workspace: _ResidentAssignmentWorkspace
-    ) -> None:
+    ) -> Generator[_Progress, Any, None]:
         for sequence, event_id, payload in workspace.pending_events():
             result = cast(
                 Mapping[str, PlainData],
-                self._assignment_call(
+                (yield from _steps(self._assignment_call,
                     session_id,
                     workspace.assignment_id,
-                    lambda: self.report_event(
+                    lambda: _steps(self.report_event,
                         session_id,
                         workspace.assignment_id,
                         sequence=sequence,
                         event_id=event_id,
                         payload=payload,
                     ),
-                ),
+                )),
             )
             acknowledged = result.get("acknowledged_sequence")
             if acknowledged != sequence:
                 raise QueueConflictError("remote event acknowledgement has a gap")
             workspace.acknowledge_event(sequence)
 
+    @_cooperative
     def retire_clean(
         self, session_id: str, *, idempotency_key: str
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
             raise QueueConflictError("agent has retained SLURM work")
         journal = self._require_journal()
@@ -5461,7 +5613,7 @@ class LocalDaemonAgentHttpClient:
             "idempotency_key": idempotency_key,
         }
         journal._persist_mutation("retire", idempotency_key, request)
-        result = self._call("retire", request)
+        result = (yield from _steps(self._call, "retire", request))
         journal.complete_mutation("retire", idempotency_key, result)
         journal.persist_retired(session_id, idempotency_key)
         return result
@@ -5471,91 +5623,133 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError("remote agent durable journal is required")
         return self._journal
 
+    @_cooperative
     def call_application(
         self, role: str, operation: str, value: Mapping[str, PlainData]
-    ) -> Mapping[str, PlainData]:
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         """Call the authenticated application view selected by its certificate."""
         if role not in {"client", "operator", "slurm_bootstrap"}:
             raise QueueServiceError("authenticated application role is invalid")
-        return self._call(operation, value, role=role)
+        return (yield from _steps(self._call, operation, value, role=role))
 
+    @_cooperative
     def _call(
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
-    ) -> Mapping[str, PlainData]:
-        connection = self._connection
-        if connection is None:
-            connection = https_connection(
-                self._config.url,
-                self._config.server_ca_path,
-                self._config.certificate_path,
-                self._config.private_key_path,
-                timeout=_HTTP_TIMEOUT_SECONDS,
-            )
-            self._connection = connection
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if (role, operation) in _FAILURE_REPORT_OPERATIONS:
             _decode(body, failure_report=True)
-        try:
-            connection.request(
-                "POST",
-                f"/v1/{role}/{operation}",
-                body=body,
-                headers={"Content-Type": "application/json"},
+        connection, self._connection = self._connection, None
+        reply = yield from _external(
+            "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
+            _exchange_agent_request, self._config, operation, body, role, connection,
+            not self._service_progress,
+        )
+        if self._connection is None and not self._closed and not self._service_progress:
+            self._connection = reply.connection
+        else:
+            reply.connection.close()
+        return reply.value
+
+
+def _start_once_steps(journal, assignment_id, execution_id, launcher, *, start_failure):
+    existing = journal._prepare_process_start(assignment_id, execution_id)
+    if existing is not None:
+        return existing
+    try:
+        process_id = yield from launcher()
+    except ManagedProcessStartError as error:
+        journal._set_start_failed(assignment_id, execution_id, start_failure(error))
+        raise
+    except Exception:
+        journal._set_state(assignment_id, AssignmentState.START_UNKNOWN)
+        raise
+    return journal._complete_process_start(assignment_id, execution_id, process_id, start_failure)
+
+
+@dataclass(frozen=True)
+class _AgentHttpReply:
+    connection: http.client.HTTPSConnection
+    value: Mapping[str, PlainData]
+
+
+def _exchange_agent_request(
+    config: AgentTlsClientConfig, operation: str, body: bytes, role: str,
+    connection: http.client.HTTPSConnection | None,
+    keep_alive: bool,
+) -> _AgentHttpReply:
+    """Exchange exact prepared bytes using one exclusively owned connection."""
+    connection = connection or https_connection(
+        config.url, config.server_ca_path, config.certificate_path,
+        config.private_key_path, timeout=_HTTP_TIMEOUT_SECONDS,
+    )
+    try:
+        return _AgentHttpReply(connection, _read_agent_reply(connection, operation, body, role))
+    except BaseException:
+        connection.close()
+        raise
+    finally:
+        if not keep_alive:
+            connection.close()
+
+
+def _read_agent_reply(
+    connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str
+) -> Mapping[str, PlainData]:
+    try:
+        connection.request(
+            "POST",
+            f"/v1/{role}/{operation}",
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        raw = response.read(_MAX_BODY_BYTES + 1)
+    except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        raise _IndeterminateAgentProtocolError(
+            "agent protocol outcome is indeterminate"
+        ) from exc
+    if len(raw) > _MAX_BODY_BYTES:
+        raise _IndeterminateAgentProtocolError(
+            "agent protocol outcome is indeterminate"
+        )
+    try:
+        payload = _decode(raw)
+    except QueueError as exc:
+        raise _IndeterminateAgentProtocolError(
+            "agent protocol outcome is indeterminate"
+        ) from exc
+    if response.status == 409:
+        if payload.get("error") == "agent_poll_active":
+            raise AgentPollActiveError("work poll is already active")
+        if payload.get("error") == "agent_poll_fenced":
+            raise AgentPollFencedError("work poll was fenced and is not reusable")
+        if payload.get("error") == "agent_poll_stale":
+            raise AgentStalePollError("work poll sequence is stale")
+        if payload.get("error") == "agent_poll_sequence_gap":
+            raise AgentPollSequenceGapError("work poll sequence has a gap")
+        if payload.get("error") == "agent_transfer_authorization_stale":
+            raise AgentTransferAuthorizationStaleError(
+                "remote transfer authorization is stale"
             )
-            response = connection.getresponse()
-            raw = response.read(_MAX_BODY_BYTES + 1)
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
-            self._close_connection()
-            raise _IndeterminateAgentProtocolError(
-                "agent protocol outcome is indeterminate"
-            ) from exc
-        if len(raw) > _MAX_BODY_BYTES:
-            self._close_connection()
-            raise _IndeterminateAgentProtocolError(
-                "agent protocol outcome is indeterminate"
-            )
-        try:
-            payload = _decode(raw)
-        except QueueError as exc:
-            self._close_connection()
-            raise _IndeterminateAgentProtocolError(
-                "agent protocol outcome is indeterminate"
-            ) from exc
-        if response.status == 409:
-            self._close_connection()
-            if payload.get("error") == "agent_poll_active":
-                raise AgentPollActiveError("work poll is already active")
-            if payload.get("error") == "agent_poll_fenced":
-                raise AgentPollFencedError("work poll was fenced and is not reusable")
-            if payload.get("error") == "agent_poll_stale":
-                raise AgentStalePollError("work poll sequence is stale")
-            if payload.get("error") == "agent_poll_sequence_gap":
-                raise AgentPollSequenceGapError("work poll sequence has a gap")
-            if payload.get("error") == "agent_transfer_authorization_stale":
-                raise AgentTransferAuthorizationStaleError(
-                    "remote transfer authorization is stale"
-                )
-            raise QueueConflictError("agent protocol conflict")
-        if response.status >= 500:
-            self._close_connection()
-            raise _IndeterminateAgentProtocolError(
-                "agent protocol outcome is indeterminate"
-            )
-        if response.status != 200 or payload.get("ok") is not True:
-            self._close_connection()
-            code = payload.get("error")
-            raise QueueServiceError(
-                str(code) if isinstance(code, str) else "agent protocol request failed"
-            )
-        result = payload.get("result")
-        if not isinstance(result, Mapping):
-            self._close_connection()
-            raise _IndeterminateAgentProtocolError(
-                "agent protocol outcome is indeterminate"
-            )
-        return freeze_plain_data(result, path="agent HTTP response")
+        raise QueueConflictError("agent protocol conflict")
+    if response.status >= 500:
+        raise _IndeterminateAgentProtocolError(
+            "agent protocol outcome is indeterminate"
+        )
+    if response.status != 200 or payload.get("ok") is not True:
+        code = payload.get("error")
+        raise QueueServiceError(
+            str(code) if isinstance(code, str) else "agent protocol request failed"
+        )
+    result = payload.get("result")
+    if not isinstance(result, Mapping):
+        raise _IndeterminateAgentProtocolError(
+            "agent protocol outcome is indeterminate"
+        )
+    return freeze_plain_data(result, path="agent HTTP response")
 
 
 class _MutualTlsHttpServer(ThreadingHTTPServer):

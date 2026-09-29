@@ -1498,6 +1498,23 @@ class SQLiteAgentJournal:
         identity. That portable result commits with the no-start fact, before
         workspace or coordinator persistence can be interrupted.
         """
+        existing = self._prepare_process_start(assignment_id, process_execution_id)
+        if existing is not None:
+            return existing
+        try:
+            process_id = launcher()
+        except ManagedProcessStartError as exc:
+            self._set_start_failed(
+                assignment_id, process_execution_id, start_failure(exc)
+            )
+            raise
+        except Exception:
+            self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
+            raise
+        return self._complete_process_start(assignment_id, process_execution_id, process_id, start_failure)
+
+    def _prepare_process_start(self, assignment_id: str, process_execution_id: str) -> str | None:
+        """Persist the native start intent before an external launch exchange."""
         if not isinstance(process_execution_id, str) or not process_execution_id:
             raise ManagedLocalError("process_execution_id is required")
         with self._transaction() as conn:
@@ -1523,18 +1540,19 @@ class SQLiteAgentJournal:
                     assignment_id,
                 ),
             )
-        try:
-            process_id = launcher()
-            if not isinstance(process_id, str) or not process_id:
-                raise ManagedProcessStartError("launcher proved no process identifier")
-        except ManagedProcessStartError as exc:
+        return None
+
+    def _complete_process_start(
+        self, assignment_id: str, process_execution_id: str, process_id: str,
+        start_failure: Callable[[ManagedProcessStartError], StageWorkerResult],
+    ) -> str:
+        """Apply a launch result on the journal's owning thread."""
+        if not isinstance(process_id, str) or not process_id:
+            exc = ManagedProcessStartError("launcher proved no process identifier")
             self._set_start_failed(
                 assignment_id, process_execution_id, start_failure(exc)
             )
-            raise
-        except Exception:
-            self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
-            raise
+            raise exc
         if process_id != process_execution_id:
             self._set_state(assignment_id, AssignmentState.START_UNKNOWN)
             raise ManagedLocalError("launcher returned an unexpected process identity")
