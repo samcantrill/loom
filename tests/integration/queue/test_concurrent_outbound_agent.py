@@ -38,6 +38,7 @@ from loom.queue.agent_sessions import (
     AgentPrincipalPolicy,
     AgentControl,
     AgentControlKind,
+    GpuDeviceDescriptor,
     TransportPrincipalPolicy,
 )
 from loom.queue.agent_session_transport import (
@@ -52,6 +53,13 @@ from loom.queue._remote_stage_execution import (
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
     ResidentProfileDescriptor,
+    ResidentGpuDevice,
+)
+from loom.queue.gpu.occupancy import (
+    GpuOccupancyMonitor,
+    GpuOccupancyPolicy,
+    GpuProcessObservation,
+    NvidiaSmiGpuProcessObserver,
 )
 import loom.queue.agent_session_transport as transport
 import loom.queue.deployment as deployment
@@ -65,6 +73,7 @@ from tests.support.stage29_composition import ResidentProviderFactory
 from .test_agent_session_transport import (
     _prepare_remote_producer_run,
     _prepare_remote_sleep_run,
+    _prepare_gpu_environment_run,
     _supervisor_process_ids,
 )
 
@@ -87,7 +96,9 @@ def _rows(path, sql, parameters=()):
 
 
 @contextmanager
-def _service(monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False):
+def _service(
+    monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False, gpu=False
+):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
     with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
         root = Path(temporary)
@@ -101,6 +112,7 @@ def _service(monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False)
             REGULAR_FILE_RELAY_CAPABILITY,
         )
         roots = {}
+        devices = (GpuDeviceDescriptor("gpu-0", "model-0", 1024),) if gpu else ()
         if shared:
             shared_root = root / "shared"
             shared_root.mkdir()
@@ -131,6 +143,9 @@ def _service(monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False)
             Path(sys.executable),
             cpu_capacity=2,
             shared_roots=roots,
+            gpu_devices=tuple(
+                ResidentGpuDevice(device, "GPU-private") for device in devices
+            ),
         )
         if shared:
             from loom.queue.resident_readiness import qualified_resident_profile
@@ -147,6 +162,7 @@ def _service(monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False)
                     "agent-a",
                     ("default",),
                     capabilities,
+                    devices,
                 ),
             ),
             principals=(
@@ -198,7 +214,12 @@ def _service(monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False)
             credentials["agent"].with_suffix(".key"),
             agent_root,
             (profile,),
-            agent_resource_provider_factory=ResidentProviderFactory(capacity=2),
+            agent_resource_provider_factory=(
+                transport._default_remote_providers
+                if gpu
+                else ResidentProviderFactory(capacity=2)
+            ),
+            gpu_occupancy_policy=GpuOccupancyPolicy(3600, 7200, 0.1) if gpu else None,
             max_concurrent_assignments=ceiling,
         )
         LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
@@ -362,6 +383,88 @@ def _submit(case, name, *, sequential=False):
     )
     case.client.submit(LocalDaemonAdmissionRequest(name, uri))
     return uri, authority
+
+
+def test_gpu_admission_probe_keeps_control_receipt_responsive(monkeypatch):
+    entered, unblock, retained = Event(), Event(), Event()
+    samples, applied, prepared = [], [], []
+    original_apply = GpuOccupancyMonitor._apply_snapshot
+    original_control = _RemoteAgentJournal.prepare_assignment_control
+    from loom.queue._managed_local import GpuResourceProvider
+
+    original_prepare = GpuResourceProvider._prepare
+
+    def observe(observer):
+        samples.append(get_ident())
+        if len(samples) == 2:
+            entered.set()
+            assert unblock.wait(20)
+        return {
+            "GPU-private": GpuProcessObservation(
+                "GPU-private", True, False, "available"
+            )
+        }
+
+    def apply(monitor, snapshot):
+        applied.append(get_ident())
+        return original_apply(monitor, snapshot)
+
+    def prepare(provider, command):
+        prepared.append(get_ident())
+        return original_prepare(provider, command)
+
+    def control(journal, request):
+        result = original_control(journal, request)
+        if entered.is_set():
+            retained.set()
+        return result
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    monkeypatch.setattr(GpuOccupancyMonitor, "_apply_snapshot", apply)
+    monkeypatch.setattr(GpuResourceProvider, "_prepare", prepare)
+    monkeypatch.setattr(_RemoteAgentJournal, "prepare_assignment_control", control)
+    with _service(monkeypatch, gpu=True) as case:
+        try:
+            uri, _ = _prepare_gpu_environment_run(
+                case.store,
+                run_name="gpu-admission",
+                preferred_models=("model-0",),
+                target="agent-a",
+                capture_requirement=case.requirement,
+            )
+            case.client.submit(LocalDaemonAdmissionRequest("gpu-admission", uri))
+            assert entered.wait(20), case.failures
+            # An offer sample already exists. This second sample is the forced
+            # prepare boundary after the journal retained the exact claim intent.
+            assert len(samples) == 2
+            assert _rows(
+                case.agent_root / "journal.sqlite",
+                "SELECT state, claims_json IS NOT NULL FROM assignments",
+            ) == [("request_durable", 1)]
+            case.client.cancel("gpu-admission")
+            assert retained.wait(5), case.failures
+            assert not prepared
+            assert all(thread != case.thread.ident for thread in samples)
+            unblock.set()
+            assert (
+                case.client.wait("gpu-admission", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE state = 'RELEASED'",
+                )
+            )
+            assert len(samples) == 2  # Applying the fresh facts never probes again.
+            assert applied == [case.thread.ident, case.thread.ident]
+            assert prepared == [case.thread.ident]
+            assert not _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT operation_id FROM launches",
+            )
+        finally:
+            unblock.set()
 
 
 @pytest.mark.parametrize("ceiling", [1, 2])

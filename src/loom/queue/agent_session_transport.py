@@ -4281,7 +4281,9 @@ class LocalDaemonAgentHttpClient:
                 if final:
                     break
         (yield from _external("bulk", workspace.accept))
-        prepared = execution_journal.prepare_composite(assignment, commands, providers)
+        prepared = yield from _steps(
+            execution_journal.prepare_composite, assignment, commands, providers
+        )
         if prepared is AssignmentState.DECLINED:
             reason_code = execution_journal.read_decline_reason(
                 assignment.assignment_id

@@ -486,6 +486,9 @@ intent, not proof of completed containment: claims remain held through positive
 no-start/containment evidence, durable output and acknowledged result commit.
 An outstanding poll is settled or replayed with its original identity before
 refreshing the offer or submitting another poll.
+GPU admission also takes a fresh off-loop occupancy sample; the manager applies
+it and prepares the claim without a second probe. An earlier free offer sample
+does not bypass admission's fresh, fail-closed occupancy decision.
 
 Application stop waits for its owned finite operations, preserves supervised
 workers and claims, and suspends at replay boundaries. A blocked filesystem

@@ -16,7 +16,7 @@ import shutil
 import sqlite3
 import stat
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -24,7 +24,7 @@ from fractions import Fraction
 from pathlib import Path
 from threading import RLock
 from time import sleep
-from typing import Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
 from loom.serialization._diagnostic_capture import _capture_exception_details
@@ -59,7 +59,8 @@ from loom.scheduling import (
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 
-from .gpu.occupancy import GpuOccupancyMonitor, GpuOccupancySnapshot
+from .gpu.occupancy import GpuOccupancyMonitor, GpuOccupancySnapshot, _sample_gpu_occupancy
+from ._agent_progress import _Progress, _cooperative, _external, _steps
 
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
@@ -708,11 +709,12 @@ class _CompositeAgentResourceProvider:
             for member, nested in self._commands(command):
                 member.restore_capacity_holding(nested)
 
-    def prepare(self, command: ClaimCommand) -> ClaimResult:
+    @_cooperative
+    def prepare(self, command: ClaimCommand) -> Generator[_Progress, Any, ClaimResult]:
         with self._lock:
             prepared: list[tuple[AgentResourceProvider, ClaimCommand]] = []
             for member, nested in self._commands(command):
-                result = _provider_call(member.prepare, nested)
+                result = yield from _steps(_provider_call, member.prepare, nested)
                 if result.outcome is not ClaimOutcome.PREPARED:
                     aborts = [
                         _provider_call(prior.abort, prior_command)
@@ -1278,12 +1280,13 @@ class SQLiteAgentJournal:
                 )
             return AssignmentState(row["state"])
 
+    @_cooperative
     def prepare_composite(
         self,
         assignment: ManagedAssignment,
         commands: Sequence[ClaimCommand],
         providers: Mapping[str, AgentResourceProvider],
-    ) -> AssignmentState:
+    ) -> Generator[_Progress, Any, AssignmentState]:
         self._require_request(assignment)
         ordered = tuple(sorted(commands, key=lambda item: item.claim.resource_kind))
         encoded_commands = _json(
@@ -1334,7 +1337,8 @@ class SQLiteAgentJournal:
             provider = providers.get(command.claim.resource_kind)
             if provider is None:
                 raise ManagedLocalError("no provider for claim resource kind")
-            result = _provider_call(
+            result = yield from _steps(
+                _provider_call,
                 provider.reconcile if reconcile else provider.prepare,
                 command,
             )
@@ -4753,7 +4757,8 @@ class GpuResourceProvider(AtomResourceProvider):
             tuple(statuses),
         )
 
-    def prepare(self, command: ClaimCommand) -> ClaimResult:
+    @_cooperative
+    def prepare(self, command: ClaimCommand) -> Generator[_Progress, Any, ClaimResult]:
         if self._occupancy_monitor is None:
             return super().prepare(command)
         with self._lock:
@@ -4772,7 +4777,19 @@ class GpuResourceProvider(AtomResourceProvider):
                 return ClaimResult(
                     prior[1], command.operation_id, command.claim.fingerprint
                 )
-        self.refresh_occupancy(force=True)
+        monitor = self._occupancy_monitor
+        # Admission always samples afresh, independently of the offer cache.
+        # Only sampling leaves the state owner; applying facts and the claim's
+        # freshness/fail-closed decision remain one manager-side transition.
+        snapshot = yield from _external(
+            "bulk",
+            _sample_gpu_occupancy,
+            monitor._observer,
+            monitor.selected_uuids,
+            monitor._utc_clock,
+            monitor._monotonic_clock,
+        )
+        monitor._apply_snapshot(snapshot)
         with self._lock:
             result = self._prepare(command)
             if result.outcome is not ClaimOutcome.DECLINED:
@@ -5046,11 +5063,12 @@ def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:
     )
 
 
+@_cooperative
 def _provider_call(
     operation: Callable[[ClaimCommand], ClaimResult], command: ClaimCommand
-) -> ClaimResult:
+) -> Generator[_Progress, Any, ClaimResult]:
     try:
-        result = operation(command)
+        result = yield from _steps(operation, command)
     except Exception as exc:  # noqa: BLE001 - provider failures are indeterminate facts.
         return ClaimResult(
             ClaimOutcome.INDETERMINATE,

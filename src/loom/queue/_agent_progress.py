@@ -40,7 +40,12 @@ def _steps(
 ) -> Generator[_Progress, Any, Any]:
     implementation = getattr(function, "_progress", None)
     if implementation is not None:
-        result = implementation(getattr(function, "__self__"), *args, **kwargs)
+        owner = getattr(function, "__self__", None)
+        result = (
+            implementation(*args, **kwargs)
+            if owner is None
+            else implementation(owner, *args, **kwargs)
+        )
     else:
         result = function(*args, **kwargs)
     if isgenerator(result):
