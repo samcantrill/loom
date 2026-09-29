@@ -550,6 +550,308 @@ def test_held_worker_and_short_assignment_obey_resident_ceiling(monkeypatch, cei
             _release_gate(gate)
 
 
+@pytest.mark.parametrize("restart_epoch", [False, True])
+def test_restart_admits_short_work_before_known_worker_exits(
+    monkeypatch, restart_epoch
+):
+    from dataclasses import replace
+    from loom.pipeline.stores import LocalArtifactStore
+
+    uncertain, queried = Event(), Event()
+    original_query = AgentProcessSupervisorClient.query
+
+    def query(owner, launch):
+        receipt = original_query(owner, launch)
+        if uncertain.is_set():
+            queried.set()
+            return replace(receipt, state=SupervisorLaunchState.UNKNOWN)
+        return receipt
+
+    monkeypatch.setattr(AgentProcessSupervisorClient, "query", query)
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "long")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            held = _running(case)
+            assert len(held) == 1
+            original_launch = _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT launch_json FROM launches",
+            )
+            case.stop.set()
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            if restart_epoch:
+                case.daemon.stop()
+                case.daemon.start()
+            uncertain.set()
+            uri, authority = _submit(case, "short")
+            offers = _rows(case.database, "SELECT COUNT(*) FROM agent_offers")
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert queried.wait(10)
+            assert _rows(case.database, "SELECT COUNT(*) FROM agent_offers") == offers
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (uri,),
+            )
+            uncertain.clear()
+            assert (
+                case.client.wait("short", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (uri,),
+                )
+            )
+            artifact = authority.list_output_commits(uri)[0].artifact_facts[0].artifact
+            assert LocalArtifactStore(case.store.local_artifact_root(uri)).load(
+                artifact
+            ) == {"value": 7}
+            assert _running(case) == held
+            owner = AgentProcessSupervisorClient(
+                case.agent_root,
+                supervisor_module.SupervisorLaunchConfiguration(
+                    transport._read_remote_agent_root_id(case.agent_root),
+                    tuple(
+                        profile.launch_profile
+                        for profile in case.config.client.resident_profiles
+                    ),
+                ),
+            )
+            launch = supervisor_module._launch_from_value(
+                json.loads(original_launch[0][0])
+            )
+            receipt = owner.query(launch)
+            assert receipt.state is SupervisorLaunchState.RUNNING
+            assert receipt.launch == launch and receipt.process_id == held[0][2]
+            assert original_launch[0] in _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT launch_json FROM launches",
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches WHERE json_extract(launch_json, '$.assignment_id') = ?",
+                (held[0][0],),
+            ) == [(1,)]
+
+            def remaining():
+                offers = _rows(
+                    case.database,
+                    "SELECT offer_json FROM agent_offers WHERE current = 1",
+                )
+                if not offers:
+                    return None
+                offer = json.loads(offers[0][0])
+                capacity = transport.AgentOffer.from_value(offer)
+                return (
+                    offer
+                    if capacity.cpu == 1 and capacity.memory_bytes == 1024**3
+                    else None
+                )
+
+            offer = _eventually(remaining)
+            assert len(offer["reflected_claim_ids"]) == 1
+            _release_gate(gate)
+            assert (
+                case.client.wait("long", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            uncertain.clear()
+            _release_gate(gate)
+
+
+def test_restart_accepts_live_starting_operation_before_process_exists(monkeypatch):
+    entered, unblock, crashed = Event(), Event(), Event()
+    original_spawn = subprocess.Popen
+    original_launch = AgentProcessSupervisorClient.launch
+    owned = []
+
+    def spawn(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert unblock.wait(40)
+        process = original_spawn(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    def launch(client, request):
+        if not crashed.is_set():
+            client._call("launch", supervisor_module._launch_value(request))
+            assert entered.wait(10)
+            crashed.set()
+            raise RuntimeError("lost accepted launch response")
+        return original_launch(client, request)
+
+    with _service(
+        monkeypatch, ceiling=2, memory=2 * 1024**3, threaded_supervisor=True
+    ) as case:
+        monkeypatch.setattr(supervisor_module.subprocess, "Popen", spawn)
+        monkeypatch.setattr(AgentProcessSupervisorClient, "launch", launch)
+        try:
+            _submit(case, "starting")
+            assert crashed.wait(20)
+            case.thread.join(20)
+            assert not case.thread.is_alive(), case.failures
+            case.expected_failures.append(RuntimeError)
+            launch_row = _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT operation_id, launch_json, state, pid FROM launches",
+            )
+            assert len(launch_row) == 1 and launch_row[0][2:] == ("starting", None)
+            uri, _ = _submit(case, "fresh")
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (uri,),
+                )
+            )
+            assert launch_row[0] in _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT operation_id, launch_json, state, pid FROM launches",
+            )
+            unblock.set()
+            assert (
+                case.client.wait("starting", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches WHERE operation_id = ?",
+                (launch_row[0][0],),
+            ) == [(1,)]
+        finally:
+            unblock.set()
+    assert owned and all(process.poll() is not None for process in owned)
+
+
+@pytest.mark.parametrize("gap", ["missing_request", "changed_config"])
+def test_restart_does_not_admit_with_unavailable_request_or_changed_config(
+    monkeypatch, gap
+):
+    from dataclasses import replace
+    from loom.queue._agent_progress import _cooperative, _steps
+
+    armed, rejected = Event(), Event()
+    opening = deployment._open_outbound_agent
+    qualify = LocalDaemonAgentHttpClient._qualify_service_admission
+    exchange = transport._exchange_agent_request
+    attempted = []
+
+    def tracked(config, operation, *args, **kwargs):
+        if armed.is_set() and operation in {"offer", "renew", "poll"}:
+            attempted.append(operation)
+        return exchange(config, operation, *args, **kwargs)
+
+    def changed(config, **kwargs):
+        if armed.is_set() and gap == "changed_config":
+            try:
+                return opening(replace(config, max_concurrent_assignments=1), **kwargs)
+            except transport.QueueError:
+                rejected.set()
+                raise
+        return opening(config, **kwargs)
+
+    @_cooperative
+    def assessment(client):
+        result = yield from _steps(qualify, client)
+        if armed.is_set() and not result:
+            rejected.set()
+        return result
+
+    monkeypatch.setattr(deployment, "_open_outbound_agent", changed)
+    monkeypatch.setattr(
+        LocalDaemonAgentHttpClient, "_qualify_service_admission", assessment
+    )
+    monkeypatch.setattr(transport, "_exchange_agent_request", tracked)
+    with _service(
+        monkeypatch, ceiling=2, memory=2 * 1024**3, shared=gap == "missing_request"
+    ) as case:
+        gate, _, _ = _submit_gated(case, "long")
+        saved = []
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            held = _running(case)
+            case.stop.set()
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            if gap == "missing_request":
+                raw = json.loads(
+                    _rows(
+                        case.agent_root / "control.sqlite",
+                        "SELECT reference_json FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0",
+                    )[0][0]
+                )
+                for path in (
+                    case.agent_root / "assignments" / held[0][0] / "resident.sqlite",
+                    case.root / "shared" / raw["location"]["path"],
+                ):
+                    backup = path.with_name(path.name + ".unavailable")
+                    path.rename(backup)
+                    saved.append((path, backup))
+            armed.set()
+            uri, _ = _submit(case, "fresh")
+            offers = _rows(case.database, "SELECT COUNT(*) FROM agent_offers")
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert rejected.wait(15), (case.failures, case.retries)
+            assert _rows(case.database, "SELECT COUNT(*) FROM agent_offers") == offers
+            assert not attempted
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state != 'BOUND'",
+                (uri,),
+            )
+            assert _running(case) == held
+            case.stop.set()
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            if gap == "changed_config":
+                assert len(case.failures) == 1
+                assert isinstance(case.failures[0], transport.QueueServiceError)
+                assert "configuration" in str(case.failures[0])
+                case.expected_failures.append(transport.QueueServiceError)
+            for path, backup in saved:
+                backup.replace(path)
+            saved.clear()
+            armed.clear()
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert _running(case) == held
+            _release_gate(gate)
+            assert (
+                case.client.wait("long", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            armed.clear()
+            _release_gate(gate)
+            if saved:
+                case.stop.set()
+                case.thread.join(20)
+                for path, backup in saved:
+                    backup.replace(path)
+
+
 def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeypatch):
     from dataclasses import replace
 
@@ -632,6 +934,133 @@ def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeyp
             unknown.clear()
             _release_gate(a)
             _release_gate(b)
+
+
+def test_recovery_rechecks_inventory_after_preparation_completes_during_proof(
+    monkeypatch,
+):
+    from loom.queue._agent_progress import _cooperative, _steps, _delay
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    armed, crashed, collecting, prepared, release, rejected = (
+        Event() for _ in range(6)
+    )
+    changed_snapshots = []
+    target = []
+    persist = SQLiteAgentJournal.persist_request
+    recovery = LocalDaemonAgentHttpClient._resume_retained_assignments
+    inventory = LocalDaemonAgentHttpClient._admission_inventory
+    qualify = LocalDaemonAgentHttpClient._qualify_service_admission
+    prepare = SQLiteAgentJournal.prepare_composite
+    external = transport._external
+
+    def interrupt(journal, assignment, request):
+        result = persist(journal, assignment, request)
+        if armed.is_set() and not crashed.is_set():
+            target.append(assignment.assignment_id)
+            crashed.set()
+            raise RuntimeError("interrupted durable request")
+        return result
+
+    @_cooperative
+    def recover(client, references, **kwargs):
+        if references[0][1] in target:
+            while not collecting.is_set() and not kwargs["suspend_requested"]():
+                yield from _delay(0.01)
+        return (yield from _steps(recovery, client, references, **kwargs))
+
+    def snapshot(client):
+        result = inventory(client)
+        if target and client._joined_starts:
+            changed_snapshots.append(tuple((row[0], row[4]) for row in result[1]))
+            collecting.set()
+        return result
+
+    def observe(lane, function, *args, **kwargs):
+        if (
+            function.__name__ == "query"
+            and collecting.is_set()
+            and not transport._owns_assignment(args[0].assignment_id)
+        ):
+
+            def complete():
+                result = function(*args, **kwargs)
+                assert prepared.wait(15)
+                return result
+
+            return (yield from external(lane, complete))
+        return (yield from external(lane, function, *args, **kwargs))
+
+    @_cooperative
+    def preparing(journal, assignment, *args):
+        result = yield from _steps(prepare, journal, assignment, *args)
+        if assignment.assignment_id in target:
+            prepared.set()
+            while not release.is_set():
+                yield from _delay(0.01)
+        return result
+
+    @_cooperative
+    def assessment(client):
+        if crashed.is_set():
+            while not client._joined_starts and not client._suspend_requested():
+                yield from _delay(0.01)
+        result = yield from _steps(qualify, client)
+        if prepared.is_set() and not release.is_set() and len(changed_snapshots) >= 2:
+            assert changed_snapshots[0] != changed_snapshots[-1]
+            assert not result
+            rejected.set()
+        return result
+
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        a, _, _ = _submit_gated(case, "a")
+        b = None
+        try:
+            _eventually(lambda: (a / "build.started").exists())
+            held = _running(case)
+            monkeypatch.setattr(SQLiteAgentJournal, "persist_request", interrupt)
+            armed.set()
+            b, _, _ = _submit_gated(case, "b")
+            assert crashed.wait(20)
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            case.expected_failures.append(RuntimeError)
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_resume_retained_assignments", recover
+            )
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_admission_inventory", snapshot
+            )
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_qualify_service_admission", assessment
+            )
+            monkeypatch.setattr(SQLiteAgentJournal, "prepare_composite", preparing)
+            monkeypatch.setattr(transport, "_external", observe)
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert rejected.wait(20), (case.failures, case.retries, changed_snapshots)
+            release.set()
+            _eventually(lambda: (b / "build.started").exists())
+            uri, _ = _submit(case, "fresh")
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (uri,),
+                )
+            )
+            assert held[0] in _running(case) and len(_running(case)) == 2
+        finally:
+            release.set()
+            prepared.set()
+            collecting.set()
+            _release_gate(a)
+            if b is not None:
+                _release_gate(b)
 
 
 def test_thirty_two_live_workers_fair_observation_and_five_renewal_cycles(monkeypatch):
@@ -2092,18 +2521,21 @@ def test_restart_recovers_every_retained_assignment_at_crash_boundaries(
             )
             assert any(row in held for row in _running(case))
             fresh_uri, _ = _submit(case, "fresh")
-            assert not _rows(
-                case.database,
-                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
-                (fresh_uri,),
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
             )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (fresh_uri,),
+                )
+            )
+            assert any(row in held for row in _running(case))
             _release_gate(gate)
             assert (
                 case.client.wait("survivor", timeout_seconds=30).state
-                is LocalDaemonAdmissionState.SUCCEEDED
-            )
-            assert (
-                case.client.wait("fresh", timeout_seconds=30).state
                 is LocalDaemonAdmissionState.SUCCEEDED
             )
             assert _rows(
@@ -2112,3 +2544,220 @@ def test_restart_recovers_every_retained_assignment_at_crash_boundaries(
             ) == [(3,)]
         finally:
             _release_gate(gate)
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "request",
+        "partial_prepare",
+        "prepared",
+        "activation_unknown",
+        "activated",
+        "publishing",
+        "no_start",
+        "committed",
+        "partial_release",
+        "released",
+        "closure",
+    ],
+)
+def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, boundary):
+    from loom.queue._agent_progress import _cooperative, _steps, _delay
+    from loom.queue._managed_local import SQLiteAgentJournal, AtomResourceProvider
+
+    crashed, held, resume, assessed = Event(), Event(), Event(), Event()
+    outcomes = []
+    admission_calls, completed_kinds = [], []
+    exchange = transport._exchange_agent_request
+
+    def tracked(config, operation, *args, **kwargs):
+        if (
+            held.is_set()
+            and not resume.is_set()
+            and operation in {"offer", "renew", "poll"}
+        ):
+            admission_calls.append(operation)
+        return exchange(config, operation, *args, **kwargs)
+
+    owners = {
+        "request": (SQLiteAgentJournal, "persist_request"),
+        "partial_prepare": (AtomResourceProvider, "prepare"),
+        "prepared": (SQLiteAgentJournal, "prepare_composite"),
+        "activation_unknown": (SQLiteAgentJournal, "activate_composite"),
+        "activated": (SQLiteAgentJournal, "activate_composite"),
+        "publishing": (transport._ResidentAssignmentWorkspace, "retain_outputs"),
+        "no_start": (
+            transport._ResidentAssignmentWorkspace,
+            "persist_failed_before_start",
+        ),
+        "committed": (LocalDaemonAgentHttpClient, "commit_result"),
+        "partial_release": (AtomResourceProvider, "release"),
+        "released": (LocalDaemonAgentHttpClient, "_release_provider_claims"),
+        "closure": (_RemoteAgentJournal, "complete_assignment_release"),
+    }
+    owner, name = owners[boundary]
+    original = getattr(owner, name)
+    recovery = LocalDaemonAgentHttpClient._resume_retained_assignments
+    qualify = LocalDaemonAgentHttpClient._qualify_service_admission
+
+    def fail():
+        if not crashed.is_set():
+            crashed.set()
+            if boundary == "partial_prepare":
+                raise KeyboardInterrupt("interrupted composite preparation")
+            if boundary == "closure":
+                case.stop.set()
+                raise transport._ManagedApplicationSuspended()
+            raise RuntimeError("interrupted retained population")
+
+    if hasattr(original, "_progress"):
+
+        @_cooperative
+        def interrupt(*args, **kwargs):
+            result = yield from _steps(original, *args, **kwargs)
+            fail()
+            return result
+    else:
+
+        def interrupt(*args, **kwargs):
+            if (
+                boundary in {"partial_prepare", "partial_release"}
+                and args[0].descriptor.kind != "memory"
+            ):
+                result = original(*args, **kwargs)
+                completed_kinds.append(args[0].descriptor.kind)
+                return result
+            if boundary in {"closure", "partial_prepare", "partial_release"}:
+                fail()
+            result = original(*args, **kwargs)
+            fail()
+            return result
+
+    @_cooperative
+    def paused(client, references, **kwargs):
+        held.set()
+        while not resume.is_set() and not kwargs["suspend_requested"]():
+            yield from _delay(0.01)
+        return (yield from _steps(recovery, client, references, **kwargs))
+
+    @_cooperative
+    def observed(client):
+        result = yield from _steps(qualify, client)
+        if held.is_set() and not resume.is_set():
+            outcomes.append(result)
+            assessed.set()
+        return result
+
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        monkeypatch.setattr(owner, name, interrupt)
+        if boundary == "activation_unknown":
+            from loom.queue._managed_local import ClaimResult, ClaimOutcome
+
+            activate = AtomResourceProvider.activate
+
+            def uncertain(provider, command):
+                if provider.descriptor.kind == "memory":
+                    return ClaimResult(
+                        ClaimOutcome.INDETERMINATE,
+                        command.operation_id,
+                        command.claim.fingerprint,
+                    )
+                return activate(provider, command)
+
+            monkeypatch.setattr(AtomResourceProvider, "activate", uncertain)
+        if boundary == "no_start":
+            environment = transport._worker_environment
+
+            def unavailable(*args, **kwargs):
+                if not crashed.is_set():
+                    raise OSError("worker environment unavailable before launch")
+                return environment(*args, **kwargs)
+
+            monkeypatch.setattr(transport, "_worker_environment", unavailable)
+        _submit(case, "retained")
+        assert crashed.wait(20), case.failures
+        case.thread.join(20)
+        assert not case.thread.is_alive()
+        if boundary in {"partial_prepare", "partial_release"}:
+            assert completed_kinds == ["cpu"]
+        if boundary != "closure":
+            case.expected_failures.append(
+                KeyboardInterrupt if boundary == "partial_prepare" else RuntimeError
+            )
+        monkeypatch.setattr(
+            LocalDaemonAgentHttpClient, "_resume_retained_assignments", paused
+        )
+        monkeypatch.setattr(
+            LocalDaemonAgentHttpClient, "_qualify_service_admission", observed
+        )
+        monkeypatch.setattr(transport, "_exchange_agent_request", tracked)
+        uri, _ = _submit(case, "fresh")
+        case.stop.clear()
+        case.thread = Thread(target=case.serve)
+        case.thread.start()
+        try:
+            assert held.wait(10)
+            assert assessed.wait(10), case.retries
+            if boundary in {
+                "partial_prepare",
+                "activation_unknown",
+                "partial_release",
+                "released",
+                "closure",
+            }:
+                assert not any(outcomes)
+                assert not admission_calls
+            else:
+                assert any(outcomes)
+            if boundary in {
+                "request",
+                "partial_prepare",
+                "prepared",
+                "activation_unknown",
+                "partial_release",
+                "released",
+                "closure",
+            }:
+                # A known pregrant request has no claim to reflect yet. Its
+                # existing coordinator target guard still forbids a new target.
+                assert not _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state != 'BOUND'",
+                    (uri,),
+                )
+            else:
+                assert (
+                    case.client.wait("fresh", timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+                _eventually(
+                    lambda: _rows(
+                        case.database,
+                        "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                        (uri,),
+                    )
+                )
+                assert not resume.is_set()
+            if boundary == "activation_unknown":
+                assert _rows(
+                    case.agent_root / "journal.sqlite", "SELECT state FROM assignments"
+                ) == [("activation_unknown",)]
+                assert not _rows(
+                    case.agent_root / "supervisor/supervisor.sqlite",
+                    "SELECT operation_id FROM launches",
+                )
+                case.stop.set()
+                return
+            resume.set()
+            assert case.client.wait("retained", timeout_seconds=30).state is (
+                LocalDaemonAdmissionState.FAILED
+                if boundary == "no_start"
+                else LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            resume.set()

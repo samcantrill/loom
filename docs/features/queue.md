@@ -495,11 +495,18 @@ GPU claims remain whole-device exclusive through publication and release.
 
 On application restart, each retained assignment recovers independently from
 its existing delivery, workspace, claim and exact supervisor identity. Known
-work can settle while another owner is unresolved. Fresh admission currently
-waits until the entire retained startup population settles, including work
-recovered from a pending poll. This conservative restart limitation can leave
-spare capacity idle for a long-running retained job. Unknown ownership never
-releases claims. Upgrade, reload and retirement still require all work to settle.
+work can settle while another owner is unresolved. Fresh admission resumes only
+after the complete retained inventory, including exact pending-poll recovery,
+has trustworthy current ownership and accounting. A continuously supervised
+worker can keep running while a new assignment uses the remaining capacity.
+Accepted STARTING operations require a fresh live supervisor receipt; a saved
+row or PID alone is insufficient. Claims stay held through publication and
+commit, and a pending provider/coordinator release blocks admission until its
+exact replay settles. Missing requests, unknown ownership, uncertain composite
+claims and pending control/session effects keep admission closed across the
+session. The manager reassesses changed inventory before preparing capacity;
+released claims are never restored as newly held or subtracted twice.
+Upgrade, reload, operator resume and retirement still require all work to settle.
 GPU admission also takes a fresh off-loop occupancy sample; the manager applies
 it and prepares the claim without a second probe. An earlier free offer sample
 does not bypass admission's fresh, fail-closed occupancy decision.
@@ -507,9 +514,10 @@ does not bypass admission's fresh, fail-closed occupancy decision.
 Application stop waits for its owned finite operations, preserves supervised
 workers and claims, and suspends at replay boundaries. A blocked filesystem
 operation can delay that wait; there is no hard shutdown or containment deadline.
-Restart remains conservative: all retained work must settle before fresh
-admission. The synchronous `execute_one()` and `resume_retained_work()` methods
-drive the same transition steps and retain their existing result shapes.
+Only service admission uses this qualified recovery proof. Unqualified direct
+clients still cannot advertise or poll with retained work. The synchronous
+`execute_one()` and `resume_retained_work()` methods drive the same transition
+steps and retain their existing result shapes and finish-known-work behavior.
 The separate external SLURM engine retains its synchronous scheduler and transfer
 behavior; these responsiveness guarantees apply to resident execution.
 Retained SLURM jobs still progress through that serial driver during restart
