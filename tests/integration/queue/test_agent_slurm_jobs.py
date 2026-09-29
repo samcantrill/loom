@@ -139,6 +139,32 @@ def test_outbound_service_settles_slurm_while_drained(
         "1" * 64,
     )
     monkeypatch.setattr(deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
+    drained_progress = Event()
+    retries = []
+    original_steps = deployment._steps
+
+    def observed_steps(function, *args, **kwargs):
+        if function.__name__ == "drive_slurm_jobs":
+            agent = function.__self__
+            if agent._drained and not agent._restart_with_retained_work:
+                drained_progress.set()
+        try:
+            result = yield from original_steps(function, *args, **kwargs)
+            if (
+                not restart_with_job
+                and function.__name__ == "drive_slurm_jobs"
+                and any(call[0] == "sbatch" for call in runner.calls)
+            ):
+                # Deliver drain between the scheduler step and the next poll,
+                # so this case tests the normal drained loop, not reconnect.
+                while not function.__self__._drained and not stop.is_set():
+                    yield from deployment._delay(0.01)
+            return result
+        except QueueConflictError as error:
+            retries.append((function.__name__, str(error)))
+            raise
+
+    monkeypatch.setattr(deployment, "_steps", observed_steps)
 
     def serve():
         try:
@@ -154,7 +180,7 @@ def test_outbound_service_settles_slurm_while_drained(
             if result:
                 return result
             time.sleep(0.02)
-        pytest.fail("retained SLURM service progress timed out")
+        pytest.fail(f"retained SLURM service progress timed out: {retries}")
 
     thread = Thread(target=serve)
     client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
@@ -234,6 +260,8 @@ def test_outbound_service_settles_slurm_while_drained(
                 ).fetchone() == ("drained",)
 
         eventually(drained)
+        if not restart_with_job:
+            eventually(drained_progress.is_set)
         client.cancel("job")
         eventually(lambda: not execution.slurm_assignments.list_run_unreleased(run_uri))
 
