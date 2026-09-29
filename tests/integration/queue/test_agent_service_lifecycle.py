@@ -300,14 +300,17 @@ def test_foreground_stop_preserves_worker_and_interrupts_restart_join(
     assert work.supervisor.query(launch).state is SupervisorLaunchState.RUNNING
 
     joining = Event()
-    resume = LocalDaemonAgentHttpClient.resume_retained_work
+    from loom.queue._agent_progress import _cooperative, _steps
 
-    def observe_join(client, **kwargs):
+    resume = LocalDaemonAgentHttpClient._resume_retained_assignments
+
+    @_cooperative
+    def observe_join(client, *args, **kwargs):
         joining.set()
-        return resume(client, **kwargs)
+        return (yield from _steps(resume, client, *args, **kwargs))
 
     monkeypatch.setattr(
-        LocalDaemonAgentHttpClient, "resume_retained_work", observe_join
+        LocalDaemonAgentHttpClient, "_resume_retained_assignments", observe_join
     )
     replacement = work.start_agent()
     assert joining.wait(5)

@@ -472,11 +472,10 @@ not return a slot. Selection and atomic targeting both enforce the ceiling;
 exact target replay consumes no additional slot. Physical CPU/RAM/device claims
 and each run's `max_parallel_stages` remain independent limits. Reflected claims
 are already excluded from provider availability and are not subtracted twice.
-Execution currently remains serial even when a larger ceiling permits targeting;
-the field does not yet promise overlapping workers. Nonempty `slurm_profiles`
-requires a ceiling of one.
+Independent resident workers can overlap up to these limits. Nonempty
+`slurm_profiles` requires a ceiling of one.
 
-The serial resident service advances input, launch, observation, publication and release
+The resident service fairly advances input, launch, observation, publication and release
 at finite operation boundaries. The application thread owns session, provider
 and journal transitions; external operations use bounded worker slots (two bulk,
 two control/observation and one work poll). Simultaneous HTTP exchanges own
@@ -486,6 +485,21 @@ intent, not proof of completed containment: claims remain held through positive
 no-start/containment evidence, durable output and acknowledged result commit.
 An outstanding poll is settled or replayed with its original identity before
 refreshing the offer or submitting another poll.
+Availability-changing exchanges are ordered through reply application, including
+exact replay after a lost release response. Every offer reflects the complete
+provider claim set. A held worker or publication does not prevent an independent
+eligible assignment from progressing; two blocked bulk operations can delay
+launch/publication/containment, while healthy receipt and stop-request paths
+remain independent. CPU and RAM are accounting reservations, not OS limits;
+GPU claims remain whole-device exclusive through publication and release.
+
+On application restart, each retained assignment recovers independently from
+its existing delivery, workspace, claim and exact supervisor identity. Known
+work can settle while another owner is unresolved. Fresh admission currently
+waits until the entire retained startup population settles, including work
+recovered from a pending poll. This conservative restart limitation can leave
+spare capacity idle for a long-running retained job. Unknown ownership never
+releases claims. Upgrade, reload and retirement still require all work to settle.
 GPU admission also takes a fresh off-loop occupancy sample; the manager applies
 it and prepares the claim without a second probe. An earlier free offer sample
 does not bypass admission's fresh, fail-closed occupancy decision.

@@ -1,4 +1,4 @@
-"""Serial outbound service progress across actual TLS and supervisor boundaries."""
+"""Concurrent outbound progress across actual TLS and supervisor boundaries."""
 
 from __future__ import annotations
 
@@ -97,7 +97,14 @@ def _rows(path, sql, parameters=()):
 
 @contextmanager
 def _service(
-    monkeypatch, *, ceiling=1, threaded_supervisor=False, shared=False, gpu=False
+    monkeypatch,
+    *,
+    ceiling=1,
+    threaded_supervisor=False,
+    shared=False,
+    gpu: bool | int = False,
+    cpu=2,
+    memory=0,
 ):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
     with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
@@ -112,7 +119,10 @@ def _service(
             REGULAR_FILE_RELAY_CAPABILITY,
         )
         roots = {}
-        devices = (GpuDeviceDescriptor("gpu-0", "model-0", 1024),) if gpu else ()
+        devices = tuple(
+            GpuDeviceDescriptor(f"gpu-{index}", "model-0", 1024)
+            for index in range(int(gpu))
+        )
         if shared:
             shared_root = root / "shared"
             shared_root.mkdir()
@@ -141,10 +151,16 @@ def _service(
             descriptor,
             Path(__file__).resolve().parents[3],
             Path(sys.executable),
-            cpu_capacity=2,
+            cpu_capacity=cpu,
+            memory_capacity_bytes=memory,
+            environment={"LOOM_TEST_GATE_ROOT": str(root)},
             shared_roots=roots,
             gpu_devices=tuple(
-                ResidentGpuDevice(device, "GPU-private") for device in devices
+                ResidentGpuDevice(
+                    device,
+                    "GPU-private" if len(devices) == 1 else f"GPU-private-{index}",
+                )
+                for index, device in enumerate(devices)
             ),
         )
         if shared:
@@ -216,8 +232,8 @@ def _service(
             (profile,),
             agent_resource_provider_factory=(
                 transport._default_remote_providers
-                if gpu
-                else ResidentProviderFactory(capacity=2)
+                if gpu or memory
+                else ResidentProviderFactory(capacity=cpu)
             ),
             gpu_occupancy_policy=GpuOccupancyPolicy(3600, 7200, 0.1) if gpu else None,
             max_concurrent_assignments=ceiling,
@@ -335,18 +351,49 @@ def _service(
                 )
             )
             yield case
+        except BaseException:
+            print("service failures", failures, "retries", retries[-10:])
+            print(
+                "assignments",
+                _rows(
+                    case.database, "SELECT assignment_id, state FROM remote_assignments"
+                ),
+            )
+            print(
+                "local",
+                _rows(
+                    agent_root / "journal.sqlite",
+                    "SELECT assignment_id, state FROM assignments",
+                ),
+            )
+            print(
+                "admissions",
+                _rows(
+                    case.database,
+                    "SELECT queue_item_id, state, blocked_reason FROM managed_admissions",
+                ),
+            )
+            raise
         finally:
             stop.set()
             case.thread.join(80)
-            assert not case.thread.is_alive(), failures
             # Only this fixture's exact supervisor is allowed to contain its
             # retained groups, including assertion-failure and stopped-app paths.
-            if _supervisor_process_ids(agent_root) or (
-                supervisor_thread is not None and supervisor_thread.is_alive()
-            ):
-                owner = LocalDaemonAgentHttpClient(client_config)
-                try:
-                    assert owner._supervisor is not None
+            cleanup_errors = []
+            try:
+                if _supervisor_process_ids(agent_root) or (
+                    supervisor_thread is not None and supervisor_thread.is_alive()
+                ):
+                    owner = AgentProcessSupervisorClient(
+                        agent_root,
+                        supervisor_module.SupervisorLaunchConfiguration(
+                            transport._read_remote_agent_root_id(agent_root),
+                            tuple(
+                                item.launch_profile
+                                for item in client_config.resident_profiles
+                            ),
+                        ),
+                    )
                     for (encoded,) in _rows(
                         agent_root / "supervisor/supervisor.sqlite",
                         "SELECT launch_json FROM launches",
@@ -354,15 +401,20 @@ def _service(
                         launch = supervisor_module._launch_from_value(
                             json.loads(encoded)
                         )
-                        assert (
-                            owner._supervisor.contain(launch).state
-                            is SupervisorLaunchState.CONTAINED
-                        )
-                    owner._supervisor.shutdown_for_test()
-                finally:
-                    owner.close()
-            server.stop()
-            daemon.stop()
+                        try:
+                            assert (
+                                owner.contain(launch).state
+                                is SupervisorLaunchState.CONTAINED
+                            )
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                    owner.shutdown_for_test()
+            finally:
+                case.thread.join(10)
+                server.stop()
+                daemon.stop()
+            assert not cleanup_errors
+            assert not case.thread.is_alive(), failures
             assert _supervisor_process_ids(agent_root) == ()
             if case.supervisor_owner is not None:
                 for child in case.supervisor_owner._children.values():
@@ -380,9 +432,341 @@ def _submit(case, name, *, sequential=False):
         requirement=case.requirement,
         sequential=sequential,
         shared_scope=case.shared_scope,
+        resource_entries=(
+            None
+            if not case.config.client.capacity_profile.memory_capacity_bytes
+            else {
+                "cpu": {"kind": "cpu", "amount": 1, "unit": "count"},
+                "memory": {"kind": "memory", "amount": 1024**3, "unit": "B"},
+            }
+        ),
     )
     case.client.submit(LocalDaemonAdmissionRequest(name, uri))
     return uri, authority
+
+
+def _submit_gated(case, name, *, memory=1024**3, gpu=False, workers=1):
+    gate = case.root / name
+    uri, authority = _prepare_remote_producer_run(
+        case.store,
+        run_name=name,
+        machine_id="agent-a",
+        value=7,
+        requirement=case.requirement,
+        stage_factory="tests.support.pipeline_execution_stages.ReleaseStage",
+        enforce=("gpu",) if gpu else (),
+        shared_scope=case.shared_scope,
+        independent_stages=workers,
+        stage_config={
+            "marker_dir": name,
+            "marker_dir_environment": "LOOM_TEST_GATE_ROOT",
+            "timeout_seconds": 900,
+        },
+        resource_entries={
+            "cpu": {"kind": "cpu", "amount": 1, "unit": "count"},
+            "memory": {"kind": "memory", "amount": memory, "unit": "B"},
+            **(
+                {
+                    "gpu": {
+                        "kind": "gpu",
+                        "amount": 1,
+                        "unit": "count",
+                        "attributes": {"allocation_mode": "exclusive"},
+                    }
+                }
+                if gpu
+                else {}
+            ),
+        },
+    )
+    case.client.submit(LocalDaemonAdmissionRequest(name, uri))
+    return gate, uri, authority
+
+
+def _release_gate(gate):
+    gate.mkdir(exist_ok=True)
+    (gate / "release").touch()
+
+
+def _running(case):
+    return _rows(
+        case.agent_root / "supervisor/supervisor.sqlite",
+        "SELECT json_extract(launch_json, '$.assignment_id'), operation_id, pid FROM launches WHERE state = 'running' ORDER BY operation_id",
+    )
+
+
+@pytest.mark.parametrize("ceiling", [1, 2])
+def test_held_worker_and_short_assignment_obey_resident_ceiling(monkeypatch, ceiling):
+    with _service(monkeypatch, ceiling=ceiling, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "long")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            held = _running(case)
+            assert len(held) == 1
+            short_uri, authority = _submit(case, "short")
+            if ceiling == 1:
+                assert not _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                    (short_uri,),
+                )
+                _release_gate(gate)
+            assert (
+                case.client.wait("short", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (short_uri,),
+                )
+            )
+            from loom.pipeline.stores import LocalArtifactStore
+
+            artifact = (
+                authority.list_output_commits(short_uri)[0].artifact_facts[0].artifact
+            )
+            assert LocalArtifactStore(case.store.local_artifact_root(short_uri)).load(
+                artifact
+            ) == {"value": 7}
+            if ceiling == 2:
+                assert _running(case) == held
+                offer = json.loads(
+                    _eventually(
+                        lambda: _rows(
+                            case.database,
+                            "SELECT offer_json FROM agent_offers WHERE current = 1",
+                        )
+                    )[0][0]
+                )
+                assert len(offer["reflected_claim_ids"]) == 1
+            _release_gate(gate)
+            assert (
+                case.client.wait("long", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            _release_gate(gate)
+
+
+def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeypatch):
+    from dataclasses import replace
+
+    unknown = Event()
+    original_query = AgentProcessSupervisorClient.query
+    blocked_id = []
+
+    def query(owner, launch):
+        receipt = original_query(owner, launch)
+        if unknown.is_set() and launch.assignment_id in blocked_id:
+            return replace(receipt, state=SupervisorLaunchState.UNKNOWN)
+        return receipt
+
+    monkeypatch.setattr(AgentProcessSupervisorClient, "query", query)
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        a, _, _ = _submit_gated(case, "a")
+        b, b_uri, _ = _submit_gated(case, "b")
+        try:
+            _eventually(
+                lambda: (
+                    (a / "build.started").exists() and (b / "build.started").exists()
+                )
+            )
+            original = _running(case)
+            assert len(original) == 2
+            blocked_id.append(original[0][0])
+            # Pick A by its authoritative coordinator run mapping.
+            blocked_id[:] = [
+                row[0]
+                for row in _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri != ?",
+                    (b_uri,),
+                )
+            ]
+            case.stop.set()
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            assert _running(case) == original
+            unknown.set()
+            fresh_uri, _ = _submit(case, "fresh")
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            _release_gate(b)
+            assert (
+                case.client.wait("b", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (b_uri,),
+                )
+            )
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (fresh_uri,),
+            )
+            assert [row for row in _running(case) if row[0] in blocked_id] == [
+                row for row in original if row[0] in blocked_id
+            ]
+            unknown.clear()
+            _release_gate(a)
+            assert (
+                case.client.wait("a", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches",
+            ) == [(3,)]
+        finally:
+            unknown.clear()
+            _release_gate(a)
+            _release_gate(b)
+
+
+def test_thirty_two_live_workers_fair_observation_and_five_renewal_cycles(monkeypatch):
+    from collections import Counter
+    from datetime import datetime, timedelta
+    from concurrent.futures import ThreadPoolExecutor
+    import loom.queue._agent_progress as progress
+
+    pools = []
+
+    class CountedPool(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.submissions = []
+            self.maximum = 0
+            pools.append(self)
+
+        def submit(self, *args, **kwargs):
+            self.submissions = [
+                future for future in self.submissions if not future.done()
+            ]
+            future = super().submit(*args, **kwargs)
+            self.submissions.append(future)
+            self.maximum = max(self.maximum, len(self.submissions))
+            assert self.maximum <= self._max_workers
+            return future
+
+    monkeypatch.setattr(progress, "ThreadPoolExecutor", CountedPool)
+    observed = []
+    ever_observed = set()
+    collecting = Event()
+    query = AgentProcessSupervisorClient.query
+
+    def record(owner, launch):
+        receipt = query(owner, launch)
+        if receipt.state is SupervisorLaunchState.RUNNING:
+            ever_observed.add(launch.assignment_id)
+        if collecting.is_set() and receipt.state is SupervisorLaunchState.RUNNING:
+            observed.append(launch.assignment_id)
+        return receipt
+
+    monkeypatch.setattr(AgentProcessSupervisorClient, "query", record)
+    offset = [0.0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+    with _service(monkeypatch, ceiling=32, cpu=32, memory=32 * 1024**2) as case:
+        gates = []
+        try:
+            gate, _, _ = _submit_gated(case, "worker-0", memory=1024**2)
+            gates.append(gate)
+            population, _, _ = _submit_gated(
+                case, "population", memory=1024**2, workers=31
+            )
+            gates.append(population)
+            _eventually(
+                lambda: (
+                    (gate / "build.started").exists()
+                    and all(
+                        (population / f"build-{index}.started").exists()
+                        for index in range(31)
+                    )
+                ),
+                seconds=480,
+            )
+            held = _running(case)
+            assert len(held) == 32
+            ids = {row[0] for row in held}
+            _eventually(lambda: ever_observed == ids, seconds=30)
+            collecting.set()
+            _eventually(lambda: set(observed) == ids, seconds=30)
+            first_round = observed[
+                : next(
+                    index + 1
+                    for index in range(len(observed))
+                    if set(observed[: index + 1]) == ids
+                )
+            ]
+            assert max(Counter(first_round).values()) <= 2
+            collecting.clear()
+            clock = case.daemon._clock
+            baseline = datetime.fromisoformat(clock().replace("Z", "+00:00"))
+            monkeypatch.setattr(
+                case.daemon,
+                "_clock",
+                lambda: (
+                    (baseline + timedelta(seconds=offset[0]))
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                ),
+            )
+            for _ in range(10):
+                old = _rows(case.database, "SELECT sequence FROM agent_offer_renewals")
+                offset[0] += deployment._OUTBOUND_OFFER_TTL_SECONDS / 2
+                _eventually(
+                    lambda: (
+                        _rows(
+                            case.database, "SELECT sequence FROM agent_offer_renewals"
+                        )
+                        != old
+                    )
+                )
+                assert _running(case) == held
+            case.client.cancel("worker-0")
+            assert (
+                case.client.wait("worker-0", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            _eventually(lambda: len(_running(case)) == 31)
+            survivors = _running(case)
+            assert all(row in held for row in survivors)
+            assert len(survivors) == 31
+            for gate in gates:
+                _release_gate(gate)
+            assert (
+                case.client.wait("population", timeout_seconds=180).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: (
+                    _rows(
+                        case.database,
+                        "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'",
+                    )
+                    == [(32,)]
+                ),
+                seconds=60,
+            )
+            assert {pool._thread_name_prefix: pool._max_workers for pool in pools} == {
+                "loom-agent-bulk": 2,
+                "loom-agent-control": 2,
+                "loom-agent-poll": 1,
+            }
+            assert all(pool.maximum <= pool._max_workers for pool in pools)
+        finally:
+            for gate in gates:
+                _release_gate(gate)
 
 
 def test_gpu_admission_probe_keeps_control_receipt_responsive(monkeypatch):
@@ -546,18 +930,18 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
                 json.loads(row[0]).get("max_concurrent_assignments", 1) == ceiling
                 for row in offers
             )
-            # The held assignment keeps its slot/claims until ordered settlement;
-            # the second run cannot start under either advertised ceiling.
+            # A held assignment retains its own slot and claims until release.
             assert not _rows(
                 case.database,
                 "SELECT assignment_id FROM remote_assignments WHERE state = 'RELEASED' AND assignment_id = ?",
                 (held["assignment_id"],),
             )
-            assert not _rows(
-                case.database,
-                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND start_permitted = 1",
-                (later_uri,),
-            )
+            if ceiling == 1:
+                assert not _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND start_permitted = 1",
+                    (later_uri,),
+                )
             unblock.set()
             assert (
                 case.client.wait("held", timeout_seconds=30).state
@@ -770,6 +1154,8 @@ def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
     requests = []
     held_request = []
     active_polls = []
+    clock_offset = [0.0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + clock_offset[0])
 
     def record(config, operation, body, role, connection, keep_alive):
         requests.append((operation, body))
@@ -810,6 +1196,7 @@ def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
                 operation in {"offer", "renew"}
                 for operation, _ in requests[first + 1 :]
             )
+            clock_offset[0] = deployment._OUTBOUND_OFFER_TTL_SECONDS
             unblock.set()
             assert replayed.wait(10), case.failures
             _eventually(
@@ -904,6 +1291,114 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
             unblock.set()
 
 
+@pytest.mark.parametrize("after_close", [False, True])
+def test_control_receipts_survive_lost_reply_from_reconnecting_client(
+    monkeypatch, after_close
+):
+    armed, held, release, reconnecting, closed = (Event() for _ in range(5))
+    publishing, release_publication, control_suspended = (Event() for _ in range(3))
+    owners = []
+    dispatch = transport._dispatch
+    complete = _RemoteAgentJournal.complete_offer_renewal
+    close = LocalDaemonAgentHttpClient.close
+    initialize = LocalDaemonAgentHttpClient.__init__
+    receive = LocalDaemonAgentHttpClient._receive_service_controls
+    retain = transport._ResidentAssignmentWorkspace.retain_outputs
+
+    def capture_owner(owner, *args, **kwargs):
+        initialize(owner, *args, **kwargs)
+        owners.append(owner)
+
+    def observe_receive(owner):
+        try:
+            yield from receive(owner)
+        except deployment._ManagedApplicationSuspended:
+            control_suspended.set()
+            raise
+
+    def hold_publication(workspace):
+        if not publishing.is_set():
+            publishing.set()
+            assert release_publication.wait(60)
+        return retain(workspace)
+
+    def lost_control_reply(view, operation, value):
+        result = dispatch(view, operation, value)
+        if operation == "assignment_control" and armed.is_set() and not held.is_set():
+            held.set()
+            assert release.wait(30)
+            raise ConnectionError("lost control reply from the closing client")
+        return result
+
+    def reconnect_after_renewal(journal, renewal, result):
+        if held.is_set() and not reconnecting.is_set():
+            reconnecting.set()
+            raise transport.QueueServiceError("lost renewal application")
+        return complete(journal, renewal, result)
+
+    def observe_close(owner):
+        close(owner)
+        if reconnecting.is_set():
+            closed.set()
+
+    monkeypatch.setattr(transport, "_dispatch", lost_control_reply)
+    monkeypatch.setattr(
+        _RemoteAgentJournal, "complete_offer_renewal", reconnect_after_renewal
+    )
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "close", observe_close)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "__init__", capture_owner)
+    monkeypatch.setattr(
+        LocalDaemonAgentHttpClient, "_receive_service_controls", observe_receive
+    )
+    monkeypatch.setattr(
+        transport._ResidentAssignmentWorkspace, "retain_outputs", hold_publication
+    )
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "retained")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            original = _running(case)
+            _submit(case, "publishing")
+            assert publishing.wait(20)
+            armed.set()
+            assert held.wait(10)
+            _eventually(lambda: owners[0]._suspend_requested(), seconds=20)
+            if after_close:
+                release_publication.set()
+                assert closed.wait(10)
+            release.set()
+            assert control_suspended.wait(10)
+            release_publication.set()
+            assert closed.wait(10)
+            assert _running(case) == original
+            case.client.cancel("retained")
+            assert (
+                case.client.wait("retained", timeout_seconds=15).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            assert (
+                case.client.wait("publishing", timeout_seconds=15).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: (
+                    _rows(
+                        case.database,
+                        "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'",
+                    )
+                    == [(2,)]
+                )
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches",
+            ) == [(2,)]
+        finally:
+            release.set()
+            release_publication.set()
+            _release_gate(gate)
+
+
 def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypatch):
     entered, unblock, observed = Event(), Event(), Event()
     dispatch = transport._dispatch
@@ -975,6 +1470,234 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
             unblock.set()
 
 
+def test_drain_running_publishing_and_late_delivery_settles_entire_population(
+    monkeypatch,
+):
+    publishing, late, release_publication, release_poll = (
+        Event(),
+        Event(),
+        Event(),
+        Event(),
+    )
+    arm_publication, arm_poll = Event(), Event()
+    retain = transport._ResidentAssignmentWorkspace.retain_outputs
+    dispatch = transport._dispatch
+
+    def publication(workspace):
+        if arm_publication.is_set() and not publishing.is_set():
+            publishing.set()
+            assert release_publication.wait(40)
+        return retain(workspace)
+
+    def exchange(view, operation, value):
+        result = dispatch(view, operation, value)
+        if (
+            arm_poll.is_set()
+            and operation == "poll"
+            and result.get("result") == "assignment"
+            and not late.is_set()
+        ):
+            late.set()
+            assert release_poll.wait(30)
+        return result
+
+    monkeypatch.setattr(
+        transport._ResidentAssignmentWorkspace, "retain_outputs", publication
+    )
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "running")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            arm_publication.set()
+            _submit(case, "publishing")
+            assert publishing.wait(20)
+            arm_poll.set()
+            _submit(case, "late")
+            assert late.wait(20)
+            session = json.loads(
+                _rows(
+                    case.agent_root / "control.sqlite",
+                    "SELECT value_json FROM agent_sessions_local",
+                )[0][0]
+            )
+            case.operator.control_agent(
+                AgentControl(
+                    "drain-all",
+                    AgentControlKind.DRAIN,
+                    "agent-a",
+                    session["session_id"],
+                    session["config_revision"],
+                    None,
+                    False,
+                    "settle every retained assignment",
+                )
+            )
+            fresh_uri, _ = _submit(case, "after-drain")
+            release_poll.set()
+            _eventually(
+                lambda: (
+                    _rows(
+                        case.agent_root / "control.sqlite",
+                        "SELECT value FROM root_metadata WHERE key = 'availability_state'",
+                    )
+                    == [("drained",)]
+                )
+            )
+            assert (
+                len(
+                    _rows(case.database, "SELECT assignment_id FROM remote_assignments")
+                )
+                == 3
+            )
+            release_publication.set()
+            _release_gate(gate)
+            for name in ("running", "publishing", "late"):
+                assert (
+                    case.client.wait(name, timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+            _eventually(
+                lambda: (
+                    _rows(
+                        case.database,
+                        "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'",
+                    )
+                    == [(3,)]
+                )
+            )
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (fresh_uri,),
+            )
+        finally:
+            release_poll.set()
+            release_publication.set()
+            _release_gate(gate)
+
+
+@pytest.mark.parametrize("restart_epoch", [False, True])
+def test_lost_release_orders_other_completion_and_preserves_local_stop(
+    monkeypatch, restart_epoch
+):
+    held, release, committed_b, stopped_c = Event(), Event(), Event(), Event()
+    dispatch = transport._dispatch
+    stop_request = AgentProcessSupervisorClient.request_stop
+    requests = []
+    ids = {}
+
+    def exchange(view, operation, value):
+        requests.append((operation, dict(value)))
+        result = dispatch(view, operation, value)
+        if (
+            operation == "release"
+            and value["assignment_id"] == ids.get("a")
+            and not held.is_set()
+        ):
+            held.set()
+            assert release.wait(40)
+            raise ConnectionError("lost accepted release")
+        if operation == "result" and value["assignment_id"] == ids.get("b"):
+            committed_b.set()
+        return result
+
+    def request_stop(owner, launch):
+        receipt = stop_request(owner, launch)
+        if held.is_set() and launch.assignment_id == ids.get("c"):
+            stopped_c.set()
+        return receipt
+
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "request_stop", request_stop)
+    offset = [0.0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        gates = []
+        try:
+            for name in ("a", "b", "c"):
+                gate, uri, _ = _submit_gated(case, name)
+                gates.append(gate)
+                _eventually(lambda: (gate / "build.started").exists())
+                ids[name] = _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                    (uri,),
+                )[0][0]
+            _release_gate(gates[0])
+            assert held.wait(20)
+            first_release = next(
+                index
+                for index, (operation, _) in enumerate(requests)
+                if operation == "release"
+            )
+            offset[0] += deployment._OUTBOUND_OFFER_TTL_SECONDS
+            _release_gate(gates[1])
+            assert committed_b.wait(20)
+            case.client.cancel("c")
+            assert stopped_c.wait(5)
+            assert not any(
+                operation in {"release", "offer", "renew", "poll"}
+                for operation, _ in requests[first_release + 1 :]
+            )
+            if restart_epoch:
+                case.daemon.stop()
+                case.daemon.start()
+            release.set()
+            for name in ("a", "b"):
+                assert (
+                    case.client.wait(name, timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+            assert (
+                case.client.wait("c", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            _eventually(
+                lambda: (
+                    _rows(
+                        case.database,
+                        "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'",
+                    )
+                    == [(3,)]
+                )
+            )
+            releases = [
+                value for operation, value in requests if operation == "release"
+            ]
+            a_releases = [
+                value for value in releases if value["assignment_id"] == ids["a"]
+            ]
+            assert len(a_releases) >= 2 and all(
+                value == a_releases[0] for value in a_releases
+            )
+            local = json.loads(
+                _rows(
+                    case.agent_root / "control.sqlite",
+                    "SELECT value_json FROM agent_sessions_local",
+                )[0][0]
+            )
+            assert _rows(
+                case.database,
+                "SELECT coordinator_epoch, availability_revision FROM agent_sessions",
+            ) == [(local["coordinator_epoch"], local["availability_revision"])]
+            if restart_epoch:
+                assert (
+                    len(
+                        {
+                            value["idempotency_key"]
+                            for operation, value in requests
+                            if operation == "reconcile"
+                        }
+                    )
+                    == 1
+                )
+        finally:
+            release.set()
+            for gate in gates:
+                _release_gate(gate)
+
+
 def test_workspace_failure_closes_application_and_resumes_exact_delivery(monkeypatch):
     from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
 
@@ -1022,3 +1745,370 @@ def test_workspace_failure_closes_application_and_resumes_exact_delivery(monkeyp
             case.agent_root / "supervisor/supervisor.sqlite",
             "SELECT COUNT(*) FROM launches",
         ) == [(2,)]
+
+
+@pytest.mark.parametrize(
+    "window", ["before_permit", "after_permit", "starting", "running", "publication"]
+)
+def test_exact_cancel_windows_preserve_unrelated_running_worker(monkeypatch, window):
+    armed, held, release, received = Event(), Event(), Event(), Event()
+    dispatch = transport._dispatch
+    spawn = subprocess.Popen
+    retain = transport._ResidentAssignmentWorkspace.retain_outputs
+    prepare = _RemoteAgentJournal.prepare_assignment_control
+
+    def pause():
+        held.set()
+        assert release.wait(30)
+
+    def exchange(view, operation, value):
+        if armed.is_set() and operation == "start_permit" and window == "before_permit":
+            pause()
+        result = dispatch(view, operation, value)
+        if armed.is_set() and operation == "start_permit" and window == "after_permit":
+            pause()
+        return result
+
+    def launch(*args, **kwargs):
+        if armed.is_set() and window == "starting":
+            pause()
+        return spawn(*args, **kwargs)
+
+    def publication(workspace):
+        if armed.is_set() and window == "publication":
+            pause()
+        return retain(workspace)
+
+    def control(journal, request):
+        result = prepare(journal, request)
+        if armed.is_set():
+            received.set()
+        return result
+
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        transport._ResidentAssignmentWorkspace, "retain_outputs", publication
+    )
+    monkeypatch.setattr(_RemoteAgentJournal, "prepare_assignment_control", control)
+    with _service(
+        monkeypatch, ceiling=2, memory=2 * 1024**3, threaded_supervisor=True
+    ) as case:
+        b, _, _ = _submit_gated(case, "survivor")
+        a = None
+        try:
+            _eventually(lambda: (b / "build.started").exists())
+            survivor = _running(case)
+            armed.set()
+            if window == "running":
+                a, _, _ = _submit_gated(case, "cancel")
+                _eventually(lambda: (a / "build.started").exists())
+            else:
+                _submit(case, "cancel")
+                assert held.wait(20)
+            case.client.cancel("cancel")
+            assert received.wait(5)
+            release.set()
+            assert (
+                case.client.wait("cancel", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            _eventually(lambda: _running(case) == survivor)
+            if window in {"before_permit", "after_permit"}:
+                assert _rows(
+                    case.agent_root / "supervisor/supervisor.sqlite",
+                    "SELECT COUNT(*) FROM launches",
+                ) == [(1,)]
+            armed.clear()
+            _release_gate(b)
+            assert (
+                case.client.wait("survivor", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            armed.clear()
+            release.set()
+            _release_gate(b)
+            if a is not None:
+                _release_gate(a)
+
+
+def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeypatch):
+    monkeypatch.setattr(
+        NvidiaSmiGpuProcessObserver,
+        "observe",
+        lambda owner: {
+            f"GPU-private-{index}": GpuProcessObservation(
+                f"GPU-private-{index}", True, False, "available"
+            )
+            for index in range(4)
+        },
+    )
+    with _service(monkeypatch, ceiling=6, cpu=8, memory=8 * 1024**3, gpu=4) as case:
+        gates = []
+        try:
+            for index in range(5):
+                gate, _, _ = _submit_gated(case, f"gpu-{index}", gpu=True)
+                gates.append(gate)
+            cpu_gate, _, _ = _submit_gated(case, "cpu")
+            gates.append(cpu_gate)
+            _eventually(
+                lambda: (
+                    all((gate / "build.started").exists() for gate in gates[:4])
+                    and (cpu_gate / "build.started").exists()
+                ),
+                seconds=45,
+            )
+            assert not (gates[4] / "build.started").exists()
+            assert len(_running(case)) == 5
+            launches = [
+                json.loads(row[0])
+                for row in _rows(
+                    case.agent_root / "supervisor/supervisor.sqlite",
+                    "SELECT launch_json FROM launches WHERE state = 'running'",
+                )
+            ]
+            bindings = [
+                launch["environment"]["CUDA_VISIBLE_DEVICES"]
+                for launch in launches
+                if "CUDA_VISIBLE_DEVICES" in launch["environment"]
+            ]
+            assert set(bindings) == {f"GPU-private-{index}" for index in range(4)}
+            assert len(bindings) == 4
+            _release_gate(gates[0])
+            _eventually(lambda: (gates[4] / "build.started").exists(), seconds=30)
+            assert all((gate / "build.started").exists() for gate in gates)
+            for gate in gates:
+                _release_gate(gate)
+            for name in [*(f"gpu-{index}" for index in range(5)), "cpu"]:
+                assert (
+                    case.client.wait(name, timeout_seconds=45).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+        finally:
+            for gate in gates:
+                _release_gate(gate)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_two_bulk_holds_preserve_exact_stop_and_unrelated_observation(
+    monkeypatch, shared
+):
+    published, input_held, release = Event(), Event(), Event()
+    stopped, observed = Event(), Event()
+    from loom.queue import _shared_publication
+
+    publication_owner, publication_name = (
+        (_shared_publication, "retain")
+        if shared
+        else (transport._ResidentAssignmentWorkspace, "retain_outputs")
+    )
+    retain = getattr(publication_owner, publication_name)
+    dispatch = transport._dispatch
+    query = AgentProcessSupervisorClient.query
+    stop_request = AgentProcessSupervisorClient.request_stop
+    armed = Event()
+    survivor_ids = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    submit = ThreadPoolExecutor.submit
+    extra_bulk = []
+
+    def submitted(pool, *args, **kwargs):
+        if (
+            pool._thread_name_prefix == "loom-agent-bulk"
+            and input_held.is_set()
+            and not release.is_set()
+        ):
+            extra_bulk.append(args)
+        return submit(pool, *args, **kwargs)
+
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", submitted)
+
+    def hold_publication(workspace, *args):
+        if armed.is_set() and not published.is_set():
+            published.set()
+            assert release.wait(60)
+        elif armed.is_set() and shared and not input_held.is_set():
+            input_held.set()
+            assert release.wait(60)
+        return retain(workspace, *args)
+
+    def hold_input(view, operation, value):
+        result = dispatch(view, operation, value)
+        if operation == "input" and published.is_set() and not input_held.is_set():
+            input_held.set()
+            assert release.wait(60)
+        return result
+
+    def observe(owner, launch):
+        receipt = query(owner, launch)
+        if (
+            input_held.is_set()
+            and survivor_ids
+            and launch.assignment_id == survivor_ids[-1]
+        ):
+            observed.set()
+        return receipt
+
+    def request_stop(owner, launch):
+        receipt = stop_request(owner, launch)
+        if input_held.is_set() and launch.assignment_id == survivor_ids[0]:
+            stopped.set()
+        return receipt
+
+    monkeypatch.setattr(publication_owner, publication_name, hold_publication)
+    monkeypatch.setattr(transport, "_dispatch", hold_input)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "query", observe)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "request_stop", request_stop)
+    with _service(
+        monkeypatch, ceiling=4, cpu=4, memory=4 * 1024**3, shared=shared
+    ) as case:
+        c, c_uri, _ = _submit_gated(case, "cancel")
+        d, d_uri, _ = _submit_gated(case, "observe")
+        try:
+            _eventually(
+                lambda: (
+                    (c / "build.started").exists() and (d / "build.started").exists()
+                )
+            )
+            survivor_ids.extend(
+                _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                    (uri,),
+                )[0][0]
+                for uri in (c_uri, d_uri)
+            )
+            armed.set()
+            _submit(case, "publishing")
+            assert published.wait(20)
+            _submit(case, "input", sequential=not shared)
+            assert input_held.wait(25)
+            case.client.cancel("cancel")
+            assert stopped.wait(5)
+            assert observed.wait(5)
+            assert not extra_bulk
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                (c_uri,),
+            )
+            assert any(row[0] == survivor_ids[1] for row in _running(case))
+            release.set()
+            assert (
+                case.client.wait("cancel", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            assert (
+                case.client.wait("publishing", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert (
+                case.client.wait("input", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert any(row[0] == survivor_ids[1] for row in _running(case))
+            _release_gate(d)
+            assert (
+                case.client.wait("observe", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+        finally:
+            release.set()
+            _release_gate(c)
+            _release_gate(d)
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ["delivery", "prepare", "launch", "publication", "commit", "provider_release"],
+)
+def test_restart_recovers_every_retained_assignment_at_crash_boundaries(
+    monkeypatch, boundary
+):
+    from loom.queue._agent_progress import _steps, _cooperative
+    from loom.queue._managed_local import SQLiteAgentJournal
+
+    armed, crashed = Event(), Event()
+    owners = {
+        "delivery": (_RemoteAgentJournal, "complete_poll"),
+        "prepare": (SQLiteAgentJournal, "prepare_composite"),
+        "launch": (AgentProcessSupervisorClient, "launch"),
+        "publication": (transport._ResidentAssignmentWorkspace, "retain_outputs"),
+        "commit": (LocalDaemonAgentHttpClient, "commit_result"),
+        "provider_release": (LocalDaemonAgentHttpClient, "_release_provider_claims"),
+    }
+    owner, name = owners[boundary]
+    original = getattr(owner, name)
+
+    def fail():
+        if armed.is_set() and not crashed.is_set():
+            crashed.set()
+            raise RuntimeError("injected application crash")
+
+    if hasattr(original, "_progress"):
+
+        @_cooperative
+        def interrupted(*args, **kwargs):
+            result = yield from _steps(original, *args, **kwargs)
+            fail()
+            return result
+    else:
+
+        def interrupted(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if boundary != "delivery" or args[-1].get("result") == "assignment":
+                fail()
+            return result
+
+    monkeypatch.setattr(owner, name, interrupted)
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "survivor")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            held = _running(case)
+            armed.set()
+            second_uri, _ = _submit(case, "interrupted")
+            assert crashed.wait(30)
+            case.thread.join(30)
+            assert not case.thread.is_alive(), case.failures
+            case.expected_failures.append(RuntimeError)
+            assert _running(case)[0] in held or any(
+                row in held for row in _running(case)
+            )
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert (
+                case.client.wait("interrupted", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (second_uri,),
+                )
+            )
+            assert any(row in held for row in _running(case))
+            fresh_uri, _ = _submit(case, "fresh")
+            assert not _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (fresh_uri,),
+            )
+            _release_gate(gate)
+            assert (
+                case.client.wait("survivor", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches",
+            ) == [(3,)]
+        finally:
+            _release_gate(gate)

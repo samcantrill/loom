@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import stat
 from threading import Event
+from time import monotonic
 from types import MappingProxyType
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -39,7 +40,7 @@ from ._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
 )
 from ._managed_local import _ManagedApplicationSuspended
-from ._agent_progress import _steps, _delay
+from ._agent_progress import _steps, _delay, _Spawn, _set_assignment_owner
 from .agent_sessions import (
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -608,13 +609,13 @@ def run_outbound_agent_service(
     lifetime: str | None = None,
     expected_coordinator_id: str | None = None,
 ) -> None:
-    """Progress one resident assignment with independent finite control receipts.
+    """Progress bounded resident assignments with independent control receipts.
 
     The configured assignment ceiling is advertised unchanged; this service
-    consumes deliveries serially. Application stop preserves owned processes and
+    manages independent deliveries fairly. Application stop preserves processes and
     claims and waits for its finite external operations before closing transport.
     """
-    from ._agent_progress import _run_serial
+    from ._agent_progress import _run_manager
 
     observing: list[LocalDaemonAgentHttpClient | None] = [None]
 
@@ -624,11 +625,15 @@ def run_outbound_agent_service(
             if client is not None:
                 try:
                     yield from client._receive_service_controls()
+                except _ManagedApplicationSuspended:
+                    # A closing client also suspends during reconnect; the
+                    # service's receipt owner continues with its replacement.
+                    pass
                 except (QueueError, AgentProcessSupervisorError):
                     pass
             yield from _delay(0.05)
 
-    _run_serial(
+    _run_manager(
         _outbound_service_steps(
             config, stop=stop, trusted_config_loader=trusted_config_loader,
             lifetime=lifetime, expected_coordinator_id=expected_coordinator_id,
@@ -705,6 +710,43 @@ def _outbound_service_steps(
     else:
         lifetime = lifetime or "persistent"
     while True:
+        assignments = {}
+        recovery = None
+        suspended = Event()
+
+        def suspending(suspended=suspended):
+            return stop.is_set() or suspended.is_set()
+
+        def recover(reference):
+            assert client is not None
+            _set_assignment_owner(reference[1])
+            while not suspending():
+                try:
+                    yield from _steps(
+                        client._resume_retained_assignments, (reference,),
+                        suspend_requested=suspending,
+                    )
+                except (QueueError, AgentProcessSupervisorError):
+                    pass
+                if reference not in client._require_journal().unresolved_assignment_references():
+                    return
+                yield from _delay(0.1)
+
+        def delivered(reference, delivery):
+            assert client is not None
+            session_id, assignment_id = reference
+            _set_assignment_owner(assignment_id)
+            request = yield from _steps(client._resolve_delivery, session_id, delivery.get("request"))
+            return (yield from _steps(client._execute_delivered_assignment,
+                session_id, request, suspend_requested=suspending))
+
+        def repair_session():
+            assert client is not None
+            yield from _steps(client._replay_pending_reconciliation)
+            yield from _steps(client._resume_pending_poll,
+                wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+                suspend_requested=suspending)
+
         try:
             if stop.is_set():
                 return
@@ -717,13 +759,32 @@ def _outbound_service_steps(
                     prepare_role_reload=prepare_install,
                 )
             client._service_progress = True
-            client._suspend_requested = stop.is_set
+            client._suspend_requested = suspending
             observing[0] = client
-            (yield from _steps(client._resume_pending_poll,
-                wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
-                suspend_requested=stop.is_set,
-            ))
-            (yield from _steps(client.resume_retained_work, suspend_requested=stop.is_set))
+            recovery = yield _Spawn(repair_session())
+            journal = client._require_journal()
+            # Every known startup owner progresses independently. Fresh work
+            # waits for the complete population, including recovered poll work.
+            while not stop.is_set():
+                for reference in journal.unresolved_assignment_references():
+                    if reference not in assignments:
+                        assignments[reference] = yield _Spawn(recover(reference))
+                for reference, view in tuple(assignments.items()):
+                    if view.complete:
+                        del assignments[reference]
+                        if view.error is not None:
+                            raise view.error
+                if recovery.complete:
+                    if recovery.error is not None:
+                        raise recovery.error
+                    if not assignments:
+                        break
+                yield from _delay(0.01)
+            if stop.is_set():
+                return
+            client._restart_with_retained_work = client._has_retained_agent_work()
+            if client._restart_with_retained_work:
+                raise QueueConflictError("retained ownership remains unresolved")
             handshake = (yield from _steps(client.handshake))
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
@@ -771,6 +832,11 @@ def _outbound_service_steps(
                     session_id=session.session_id,
                 )
             while not stop.is_set():
+                for reference, view in tuple(assignments.items()):
+                    if view.complete:
+                        del assignments[reference]
+                        if view.error is not None:
+                            raise view.error
                 if lifetime == "run":
                     retirement = {
                         "session_id": session.session_id,
@@ -810,23 +876,39 @@ def _outbound_service_steps(
                             coordinator_id=coordinator_id,
                             session_id=session.session_id,
                         )
-                (yield from _steps(client.poll_control, session.session_id))
+                if client._service_control_due:
+                    client._service_control_due = False
+                    yield from _steps(client.poll_control, session.session_id)
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 client._resource_maintenance_enabled = True  # noqa: SLF001
-                (yield from _steps(client.refresh_resource_offer, ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS))
+                if monotonic() >= client._next_resource_maintenance:
+                    policy = active.client.gpu_occupancy_policy
+                    interval = min(5.0, _OUTBOUND_OFFER_TTL_SECONDS / 2)
+                    if policy is not None:
+                        interval = min(interval, policy.poll_interval_seconds)
+                    client._next_resource_maintenance = monotonic() + interval
+                    yield from _steps(client.refresh_resource_offer, ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS)
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
+                if client._drained or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
+                    yield from _delay(0.05)
+                    continue
+                yield from _steps(client.drive_slurm_jobs)
                 sequence = client.next_poll_sequence(session.session_id)
-                (yield from _steps(client.execute_one,
+                delivery = (yield from _steps(client.wait_for_work,
                     session.session_id,
                     session.availability_revision,
                     sequence=sequence,
                     wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
-                    suspend_requested=stop.is_set,
                 ))
+                if delivery.get("result") == "assignment":
+                    # complete_poll already owns the original request by ID.
+                    for reference in journal.unresolved_assignment_references():
+                        if reference not in assignments:
+                            assignments[reference] = yield _Spawn(delivered(reference, delivery))
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
@@ -837,6 +919,10 @@ def _outbound_service_steps(
                 return
             (yield from _delay(active.reconnect_seconds))
         finally:
+            suspended.set()
+            observing[0] = None
+            while any(not view.complete for view in assignments.values()) or (recovery is not None and not recovery.complete):
+                yield from _delay(0.01)
             if client is not None:
                 observing[0] = None
                 closing = client

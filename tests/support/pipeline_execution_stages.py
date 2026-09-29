@@ -320,6 +320,9 @@ class ReleaseStage:
     ) -> Mapping[str, ArtifactRef]:
         _ = inputs
         marker_dir = Path(str(context.stage_config["marker_dir"]))
+        marker_environment = context.stage_config.get("marker_dir_environment")
+        if isinstance(marker_environment, str):
+            marker_dir = Path(os.environ[marker_environment]) / marker_dir
         marker_dir.mkdir(parents=True, exist_ok=True)
         (marker_dir / f"{context.stage_name}.started").write_text(
             context.stage_name,

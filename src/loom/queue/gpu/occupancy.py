@@ -307,6 +307,8 @@ class GpuOccupancyMonitor:
 
     def _apply_snapshot(self, snapshot: GpuOccupancySnapshot) -> GpuOccupancySnapshot:
         """Install external sampling facts on the provider owner's thread."""
+        if self._snapshot is not None and self._snapshot.completed_monotonic > snapshot.completed_monotonic:
+            return self._snapshot
         self._snapshot = snapshot
         return snapshot
 
