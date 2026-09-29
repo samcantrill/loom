@@ -268,6 +268,17 @@ startup fails closed. An empty supervisor may restart after a host restart; a
 supervisor that has accepted a launch cannot be reconstructed from an absent
 process and requires explicit recovery.
 
+Each private supervisor IPC exchange has a ten-second whole-exchange deadline
+covering connect, mutual authentication, request send and response read. This
+bounds the actual calling operation and closes its connection; it does not set
+a worker lifetime or overall containment deadline. The serial supervisor may
+continue an accepted operation after its caller times out, and other requests
+can time out while that operation is still running. A timeout after possible
+dispatch is an unknown outcome. Keep the exact launch operation, digest, fence,
+workspace and capacity claims for query or exact replay. Even a failure before
+this attempt could send cannot resolve an earlier uncertain attempt. Neither
+timeout nor missing response proves no-start, process death or safe release.
+
 Clean daemon shutdown stops the supervisor only when the coordinator, agent
 journal and supervisor prove no retained work. A refused or unavailable proof
 keeps the supervisor running and writes a warning with its original exception

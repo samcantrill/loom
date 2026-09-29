@@ -12,12 +12,16 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 from multiprocessing import AuthenticationError
-from multiprocessing.connection import Client, Connection, Listener
+from multiprocessing.connection import (
+    Connection, Listener, answer_challenge, deliver_challenge,
+)
 import secrets
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -35,6 +39,51 @@ from ._process_group import OwnedProcessGroup, require_group_wait_support
 
 class AgentProcessSupervisorError(ValueError):
     """A supervisor identity, schema, or launch contract is invalid."""
+
+
+class _SupervisorCommunicationError(AgentProcessSupervisorError):
+    """Transport failure; no-dispatch applies only to this particular attempt."""
+
+    def __init__(self, *, possibly_dispatched: bool) -> None:
+        self.possibly_dispatched = possibly_dispatched
+        super().__init__(
+            "managed supervisor communication failed; outcome is unknown"
+            if possibly_dispatched
+            else "managed supervisor communication failed before request dispatch"
+        )
+
+
+class _DeadlineConnection(Connection):
+    """Keep multiprocessing framing/authentication with deadline-bound socket IO."""
+
+    def __init__(self, transport: socket.socket, deadline: float) -> None:
+        super().__init__(transport.fileno())
+        self._transport = transport
+        self._deadline = deadline
+
+    def _remaining(self) -> float:
+        remaining = self._deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("supervisor exchange deadline expired")
+        return remaining
+
+    def _send(self, buf: bytes) -> None:
+        self._transport.settimeout(self._remaining())
+        self._transport.sendall(buf)
+
+    def _recv(self, size: int) -> io.BytesIO:
+        result = io.BytesIO()
+        while size:
+            self._transport.settimeout(self._remaining())
+            chunk = self._transport.recv(size)
+            if not chunk:
+                raise EOFError("supervisor connection closed")
+            result.write(chunk)
+            size -= len(chunk)
+        return result
+
+    def _close(self) -> None:
+        self._transport.close()
 
 
 class SupervisorLaunchState(StrEnum):
@@ -1342,7 +1391,13 @@ class AgentProcessSupervisorClient:
     This is intentionally not an HTTP/public queue protocol.  The endpoint and
     random verifier are protected root state; an agent application only proves
     it is talking to the continuous service selected during initialization.
+    Each exchange has one ten-second transport deadline, including mutual
+    authentication. Failure after possible dispatch leaves the effect unknown;
+    retain the exact launch and claims for query/replay. This is not a worker
+    lifetime or overall containment deadline.
     """
+
+    _EXCHANGE_TIMEOUT = 10.0
 
     def __init__(
         self, agent_root: Path, configuration: SupervisorLaunchConfiguration
@@ -1459,20 +1514,33 @@ class AgentProcessSupervisorClient:
             sleep(0.01)
 
     def _call(self, operation: str, value: object) -> object:
+        deadline = monotonic() + self._EXCHANGE_TIMEOUT
         if not self._endpoint.exists():
             raise AgentProcessSupervisorError(
                 "managed supervisor endpoint is unavailable"
             )
+        possibly_dispatched = False
         try:
-            connection = Client(
-                str(self._endpoint), family="AF_UNIX", authkey=self._secret
-            )
-            connection.send({"operation": operation, "value": value})
-            result = connection.recv()
-            connection.close()
-        except (OSError, EOFError, ConnectionError) as exc:
-            raise AgentProcessSupervisorError(
-                "managed supervisor endpoint is unavailable"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as transport:
+                with _DeadlineConnection(transport, deadline) as connection:
+                    transport.settimeout(connection._remaining())
+                    transport.connect(str(self._endpoint))
+                    answer_challenge(connection, self._secret)
+                    deliver_challenge(connection, self._secret)
+                    # Even a partial write cannot establish no-start. The peer
+                    # may complete an accepted effect after this call disconnects.
+                    possibly_dispatched = True
+                    connection.send({"operation": operation, "value": value})
+                    result = connection.recv()
+        except (ConnectionRefusedError, FileNotFoundError) as exc:
+            if not possibly_dispatched:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor endpoint is unavailable"
+                ) from exc
+            raise _SupervisorCommunicationError(possibly_dispatched=True) from exc
+        except (OSError, EOFError, AuthenticationError) as exc:
+            raise _SupervisorCommunicationError(
+                possibly_dispatched=possibly_dispatched
             ) from exc
         if not isinstance(result, Mapping):
             raise AgentProcessSupervisorError("managed supervisor response is invalid")

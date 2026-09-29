@@ -2942,6 +2942,8 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         ("legacy_missing", False),
         ("before_supervisor_accept", False),
         ("after_supervisor_accept", False),
+        ("before_dispatch_timeout", False),
+        ("accepted_reply_timeout", False),
         ("before_result_commit", False),
         ("before_coordinator_release", False),
         ("after_supervisor_accept", True),
@@ -2964,6 +2966,8 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     shared_inventory: bool,
 ) -> None:
     """A fresh application joins one exact operation across every crash barrier."""
+
+    from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
 
     no_start = restart_barrier in {
         "failed_before_result_commit",
@@ -3190,13 +3194,19 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         elif restart_barrier in {
             "before_supervisor_accept",
             "after_supervisor_accept",
+            "before_dispatch_timeout",
+            "accepted_reply_timeout",
         }:
             original_launch = supervisor.launch
 
             def interrupt_launch(value: ResidentWorkerLaunch) -> SupervisorReceipt:
                 if restart_barrier == "before_supervisor_accept":
                     raise RuntimeError("simulated agent application restart")
+                if restart_barrier == "before_dispatch_timeout":
+                    raise _SupervisorCommunicationError(possibly_dispatched=False)
                 original_launch(value)
+                if restart_barrier == "accepted_reply_timeout":
+                    raise _SupervisorCommunicationError(possibly_dispatched=True)
                 raise RuntimeError("simulated agent application restart")
 
             monkeypatch.setattr(supervisor, "launch", interrupt_launch)
@@ -3293,6 +3303,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                     "write_stage_failure",
                     original_write_failure,
                 )
+            elif restart_barrier in {"before_dispatch_timeout", "accepted_reply_timeout"}:
+                with pytest.raises(_SupervisorCommunicationError):
+                    execution.result(timeout=20)
+                assert agent._execution_journal is not None
+                assert agent._execution_journal.retained_claim_commands()
             else:
                 with pytest.raises(RuntimeError, match="application restart"):
                     execution.result(timeout=20)
@@ -3385,6 +3400,19 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 replacement._execution_journal, "record_supervisor_rejected_start",
                 original_rejected,
             )
+        if restart_barrier == "accepted_reply_timeout":
+            assert replacement._execution_journal is not None
+            claims = replacement._execution_journal.retained_claim_commands()
+            original_query = replacement_supervisor.query
+
+            def unavailable_query(_launch):
+                raise _SupervisorCommunicationError(possibly_dispatched=False)
+
+            monkeypatch.setattr(replacement_supervisor, "query", unavailable_query)
+            with pytest.raises(_SupervisorCommunicationError):
+                replacement.resume_retained_work()
+            assert replacement._execution_journal.retained_claim_commands() == claims
+            monkeypatch.setattr(replacement_supervisor, "query", original_query)
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
         assert replacement.resume_retained_work() == ()
