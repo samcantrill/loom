@@ -553,6 +553,23 @@ Additive nullable reference columns are installed under existing owner locks;
 historical inline polls, deliveries and workspaces retain their original bytes
 and digests. Nonshared remote delivery remains inline.
 
+The agent retains each complete original wire request (inline bundle or shared
+reference) by session and assignment ID in the existing reference journal,
+atomically with its completed poll receipt. Exact replay preserves that request;
+conflicting replay fails without replacing it. The latest poll remains a single
+sequenced replay row, so advancing the poll does not erase an earlier delivery
+even before a workspace exists. Neither journal schema nor coordinator schema
+changes.
+
+On startup, unresolved legacy delivery rows without a request are backfilled
+only from a matching surviving inline poll receipt. Existing shared references
+remain unchanged. When that receipt is gone, the exact authenticated workspace
+can still resume retained work; it is never converted into an original wire
+record. Missing both sources leaves the delivery recovery-required and prevents
+fresh offers or polls. Resolved delivery rows are left alone. Startup still
+settles retained work and reconciles an uncertain poll with its exact original
+session, sequence, availability revision and timeout before admitting new work.
+
 Payload files belong to retained delivery/poll/workspace history. Terminal or
 staging cleanup does not delete them. There is no automatic payload collector;
 pre-commit orphan files authorize nothing and must remain until their publication

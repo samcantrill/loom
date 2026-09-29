@@ -592,11 +592,46 @@ class _RemoteAgentJournal:
                 "remote agent control state is unavailable"
             ) from exc
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_session_references)")}
             if "reference_json" not in columns:
                 conn.execute("ALTER TABLE agent_session_references ADD COLUMN reference_json TEXT")
+            self._backfill_delivery_requests(conn)
             conn.commit()
         self.root_id = metadata["stable_id"]
+
+    @staticmethod
+    def _backfill_delivery_requests(conn: sqlite3.Connection) -> None:
+        from ._shared_assignment import reference
+
+        # Only the surviving original inline receipt can fill a legacy row.
+        # A resolved workspace is a different representation and remains owned
+        # by the retained-work recovery path.
+        rows = conn.execute(
+            "SELECT r.session_id, r.reference_id, p.result_json "
+            "FROM agent_session_references r JOIN agent_poll_state_local p "
+            "ON p.session_id = r.session_id WHERE r.reference_kind = 'delivery' "
+            "AND r.resolved = 0 AND r.reference_json IS NULL "
+            "AND p.result_json IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            result = json.loads(row["result_json"])
+            request = result.get("request")
+            if (
+                result.get("result") != "assignment"
+                or not isinstance(request, dict)
+                or request.get("assignment_id") != row["reference_id"]
+            ):
+                continue
+            if reference(request) is not None:
+                continue
+            _ResidentAssignmentBundle.from_remote_dict(request)
+            conn.execute(
+                "UPDATE agent_session_references SET reference_json = ? "
+                "WHERE session_id = ? AND reference_kind = 'delivery' "
+                "AND reference_id = ? AND resolved = 0 AND reference_json IS NULL",
+                (_canonical_json(request), row["session_id"], row["reference_id"]),
+            )
 
     def _validated_metadata(
         self,
@@ -1375,15 +1410,31 @@ class _RemoteAgentJournal:
                     assignment_id = str(ref["assignment_id"])
                 else:
                     assignment_id = _ResidentAssignmentBundle.from_remote_dict(request_value).assignment_id
+                request_json = _canonical_json(
+                    cast(Mapping[str, PlainData], request_value)
+                )
+                retained = conn.execute(
+                    "SELECT reference_json FROM agent_session_references "
+                    "WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
+                    (session_id, assignment_id),
+                ).fetchone()
+                if (
+                    retained is not None
+                    and retained[0] is not None
+                    and retained[0] != request_json
+                ):
+                    raise QueueConflictError(
+                        "assignment delivery replay returned a different request"
+                    )
                 conn.execute(
                     "INSERT INTO agent_session_references(session_id, "
-                    "reference_kind, reference_id, resolved) "
-                    "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
-                    "reference_kind, reference_id) DO NOTHING",
-                    (session_id, assignment_id),
+                    "reference_kind, reference_id, resolved, reference_json) "
+                    "VALUES (?, 'delivery', ?, 0, ?) ON CONFLICT(session_id, "
+                    "reference_kind, reference_id) DO UPDATE SET "
+                    "reference_json = excluded.reference_json "
+                    "WHERE agent_session_references.reference_json IS NULL",
+                    (session_id, assignment_id, request_json),
                 )
-                if ref is not None:
-                    conn.execute("UPDATE agent_session_references SET reference_json = ? WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?", (_canonical_json(ref), session_id, assignment_id))
                 poll_state = "DELIVERED"
             elif poll_result == "wait":
                 poll_state = "WAIT"
@@ -1779,13 +1830,6 @@ class _RemoteAgentJournal:
             retained = conn.execute("SELECT reference_json FROM agent_session_references WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?", (session_id, assignment_id)).fetchone()
             if retained is not None and retained[0] is not None:
                 return json.loads(retained[0])
-            row = conn.execute("SELECT result_json FROM agent_poll_state_local WHERE session_id = ?", (session_id,)).fetchone()
-        if row is None or row[0] is None:
-            return None
-        result = json.loads(row[0])
-        request = result.get("request")
-        if isinstance(request, dict) and request.get("assignment_id") == assignment_id:
-            return request
         return None
 
     def unresolved_assignment_references(self) -> tuple[tuple[str, str], ...]:

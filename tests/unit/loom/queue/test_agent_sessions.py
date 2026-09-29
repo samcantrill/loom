@@ -1912,6 +1912,159 @@ def test_poll_sequence_rejects_stale_and_gap_and_keeps_one_replay_row(
         daemon.stop()
 
 
+def _delivery_journal(root):
+    from loom.queue.agent_session_transport import _RemoteAgentJournal
+
+    LocalDaemon.initialize_agent_root(root)
+    journal = _RemoteAgentJournal(root)
+    registration = journal.persist_registration_intent(AgentRegistration(
+        "register", "coordinator", "epoch", journal.root_id,
+        "config", "inventory", "availability", ("default",), ("python",),
+    ))
+    session = replace(
+        _replacement_projection_session(), session_id="session-1",
+        agent_root_id=journal.root_id,
+    )
+    journal.persist_session("register", registration.value(), session)
+    return journal, session
+
+
+def _prepare_delivery_poll(journal, session, sequence):
+    value = {
+        "session_id": session.session_id,
+        "availability_revision": session.availability_revision,
+        "sequence": sequence,
+        "wait_timeout_ms": 1,
+    }
+    return journal.prepare_poll(
+        session.session_id, session.availability_revision, sequence, value,
+    )
+
+
+@pytest.mark.parametrize("forms", [("inline", "inline"), ("shared", "shared"), ("inline", "shared")])
+def test_delivery_requests_survive_next_poll_and_restart(tmp_path, forms):
+    from loom.queue._shared_assignment import publish
+    from loom.queue.agent_session_transport import _RemoteAgentJournal
+    from loom.serialization import thaw_plain_data
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
+
+    profile, first, _, _, _ = _assignment_reference_fixture(tmp_path)
+    requests = (first, replace(first, assignment_id="assignment-2", attempt_id="attempt-2"))
+    root = tmp_path / "agent"
+    journal, session = _delivery_journal(root)
+    wires = []
+    try:
+        for sequence, (form, request) in enumerate(zip(forms, requests), 1):
+            wire = request.to_dict()
+            if form == "shared":
+                wire = publish(json.dumps(wire, sort_keys=True, separators=(",", ":")), request,
+                    root_id="control", roots=profile.shared_roots,
+                    session_id=session.session_id, issuer_epoch=session.coordinator_epoch)
+            wires.append(wire)
+            assert _prepare_delivery_poll(journal, session, sequence) is None
+            # An exchange lost before local commit leaves the exact intent pending.
+            assert journal.pending_poll() == (session.session_id, session.availability_revision, sequence)
+            assert _prepare_delivery_poll(journal, session, sequence) is None
+            result = {"result": "assignment", "request": wire, "sequence": sequence}
+            if form == "shared":
+                with pytest.raises(QueueConflictError, match="another session"):
+                    journal.complete_poll(session.session_id, sequence, {
+                        **result, "request": {**wire, "session_id": "another-session"},
+                    })
+                assert journal.delivery_request(session.session_id, request.assignment_id) is None
+            if sequence == 1:
+                with sqlite3.connect(root / "control.sqlite") as conn:
+                    conn.execute("CREATE TRIGGER interrupt_completion BEFORE UPDATE ON agent_poll_state_local "
+                        "BEGIN SELECT RAISE(ABORT, 'completion interrupted'); END")
+                with pytest.raises(sqlite3.IntegrityError, match="completion interrupted"):
+                    journal.complete_poll(session.session_id, sequence, result)
+                assert journal.delivery_request(session.session_id, request.assignment_id) is None
+                assert journal.unresolved_assignment_references() == ()
+                assert journal.pending_poll() == (session.session_id, session.availability_revision, sequence)
+                with sqlite3.connect(root / "control.sqlite") as conn:
+                    conn.execute("DROP TRIGGER interrupt_completion")
+            journal.complete_poll(session.session_id, sequence, result)
+            # A response lost after commit replays without a second delivery.
+            assert thaw_plain_data(_prepare_delivery_poll(journal, session, sequence)) == result
+            journal.complete_poll(session.session_id, sequence, result)
+            with pytest.raises(QueueConflictError, match="different result"):
+                journal.complete_poll(session.session_id, sequence, {**result, "sequence": sequence + 1})
+        assert not (root / "assignments").exists()
+    finally:
+        journal.close()
+    journal = _RemoteAgentJournal(root)
+    try:
+        assert journal.unresolved_assignment_references() == tuple(
+            sorted((session.session_id, request.assignment_id) for request in requests)
+        )
+        for request, wire in zip(requests, wires):
+            assert journal.delivery_request(session.session_id, request.assignment_id) == wire
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*), sequence FROM agent_poll_state_local").fetchone() == (1, 2)
+            assert conn.execute("PRAGMA user_version").fetchone() == (12,)
+            assert conn.execute("SELECT COUNT(*) FROM agent_session_references").fetchone() == (2,)
+            assert dict(conn.execute("SELECT reference_id, reference_json FROM agent_session_references")) == {
+                request.assignment_id: json.dumps(wire, sort_keys=True, separators=(",", ":"))
+                for request, wire in zip(requests, wires)
+            }
+        # The per-assignment owner also rejects a conflicting request in a later poll.
+        _prepare_delivery_poll(journal, session, 3)
+        changed = {**wires[0], "issuer_epoch": "another-epoch"} if forms[0] == "shared" else {
+            **wires[0], "prepared_at": "2020-01-02T00:00:00Z",
+        }
+        with pytest.raises(QueueConflictError, match="different request"):
+            journal.complete_poll(session.session_id, 3, {"result": "assignment", "request": changed})
+        assert journal.delivery_request(session.session_id, first.assignment_id) == wires[0]
+        assert journal.pending_poll() == (session.session_id, session.availability_revision, 3)
+        journal.complete_poll(session.session_id, 3, {"result": "assignment", "request": wires[0]})
+        assert len(journal.unresolved_assignment_references()) == 2
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("resolved", [False, True])
+def test_delivery_backfill_only_matches_unresolved_inline_receipt(tmp_path, resolved):
+    from loom.queue.agent_session_transport import _RemoteAgentJournal
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
+
+    _, request, encoded, ref, _ = _assignment_reference_fixture(tmp_path)
+    root = tmp_path / "agent"
+    journal, session = _delivery_journal(root)
+    try:
+        _prepare_delivery_poll(journal, session, 1)
+        journal.complete_poll(session.session_id, 1, {"result": "assignment", "request": request.to_dict()})
+        if resolved:
+            journal.resolve_assignment_reference(session.session_id, request.assignment_id)
+        journal.retain_assignment_reference(session.session_id, "missing-request")
+        journal.retain_assignment_reference(session.session_id, "resolved-request")
+        journal.resolve_assignment_reference(session.session_id, "resolved-request")
+        journal.retain_assignment_reference("other-session", request.assignment_id)
+        # Reproduce the supported legacy inline row, not a new durable owner.
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            conn.execute("UPDATE agent_session_references SET reference_json = NULL")
+            shared_json = json.dumps(ref, sort_keys=True, separators=(",", ":"))
+            conn.execute("INSERT INTO agent_session_references VALUES (?, 'delivery', 'shared-request', 0, ?)",
+                (session.session_id, shared_json))
+    finally:
+        journal.close()
+    journal = _RemoteAgentJournal(root)
+    try:
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            rows = conn.execute("SELECT session_id, reference_id, resolved, reference_json FROM agent_session_references ORDER BY session_id, reference_id").fetchall()
+        assert rows == sorted([
+            (session.session_id, request.assignment_id, int(resolved), None if resolved else encoded),
+            (session.session_id, "missing-request", 0, None),
+            (session.session_id, "resolved-request", 1, None),
+            ("other-session", request.assignment_id, 0, None),
+            (session.session_id, "shared-request", 0, shared_json),
+        ])
+        _prepare_delivery_poll(journal, session, 2)
+        journal.complete_poll(session.session_id, 2, {"result": "wait"})
+        assert journal.delivery_request(session.session_id, request.assignment_id) == (None if resolved else request.to_dict())
+    finally:
+        journal.close()
+
+
 def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -> None:
     policy = AgentPolicyConfig(
         agents=(
