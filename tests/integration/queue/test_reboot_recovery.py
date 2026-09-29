@@ -273,7 +273,14 @@ def test_reboot_containment_closes_and_releases_same_session(
             (workspace.root / "worker-result.json").write_text(
                 json.dumps(result.to_dict())
             )
-        supervisor.shutdown_for_test()
+        # Reboot recovery requires an unclean owner loss. Orderly shutdown now
+        # refuses unsettled receipts, even after this fixture killed the root.
+        service_fd = os.pidfd_open(supervisor.service_process_id)
+        try:
+            signal.pidfd_send_signal(service_fd, signal.SIGKILL)
+            assert select.select([service_fd], [], [], 5)[0]
+        finally:
+            os.close(service_fd)
         agent.close()
         from loom.queue.errors import QueueServiceError
 

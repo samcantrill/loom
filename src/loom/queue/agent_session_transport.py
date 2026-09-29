@@ -3433,7 +3433,7 @@ class LocalDaemonAgentHttpClient:
                 continue
             try:
                 launch = _launch_from_value(json.loads(encoded_launch))
-                supervisor.request_stop(launch)
+                supervisor.request_stop_wait(launch)
                 receipt = supervisor.contain(launch)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
@@ -3692,7 +3692,7 @@ class LocalDaemonAgentHttpClient:
                     or launch.execution_fence != control.fence
                 ):
                     return "unknown", None
-                self._supervisor.request_stop(launch)
+                self._supervisor.request_stop_wait(launch)
                 contained = self._supervisor.contain(launch)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
@@ -3932,7 +3932,7 @@ class LocalDaemonAgentHttpClient:
                 encoded = workspace.supervisor_launch_json()
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
-                receipt = self._supervisor.query(_launch_from_value(json.loads(encoded)))
+                receipt = self._supervisor.query_wait(_launch_from_value(json.loads(encoded)))
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(
                         workspace.worker_request(),
@@ -4683,7 +4683,7 @@ class LocalDaemonAgentHttpClient:
                 )
                 continue
             launch = _launch_from_value(json.loads(launch_json))
-            receipt = supervisor.query(launch)
+            receipt = supervisor.query_wait(launch)
             if (
                 launch.continuity_epoch in supervisor.reboot_generations
                 and receipt.exit_code is None
@@ -4907,7 +4907,7 @@ class LocalDaemonAgentHttpClient:
                 )
                 if self._supervisor is None:
                     raise QueueConflictError("remote completion lost its supervisor")
-                evidence = self._supervisor.query(launch)
+                evidence = self._supervisor.query_wait(launch)
                 if evidence.state is not SupervisorLaunchState.CONTAINED:
                     raise QueueConflictError("remote completion lacks containment")
                 if (

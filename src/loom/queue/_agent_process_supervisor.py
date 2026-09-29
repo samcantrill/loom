@@ -17,9 +17,7 @@ import json
 import os
 from pathlib import Path
 from multiprocessing import AuthenticationError
-from multiprocessing.connection import (
-    Connection, Listener, answer_challenge, deliver_challenge,
-)
+from multiprocessing.connection import Connection, answer_challenge, deliver_challenge
 import secrets
 import socket
 import sqlite3
@@ -27,7 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from threading import Thread
+from threading import BoundedSemaphore, Event, RLock, Thread
 from time import monotonic, sleep
 from typing import Mapping, cast
 from uuid import uuid4
@@ -51,6 +49,9 @@ class _SupervisorCommunicationError(AgentProcessSupervisorError):
             if possibly_dispatched
             else "managed supervisor communication failed before request dispatch"
         )
+
+
+_PENDING_OBSERVATION = "managed supervisor observation pending without fresh ownership"
 
 
 class _DeadlineConnection(Connection):
@@ -387,6 +388,8 @@ class AgentProcessSupervisor:
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
+        self._operation_lock = RLock()
+        self._assignment_locks: dict[str, RLock] = {}
         self._path = self.root / "supervisor.sqlite"
         if initialize:
             self._initialize()
@@ -681,6 +684,14 @@ class AgentProcessSupervisor:
             raise AgentProcessSupervisorError("assignment was durably rejected before launch")
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        with self._assignment_lock(launch):
+            return self._launch(launch)
+
+    def _assignment_lock(self, launch: ResidentWorkerLaunch) -> RLock:
+        with self._operation_lock:
+            return self._assignment_locks.setdefault(launch.assignment_id, RLock())
+
+    def _launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
         if launch.backend_kind == "docker":
             return self._docker_reconcile(launch, start=True)
@@ -704,6 +715,13 @@ class AgentProcessSupervisor:
                     raise AgentProcessSupervisorError(
                         "launch operation conflicts with durable identity"
                     )
+                if (
+                    row["state"] == "starting"
+                    or (launch.launch_operation_id not in self._children
+                        and row["state"] == "running")
+                ):
+                    conn.commit()
+                    return self.query(launch)
                 return self._receipt(launch, row)
             conn.execute(
                 "INSERT INTO launches(operation_id, digest, launch_json, state, revision) VALUES (?, ?, ?, ?, 1)",
@@ -775,6 +793,10 @@ class AgentProcessSupervisor:
         return self._receipt(launch, row)
 
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        with self._assignment_lock(launch):
+            return self._query(launch)
+
+    def _query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
         if launch.backend_kind == "docker":
             return self._docker_reconcile(launch)
@@ -789,6 +811,19 @@ class AgentProcessSupervisor:
                 raise AgentProcessSupervisorError(
                     "launch query conflicts with durable identity"
                 )
+            if row["state"] == "starting":
+                # The assignment lock excludes a live launch here. An aborted
+                # launch can retain a child without completing namespace/grant
+                # evidence; that stale row is not an in-progress operation.
+                conn.execute(
+                    "UPDATE launches SET state = 'unknown', revision = revision + 1 "
+                    "WHERE operation_id = ?", (launch.launch_operation_id,),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM launches WHERE operation_id = ?",
+                    (launch.launch_operation_id,),
+                ).fetchone()
             child = self._children.get(launch.launch_operation_id)
             if child is not None:
                 code = child.root_status()
@@ -830,6 +865,10 @@ class AgentProcessSupervisor:
             return self._receipt(launch, row)
 
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        with self._assignment_lock(launch):
+            return self._contain(launch)
+
+    def _contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         if launch.backend_kind == "docker":
             return self._docker_reconcile(launch, contain=True)
         receipt = self.query(launch)
@@ -946,6 +985,9 @@ class AgentProcessSupervisor:
                 raise AgentProcessSupervisorError(
                     "Docker launch conflicts with durable identity"
                 )
+            # No database writer may span a daemon call, including replay of an
+            # existing row. Other assignments need these short transitions.
+            conn.commit()
             binding = launch.profile.container
             assert binding is not None
             owner = DockerWorker(
@@ -1440,7 +1482,7 @@ class AgentProcessSupervisorClient:
         return value
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
-        return _receipt_from_value(self._call("launch", _launch_value(launch)))
+        return self._join("launch", launch)
 
     def reject_unstarted_assignment(self, assignment_id: str) -> bool:
         value = self._call("reject_unstarted_assignment", {
@@ -1455,16 +1497,56 @@ class AgentProcessSupervisorClient:
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("query", _launch_value(launch)))
 
+    def query_wait(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        """Join a pending observation for synchronous execution/recovery callers."""
+        return self._join("query", launch)
+
     def request_stop(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("request_stop", _launch_value(launch)))
 
+    def request_stop_wait(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        """Join stop dispatch for synchronous callers, without claiming containment."""
+        return self._join("request_stop", launch)
+
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
-        return _receipt_from_value(self._call("contain", _launch_value(launch)))
+        return self._join("contain", launch)
+
+    def _join(self, operation: str, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        # Each exchange is bounded; only the synchronous caller joins a slow
+        # effect. The service's reserved request handlers never wait for it.
+        while True:
+            try:
+                if operation == "query":
+                    receipt = self.query(launch)
+                elif operation == "request_stop":
+                    receipt = self.request_stop(launch)
+                else:
+                    receipt = _receipt_from_value(self._call(operation, _launch_value(launch)))
+            except AgentProcessSupervisorError as exc:
+                if str(exc) != _PENDING_OBSERVATION:
+                    raise
+                sleep(0.05)
+                continue
+            if receipt.state is not SupervisorLaunchState.STARTING and not (
+                operation == "launch" and receipt.state is SupervisorLaunchState.NOT_ACCEPTED
+            ):
+                return receipt
+            sleep(0.05)
 
     def shutdown_for_test(self) -> None:
         self._shutdown()
 
     def shutdown_clean(self) -> None:
+        # Preserve clean shutdown's root-first descendant cleanup. Join through
+        # ordinary bounded containment exchanges, outside request dispatch.
+        with sqlite3.connect(self._root / "supervisor.sqlite") as conn:
+            launches = tuple(conn.execute(
+                "SELECT launch_json FROM launches WHERE state = 'exited'"
+            ))
+        for (encoded,) in launches:
+            launch = _launch_from_value(json.loads(encoded))
+            if launch.continuity_epoch == self.continuity_epoch:
+                self.contain(launch)
         self._call("shutdown_clean", None)
         self._wait_for_shutdown()
 
@@ -1719,6 +1801,176 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
     return configuration
 
 
+@dataclass
+class _SupervisorOperation:
+    launch: ResidentWorkerLaunch
+    active: str | None = None
+    new_launch: bool = False
+    stop: bool = False
+    observed: bool = False
+    results: dict[str, SupervisorReceipt | Exception] = field(default_factory=dict)
+
+
+class _SupervisorDispatch:
+    """Two physical effects, no submission queue, and coalesced stop intent.
+
+    The lock protects admission and operation maps only. Workers own all
+    external waits; a disconnected requester cannot cancel an accepted effect.
+    """
+
+    _SLOW_LIMIT = 2
+
+    def __init__(self, supervisor: AgentProcessSupervisor) -> None:
+        self.supervisor = supervisor
+        self.lock = RLock()
+        self.operations: dict[str, _SupervisorOperation] = {}
+        self.active = 0
+        self.closing = False
+
+    def _snapshot(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        self.supervisor._validate_launch(launch)
+        with self.supervisor._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM launches WHERE operation_id = ?",
+                (launch.launch_operation_id,),
+            ).fetchone()
+        if row is None:
+            return SupervisorReceipt(SupervisorLaunchState.NOT_ACCEPTED, launch, 0)
+        if row["digest"] != launch.spec_digest:
+            raise AgentProcessSupervisorError("launch operation conflicts with durable identity")
+        return self.supervisor._receipt(launch, row)
+
+    def receipt(self, operation: str, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        from dataclasses import replace
+
+        with self.lock:
+            if self.closing:
+                raise AgentProcessSupervisorError("managed supervisor is shutting down")
+            current = self._snapshot(launch)
+            entry = self.operations.get(launch.launch_operation_id)
+            if entry is not None and entry.launch.spec_digest != launch.spec_digest:
+                raise AgentProcessSupervisorError("launch operation conflicts with durable identity")
+            if entry is not None and operation in entry.results:
+                result = entry.results.pop(operation)
+                if isinstance(result, Exception):
+                    raise result
+                return result
+            if operation != "launch" and current.state is SupervisorLaunchState.NOT_ACCEPTED and entry is None:
+                return current
+            busy = any(
+                item.active is not None and item.launch.assignment_id == launch.assignment_id
+                for item in self.operations.values()
+            )
+            # Nonblocking process observations and signals use an idle exact
+            # owner. Never enter its group lock during a containment wait.
+            child = self.supervisor._children.get(launch.launch_operation_id)
+            if not busy and launch.backend_kind != "docker" and child is not None:
+                if operation == "request_stop" and current.state is not SupervisorLaunchState.STARTING:
+                    try:
+                        child.terminate()
+                    except OSError:
+                        pass
+                    return current
+                if (operation == "query" and current.state is not SupervisorLaunchState.STARTING
+                    and child.root_status() is None):
+                    return current
+            if operation in {"query", "request_stop"} and current.state is SupervisorLaunchState.CONTAINED:
+                # Docker's success/backend fields live in its existing owner,
+                # so its terminal receipt still comes through reconciliation.
+                if launch.backend_kind != "docker":
+                    return current
+            if entry is None:
+                if self.active >= self._SLOW_LIMIT or busy:
+                    # New work is not accepted into a hidden executor queue.
+                    if current.state is SupervisorLaunchState.NOT_ACCEPTED:
+                        return current
+                    raise AgentProcessSupervisorError(_PENDING_OBSERVATION)
+                entry = _SupervisorOperation(launch)
+                self.operations[launch.launch_operation_id] = entry
+            if operation == "request_stop" and entry.active != "request_stop":
+                entry.stop = True
+            if not busy and self.active < self._SLOW_LIMIT:
+                self._start(
+                    entry, "request_stop" if entry.stop else operation,
+                    new_launch=current.state is SupervisorLaunchState.NOT_ACCEPTED,
+                )
+            if current.state is SupervisorLaunchState.NOT_ACCEPTED:
+                # An admitted launch has not necessarily won durable acceptance
+                # yet. A stop intent stays attached until that race settles.
+                return current
+            if not entry.observed and not entry.new_launch:
+                # A retained row plus an in-flight refresh does not prove that
+                # this service owns the old effect. Reuse the existing error
+                # envelope until the observation completes; joiners retry it.
+                raise AgentProcessSupervisorError(_PENDING_OBSERVATION)
+            # Pending Docker reconciliation never presents a retained backend ID
+            # as freshly observed ownership. Native pending launch is backed by
+            # the live operation, even before its child handle is installed.
+            return replace(current, state=SupervisorLaunchState.STARTING)
+
+    def _start(
+        self, entry: _SupervisorOperation, operation: str, *, new_launch: bool = False,
+    ) -> None:
+        entry.active = operation
+        # Only admission without a durable row proves this live launch owns
+        # acceptance. An exact retained replay must first reconcile ownership.
+        entry.new_launch = operation == "launch" and new_launch
+        if operation == "request_stop":
+            entry.stop = False
+        self.active += 1
+        Thread(target=self._run, args=(entry, operation), daemon=True).start()
+
+    def _run(self, entry: _SupervisorOperation, operation: str) -> None:
+        launch = entry.launch
+        try:
+            if operation == "request_stop":
+                with self.supervisor._assignment_lock(launch):
+                    if launch.backend_kind == "docker":
+                        result = self.supervisor._docker_reconcile(launch, cancel=True)
+                    else:
+                        result = self.supervisor.query(launch)
+                        child = self.supervisor._children.get(launch.launch_operation_id)
+                        if child is not None:
+                            child.terminate()
+            elif operation == "launch":
+                result = self.supervisor.launch(launch)
+            elif operation == "contain":
+                result = self.supervisor.contain(launch)
+            else:
+                result = self.supervisor.query(launch)
+        except Exception as exc:
+            result = exc
+        with self.lock:
+            entry.results.clear()
+            entry.results[operation] = result
+            if isinstance(result, SupervisorReceipt):
+                entry.observed = result.state not in {
+                    SupervisorLaunchState.UNKNOWN, SupervisorLaunchState.NOT_ACCEPTED,
+                }
+            entry.active = None
+            entry.new_launch = False
+            self.active -= 1
+            # One volatile stop intent per accepted launch, never another
+            # submitted task while both slow slots are charged.
+            for candidate in self.operations.values():
+                if self.active >= self._SLOW_LIMIT:
+                    break
+                if candidate.stop and candidate.active is None and not any(
+                    item.active is not None
+                    and item.launch.assignment_id == candidate.launch.assignment_id
+                    for item in self.operations.values()
+                ):
+                    self._start(candidate, "request_stop")
+
+    def begin_shutdown(self) -> None:
+        with self.lock:
+            if self.active or any(entry.stop for entry in self.operations.values()):
+                raise AgentProcessSupervisorError("managed supervisor has in-flight operations")
+            if not self.supervisor.quiescent():
+                raise AgentProcessSupervisorError("managed supervisor has non-quiescent launches")
+            self.closing = True
+
+
 def _serve(root: Path) -> None:
     root = Path(root).resolve()
     lock_path = root / "service.lock"
@@ -1738,20 +1990,27 @@ def _serve(root: Path) -> None:
     endpoint = _endpoint_for_root(root)
     if endpoint.exists():
         endpoint.unlink()
-    listener = Listener(str(endpoint), family="AF_UNIX", authkey=secret)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(endpoint))
+    listener.listen(4)
+    listener.settimeout(0.1)
     endpoint.chmod(0o600)
-    running = True
-    try:
-        while running:
+    dispatch = _SupervisorDispatch(supervisor)
+    stopped = Event()
+    slots = BoundedSemaphore(4)
+    requests: set[Thread] = set()
+    request_lock = RLock()
+
+    def handle(transport: socket.socket) -> None:
+        from threading import current_thread
+
+        with _DeadlineConnection(
+            transport, monotonic() + AgentProcessSupervisorClient._EXCHANGE_TIMEOUT
+        ) as connection:
             try:
-                connection = listener.accept()
-            except (AuthenticationError, EOFError, ConnectionError):
-                continue
-            try:
-                try:
-                    request = connection.recv()
-                except (EOFError, OSError):
-                    continue
+                deliver_challenge(connection, secret)
+                answer_challenge(connection, secret)
+                request = connection.recv()
                 if not isinstance(request, Mapping):
                     raise AgentProcessSupervisorError(
                         "managed supervisor request is invalid"
@@ -1777,43 +2036,23 @@ def _serve(root: Path) -> None:
                         or value["supervisor_id"] != supervisor.supervisor_id
                         or value["continuity_epoch"] != supervisor.continuity_epoch):
                         raise AgentProcessSupervisorError("supervisor rejection identity is stale")
-                    response = supervisor.reject_unstarted_assignment(value["assignment_id"])
-                elif operation == "launch":
+                    with dispatch.lock:
+                        if dispatch.closing:
+                            raise AgentProcessSupervisorError("managed supervisor is shutting down")
+                        response = supervisor.reject_unstarted_assignment(value["assignment_id"])
+                elif operation in {"launch", "query", "request_stop", "contain"}:
                     response = _receipt_value(
-                        supervisor.launch(cast(ResidentWorkerLaunch, launch))
+                        dispatch.receipt(str(operation), cast(ResidentWorkerLaunch, launch))
                     )
-                elif operation == "query":
-                    response = _receipt_value(
-                        supervisor.query(cast(ResidentWorkerLaunch, launch))
-                    )
-                elif operation == "request_stop":
-                    current = (
-                        supervisor._docker_reconcile(
-                            cast(ResidentWorkerLaunch, launch), cancel=True
-                        )
-                        if cast(ResidentWorkerLaunch, launch).backend_kind == "docker"
-                        else supervisor.query(cast(ResidentWorkerLaunch, launch))
-                    )
-                    child = supervisor._children.get(
-                        cast(ResidentWorkerLaunch, launch).launch_operation_id
-                    )
-                    if child is not None:
-                        try:
-                            child.terminate()
-                        except OSError:
-                            pass
-                    response = _receipt_value(current)
-                elif operation == "contain":
-                    response = _receipt_value(
-                        supervisor.contain(cast(ResidentWorkerLaunch, launch))
-                    )
-                elif operation == "shutdown":
+                elif operation in {"shutdown", "shutdown_clean"}:
+                    with request_lock:
+                        if len(requests) != 1:
+                            raise AgentProcessSupervisorError("managed supervisor has in-flight requests")
+                        dispatch.begin_shutdown()
+                        if operation == "shutdown_clean":
+                            supervisor.mark_clean_shutdown()
+                        stopped.set()
                     response = None
-                    running = False
-                elif operation == "shutdown_clean":
-                    supervisor.mark_clean_shutdown()
-                    response = None
-                    running = False
                 else:
                     raise AgentProcessSupervisorError(
                         "managed supervisor operation is invalid"
@@ -1826,10 +2065,32 @@ def _serve(root: Path) -> None:
                 ValueError,
             ) as exc:
                 _send_supervisor_reply(connection, {"ok": False, "error": str(exc)})
+            except (AuthenticationError, EOFError, OSError):
+                pass
             finally:
-                connection.close()
+                with request_lock:
+                    requests.discard(current_thread())
+                slots.release()
+
+    try:
+        while not stopped.is_set():
+            try:
+                transport, _ = listener.accept()
+            except TimeoutError:
+                continue
+            with request_lock:
+                if stopped.is_set() or not slots.acquire(blocking=False):
+                    transport.close()
+                    continue
+                thread = Thread(target=handle, args=(transport,), daemon=True)
+                requests.add(thread)
+                thread.start()
     finally:
         listener.close()
+        with request_lock:
+            remaining = tuple(requests)
+        for thread in remaining:
+            thread.join()
         if endpoint.exists():
             endpoint.unlink()
         lock.close()
