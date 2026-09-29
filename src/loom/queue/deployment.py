@@ -782,9 +782,6 @@ def _outbound_service_steps(
                 yield from _delay(0.01)
             if stop.is_set():
                 return
-            client._restart_with_retained_work = client._has_retained_agent_work()
-            if client._restart_with_retained_work:
-                raise QueueConflictError("retained ownership remains unresolved")
             handshake = (yield from _steps(client.handshake))
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
@@ -824,6 +821,17 @@ def _outbound_service_steps(
                         "reconcile", session.session_id, coordinator_epoch
                     ),
                 ))
+            # External jobs retain ownership too, but use the existing serial
+            # scheduler driver, not resident assignment views. Reconcile first
+            # and settle them before admitting fresh work after restart.
+            while client._slurm_agent is not None and client._slurm_agent.has_retained_work():
+                if stop.is_set():
+                    return
+                yield from _steps(client.drive_slurm_jobs)
+                yield from _delay(0.05)
+            client._restart_with_retained_work = client._has_retained_agent_work()
+            if client._restart_with_retained_work:
+                raise QueueConflictError("retained ownership remains unresolved")
             if lifetime != "run" and active.client.agent_root is not None:
                 record_process(
                     active.client.agent_root,
@@ -893,10 +901,10 @@ def _outbound_service_steps(
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
+                yield from _steps(client.drive_slurm_jobs)
                 if client._drained or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
                     continue
-                yield from _steps(client.drive_slurm_jobs)
                 sequence = client.next_poll_sequence(session.session_id)
                 delivery = (yield from _steps(client.wait_for_work,
                     session.session_id,

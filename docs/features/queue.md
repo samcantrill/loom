@@ -512,6 +512,9 @@ admission. The synchronous `execute_one()` and `resume_retained_work()` methods
 drive the same transition steps and retain their existing result shapes.
 The separate external SLURM engine retains its synchronous scheduler and transfer
 behavior; these responsiveness guarantees apply to resident execution.
+Retained SLURM jobs still progress through that serial driver during restart
+recovery and drain, without enabling fresh resident admission or weakening
+the all-work shutdown, reload, and retirement checks.
 
 Offer readers interpret an absent ceiling as one. Writers omit one to preserve
 historical canonical bytes and include larger values in scheduling decisions.
