@@ -1805,6 +1805,7 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
 class _SupervisorOperation:
     launch: ResidentWorkerLaunch
     active: str | None = None
+    new_launch: bool = False
     stop: bool = False
     observed: bool = False
     results: dict[str, SupervisorReceipt | Exception] = field(default_factory=dict)
@@ -1889,12 +1890,15 @@ class _SupervisorDispatch:
             if operation == "request_stop" and entry.active != "request_stop":
                 entry.stop = True
             if not busy and self.active < self._SLOW_LIMIT:
-                self._start(entry, "request_stop" if entry.stop else operation)
+                self._start(
+                    entry, "request_stop" if entry.stop else operation,
+                    new_launch=current.state is SupervisorLaunchState.NOT_ACCEPTED,
+                )
             if current.state is SupervisorLaunchState.NOT_ACCEPTED:
                 # An admitted launch has not necessarily won durable acceptance
                 # yet. A stop intent stays attached until that race settles.
                 return current
-            if not entry.observed and entry.active != "launch":
+            if not entry.observed and not entry.new_launch:
                 # A retained row plus an in-flight refresh does not prove that
                 # this service owns the old effect. Reuse the existing error
                 # envelope until the observation completes; joiners retry it.
@@ -1904,8 +1908,13 @@ class _SupervisorDispatch:
             # the live operation, even before its child handle is installed.
             return replace(current, state=SupervisorLaunchState.STARTING)
 
-    def _start(self, entry: _SupervisorOperation, operation: str) -> None:
+    def _start(
+        self, entry: _SupervisorOperation, operation: str, *, new_launch: bool = False,
+    ) -> None:
         entry.active = operation
+        # Only admission without a durable row proves this live launch owns
+        # acceptance. An exact retained replay must first reconcile ownership.
+        entry.new_launch = operation == "launch" and new_launch
         if operation == "request_stop":
             entry.stop = False
         self.active += 1
@@ -1939,6 +1948,7 @@ class _SupervisorDispatch:
                     SupervisorLaunchState.UNKNOWN, SupervisorLaunchState.NOT_ACCEPTED,
                 }
             entry.active = None
+            entry.new_launch = False
             self.active -= 1
             # One volatile stop intent per accepted launch, never another
             # submitted task while both slow slots are charged.

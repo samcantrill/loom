@@ -400,8 +400,9 @@ def test_accepted_launch_lost_reply_keeps_owner_and_other_ipc_requests_live(
             release.set()
 
 
+@pytest.mark.parametrize("operation", ["query", "launch"])
 def test_reopened_docker_pending_query_requires_fresh_backend_ownership(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
     from types import SimpleNamespace
     from loom.queue._docker_worker import DockerWorker
@@ -418,12 +419,15 @@ def test_reopened_docker_pending_query_requires_fresh_backend_ownership(
     daemon = Daemon()
     reached = Event()
     release = Event()
+    unavailable = Event()
     launches = []
 
     def call(owner, *args):
         if launches and args[0] == "inspect" and not release.is_set():
             reached.set()
             assert release.wait(5)
+        if unavailable.is_set():
+            return None
         return daemon((*owner.prefix, *args))
 
     def retain(owner):
@@ -434,27 +438,35 @@ def test_reopened_docker_pending_query_requires_fresh_backend_ownership(
     monkeypatch.setattr(DockerWorker, "_run", call)
     with _ipc_owner(tmp_path, monkeypatch, (profile,), retained=retain) as (client, _, dispatch):
         launch = launches[0]
+        unavailable.set()
         try:
             with pytest.raises(AgentProcessSupervisorError, match="pending without fresh ownership"):
-                client.query(launch)
+                client._call(operation, _launch_value(launch))
             assert reached.wait(3)
             assert dispatch.active == 1
             with ThreadPoolExecutor(max_workers=1) as workers:
-                joined = workers.submit(client.query_wait, launch)
+                joined = workers.submit(client.launch if operation == "launch" else client.query_wait, launch)
                 try:
+                    with pytest.raises(AgentProcessSupervisorError, match="pending without fresh ownership"):
+                        client._call("launch", _launch_value(launch))
                     with pytest.raises(AgentProcessSupervisorError, match="pending without fresh ownership"):
                         client.query(launch)
                     assert not joined.done()
                 finally:
                     release.set()
                 receipt = joined.result(timeout=3)
+            assert receipt.state is SupervisorLaunchState.UNKNOWN
+            assert not dispatch.operations[launch.launch_operation_id].observed
+            unavailable.clear()
+            receipt = client.query_wait(launch)
             assert receipt.state is SupervisorLaunchState.RUNNING
             assert receipt.backend_id == "immutable-id"
             assert sum(call[0] == "create" for call in daemon.calls) == 1
             assert sum(call[0] == "start" for call in daemon.calls) == 1
         finally:
             release.set()
-            client.request_stop(launch)
+            unavailable.clear()
+            client.request_stop_wait(launch)
             assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
 
 
