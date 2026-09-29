@@ -229,6 +229,15 @@ class AgentTlsServerConfig:
 
 @dataclass(frozen=True, slots=True)
 class AgentTlsClientConfig:
+    """Protected outbound identity, execution profiles and resident ceiling.
+
+    ``max_concurrent_assignments`` accepts integers 1..1024 (excluding bool),
+    defaults to one, and bounds all unreleased resident assignments. It changes
+    active configuration, requiring settlement and trusted reload to resize.
+    Nonempty ``slurm_profiles`` requires one. Execution is currently serial
+    even with a larger targeting ceiling.
+    """
+
     url: str
     server_ca_path: Path
     certificate_path: Path
@@ -245,8 +254,21 @@ class AgentTlsClientConfig:
     gpu_occupancy_policy: GpuOccupancyPolicy | None = None
 
     slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
+    max_concurrent_assignments: int = 1
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_concurrent_assignments, bool)
+            or not isinstance(self.max_concurrent_assignments, int)
+            or not 1 <= self.max_concurrent_assignments <= 1024
+        ):
+            raise QueueServiceError(
+                "max_concurrent_assignments must be an integer from 1 through 1024"
+            )
+        if self.slurm_profiles and self.max_concurrent_assignments > 1:
+            raise QueueServiceError(
+                "max_concurrent_assignments above one is unsupported with slurm_profiles"
+            )
         slurm_profiles = tuple(self.slurm_profiles)
         if any(
             not isinstance(item, SlurmReadyStageProfile) for item in slurm_profiles
@@ -595,22 +617,26 @@ class _RemoteAgentJournal:
             if metadata.get("role") != "local-agent" or not metadata.get("stable_id"):
                 raise QueueServiceError("remote agent root identity is invalid")
             validate_agent_session_schema(conn, coordinator=False)
-            if expected_configuration_fingerprint is None:
-                return metadata
-            binding_path = self._root / _AGENT_BINDING_FILE
-            if (
-                not binding_path.is_file()
-                or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+            if expected_configuration_fingerprint is None and (
+                expected_active_configuration_fingerprint is None
+                or "active_configuration_fingerprint" not in metadata
             ):
-                raise QueueServiceError("remote agent binding is unavailable")
-            binding = json.loads(binding_path.read_text(encoding="utf-8"))
-            if binding != {
-                "schema_version": 2,
-                "role_kind": "outbound-agent",
-                "stable_id": metadata["stable_id"],
-                "immutable_fingerprint": expected_configuration_fingerprint,
-            }:
-                raise QueueServiceError("remote agent binding is invalid")
+                return metadata
+            if expected_configuration_fingerprint is not None:
+                binding_path = self._root / _AGENT_BINDING_FILE
+                if (
+                    not binding_path.is_file()
+                    or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+                ):
+                    raise QueueServiceError("remote agent binding is unavailable")
+                binding = json.loads(binding_path.read_text(encoding="utf-8"))
+                if binding != {
+                    "schema_version": 2,
+                    "role_kind": "outbound-agent",
+                    "stable_id": metadata["stable_id"],
+                    "immutable_fingerprint": expected_configuration_fingerprint,
+                }:
+                    raise QueueServiceError("remote agent binding is invalid")
             active = metadata.get("active_configuration_fingerprint")
             pending = tuple(
                 conn.execute(
@@ -2668,6 +2694,10 @@ class LocalDaemonAgentHttpClient:
                     "agent coordinator protocol is unsupported; hard cut-over "
                     f"requires version {PROTOCOL_VERSION}"
                 )
+            if "concurrent-resident-assignments-v1" not in capabilities:
+                raise QueueServiceError(
+                    "coordinator upgrade required: missing concurrent-resident-assignments-v1"
+                )
         return result
 
     def register(self, request: AgentRegistration) -> AgentSession:
@@ -2885,6 +2915,7 @@ class LocalDaemonAgentHttpClient:
                 capacity_profile=profile,
             )
         offer = AgentOffer(
+            max_concurrent_assignments=self._config.max_concurrent_assignments,
             session_id=session.session_id,
             coordinator_epoch=session.coordinator_epoch,
             config_revision=session.config_revision,
@@ -6834,6 +6865,11 @@ def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
         {
             "config": _agent_config_revision(config),
             "inventory": _agent_inventory_revision(config),
+            **(
+                {"max_concurrent_assignments": config.max_concurrent_assignments}
+                if config.max_concurrent_assignments != 1
+                else {}
+            ),
             **(
                 {"gpu_occupancy": config.gpu_occupancy_policy.to_dict()}
                 if config.gpu_occupancy_policy is not None

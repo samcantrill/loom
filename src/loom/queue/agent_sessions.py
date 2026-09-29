@@ -688,6 +688,14 @@ class AgentProviderDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class AgentOffer:
+    """Remaining provider capacity and a ceiling on unreleased resident work.
+
+    ``max_concurrent_assignments`` is a non-Boolean integer in [1, 1024].
+    It counts targeted and uncertain assignments as well as running work;
+    physical resources and per-run parallelism remain independent limits.
+    The default is omitted from the wire to preserve historical replay bytes.
+    """
+
     session_id: str
     coordinator_epoch: str
     config_revision: str
@@ -706,8 +714,17 @@ class AgentOffer:
     resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
 
     external_slurm_profiles: tuple[tuple[str, str], ...] = ()
+    max_concurrent_assignments: int = 1
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_concurrent_assignments, bool)
+            or not isinstance(self.max_concurrent_assignments, int)
+            or not 1 <= self.max_concurrent_assignments <= 1024
+        ):
+            raise QueueServiceError(
+                "max_concurrent_assignments must be an integer from 1 through 1024"
+            )
         profiles = tuple(tuple(item) for item in self.external_slurm_profiles)
         if any(
             len(item) != 2
@@ -930,6 +947,11 @@ class AgentOffer:
             "external_slurm_profiles": [
                 list(item) for item in self.external_slurm_profiles
             ],
+            **(
+                {"max_concurrent_assignments": self.max_concurrent_assignments}
+                if self.max_concurrent_assignments != 1
+                else {}
+            ),
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
             "config_revision": self.config_revision,
@@ -970,6 +992,8 @@ class AgentOffer:
         if not isinstance(value, Mapping) or set(value) not in (
             expected,
             expected | {"resource_status"},
+            expected | {"max_concurrent_assignments"},
+            expected | {"resource_status", "max_concurrent_assignments"},
         ):
             raise QueueServiceError("agent offer is invalid")
         legacy = "resource_status" not in value
@@ -1031,6 +1055,9 @@ class AgentOffer:
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
+            max_concurrent_assignments=cast(
+                int, value.get("max_concurrent_assignments", 1)
+            ),
             external_slurm_profiles=tuple(
                 tuple(item) for item in value["external_slurm_profiles"]
             ),
@@ -1981,6 +2008,7 @@ class AgentSessionService:
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
                     "agent-sessions-v12",
+                    "concurrent-resident-assignments-v1",
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
                     REMOTE_EXECUTION_CAPABILITY,
@@ -5843,6 +5871,27 @@ def _target_remote_delivery(
             conn.commit()
             daemon._poll_waiters.notify(session_id)
             return
+        offer = conn.execute(
+            "SELECT offer_json, expires_at FROM agent_offers WHERE session_id = ? "
+            "AND availability_revision = ? AND coordinator_epoch = ? "
+            "AND current = 1",
+            (session_id, availability_revision, daemon._epoch),  # type: ignore[attr-defined]
+        ).fetchone()
+        if offer is None or str(offer["expires_at"]) < daemon._accepted_time(conn):  # type: ignore[attr-defined]
+            raise QueueConflictError("targeted delivery requires a current offer")
+        offer_value = json.loads(str(offer["offer_json"]))
+        outstanding = conn.execute(
+            "SELECT COUNT(*) FROM remote_assignments "
+            "WHERE session_id = ? AND state != 'RELEASED'",
+            (session_id,),
+        ).fetchone()[0]
+        if outstanding >= offer_value.get("max_concurrent_assignments", 1):
+            raise QueueConflictError("agent resident assignment ceiling is exhausted")
+        offered_profiles = offer_value.get("resident_profiles", [])
+        if request.profile.to_dict() not in offered_profiles:
+            raise QueueConflictError(
+                "targeted delivery resident profile is not in the current offer"
+            )
         reference_json = None
         if shared:
             from ._shared_assignment import CAPABILITY, publish, require_root
@@ -5858,20 +5907,6 @@ def _target_remote_delivery(
             reference_json = _canonical_json(publish(encoded, request,
                 root_id=cast(str, root_id), roots=roots, session_id=session_id,
                 issuer_epoch=cast(str, daemon._epoch)))
-        offer = conn.execute(
-            "SELECT offer_json, expires_at FROM agent_offers WHERE session_id = ? "
-            "AND availability_revision = ? AND coordinator_epoch = ? "
-            "AND current = 1",
-            (session_id, availability_revision, daemon._epoch),  # type: ignore[attr-defined]
-        ).fetchone()
-        if offer is None or str(offer["expires_at"]) < daemon._accepted_time(conn):  # type: ignore[attr-defined]
-            raise QueueConflictError("targeted delivery requires a current offer")
-        offer_value = json.loads(str(offer["offer_json"]))
-        offered_profiles = offer_value.get("resident_profiles", [])
-        if request.profile.to_dict() not in offered_profiles:
-            raise QueueConflictError(
-                "targeted delivery resident profile is not in the current offer"
-            )
         retained_inputs: list[tuple[object, ...]] = []
         for item in request.inputs:
             if shared_binding(item.metadata) is not None:

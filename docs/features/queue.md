@@ -463,6 +463,35 @@ either `null` for a pure coordinator or an explicit reference to a
 read a `loom.outbound-agent-service` document. Worker installation and resource
 settings belong to the agent. A pure coordinator requires no local worker or GPU.
 
+Outbound agents accept optional `max_concurrent_assignments`, a non-Boolean
+integer from 1 through 1024, defaulting to one. `AgentTlsClientConfig` and
+`AgentOffer` expose the same trailing defaulted field. The ceiling counts all
+resident assignments not yet acknowledged as RELEASED, including targeted,
+preparing, publishing and uncertain work. Process exit or result commit does
+not return a slot. Selection and atomic targeting both enforce the ceiling;
+exact target replay consumes no additional slot. Physical CPU/RAM/device claims
+and each run's `max_parallel_stages` remain independent limits. Reflected claims
+are already excluded from provider availability and are not subtracted twice.
+Execution currently remains serial even when a larger ceiling permits targeting;
+the field does not yet promise overlapping workers. Nonempty `slurm_profiles`
+requires a ceiling of one.
+
+Offer readers interpret an absent ceiling as one. Writers omit one to preserve
+historical canonical bytes and include larger values in scheduling decisions.
+New outbound services require the coordinator handshake capability
+`concurrent-resident-assignments-v1`, including at the default ceiling. Upgrade
+the coordinator first; old agents remain supported with a one-slot ceiling.
+Protocol 13 and the deployment/coordinator/agent/supervisor schema versions
+remain unchanged. Peer rejection does not discard retained claims.
+
+Omitted and explicit one have the same active configuration fingerprint as
+older default roots. Nondefault ceilings change active configuration, not
+scientific/profile identity. Drain and settle retained assignments and uncertain
+polls before trusted reload or upgrade; live resizing and restart with an edited
+ceiling are rejected by the existing configuration binding. Resume with the
+recorded configuration first. Downgrade after enabling a nondefault ceiling
+requires normal drain, settlement and clean-root/version handling.
+
 A coordinator using shared execution declares optional top-level `shared_roots`
 in its protected role file, using the same host-path, access, bounded challenge
 and publication-budget fields as agent profiles. These are the coordinator's

@@ -1249,8 +1249,10 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         recovered.close()
 
 
+@pytest.mark.parametrize("change", ["resources", "ceiling"])
 def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretation(
     tmp_path: Path,
+    change: str,
 ) -> None:
     root = _fresh_remote_agent_root(tmp_path)
     original = ResidentExecutionProfile(
@@ -1271,9 +1273,10 @@ def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretat
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
     client = LocalDaemonAgentHttpClient(base)
-    replacement = replace(
-        base,
-        resident_profiles=(replace(original, cpu_capacity=2),),
+    replacement = (
+        replace(base, resident_profiles=(replace(original, cpu_capacity=2),))
+        if change == "resources"
+        else replace(base, max_concurrent_assignments=2)
     )
     try:
         client._validate_reload_config(  # noqa: SLF001 - exact reload boundary
@@ -1343,9 +1346,7 @@ def test_agent_open_rejects_durable_supervisor_without_profiles_without_locking_
         resident_profiles=(profile,),
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(configured)
-    with pytest.raises(
-        QueueServiceError, match="managed_supervisor_state_requires_reinitialization"
-    ):
+    with pytest.raises(QueueServiceError, match="configuration changed without reload"):
         LocalDaemonAgentHttpClient(replace(configured, resident_profiles=()))
 
     reopened = LocalDaemonAgentHttpClient(configured)
@@ -1563,6 +1564,323 @@ def test_shared_inventory_prepares_competing_profile_claims(
         if client._supervisor is not None:
             client._supervisor.shutdown_for_test()
         client.close()
+
+
+@pytest.mark.parametrize(
+    ("ceiling", "cpu", "memory_gib", "gpu", "expected"),
+    [
+        (1, 8, 8, False, 1),
+        (2, 8, 8, False, 2),
+        (6, 1, 8, False, 1),
+        (6, 8, 1, False, 1),
+        (6, 8, 8, True, 5),
+    ],
+)
+def test_remote_candidate_ceiling_and_reflected_remaining_resources(
+    tmp_path: Path, ceiling: int, cpu: int, memory_gib: int, gpu: bool, expected: int
+) -> None:
+    """Targeted work counts before grant; remaining reports are not charged twice."""
+    descriptor = ResidentProfileDescriptor(
+        "resident", "1", "project-1", "environment-1", "executor-1"
+    )
+    devices = (
+        tuple(
+            ResidentGpuDevice(
+                GpuDeviceDescriptor(f"gpu-{index}", "model", 1024**3),
+                f"GPU-private-{index}",
+            )
+            for index in range(4)
+        )
+        if gpu
+        else ()
+    )
+    profile = ResidentExecutionProfile(
+        descriptor,
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=cpu,
+        memory_capacity_bytes=memory_gib * 1024**3,
+        gpu_devices=devices,
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "credential",
+                "principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+                gpu_devices=tuple(item.descriptor for item in devices),
+            ),
+        )
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    runs = [
+        _prepare_remote_producer_run(
+            store,
+            run_name=f"run-{index}",
+            machine_id="agent-a",
+            value=index,
+            requirement=ExecutionRequirement(
+                "project-1", "environment-1", "executor-1"
+            ),
+            resource_entries={
+                "cpu": {"kind": "cpu", "amount": 1, "unit": "count"},
+                "memory": {"kind": "memory", "amount": 1024**3, "unit": "B"},
+                **(
+                    {
+                        "gpu": {
+                            "kind": "gpu",
+                            "amount": 1,
+                            "unit": "count",
+                            "attributes": {"allocation_mode": "exclusive"},
+                        }
+                    }
+                    if gpu and index < 5
+                    else {}
+                ),
+            },
+        )
+        for index in range(6 if gpu else 3)
+    ]
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        None,
+        store.root,
+        None,
+        cpu_capacity=0,
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        view = daemon.agent_view(
+            LocalDaemonPrincipal("principal", LocalDaemonRole.AGENT, "credential")
+        )
+        hello = view.handshake()
+        session = view.register(
+            AgentRegistration(
+                "register",
+                str(hello["coordinator_id"]),
+                str(hello["coordinator_epoch"]),
+                "agent-root",
+                "config",
+                "inventory",
+                "availability-0",
+                ("default",),
+                capabilities,
+                retirement_verifier="01" * 32,
+            )
+        )
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        for index, (run_uri, _) in enumerate(runs):
+            coordinator.submit(LocalDaemonAdmissionRequest(f"item-{index}", run_uri))
+        execution = daemon._execution
+        assert execution is not None
+        claims = []
+        claimed_devices = set()
+        requests: list[dict[str, Any]] = []
+        for index in range(expected + 1):
+            offer = AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                "config",
+                "inventory",
+                f"availability-{index}",
+                cpu - len(claims),
+                (memory_gib - len(claims)) * 1024**3,
+                30,
+                _resident_provider_descriptors(profile, "agent-a"),
+                resident_profiles=(descriptor,),
+                reflected_claim_ids=tuple(claims),
+                max_concurrent_assignments=ceiling,
+                gpu_devices=tuple(item.descriptor for item in devices),
+                gpu_atoms=tuple(
+                    item.descriptor.capacity_atom()
+                    for item in devices
+                    if item.descriptor.device_id not in claimed_devices
+                ),
+            )
+            view.publish_offer(
+                offer,
+                idempotency_key=f"offer-{index}",
+                expected_availability_revision=None
+                if index == 0
+                else f"availability-{index - 1}",
+            )
+            if len(claims) >= ceiling:
+                assert execution._remote_candidates() == {}
+            daemon.reconcile_once()
+            with sqlite3.connect(config.control_database) as conn:
+                requests = [
+                    json.loads(row[0])
+                    for row in conn.execute("SELECT request_json FROM agent_deliveries")
+                ]
+            assert len(requests) == min(index + 1, expected)
+            # A target absent from the current report withholds its whole candidate.
+            if index < expected:
+                assert execution._remote_candidates() == {}
+                delivery = view.wait_for_work(
+                    session.session_id,
+                    offer.availability_revision,
+                    sequence=index + 1,
+                    wait_timeout_ms=1,
+                )
+                assert delivery["result"] == "assignment"
+                request = next(
+                    request for request in requests if request["claim_id"] not in claims
+                )
+                view.accept_assignment(
+                    session.session_id,
+                    request["assignment_id"],
+                    request_digest=hashlib.sha256(
+                        json.dumps(
+                            request, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest(),
+                )
+            claims = [request["claim_id"] for request in requests]
+            claimed_devices = {
+                atom["local_capacity_key"].removeprefix("agent-a:")
+                for request in requests
+                for claim in request["claims"]
+                if claim["resource_kind"] == "gpu"
+                for atom in claim["atoms"]
+            }
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM remote_assignments WHERE state != 'RELEASED'"
+                ).fetchone()[0]
+                == expected
+            )
+        if gpu:
+            assert claimed_devices == {f"gpu-{index}" for index in range(4)}
+            assert (
+                sum(
+                    any(claim["resource_kind"] == "gpu" for claim in request["claims"])
+                    for request in requests
+                )
+                == 4
+            )
+    finally:
+        daemon.stop()
+
+
+def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The target CAS may reject after selection/reservation; its caller compensates."""
+    from tests.unit.loom.queue.test_agent_sessions import _config, _policy, _view
+
+    descriptor = ResidentProfileDescriptor(
+        "resident", "1", "project-1", "environment-1", "executor-1"
+    )
+    profile = ResidentExecutionProfile(descriptor, tmp_path, Path(sys.executable))
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = _policy()
+    policy = replace(
+        policy, agents=(replace(policy.agents[0], capabilities=capabilities),)
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_remote_producer_run(
+        store,
+        run_name="rejected",
+        machine_id="agent-a",
+        value=1,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
+    )
+    config = replace(_config(tmp_path, policy), remote_profiles=(descriptor,))
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    rejected = []
+
+    def reject_target(*args, **kwargs):
+        rejected.append(kwargs["request"])
+        raise QueueConflictError("agent resident assignment ceiling is exhausted")
+
+    monkeypatch.setattr(
+        local_daemon_execution, "_target_remote_delivery", reject_target
+    )
+    try:
+        view = _view(daemon)
+        hello = view.handshake()
+        session = view.register(
+            AgentRegistration(
+                "register",
+                str(hello["coordinator_id"]),
+                str(hello["coordinator_epoch"]),
+                "agent-root",
+                "config",
+                "inventory",
+                "availability",
+                ("default",),
+                capabilities,
+                retirement_verifier="01" * 32,
+            )
+        )
+        view.publish_offer(
+            AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                "config",
+                "inventory",
+                "availability",
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, "agent-a"),
+                resident_profiles=(descriptor,),
+                max_concurrent_assignments=2,
+            ),
+            idempotency_key="offer",
+        )
+        daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        ).submit(LocalDaemonAdmissionRequest("item", run_uri))
+        daemon.reconcile_once()
+        assert rejected
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+            )
+            assert (
+                conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0]
+                == 0
+            )
+        assert daemon._execution is not None
+        for request in rejected:
+            assert (
+                daemon._execution.coordinator.state(request.assignment_id) == "released"
+            )
+        from loom.pipeline.stores.sqlite_authority import _authority_database_path
+
+        with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM managed_attempt_bindings"
+                ).fetchone()[0]
+                == 0
+            )
+            assert conn.execute(
+                "SELECT COUNT(*) FROM managed_attempt_unbind_receipts"
+            ).fetchone()[0] == len(rejected)
+    finally:
+        daemon.stop()
 
 
 def _prepare_remote_producer_run(
@@ -2520,9 +2838,14 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
     )
 
     # Existing version-12 root and claim survive enabling the default policy.
+    with pytest.raises(QueueServiceError, match="changed without reload"):
+        LocalDaemonAgentHttpClient(replace(remote_config, max_concurrent_assignments=2))
+    assert execution_journal.retained_claim_commands() == (command,)
     restarted = LocalDaemonAgentHttpClient(
         replace(
-            remote_config, gpu_occupancy_policy=GpuOccupancyPolicy() if gpu else None
+            remote_config,
+            gpu_occupancy_policy=GpuOccupancyPolicy() if gpu else None,
+            max_concurrent_assignments=1,
         )
     )
     assert execution_journal.retained_claim_commands() == (command,)
@@ -3321,8 +3644,18 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
         daemon.stop()
 
 
-@pytest.mark.parametrize("recovery", ["normal", "release_restart", "legacy_renewal"])
-def test_repeated_capacity_release_publishes_fresh_offer(tmp_path, monkeypatch, recovery):
+@pytest.mark.parametrize(
+    ("recovery", "ceiling"),
+    [
+        ("normal", 1),
+        ("normal", 2),
+        ("release_restart", 1),
+        ("legacy_renewal", 1),
+    ],
+)
+def test_repeated_capacity_release_publishes_fresh_offer(
+    tmp_path, monkeypatch, recovery, ceiling
+):
     """Identical restored capacity cannot renew a consumed offer after release."""
     credentials = _credentials(tmp_path / "tls")
     first_descriptor = ResidentProfileDescriptor(
@@ -3393,6 +3726,7 @@ def test_repeated_capacity_release_publishes_fresh_offer(tmp_path, monkeypatch, 
         credentials["agent"].with_suffix(".key"),
         _fresh_remote_agent_root(tmp_path),
         profiles,
+        max_concurrent_assignments=ceiling,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
@@ -3409,6 +3743,14 @@ def test_repeated_capacity_release_publishes_fresh_offer(tmp_path, monkeypatch, 
         completed = _RemoteAgentJournal.complete_assignment_release
         for index, (run_uri, authority) in enumerate(prepared):
             agent.refresh_resource_offer()
+            with sqlite3.connect(config.control_database) as conn:
+                wire = json.loads(
+                    conn.execute(
+                        "SELECT offer_json FROM agent_offers WHERE current = 1"
+                    ).fetchone()[0]
+                )
+            assert wire.get("max_concurrent_assignments", 1) == ceiling
+            assert ("max_concurrent_assignments" in wire) == (ceiling != 1)
             current = agent.active_session()
             assert current is not None
             coordinator.submit(LocalDaemonAdmissionRequest(f"repeat-{index}", run_uri))
@@ -4721,6 +5063,118 @@ def test_agent_client_rejects_an_old_protocol_without_compatibility(
     monkeypatch.setattr(client, "_call", old_handshake)
     with pytest.raises(QueueServiceError, match="hard cut-over"):
         client.handshake()
+
+
+@pytest.mark.parametrize("ceiling", [1, 2])
+def test_outbound_service_rejects_old_admission_capability_before_offering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident", "1", "project", "environment", "executor"
+        ),
+        tmp_path,
+        Path(sys.executable),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost:1",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        resident_profiles=(profile,),
+        max_concurrent_assignments=ceiling,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    stop = Event()
+    calls = []
+
+    def old_coordinator(operation, value, *, role="agent"):
+        calls.append(operation)
+        stop.set()
+        return {
+            "protocol_version": "13",
+            "capabilities": [
+                "agent-sessions-v12",
+                REMOTE_EXECUTION_CAPABILITY,
+                REGULAR_FILE_RELAY_CAPABILITY,
+            ],
+            "coordinator_id": "coordinator-1",
+            "coordinator_epoch": "epoch-1",
+            "role": role,
+        }
+
+    monkeypatch.setattr(client, "_call", old_coordinator)
+    with pytest.raises(
+        QueueServiceError, match="upgrade required.*concurrent-resident"
+    ):
+        client.handshake()
+    stop.clear()
+    calls.clear()
+    monkeypatch.setattr(
+        queue_deployment, "_open_outbound_agent", lambda *args, **kwargs: client
+    )
+    run_outbound_agent_service(
+        OutboundAgentServiceConfig(
+            config,
+            OutboundAgentRegistrationConfig(
+                "config-1", "inventory-1", "availability-1", ("default",), ("python",)
+            ),
+            0.01,
+            tmp_path / "agent.yaml",
+            "immutable",
+            "active",
+        ),
+        stop=stop,
+    )
+    assert calls == ["handshake"]
+    with sqlite3.connect(cast(Path, config.agent_root) / "control.sqlite") as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM agent_sessions_local").fetchone()[0] == 0
+        )
+
+
+@pytest.mark.parametrize("value", [None, True, 0, -1, 1.5, "2", 1025])
+def test_programmatic_agent_rejects_invalid_assignment_ceiling(
+    tmp_path: Path, value: Any
+) -> None:
+    with pytest.raises(QueueServiceError, match="max_concurrent_assignments"):
+        AgentTlsClientConfig(
+            "https://localhost",
+            tmp_path / "ca",
+            tmp_path / "cert",
+            tmp_path / "key",
+            max_concurrent_assignments=value,
+        )
+
+
+def test_programmatic_agent_ceiling_fingerprint_and_slurm_boundary(
+    tmp_path: Path,
+) -> None:
+    from loom.queue.agent_session_transport import _agent_active_fingerprint
+
+    base = AgentTlsClientConfig(
+        "https://localhost", tmp_path / "ca", tmp_path / "cert", tmp_path / "key"
+    )
+    assert _agent_active_fingerprint(base) == _agent_active_fingerprint(
+        replace(base, max_concurrent_assignments=1)
+    )
+    assert _agent_active_fingerprint(base) != _agent_active_fingerprint(
+        replace(base, max_concurrent_assignments=2)
+    )
+    assert (
+        replace(base, max_concurrent_assignments=1024).max_concurrent_assignments
+        == 1024
+    )
+    slurm = replace(
+        base,
+        agent_root=tmp_path / "agent",
+        slurm_profiles=(_slurm_bootstrap_profile(tmp_path),),
+    )
+    assert slurm.max_concurrent_assignments == 1
+    with pytest.raises(QueueServiceError, match="unsupported with slurm_profiles"):
+        replace(slurm, max_concurrent_assignments=2)
 
 
 @pytest.mark.parametrize("old_version", [5, 6])
