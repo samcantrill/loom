@@ -10,6 +10,7 @@ import socket
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Barrier, Event
 from dataclasses import replace
 from pathlib import Path
@@ -30,7 +31,10 @@ from loom.queue._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
     _launch_from_value,
     _launch_value,
+    _receipt_from_value,
     _SupervisorCommunicationError,
+    _SupervisorDispatch,
+    _serve,
 )
 
 
@@ -59,6 +63,441 @@ def _launch(
         profile=_profile(),
         environment={},
     )
+
+
+@contextmanager
+def _ipc_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profiles, retained=None):
+    """Real authenticated IPC with injectable backends and creation-owned groups."""
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    configuration = SupervisorLaunchConfiguration("agent-A", tuple(profiles))
+    AgentProcessSupervisorService.initialize_process_free(agent, configuration=configuration)
+    if retained is not None:
+        retained(AgentProcessSupervisor(
+            agent / "supervisor", agent_id=configuration.agent_id, profiles=configuration.profiles,
+        ))
+    dispatches = []
+
+    def dispatch(supervisor):
+        value = _SupervisorDispatch(supervisor)
+        dispatches.append(value)
+        return value
+
+    monkeypatch.setattr("loom.queue._agent_process_supervisor._SupervisorDispatch", dispatch)
+    server = threading.Thread(target=_serve, args=(agent / "supervisor",), daemon=True)
+    server.start()
+    deadline = monotonic() + 5
+    while True:
+        try:
+            client = AgentProcessSupervisorClient(agent, configuration)
+            break
+        except AgentProcessSupervisorError:
+            assert monotonic() < deadline
+            sleep(0.01)
+    owner = dispatches[0].supervisor
+    try:
+        yield client, owner, dispatches[0]
+    finally:
+        with owner._connect() as conn:
+            launches = [_launch_from_value(json.loads(row[0])) for row in conn.execute(
+                "SELECT launch_json FROM launches"
+            )]
+        for launch in launches:
+            assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
+        for child in owner._children.values():
+            assert child.settled()
+            assert child._process.returncode is not None
+        assert not owner._namespace_inits
+        client._call("shutdown_clean", None)
+        server.join(timeout=5)
+        assert not server.is_alive()
+        assert not client._endpoint.exists()
+
+
+def _sleeping_profile(tmp_path: Path) -> ResidentWorkerLaunchProfile:
+    executable = tmp_path / "held-worker"
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n")
+    executable.chmod(0o700)
+    return replace(_profile(), python_executable=executable)
+
+
+def _named_launch(client, tmp_path, profile, name):
+    workspace = tmp_path / name
+    workspace.mkdir()
+    return replace(
+        _launch(client, workspace), profile=profile, assignment_id=name,
+        launch_operation_id="launch-" + name, process_execution_id="process-" + name,
+    )
+
+
+@pytest.mark.parametrize("held", ["spawn", "namespace", "contain"])
+def test_ipc_slow_saturation_preserves_query_stop_and_exact_starting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held: str,
+) -> None:
+    from types import SimpleNamespace
+    from loom.pipeline.executors.apptainer import _timeout
+    from loom.queue._process_group import OwnedProcessGroup
+
+    profile = _sleeping_profile(tmp_path)
+    container = replace(profile, descriptor={"profile_id": "container"}, container={
+        "kind": "apptainer", "container": {"image": {"reference": "/fixture.sif"}},
+        "options": {"command": "/fake-apptainer"},
+        "python_executable": sys.executable, "daemon_endpoint": None,
+    })
+    monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(
+        lambda self: SimpleNamespace(argv=(str(profile.python_executable),), metadata={})
+    ))
+    release = Event()
+    reached = [Event(), Event()]
+    calls = []
+    original_spawn = subprocess.Popen
+    original_contain = OwnedProcessGroup.contain
+    held_pids = set()
+
+    def hold():
+        index = len(calls)
+        calls.append(index)
+        assert index < 2, "a third physical effect was submitted"
+        reached[index].set()
+        assert release.wait(10)
+
+    def spawn(*args, **kwargs):
+        if held == "spawn" and not release.is_set():
+            hold()
+        return original_spawn(*args, **kwargs)
+
+    def capture(process, group):
+        if held == "namespace":
+            hold()
+        return os.pidfd_open(process.pid)
+
+    def contain(group):
+        if held == "contain" and group.pid in held_pids and not release.is_set():
+            hold()
+        return original_contain(group)
+
+    monkeypatch.setattr(_timeout, "_capture_init", capture)
+    monkeypatch.setattr(OwnedProcessGroup, "contain", contain)
+    with _ipc_owner(tmp_path, monkeypatch, (profile, container)) as (client, owner, dispatch):
+        b = _named_launch(client, tmp_path, profile, "B")
+        d = _named_launch(client, tmp_path, profile, "D")
+        client.launch(b)
+        client.launch(d)
+        slow_profile = container if held == "namespace" else profile
+        a = _named_launch(client, tmp_path, slow_profile, "A")
+        c = _named_launch(client, tmp_path, slow_profile, "C")
+        if held == "contain":
+            held_pids.update((client.launch(a).process_id, client.launch(c).process_id))
+        monkeypatch.setattr("loom.queue._agent_process_supervisor.subprocess.Popen", spawn)
+        try:
+            operation = "contain" if held == "contain" else "launch"
+            client._call(operation, _launch_value(a))
+            assert reached[0].wait(3)
+            client._call(operation, _launch_value(c))
+            assert reached[1].wait(3)
+            assert dispatch.active == 2
+            assert client.query(b).state is SupervisorLaunchState.RUNNING
+            assert client.request_stop(b).state is SupervisorLaunchState.RUNNING
+            assert client.query(d).state is SupervisorLaunchState.RUNNING
+            assert owner._children[d.launch_operation_id].root_status() is None
+            assert client.query(a).state is SupervisorLaunchState.STARTING
+            if held == "spawn":
+                assert a.launch_operation_id not in owner._children
+            assert client.reject_unstarted_assignment(a.assignment_id) is False
+            with pytest.raises(AgentProcessSupervisorError, match="conflicts"):
+                client._call("launch", _launch_value(replace(a, execution_fence="other")))
+            extra = _named_launch(client, tmp_path, profile, "unadmitted")
+            for _ in range(12):
+                assert _receipt_from_value(client._call("launch", _launch_value(extra))).state is SupervisorLaunchState.NOT_ACCEPTED
+                assert client.request_stop(a).state is SupervisorLaunchState.STARTING
+                assert _receipt_from_value(client._call("contain", _launch_value(b))).state is SupervisorLaunchState.STARTING
+            assert len(calls) == 2
+            assert extra.launch_operation_id not in dispatch.operations
+            assert dispatch.active == 2
+            with owner._connect() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 4
+            with pytest.raises(AgentProcessSupervisorError, match="in-flight"):
+                client._call("shutdown_clean", None)
+            with pytest.raises(AgentProcessSupervisorError, match="requires clean shutdown"):
+                owner.rotate_clean_continuity()
+        finally:
+            release.set()
+        # Joining happens outside dispatch, and duplicate launches retain one
+        # creation-owned root even when stop won during accepted STARTING.
+        if held != "contain":
+            started = client.launch(a)
+            assert started.process_id == owner._children[a.launch_operation_id].pid
+            assert client.launch(a).process_id == started.process_id
+        assert client.contain(a).state is SupervisorLaunchState.CONTAINED
+        assert client.contain(b).state is SupervisorLaunchState.CONTAINED
+        assert owner._children[d.launch_operation_id].root_status() is None
+
+
+def test_ipc_request_admission_is_bounded_before_authentication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.queue._agent_process_supervisor as module
+
+    with _ipc_owner(tmp_path, monkeypatch, (_profile(),)) as (client, _, dispatch):
+        original = module.deliver_challenge
+        admitted = []
+        release = Event()
+
+        def hold(connection, secret):
+            admitted.append(connection)
+            assert release.wait(5)
+            return original(connection, secret)
+
+        monkeypatch.setattr(module, "deliver_challenge", hold)
+        peers = []
+        try:
+            for _ in range(4):
+                peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                peer.settimeout(2)
+                peer.connect(str(client._endpoint))
+                peers.append(peer)
+            deadline = monotonic() + 3
+            while len(admitted) != 4:
+                assert monotonic() < deadline
+                sleep(0.01)
+            for _ in range(12):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as extra:
+                    extra.settimeout(2)
+                    extra.connect(str(client._endpoint))
+                    assert extra.recv(1) == b""
+            assert len(admitted) == 4
+            assert dispatch.active == 0
+        finally:
+            monkeypatch.setattr(module, "deliver_challenge", original)
+            for peer in peers:
+                peer.close()
+            release.set()
+        deadline = monotonic() + 3
+        while True:
+            try:
+                assert client.status()["supervisor_id"] == client.supervisor_id
+                break
+            except AgentProcessSupervisorError:
+                assert monotonic() < deadline
+                sleep(0.01)
+
+
+def test_ipc_docker_waits_use_slow_capacity_and_coalesce_exact_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from loom.queue._docker_worker import DockerWorker
+    from tests.unit.loom.queue.test_docker_worker import Daemon
+
+    native = _sleeping_profile(tmp_path)
+    docker = replace(native, descriptor={"profile_id": "docker"}, container={
+        "kind": "docker", "container": {"image": {"reference": "sha256:" + "a" * 64}},
+        "options": {"command": "/docker"}, "python_executable": sys.executable,
+        "daemon_endpoint": "unix:///fixture",
+    })
+    monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(
+        lambda self: SimpleNamespace(argv=("/docker", "run", "image", "python"), metadata={})
+    ))
+    daemons = {}
+    release = Event()
+    reached = {"launch-A": Event(), "launch-C": Event()}
+    holding = False
+    held_calls = []
+
+    def call(owner, *args):
+        if holding and not release.is_set() and args[0] == "inspect":
+            held_calls.append(owner.operation_id)
+            assert owner.operation_id in reached, "third backend operation submitted"
+            reached[owner.operation_id].set()
+            assert release.wait(10)
+        daemon = daemons.setdefault(owner.operation_id, Daemon())
+        return daemon((*owner.prefix, *args))
+
+    monkeypatch.setattr(DockerWorker, "_run", call)
+    with _ipc_owner(tmp_path, monkeypatch, (native, docker)) as (client, owner, dispatch):
+        launches = {name: _named_launch(client, tmp_path, docker, name) for name in ("A", "C", "E")}
+        for launch in launches.values():
+            assert client.launch(launch).backend_id == "immutable-id"
+        b = _named_launch(client, tmp_path, native, "B")
+        d = _named_launch(client, tmp_path, native, "D")
+        client.launch(b)
+        client.launch(d)
+        holding = True
+        try:
+            assert client.query(launches["A"]).state is SupervisorLaunchState.STARTING
+            assert reached["launch-A"].wait(3)
+            assert client.request_stop(launches["C"]).state is SupervisorLaunchState.STARTING
+            assert reached["launch-C"].wait(3)
+            assert client.query(b).state is SupervisorLaunchState.RUNNING
+            assert client.request_stop(b).state is SupervisorLaunchState.RUNNING
+            assert client.query(d).state is SupervisorLaunchState.RUNNING
+            for _ in range(12):
+                assert client.request_stop(launches["E"]).state is SupervisorLaunchState.STARTING
+                assert _receipt_from_value(client._call("contain", _launch_value(launches["C"]))).state is SupervisorLaunchState.STARTING
+            assert dispatch.active == 2
+            assert held_calls == ["launch-A", "launch-C"]
+            assert dispatch.operations["launch-E"].stop
+            assert not any(call[0] == "kill" for call in daemons["launch-E"].calls)
+            with pytest.raises(AgentProcessSupervisorError, match="in-flight"):
+                client._call("shutdown", None)
+        finally:
+            release.set()
+        client.request_stop(launches["A"])
+        for launch in launches.values():
+            receipt = client.contain(launch)
+            assert receipt.state is SupervisorLaunchState.CONTAINED
+            assert not receipt.qualified_success
+            daemon = daemons[launch.launch_operation_id]
+            assert sum(call[0] == "create" for call in daemon.calls) == 1
+            assert sum(call[0] == "start" for call in daemon.calls) == 1
+            assert daemon.container is None
+        assert owner._children[d.launch_operation_id].root_status() is None
+
+
+def test_accepted_launch_lost_reply_keeps_owner_and_other_ipc_requests_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.queue._agent_process_supervisor as module
+
+    profile = _sleeping_profile(tmp_path)
+    with _ipc_owner(tmp_path, monkeypatch, (profile,)) as (client, owner, dispatch):
+        a = _named_launch(client, tmp_path, profile, "A")
+        b = _named_launch(client, tmp_path, profile, "B")
+        client.launch(b)
+        reply_held = Event()
+        release = Event()
+        send = module._send_supervisor_reply
+
+        def lose_reply(connection, response):
+            value = response.get("value")
+            if (isinstance(value, dict) and value.get("process_id") is not None
+                and value.get("launch", {}).get("launch_operation_id") == a.launch_operation_id
+                and not reply_held.is_set()):
+                reply_held.set()
+                assert release.wait(5)
+            send(connection, response)
+
+        monkeypatch.setattr(module, "_send_supervisor_reply", lose_reply)
+        impatient = AgentProcessSupervisorClient(tmp_path / "agent", client._configuration)
+        impatient._EXCHANGE_TIMEOUT = 0.2
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                attempt = pool.submit(impatient.launch, a)
+                assert reply_held.wait(3)
+                with pytest.raises(_SupervisorCommunicationError) as failure:
+                    attempt.result(timeout=2)
+                assert failure.value.possibly_dispatched
+            root = owner._children[a.launch_operation_id]
+            assert root.root_status() is None
+            assert client.query(b).state is SupervisorLaunchState.RUNNING
+            assert client.request_stop(b).state is SupervisorLaunchState.RUNNING
+            assert client.launch(a).process_id == root.pid
+            assert len(owner._children) == 2
+            assert dispatch.active == 0
+            with pytest.raises(AgentProcessSupervisorError, match="in-flight requests"):
+                client._call("shutdown_clean", None)
+        finally:
+            release.set()
+
+
+def test_reopened_docker_pending_query_requires_fresh_backend_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from loom.queue._docker_worker import DockerWorker
+    from tests.unit.loom.queue.test_docker_worker import Daemon
+
+    profile = replace(_profile(), container={
+        "kind": "docker", "container": {"image": {"reference": "sha256:" + "a" * 64}},
+        "options": {"command": "/docker"}, "python_executable": sys.executable,
+        "daemon_endpoint": "unix:///fixture",
+    })
+    monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(
+        lambda self: SimpleNamespace(argv=("/docker", "run", "image", "python"), metadata={})
+    ))
+    daemon = Daemon()
+    reached = Event()
+    release = Event()
+    launches = []
+
+    def call(owner, *args):
+        if launches and args[0] == "inspect" and not release.is_set():
+            reached.set()
+            assert release.wait(5)
+        return daemon((*owner.prefix, *args))
+
+    def retain(owner):
+        launch = _named_launch(owner, tmp_path, profile, "retained")
+        assert owner.launch(launch).state is SupervisorLaunchState.RUNNING
+        launches.append(launch)
+
+    monkeypatch.setattr(DockerWorker, "_run", call)
+    with _ipc_owner(tmp_path, monkeypatch, (profile,), retained=retain) as (client, _, dispatch):
+        launch = launches[0]
+        try:
+            with pytest.raises(AgentProcessSupervisorError, match="pending without fresh ownership"):
+                client.query(launch)
+            assert reached.wait(3)
+            assert dispatch.active == 1
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                joined = workers.submit(client.query_wait, launch)
+                try:
+                    with pytest.raises(AgentProcessSupervisorError, match="pending without fresh ownership"):
+                        client.query(launch)
+                    assert not joined.done()
+                finally:
+                    release.set()
+                receipt = joined.result(timeout=3)
+            assert receipt.state is SupervisorLaunchState.RUNNING
+            assert receipt.backend_id == "immutable-id"
+            assert sum(call[0] == "create" for call in daemon.calls) == 1
+            assert sum(call[0] == "start" for call in daemon.calls) == 1
+        finally:
+            release.set()
+            client.request_stop(launch)
+            assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
+
+
+def test_failed_launch_with_owned_child_cannot_leave_a_live_starting_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from loom.pipeline.executors.apptainer import _timeout
+
+    native = _sleeping_profile(tmp_path)
+    profile = replace(native, descriptor={"profile_id": "container"}, container={
+        "kind": "apptainer", "container": {"image": {"reference": "/fixture.sif"}},
+        "options": {"command": "/fake-apptainer"},
+        "python_executable": sys.executable, "daemon_endpoint": None,
+    })
+    monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(
+        lambda self: SimpleNamespace(argv=(str(native.python_executable),), metadata={})
+    ))
+    monkeypatch.setattr(_timeout, "_capture_init", lambda process, group: os.pidfd_open(process.pid))
+    write_text = Path.write_text
+
+    def fail_grant(path, *args, **kwargs):
+        if path.name == "run.grant" and path.parent.name == "A":
+            raise PermissionError("workspace grant unavailable")
+        return write_text(path, *args, **kwargs)
+
+    with _ipc_owner(tmp_path, monkeypatch, (native, profile)) as (client, owner, dispatch):
+        a = _named_launch(client, tmp_path, profile, "A")
+        b = _named_launch(client, tmp_path, native, "B")
+        client.launch(b)
+        monkeypatch.setattr(Path, "write_text", fail_grant)
+        with pytest.raises(_SupervisorCommunicationError):
+            client.launch(a)
+        assert dispatch.active == 0
+        child = owner._children[a.launch_operation_id]
+        assert child.root_status() is None
+        assert client.request_stop_wait(a).state is SupervisorLaunchState.UNKNOWN
+        assert client.query_wait(a).state is SupervisorLaunchState.UNKNOWN
+        assert client.launch(a).state is SupervisorLaunchState.UNKNOWN
+        assert owner._children[a.launch_operation_id] is child
+        assert client.query(b).state is SupervisorLaunchState.RUNNING
+        assert client.contain(a).state is SupervisorLaunchState.CONTAINED
+        assert child.settled()
 
 
 def test_legacy_launch_writer_shape_and_digest_are_preserved(tmp_path: Path) -> None:
@@ -783,9 +1222,12 @@ def test_accepted_launch_reply_timeout_replays_one_live_root(
                 def lose_reply() -> None:
                     with listener.accept() as downstream:
                         request = downstream.recv()
-                        with Client(str(original_endpoint), family="AF_UNIX", authkey=client._secret) as upstream:
-                            upstream.send(request)
-                            accepted.update(upstream.recv())
+                        while not accepted.get("value", {}).get("process_id"):
+                            with Client(str(original_endpoint), family="AF_UNIX", authkey=client._secret) as upstream:
+                                upstream.send(request)
+                                accepted.update(upstream.recv())
+                            assert accepted["ok"] is True
+                            sleep(0.01)
                         assert release.wait(3)
 
                 with ThreadPoolExecutor(max_workers=2) as workers:

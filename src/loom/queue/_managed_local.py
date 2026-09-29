@@ -4013,7 +4013,7 @@ def run_managed_local_assignment(
             raise ManagedLocalError(
                 "retained start has no supervisor operation and cannot be relaunched"
             )
-        receipt = supervisor.query(launch)
+        receipt = supervisor.query_wait(launch)
         if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
             receipt = supervisor.launch(launch)
         if receipt.state is SupervisorLaunchState.UNKNOWN or not receipt.started:
@@ -4048,7 +4048,7 @@ def run_managed_local_assignment(
                 raise ManagedLocalError("supervisor process outcome is unknown")
             if cancellation_requested is not None and cancellation_requested():
                 cancellation_seen = True
-                supervisor.request_stop(launch)
+                supervisor.request_stop_wait(launch)
             if suspend_requested is not None and suspend_requested():
                 raise _ManagedApplicationSuspended(
                     "local application stopped with supervised work retained"

@@ -375,6 +375,7 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
     original_complete = _RemoteAgentJournal.complete_offer_renewal
     lost_response = Event()
+    renewal_replayed = Event()
 
     def lose_first_renewal_response(
         journal: _RemoteAgentJournal, renewal: object, result: object
@@ -383,6 +384,7 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
             lost_response.set()
             raise QueueServiceError("simulated lost renewal response")
         original_complete(journal, renewal, result)  # type: ignore[arg-type]
+        renewal_replayed.set()
 
     monkeypatch.setattr(
         _RemoteAgentJournal,
@@ -448,6 +450,10 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
                 break
             sleep(0.02)
         assert active == 1
+        # The accepted offer survives the injected lost reply, while an empty
+        # supervisor may stop during reconnect. Observe the completed replay
+        # before asserting the new incarnation's live process owner.
+        assert renewal_replayed.wait(10)
         assert len(_supervisor_process_ids(cast(Path, client_config.agent_root))) == 1
 
         # Keep the production service idle through more than three complete

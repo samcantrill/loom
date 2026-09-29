@@ -271,13 +271,30 @@ process and requires explicit recovery.
 Each private supervisor IPC exchange has a ten-second whole-exchange deadline
 covering connect, mutual authentication, request send and response read. This
 bounds the actual calling operation and closes its connection; it does not set
-a worker lifetime or overall containment deadline. The serial supervisor may
-continue an accepted operation after its caller times out, and other requests
-can time out while that operation is still running. A timeout after possible
-dispatch is an unknown outcome. Keep the exact launch operation, digest, fence,
-workspace and capacity claims for query or exact replay. Even a failure before
+a worker lifetime or overall containment deadline. The supervisor admits at
+most two slow launch, backend-observation or containment operations, separately
+from four bounded authenticated request handlers. It does not queue additional
+slow submissions. Exact healthy process queries and nonblocking stop signals
+remain available when both slow slots are occupied. Backend-dependent stops
+retain one coalesced intent per owned launch and wait for available capacity;
+a pending receipt does not prove containment. Exact launch replay coalesces
+with an accepted in-progress launch, including before its child handle exists.
+The supervisor continues an accepted effect after its caller disconnects.
+A timeout after possible dispatch is an unknown outcome. Keep the exact launch
+operation, digest, fence, workspace and capacity claims for query or exact
+replay. Even a failure before
 this attempt could send cannot resolve an earlier uncertain attempt. Neither
 timeout nor missing response proves no-start, process death or safe release.
+
+Synchronous launch, stop dispatch, containment and recovery observation callers
+join pending receipts outside service dispatch through individually bounded exchanges.
+Single `query` and `request_stop` exchanges remain finite; backend waits may
+return STARTING while a live owner progresses. A retained row alone never
+establishes ownership: observation without fresh ownership reports pending
+through the existing error response until reconciliation returns actual evidence.
+Shutdown refuses in-flight requests/effects or unsettled owned groups. Clean
+shutdown still joins containment of descendants whose root has already exited.
+These bounds do not guarantee physical containment while a backend is blocked.
 
 Clean daemon shutdown stops the supervisor only when the coordinator, agent
 journal and supervisor prove no retained work. A refused or unavailable proof
