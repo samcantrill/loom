@@ -5671,7 +5671,13 @@ class LocalDaemonExecution:
         )
         if granted.fencing_token != fence:
             raise QueueConflictError("remote execution fence conflicts")
-        authority.confirm_execution_started(str(record["run_uri"]), fence=granted)
+        # A granted launch may create its process after cancellation wins the
+        # authority epoch. Retain that physical start for containment without
+        # attempting the now-forbidden logical transition to running.
+        if not self._attempt_cancel_requested(
+            str(record["run_uri"]), str(record["attempt_id"])
+        ):
+            authority.confirm_execution_started(str(record["run_uri"]), fence=granted)
         state = self.coordinator.state(assignment_id)
         if state == "granted":
             self.coordinator.advance(
@@ -5763,7 +5769,11 @@ class LocalDaemonExecution:
                     },
                 ),
             )
-            if report.status is StageStatus.CANCELLED and not record["start_permitted"]:
+            if report.status is StageStatus.CANCELLED and (
+                not record["start_permitted"] or report.process_created is False
+            ):
+                # An exact supervisor rejection can win after the permit reply.
+                # That positive no-start result still owns the first event.
                 self.coordinator.record_event(
                     assignment_id,
                     1,

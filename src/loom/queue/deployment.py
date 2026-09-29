@@ -39,6 +39,7 @@ from ._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
 )
 from ._managed_local import _ManagedApplicationSuspended
+from ._agent_progress import _steps, _delay
 from .agent_sessions import (
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -607,6 +608,45 @@ def run_outbound_agent_service(
     lifetime: str | None = None,
     expected_coordinator_id: str | None = None,
 ) -> None:
+    """Progress one resident assignment with independent finite control receipts.
+
+    The configured assignment ceiling is advertised unchanged; this service
+    consumes deliveries serially. Application stop preserves owned processes and
+    claims and waits for its finite external operations before closing transport.
+    """
+    from ._agent_progress import _run_serial
+
+    observing: list[LocalDaemonAgentHttpClient | None] = [None]
+
+    def controls():
+        while not stop.is_set():
+            client = observing[0]
+            if client is not None:
+                try:
+                    yield from client._receive_service_controls()
+                except (QueueError, AgentProcessSupervisorError):
+                    pass
+            yield from _delay(0.05)
+
+    _run_serial(
+        _outbound_service_steps(
+            config, stop=stop, trusted_config_loader=trusted_config_loader,
+            lifetime=lifetime, expected_coordinator_id=expected_coordinator_id,
+            observing=observing,
+        ),
+        controls(),
+    )
+
+
+def _outbound_service_steps(
+    config: OutboundAgentServiceConfig,
+    *,
+    stop: Event,
+    trusted_config_loader: Callable[[], OutboundAgentServiceConfig] | None = None,
+    lifetime: str | None = None,
+    expected_coordinator_id: str | None = None,
+    observing: list[LocalDaemonAgentHttpClient | None],
+):
     """Run a foreground agent, preserving supervised work on service stop.
 
     Stop interrupts active and retained-worker observation at durable replay
@@ -650,6 +690,9 @@ def run_outbound_agent_service(
         trusted_config_loader=None if trusted_config_loader is None else load_client,
         prepare_role_reload=prepare_install,
     )
+    client._service_progress = True
+    client._suspend_requested = stop.is_set
+    observing[0] = client
     from ._service_lifetime import record_process, retained_lifetime
 
     if active.client.agent_root is not None:
@@ -673,12 +716,15 @@ def run_outbound_agent_service(
                     ),
                     prepare_role_reload=prepare_install,
                 )
-            client._resume_pending_poll(
+            client._service_progress = True
+            client._suspend_requested = stop.is_set
+            observing[0] = client
+            (yield from _steps(client._resume_pending_poll,
                 wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
                 suspend_requested=stop.is_set,
-            )
-            client.resume_retained_work(suspend_requested=stop.is_set)
-            handshake = client.handshake()
+            ))
+            (yield from _steps(client.resume_retained_work, suspend_requested=stop.is_set))
+            handshake = (yield from _steps(client.handshake))
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
             coordinator_id = cast(str, handshake["coordinator_id"])
             if (
@@ -696,7 +742,7 @@ def run_outbound_agent_service(
                     active.registration.config_revision,
                     *((generation,) if lifetime == "run" else ()),
                 )
-                session = client.register(
+                session = (yield from _steps(client.register,
                     AgentRegistration(
                         operation_id,
                         coordinator_id,
@@ -708,15 +754,15 @@ def run_outbound_agent_service(
                         active.registration.pools,
                         active.registration.capabilities,
                     )
-                )
+                ))
             elif session.coordinator_epoch != coordinator_epoch:
-                session = client.reconcile(
+                session = (yield from _steps(client.reconcile,
                     session.session_id,
                     coordinator_epoch,
                     idempotency_key=_operation_id(
                         "reconcile", session.session_id, coordinator_epoch
                     ),
-                )
+                ))
             if lifetime != "run" and active.client.agent_root is not None:
                 record_process(
                     active.client.agent_root,
@@ -732,7 +778,7 @@ def run_outbound_agent_service(
                         "generation": generation,
                         "action": "observe",
                     }
-                    decision = client._call("service_lifetime", retirement)
+                    decision = (yield from _steps(client._call, "service_lifetime", retirement))
                     if decision.get("state") == "authorized":
                         if decision.get("coordinator_id") != coordinator_id or any(
                             decision.get(key) != retirement[key]
@@ -741,14 +787,14 @@ def run_outbound_agent_service(
                             raise QueueConflictError(
                                 "service retirement evidence is stale"
                             )
-                        client.retire_clean(
+                        (yield from _steps(client.retire_clean,
                             session.session_id,
                             idempotency_key="service-retire-" + generation,
-                        )
+                        ))
                         client.shutdown_clean()
-                        client._call(
+                        (yield from _steps(client._call,
                             "service_lifetime", {**retirement, "action": "closed"}
-                        )
+                        ))
                         if active.client.agent_root is not None:
                             record_process(
                                 active.client.agent_root,
@@ -764,23 +810,23 @@ def run_outbound_agent_service(
                             coordinator_id=coordinator_id,
                             session_id=session.session_id,
                         )
-                client.poll_control(session.session_id)
+                (yield from _steps(client.poll_control, session.session_id))
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 client._resource_maintenance_enabled = True  # noqa: SLF001
-                client.refresh_resource_offer(ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS)
+                (yield from _steps(client.refresh_resource_offer, ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS))
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 sequence = client.next_poll_sequence(session.session_id)
-                client.execute_one(
+                (yield from _steps(client.execute_one,
                     session.session_id,
                     session.availability_revision,
                     sequence=sequence,
                     wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
                     suspend_requested=stop.is_set,
-                )
+                ))
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
@@ -789,9 +835,10 @@ def run_outbound_agent_service(
         except QueueError:
             if stop.is_set():
                 return
-            stop.wait(active.reconnect_seconds)
+            (yield from _delay(active.reconnect_seconds))
         finally:
             if client is not None:
+                observing[0] = None
                 closing = client
                 client = None
                 try:

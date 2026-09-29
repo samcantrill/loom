@@ -1796,15 +1796,20 @@ class _ResidentAssignmentWorkspace:
             )
 
     def supervisor_launch_json(self) -> str | None:
-        with self._connect() as conn:
+        return self.read_supervisor_launch_json(self.root.parent.parent, self.assignment_id)
+
+    @staticmethod
+    def read_supervisor_launch_json(agent_root: Path, assignment_id: str) -> str | None:
+        """Observe a retained launch without creating or mutating its workspace."""
+        _identifier(assignment_id, "assignment_id")
+        database = Path(agent_root).resolve() / "assignments" / assignment_id / "resident.sqlite"
+        if not database.is_file():
+            return None
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
             row = conn.execute(
                 "SELECT supervisor_launch_json FROM request WHERE singleton = 1"
             ).fetchone()
-        return (
-            None
-            if row is None or row["supervisor_launch_json"] is None
-            else str(row["supervisor_launch_json"])
-        )
+        return None if row is None or row[0] is None else str(row[0])
 
     def worker_request(self, *, resolve_shared: bool = False) -> StageWorkerRequest:
         """Project native request facts; execution alone resolves shared payloads.

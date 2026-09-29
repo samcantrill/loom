@@ -476,6 +476,29 @@ Execution currently remains serial even when a larger ceiling permits targeting;
 the field does not yet promise overlapping workers. Nonempty `slurm_profiles`
 requires a ceiling of one.
 
+The serial resident service advances input, launch, observation, publication and release
+at finite operation boundaries. The application thread owns session, provider
+and journal transitions; external operations use bounded worker slots (two bulk,
+two control/observation and one work poll). Simultaneous HTTP exchanges own
+separate connections. Control receipt and exact stop requests can progress while
+an input or publication operation is blocked. A received cancellation is durable
+intent, not proof of completed containment: claims remain held through positive
+no-start/containment evidence, durable output and acknowledged result commit.
+An outstanding poll is settled or replayed with its original identity before
+refreshing the offer or submitting another poll.
+GPU admission also takes a fresh off-loop occupancy sample; the manager applies
+it and prepares the claim without a second probe. An earlier free offer sample
+does not bypass admission's fresh, fail-closed occupancy decision.
+
+Application stop waits for its owned finite operations, preserves supervised
+workers and claims, and suspends at replay boundaries. A blocked filesystem
+operation can delay that wait; there is no hard shutdown or containment deadline.
+Restart remains conservative: all retained work must settle before fresh
+admission. The synchronous `execute_one()` and `resume_retained_work()` methods
+drive the same transition steps and retain their existing result shapes.
+The separate external SLURM engine retains its synchronous scheduler and transfer
+behavior; these responsiveness guarantees apply to resident execution.
+
 Offer readers interpret an absent ceiling as one. Writers omit one to preserve
 historical canonical bytes and include larger values in scheduling decisions.
 New outbound services require the coordinator handshake capability

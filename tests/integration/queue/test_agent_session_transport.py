@@ -589,7 +589,7 @@ def test_assignment_retry_exhaustion_preserves_the_indeterminate_pregrant_call(
             agent_session_transport._IndeterminateAgentProtocolError("unavailable")
         ),
     )
-    monkeypatch.setattr(agent_session_transport, "sleep", lambda _seconds: None)
+    monkeypatch.setattr("loom.queue._agent_progress.sleep", lambda _seconds: None)
 
     with pytest.raises(agent_session_transport._IndeterminateAgentProtocolError):
         client._assignment_call("session-1", "assignment-1", indeterminate_operation)  # noqa: SLF001
@@ -1902,6 +1902,7 @@ def _prepare_remote_producer_run(
     enforce: tuple[str, ...] = (),
     native_failure: bool = False,
     reported_failure: bool = False,
+    shared_scope: Mapping[str, PlainData] | None = None,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1951,6 +1952,9 @@ def _prepare_remote_producer_run(
                 "outputs": {"text": {"artifact_type": "text", "codec_key": "text.v1"}},
             }
         )
+    if shared_scope is not None:
+        from loom.queue.shared_execution import bind_snapshot
+        bind_snapshot({"pipeline": pipeline_config}, shared_scope)
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,

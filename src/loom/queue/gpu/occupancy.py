@@ -300,17 +300,27 @@ class GpuOccupancyMonitor:
                 and cached.is_fresh(now, self.policy.poll_interval_seconds)
             ):
                 return cached
-            observations = self._observer.observe()
-            snapshot = GpuOccupancySnapshot(
-                tuple(
-                    observations.get(
-                        uuid,
-                        GpuProcessObservation(uuid, False, False, "device_missing"),
-                    )
-                    for uuid in self._selected_uuids
-                ),
-                utc_timestamp(self._utc_clock()),
-                self._monotonic_clock(),
+            snapshot = _sample_gpu_occupancy(
+                self._observer, self._selected_uuids, self._utc_clock, self._monotonic_clock,
             )
-            self._snapshot = snapshot
-            return snapshot
+            return self._apply_snapshot(snapshot)
+
+    def _apply_snapshot(self, snapshot: GpuOccupancySnapshot) -> GpuOccupancySnapshot:
+        """Install external sampling facts on the provider owner's thread."""
+        self._snapshot = snapshot
+        return snapshot
+
+
+def _sample_gpu_occupancy(
+    observer: NvidiaSmiGpuProcessObserver,
+    selected_uuids: tuple[str, ...],
+    utc_clock: Callable[[], datetime],
+    monotonic_clock: Callable[[], float],
+) -> GpuOccupancySnapshot:
+    """Return immutable facts timestamped at sampling, before manager dispatch."""
+    observations = observer.observe()
+    return GpuOccupancySnapshot(
+        tuple(observations.get(uuid, GpuProcessObservation(uuid, False, False, "device_missing"))
+              for uuid in selected_uuids),
+        utc_timestamp(utc_clock()), monotonic_clock(),
+    )
