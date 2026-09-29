@@ -2936,6 +2936,10 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
 @pytest.mark.parametrize(
     ("restart_barrier", "shared_inventory"),
     (
+        ("before_workspace", False),
+        ("legacy_receipt", False),
+        ("legacy_workspace", False),
+        ("legacy_missing", False),
         ("before_supervisor_accept", False),
         ("after_supervisor_accept", False),
         ("before_result_commit", False),
@@ -3170,6 +3174,20 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 providers["cpu"], "worker_environment", unavailable_binding
             )
         if restart_barrier in {
+            "before_workspace", "legacy_receipt", "legacy_workspace", "legacy_missing",
+        }:
+
+            def interrupt_delivery(session_id, request, **kwargs):
+                if restart_barrier == "legacy_workspace":
+                    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+
+                    _ResidentAssignmentWorkspace(
+                        cast(Path, remote_config.agent_root), request.assignment_id,
+                    ).persist_request(request, profile)
+                raise RuntimeError("simulated agent application restart")
+
+            monkeypatch.setattr(agent, "_execute_delivered_assignment", interrupt_delivery)
+        elif restart_barrier in {
             "before_supervisor_accept",
             "after_supervisor_accept",
         }:
@@ -3300,6 +3318,13 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             } == {"cpu", "memory", "gpu"}
         supervisor_id = supervisor.supervisor_id
         agent.close()
+        if restart_barrier.startswith("legacy_") and restart_barrier != "legacy_launch_construction":
+            with sqlite3.connect(cast(Path, remote_config.agent_root) / "control.sqlite") as conn:
+                conn.execute("UPDATE agent_session_references SET reference_json = NULL WHERE reference_kind = 'delivery'")
+                if restart_barrier in {"legacy_workspace", "legacy_missing"}:
+                    # The old single-row poll owner has advanced beyond this delivery.
+                    conn.execute("UPDATE agent_poll_state_local SET state = 'WAIT', result_json = ?",
+                        (json.dumps({"result": "wait"}),))
         replacement = LocalDaemonAgentHttpClient(remote_config)
         replacement_supervisor = replacement._supervisor  # noqa: SLF001
         assert replacement_supervisor is not None
@@ -3308,6 +3333,24 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             monkeypatch.setattr(replacement_supervisor, "launch", forbidden_launch)
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
+        if restart_barrier == "legacy_missing":
+            retained = replacement._require_journal().unresolved_assignment_references()
+            assert len(retained) == 1
+            with pytest.raises(QueueConflictError, match="delivery is unavailable"):
+                replacement.resume_retained_work()
+            assert replacement._require_journal().unresolved_assignment_references() == retained
+            with pytest.raises(QueueConflictError, match="cannot advertise"):
+                replacement.publish_offer(offer, idempotency_key="offer-after-missing-request")
+            with pytest.raises(QueueConflictError, match="cannot poll"):
+                replacement.wait_for_work(session.session_id, session.availability_revision,
+                    sequence=2, wait_timeout_ms=1)
+            return
+        legacy_delivery = None
+        if restart_barrier in {"legacy_receipt", "legacy_workspace"}:
+            (legacy_delivery,) = replacement._require_journal().unresolved_assignment_references()
+            assert (replacement._require_journal().delivery_request(*legacy_delivery) is None) == (
+                restart_barrier == "legacy_workspace"
+            )
         if restart_barrier == "rejection_before_result":
             from loom.queue._agent_process_supervisor import AgentProcessSupervisorError
 
@@ -3345,6 +3388,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
         assert replacement.resume_retained_work() == ()
+        if restart_barrier == "legacy_workspace":
+            assert legacy_delivery is not None
+            assert replacement._require_journal().delivery_request(*legacy_delivery) is None
+        if restart_barrier in {"before_workspace", "legacy_receipt", "legacy_workspace"}:
+            with sqlite3.connect(config.control_database) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone() == (1,)
         if restart_barrier == "diagnostic_write":
             with sqlite3.connect(config.control_database) as conn:
                 assert (
