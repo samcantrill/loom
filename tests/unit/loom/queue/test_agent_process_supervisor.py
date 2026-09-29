@@ -6,11 +6,14 @@ import json
 import sqlite3
 import sys
 import subprocess
+import socket
+import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 from dataclasses import replace
 from pathlib import Path
-from multiprocessing.connection import Client
+from multiprocessing.connection import Client, Connection, Listener
 from time import monotonic, sleep
 from typing import Any, cast
 
@@ -27,6 +30,7 @@ from loom.queue._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
     _launch_from_value,
     _launch_value,
+    _SupervisorCommunicationError,
 )
 
 
@@ -649,6 +653,176 @@ def test_client_disconnect_preserves_supervisor_and_its_running_worker(
     finally:
         client.contain(launch)
         client.shutdown_for_test()
+
+
+@pytest.mark.parametrize(
+    "stall", ["connect", "auth", "mutual_auth", "send", "reply", "partial_reply", "shared_deadline"],
+)
+def test_client_deadline_interrupts_actual_transport_and_closes_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stall: str,
+) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=SupervisorLaunchConfiguration("agent-A", (_profile(),))
+    )
+    original_endpoint = client._endpoint
+    release = Event()
+    reached = Event()
+    closed = Event()
+    request = _launch_value(replace(
+        _launch(client, tmp_path), environment={"PAYLOAD": "x" * (8 * 1024 * 1024)},
+    ))
+    try:
+        with tempfile.TemporaryDirectory(prefix="loom-ipc-") as short_root:
+            endpoint = str(Path(short_root) / "peer.sock")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(endpoint)
+                listener.listen(0)
+                listener.settimeout(3)
+                monkeypatch.setattr(client, "_endpoint", Path(endpoint))
+                monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 0.6 if stall == "shared_deadline" else 0.2)
+
+                def peer() -> None:
+                    if stall == "connect":
+                        reached.set()
+                        assert release.wait(3)
+                        return
+                    transport, _ = listener.accept()
+                    with transport:
+                        if stall != "auth":
+                            from multiprocessing.connection import (
+                                answer_challenge, deliver_challenge,
+                            )
+                            with Connection(os.dup(transport.fileno())) as connection:
+                                if stall == "shared_deadline":
+                                    sleep(0.4)
+                                deliver_challenge(connection, client._secret)
+                                if stall != "mutual_auth":
+                                    answer_challenge(connection, client._secret)
+                                if stall in {"reply", "partial_reply", "shared_deadline"}:
+                                    received = connection.recv()
+                                    assert received == {"operation": "launch", "value": request}
+                                if stall == "partial_reply":
+                                    # An incomplete frame must obey the same deadline.
+                                    transport.sendall(b"\x00\x00\x00\x40partial")
+                                reached.set()
+                                assert release.wait(3)
+                        else:
+                            reached.set()
+                            assert release.wait(3)
+                        transport.settimeout(3)
+                        while transport.recv(65536):
+                            pass
+                        closed.set()
+
+                filler = None
+                if stall == "connect":
+                    # Fill this real Unix listener's backlog without accepting.
+                    filler = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    filler.connect(endpoint)
+                try:
+                    with ThreadPoolExecutor(max_workers=2) as workers:
+                        serving = workers.submit(peer)
+
+                        def call() -> tuple[float, _SupervisorCommunicationError]:
+                            started = monotonic()
+                            threads = set(threading.enumerate())
+                            descriptors = len(tuple(Path("/proc/self/fd").iterdir()))
+                            with pytest.raises(_SupervisorCommunicationError) as failure:
+                                client._call("launch", request)
+                            assert set(threading.enumerate()) == threads
+                            if stall == "connect":
+                                assert len(tuple(Path("/proc/self/fd").iterdir())) == descriptors
+                            return monotonic() - started, failure.value
+
+                        attempt = workers.submit(call)
+                        try:
+                            elapsed, failure = attempt.result(timeout=2)
+                            assert reached.wait(1)
+                            assert elapsed < (0.9 if stall == "shared_deadline" else 1)
+                            assert failure.possibly_dispatched is (stall not in {"connect", "auth", "mutual_auth"})
+                        finally:
+                            release.set()
+                        serving.result(timeout=3)
+                    if stall != "connect":
+                        assert closed.is_set()
+                finally:
+                    release.set()
+                    if filler is not None:
+                        filler.close()
+    finally:
+        monkeypatch.setattr(client, "_endpoint", original_endpoint)
+        monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 10)
+        client.shutdown_for_test()
+
+
+def test_accepted_launch_reply_timeout_replays_one_live_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import select
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    executable = tmp_path / "held-worker"
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    executable.chmod(0o700)
+    profile = replace(_profile(), python_executable=executable)
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=SupervisorLaunchConfiguration("agent-A", (profile,))
+    )
+    launch = replace(_launch(client, tmp_path), profile=profile)
+    original_endpoint = client._endpoint
+    release = Event()
+    accepted: dict[str, Any] = {}
+    process_fd = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="loom-ipc-") as short_root:
+            endpoint = str(Path(short_root) / "peer.sock")
+            with Listener(endpoint, family="AF_UNIX", authkey=client._secret) as listener:
+                def lose_reply() -> None:
+                    with listener.accept() as downstream:
+                        request = downstream.recv()
+                        with Client(str(original_endpoint), family="AF_UNIX", authkey=client._secret) as upstream:
+                            upstream.send(request)
+                            accepted.update(upstream.recv())
+                        assert release.wait(3)
+
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    peer = workers.submit(lose_reply)
+                    monkeypatch.setattr(client, "_endpoint", Path(endpoint))
+                    monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 0.3)
+                    attempt = workers.submit(client.launch, launch)
+                    try:
+                        with pytest.raises(_SupervisorCommunicationError) as failure:
+                            attempt.result(timeout=2)
+                        assert failure.value.possibly_dispatched
+                    finally:
+                        release.set()
+                    peer.result(timeout=3)
+        monkeypatch.setattr(client, "_endpoint", original_endpoint)
+        monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 10)
+        assert accepted["ok"] is True
+        pid = accepted["value"]["process_id"]
+        process_fd = os.pidfd_open(pid)
+        assert not select.select([process_fd], [], [], 0)[0]
+        replay = client.launch(launch)
+        assert replay.process_id == pid
+        assert client.query(launch).state is SupervisorLaunchState.RUNNING
+        with sqlite3.connect(agent / "supervisor/supervisor.sqlite") as connection:
+            assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+        with pytest.raises(AgentProcessSupervisorError, match="non-quiescent"):
+            client.shutdown_clean()
+        assert not select.select([process_fd], [], [], 0)[0]
+    finally:
+        release.set()
+        monkeypatch.setattr(client, "_endpoint", original_endpoint)
+        monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 10)
+        client.contain(launch)
+        client.shutdown_for_test()
+        if process_fd is not None:
+            assert select.select([process_fd], [], [], 3)[0]
+            os.close(process_fd)
 
 
 def test_process_free_initialization_requires_serve_and_clean_shutdown(
