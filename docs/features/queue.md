@@ -505,7 +505,9 @@ commit, and a pending provider/coordinator release blocks admission until its
 exact replay settles. Missing requests, unknown ownership, uncertain composite
 claims and pending control/session effects keep admission closed across the
 session. The manager reassesses changed inventory before preparing capacity;
-released claims are never restored as newly held or subtracted twice.
+any newer UNKNOWN ownership observation also invalidates an in-flight proof,
+even without a journal change. Only a wholly fresh proof can reopen admission.
+Released claims are never restored as newly held or subtracted twice.
 Upgrade, reload, operator resume and retirement still require all work to settle.
 GPU admission also takes a fresh off-loop occupancy sample; the manager applies
 it and prepares the claim without a second probe. An earlier free offer sample

@@ -936,6 +936,135 @@ def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeyp
             _release_gate(b)
 
 
+def test_recovery_rejects_newer_unknown_observation_during_other_owner_query(
+    monkeypatch,
+):
+    from dataclasses import replace
+    from loom.queue._agent_progress import _cooperative, _steps, _delay
+
+    armed, driver_waiting, querying_second, applied_unknown, assessed, allow_fresh = (
+        Event() for _ in range(6)
+    )
+    targets, outcomes, attempted = [], [], []
+    qualify = LocalDaemonAgentHttpClient._qualify_service_admission
+    observe = LocalDaemonAgentHttpClient._observe_supervisor_ownership
+    external = transport._external
+    exchange = transport._exchange_agent_request
+
+    def observation(client, receipt):
+        observe(client, receipt)
+        if armed.is_set() and receipt.state is SupervisorLaunchState.UNKNOWN:
+            applied_unknown.set()
+
+    def interleave(lane, function, *args, **kwargs):
+        if function.__name__ == "query" and targets and not allow_fresh.is_set():
+            assignment_id = args[0].assignment_id
+            driver = transport._owns_assignment(assignment_id)
+            if not driver and assignment_id == targets[1]:
+
+                def held_query():
+                    result = function(*args, **kwargs)
+                    querying_second.set()
+                    assert applied_unknown.wait(15)
+                    return result
+
+                return (yield from external(lane, held_query))
+            if driver and assignment_id == targets[0]:
+
+                def unknown_query():
+                    result = function(*args, **kwargs)
+                    driver_waiting.set()
+                    assert querying_second.wait(15)
+                    return replace(result, state=SupervisorLaunchState.UNKNOWN)
+
+                return (yield from external(lane, unknown_query))
+        return (yield from external(lane, function, *args, **kwargs))
+
+    @_cooperative
+    def assessment(client):
+        if armed.is_set() and not allow_fresh.is_set():
+            while len(client._joined_starts) < 2 or assessed.is_set():
+                if client._suspend_requested() or allow_fresh.is_set():
+                    break
+                yield from _delay(0.01)
+            if not targets:
+                targets.extend(
+                    assignment_id
+                    for _, assignment_id in client._require_journal().unresolved_assignment_references()
+                )
+            while not driver_waiting.is_set() and not client._suspend_requested():
+                yield from _delay(0.01)
+            before = client._admission_inventory()
+            result = yield from _steps(qualify, client)
+            if applied_unknown.is_set() and not assessed.is_set():
+                outcomes.append((result, before == client._admission_inventory()))
+                assessed.set()
+            return result
+        return (yield from _steps(qualify, client))
+
+    def tracked(config, operation, *args, **kwargs):
+        if applied_unknown.is_set() and not allow_fresh.is_set():
+            if operation in {"offer", "renew", "poll"}:
+                attempted.append(operation)
+        return exchange(config, operation, *args, **kwargs)
+
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        a, _, _ = _submit_gated(case, "a")
+        b, _, _ = _submit_gated(case, "b")
+        try:
+            _eventually(
+                lambda: (
+                    (a / "build.started").exists() and (b / "build.started").exists()
+                )
+            )
+            original = _running(case)
+            case.stop.set()
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_qualify_service_admission", assessment
+            )
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_observe_supervisor_ownership", observation
+            )
+            monkeypatch.setattr(transport, "_external", interleave)
+            monkeypatch.setattr(transport, "_exchange_agent_request", tracked)
+            armed.set()
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert assessed.wait(25), (case.failures, case.retries)
+            assert outcomes == [(False, True)]
+            assert not attempted
+            assert _running(case) == original
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches",
+            ) == [(2,)]
+            # The invalidation is not a permanent ban: a wholly fresh proof can
+            # admit spare capacity while both exact original workers remain live.
+            allow_fresh.set()
+            uri, _ = _submit(case, "fresh")
+            assert (
+                case.client.wait("fresh", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                    (uri,),
+                )
+            )
+            assert _running(case) == original
+        finally:
+            allow_fresh.set()
+            applied_unknown.set()
+            querying_second.set()
+            _release_gate(a)
+            _release_gate(b)
+
+
 def test_recovery_rechecks_inventory_after_preparation_completes_during_proof(
     monkeypatch,
 ):

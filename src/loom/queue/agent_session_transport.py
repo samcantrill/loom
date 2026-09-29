@@ -2472,6 +2472,7 @@ class LocalDaemonAgentHttpClient:
             try:
                 self._restart_with_retained_work = self._has_retained_agent_work()
                 self._service_recovery_admission = self._restart_with_retained_work
+                self._ownership_observation_generation = 0
                 self._joined_starts: set[str] = set()
             except ManagedLocalError as exc:
                 raise QueueServiceError(
@@ -3523,6 +3524,14 @@ class LocalDaemonAgentHttpClient:
             )
         )
 
+    def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
+        if receipt.state is SupervisorLaunchState.UNKNOWN:
+            # Observation application is manager-owned, but can interleave with
+            # another assignment's asynchronous admission query without a write.
+            self._ownership_observation_generation += 1
+            self._restart_with_retained_work = True
+            self._service_recovery_admission = True
+
     def _admission_inventory(self):
         """Read the existing owners, including facts without a delivery view."""
         journal = self._require_journal()
@@ -3586,6 +3595,7 @@ class LocalDaemonAgentHttpClient:
         supervisor = self._supervisor
         if execution is None or supervisor is None:
             return False
+        observation_generation = self._ownership_observation_generation
         inventory = self._admission_inventory()
         references, rows, pending, session, poll, control, received, acknowledgement = (
             inventory
@@ -3684,6 +3694,7 @@ class LocalDaemonAgentHttpClient:
                 return False
             try:
                 receipt = yield from _external("control", supervisor.query, launch)
+                self._observe_supervisor_ownership(receipt)
             except AgentProcessSupervisorError:
                 return False
             if receipt.state not in {
@@ -3703,6 +3714,7 @@ class LocalDaemonAgentHttpClient:
             or self._epoch_reconciliation_pending
             or (self._suspend_requested is not None and self._suspend_requested())
             or inventory != self._admission_inventory()
+            or observation_generation != self._ownership_observation_generation
         ):
             return False
         self._restart_with_retained_work = False
@@ -3735,6 +3747,7 @@ class LocalDaemonAgentHttpClient:
                 launch = _launch_from_value(json.loads(encoded_launch))
                 (yield from _external("bulk", supervisor.request_stop_wait, launch))
                 receipt = (yield from _external("bulk", supervisor.contain, launch))
+                self._observe_supervisor_ownership(receipt)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
                 continue
@@ -4025,6 +4038,7 @@ class LocalDaemonAgentHttpClient:
                     return "unknown", None
                 (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
                 contained = (yield from _external("bulk", self._supervisor.contain, launch))
+                self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
             if contained.state is not SupervisorLaunchState.CONTAINED:
@@ -4279,6 +4293,7 @@ class LocalDaemonAgentHttpClient:
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
                 receipt = (yield from _external("bulk", self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
+                self._observe_supervisor_ownership(receipt)
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(
                         workspace.worker_request(),
@@ -4664,6 +4679,7 @@ class LocalDaemonAgentHttpClient:
                     )
                 )
                 receipt = (yield from _external("bulk", supervisor.launch, launch))
+                self._observe_supervisor_ownership(receipt)
                 if (
                     receipt.state
                     in {
@@ -4800,14 +4816,13 @@ class LocalDaemonAgentHttpClient:
             while True:
                 _raise_if_application_suspended(suspend_requested)
                 receipt = (yield from _external("control", supervisor.query, launch))
+                self._observe_supervisor_ownership(receipt)
                 if receipt.state in {
                     SupervisorLaunchState.EXITED,
                     SupervisorLaunchState.CONTAINED,
                 }:
                     break
                 if receipt.state is SupervisorLaunchState.UNKNOWN:
-                    self._restart_with_retained_work = True
-                    self._service_recovery_admission = True
                     raise QueueConflictError("remote supervisor continuity is unknown")
                 (yield from _steps(self.poll_assignment_control, session_id))
                 (yield from _steps(self._maintain_resource_offer))
@@ -5099,6 +5114,7 @@ class LocalDaemonAgentHttpClient:
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = (yield from _external("bulk", supervisor.query_wait, launch))
+            self._observe_supervisor_ownership(receipt)
             if (
                 launch.continuity_epoch in supervisor.reboot_generations
                 and receipt.exit_code is None
@@ -5140,6 +5156,7 @@ class LocalDaemonAgentHttpClient:
                     _raise_if_application_suspended(suspend_requested)
                     yield from _delay(0.01)
                 receipt = (yield from _external("bulk", supervisor.launch, launch))
+                self._observe_supervisor_ownership(receipt)
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
             needs_start_join = execution_journal.read_state(assignment_id) in {
@@ -5165,6 +5182,7 @@ class LocalDaemonAgentHttpClient:
                 (yield from _steps(self.poll_assignment_control, session_id))
                 (yield from _delay(0.05))
                 receipt = (yield from _external("control", supervisor.query, launch))
+                self._observe_supervisor_ownership(receipt)
                 if needs_start_join and receipt.started:
                     (yield from _steps(self._join_retained_supervised_start,
                         session,
@@ -5242,6 +5260,7 @@ class LocalDaemonAgentHttpClient:
                     ).encode(),
                 )
         contained = (yield from _external("bulk", supervisor.contain, launch))
+        self._observe_supervisor_ownership(contained)
         if contained.state is not SupervisorLaunchState.CONTAINED:
             return False
         if (
@@ -5334,6 +5353,7 @@ class LocalDaemonAgentHttpClient:
                 if self._supervisor is None:
                     raise QueueConflictError("remote completion lost its supervisor")
                 evidence = (yield from _external("bulk", self._supervisor.query_wait, launch))
+                self._observe_supervisor_ownership(evidence)
                 if evidence.state is not SupervisorLaunchState.CONTAINED:
                     raise QueueConflictError("remote completion lacks containment")
                 if (
