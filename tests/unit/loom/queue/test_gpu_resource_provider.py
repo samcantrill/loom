@@ -166,7 +166,16 @@ def test_eight_selected_gpus_yield_disjoint_claims_and_the_ninth_waits() -> None
 
     ninth = ClaimCommand(
         ManagedAssignment(
-            "assignment-9", "run-1", "work-9", "train", 1, "attempt-9", "agent-1", "session-1", "offer-1", "claim-9"
+            "assignment-9",
+            "run-1",
+            "work-9",
+            "train",
+            1,
+            "attempt-9",
+            "agent-1",
+            "session-1",
+            "offer-1",
+            "claim-9",
         ),
         "prepare-9",
         ResourceClaim("gpu", planner.claim_contracts[0], (atoms[0],), 1),
@@ -307,9 +316,7 @@ def test_gpu_provider_allow_policy_fails_closed_for_untrusted_observations() -> 
     assert missing.atoms == ()
     assert missing.resource_status[0].reason_code == "device_missing"
 
-    observer.observations = (
-        GpuProcessObservation("GPU-a", True, False, "available"),
-    )
+    observer.observations = (GpuProcessObservation("GPU-a", True, False, "available"),)
     provider.refresh_occupancy(force=True)
     clock[0] = 16.0
     stale = provider.observe(request)
@@ -317,7 +324,9 @@ def test_gpu_provider_allow_policy_fails_closed_for_untrusted_observations() -> 
     assert stale.resource_status[0].reason_code == "observation_stale"
 
 
-def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(tmp_path) -> None:
+def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(
+    tmp_path,
+) -> None:
     planner = GpuResourcePlanner()
     atoms = tuple(
         CapacityAtom("gpu", key, ExactQuantity(1), "count", ExactQuantity(1))
@@ -393,16 +402,29 @@ def test_gpu_provider_filters_cached_observations_and_forces_preparation_probe(t
     assignment = command.assignment
     assert isinstance(assignment, ManagedAssignment)
     journal.persist_request(assignment, {"request": "durable"})
-    assert journal.prepare_composite(assignment, (command,), {"gpu": provider}) is AssignmentState.DECLINED
-    assert journal.read_decline_reason(assignment.assignment_id) == "external_process_detected"
+    assert (
+        journal.prepare_composite(assignment, (command,), {"gpu": provider})
+        is AssignmentState.DECLINED
+    )
+    assert (
+        journal.read_decline_reason(assignment.assignment_id)
+        == "external_process_detected"
+    )
     journal.release_declined(assignment.assignment_id, "after-decline")
     probe_count = observer.calls
     observer.observations = tuple(
-        GpuProcessObservation(uuid, True, False, "available") for uuid in ("GPU-a", "GPU-b")
+        GpuProcessObservation(uuid, True, False, "available")
+        for uuid in ("GPU-a", "GPU-b")
     )
     reopened = SQLiteAgentJournal(journal_path)
-    assert reopened.prepare_composite(assignment, (command,), {"gpu": provider}) is AssignmentState.DECLINED
-    assert reopened.read_decline_reason(assignment.assignment_id) == "external_process_detected"
+    assert (
+        reopened.prepare_composite(assignment, (command,), {"gpu": provider})
+        is AssignmentState.DECLINED
+    )
+    assert (
+        reopened.read_decline_reason(assignment.assignment_id)
+        == "external_process_detected"
+    )
     assert reopened.read_result(assignment.assignment_id) is None
     assert observer.calls == probe_count
 
@@ -440,6 +462,46 @@ def _claim_command(
         "prepare-observed",
         ResourceClaim("gpu", planner.claim_contracts[0], (atom,), 1),
         provider.descriptor,
+    )
+
+
+def test_late_free_sample_cannot_replace_newer_blocked_capacity() -> None:
+    from loom.queue.gpu.occupancy import _sample_gpu_occupancy
+
+    planner = GpuResourcePlanner()
+    atom = CapacityAtom("gpu", "safe-a", ExactQuantity(1), "count", ExactQuantity(1))
+    observer = _FakeOccupancyObserver(
+        ("GPU-a",), (GpuProcessObservation("GPU-a", True, False, "available"),)
+    )
+    clock = [1.0]
+
+    def utc():
+        return datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    monitor = GpuOccupancyMonitor(
+        ("GPU-a",),
+        policy=GpuOccupancyPolicy(),
+        observer=observer,  # type: ignore[arg-type]
+        monotonic_clock=lambda: clock[0],
+        utc_clock=utc,
+    )
+    old = _sample_gpu_occupancy(observer, ("GPU-a",), utc, lambda: clock[0])  # type: ignore[arg-type]
+    clock[0] = 2.0
+    observer.observations = (
+        GpuProcessObservation("GPU-a", True, True, "external_process_detected"),
+    )
+    current = _sample_gpu_occupancy(observer, ("GPU-a",), utc, lambda: clock[0])  # type: ignore[arg-type]
+    monitor._apply_snapshot(current)
+    assert monitor._apply_snapshot(old) is current
+    provider = GpuResourceProvider(
+        planner.claim_contracts,
+        (atom,),
+        bindings={"safe-a": "GPU-a"},
+        occupancy_monitor=monitor,
+    )
+    assert (
+        provider.observe(ObserveRequest("agent", "session", "after-late-sample")).atoms
+        == ()
     )
 
 

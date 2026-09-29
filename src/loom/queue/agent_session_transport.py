@@ -124,7 +124,7 @@ from ._coordinator_control import (
     error_envelope,
 )
 from ._coordinator_transport import https_connection
-from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay
+from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment
 from .local_daemon import (
     AdmissionNotFoundError,
     CoordinatorSchedulingReload,
@@ -2423,6 +2423,9 @@ class LocalDaemonAgentHttpClient:
         self._connection: http.client.HTTPSConnection | None = None
         self._closed = False
         self._service_progress = False
+        self._service_control_due = True
+        self._epoch_reconciliation_pending = False
+        self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
         self._slurm_agent = (
             AgentSlurmJobs(Path(config.agent_root), config.slurm_profiles)
@@ -2761,6 +2764,7 @@ class LocalDaemonAgentHttpClient:
         return result
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def register(self, request: AgentRegistration) -> Generator[_Progress, Any, AgentSession]:
         from .preparation import (
             PREPARATION_INPUT_CAPABILITY,
@@ -2814,6 +2818,24 @@ class LocalDaemonAgentHttpClient:
         return session
 
     @_cooperative
+    @_serialized("_mutation_gate")
+    def _replay_pending_reconciliation(self):
+        journal = self._require_journal()
+        with journal._connection() as conn:
+            pending = conn.execute(
+                "SELECT operation_id, request_json FROM agent_mutation_intents "
+                "WHERE operation = 'reconcile' AND result_json IS NULL ORDER BY rowid"
+            ).fetchall()
+        for operation_id, encoded in pending:
+            self._epoch_reconciliation_pending = True
+            response = yield from _steps(self._call, "reconcile", json.loads(encoded))
+            session = _session_from_value(response)
+            journal.persist_reconciled_session(session)
+            journal.complete_mutation("reconcile", operation_id, session.value())
+            self._epoch_reconciliation_pending = False
+
+    @_cooperative
+    @_serialized("_mutation_gate")
     def reconcile(
         self,
         session_id: str,
@@ -2822,19 +2844,51 @@ class LocalDaemonAgentHttpClient:
         idempotency_key: str,
     ) -> Generator[_Progress, Any, AgentSession]:
         journal = self._require_journal()
+        if self._service_progress:
+            yield from _steps(self._replay_pending_reconciliation)
         expected = journal.session(session_id)
-        request: dict[str, PlainData] = {
-            "expected": expected.value(),
-            "coordinator_epoch": coordinator_epoch,
-            "idempotency_key": idempotency_key,
-        }
-        journal._persist_mutation("reconcile", idempotency_key, request)
-        session = _session_from_value((yield from _steps(self._call, "reconcile", request)))
-        journal.complete_mutation("reconcile", idempotency_key, session.value())
-        journal.persist_reconciled_session(session)
-        return session
+        if self._service_progress and expected.coordinator_epoch == coordinator_epoch:
+            self._epoch_reconciliation_pending = False
+            return expected
+        candidates = [expected]
+        if self._service_progress and self._execution_journal is not None:
+            # An ordered release may have committed before its response was
+            # lost and the coordinator restarted. Its exact durable revision is
+            # the other possible session view, never a new capacity estimate.
+            revisions = {
+                self._execution_journal.read_availability_revision(assignment_id)
+                for owner_session, assignment_id in journal.unresolved_assignment_references()
+                if owner_session == session_id
+                and self._execution_journal.find_state(assignment_id) is AssignmentState.RELEASED
+            } - {None, expected.availability_revision}
+            if len(revisions) == 1:
+                candidates.insert(0, replace(expected, availability_revision=cast(str, next(iter(revisions)))))
+        for index, candidate in enumerate(candidates):
+            key = idempotency_key if index == 0 else idempotency_key + ":before-release"
+            request: dict[str, PlainData] = {
+                "expected": candidate.value(),
+                "coordinator_epoch": coordinator_epoch,
+                "idempotency_key": key,
+            }
+            journal._persist_mutation("reconcile", key, request)
+            try:
+                session = _session_from_value((yield from _steps(self._call, "reconcile", request)))
+            except QueueConflictError:
+                if index + 1 == len(candidates):
+                    raise
+                # Only a definite rejection permits trying the pre-release
+                # view. An uncertain exchange keeps retrying its original bytes.
+                with journal._connection() as conn:
+                    conn.execute("DELETE FROM agent_mutation_intents WHERE operation = 'reconcile' AND operation_id = ? AND result_json IS NULL", (key,))
+                continue
+            journal.persist_reconciled_session(session)
+            journal.complete_mutation("reconcile", key, session.value())
+            self._epoch_reconciliation_pending = False
+            return session
+        raise QueueConflictError("agent epoch reconciliation is unresolved")
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def publish_offer(
         self,
         offer: AgentOffer,
@@ -2939,6 +2993,7 @@ class LocalDaemonAgentHttpClient:
         return result
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def renew_offer(self, renewal: AgentOfferRenewal) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._drained or self._restart_with_retained_work:
             raise QueueConflictError("agent cannot renew executable capacity")
@@ -2955,6 +3010,7 @@ class LocalDaemonAgentHttpClient:
         return result
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def refresh_resource_offer(
         self, *, ttl_seconds: int = 30
     ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
@@ -3089,7 +3145,7 @@ class LocalDaemonAgentHttpClient:
     @_cooperative
     def _maintain_resource_offer(self) -> Generator[_Progress, Any, None]:
         """Keep control/supervision running when a report response is unavailable."""
-        if not self._resource_maintenance_enabled:
+        if self._service_progress or not self._resource_maintenance_enabled:
             return
         now = monotonic()
         if now < self._next_resource_maintenance:
@@ -3112,6 +3168,7 @@ class LocalDaemonAgentHttpClient:
         return None if renewal is None else (yield from _steps(self.renew_offer, renewal))
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def wait_for_work(
         self,
         session_id: str,
@@ -3126,6 +3183,13 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError(
                 "restarted agent with retained remote work cannot poll for new work"
             )
+        if self._service_progress:
+            journal = self._require_journal()
+            current = journal.current_resource_offer(session_id)
+            if current is None:
+                self._next_resource_maintenance = 0
+                return {"result": "idle"}
+            availability_revision = journal.session(session_id).availability_revision
         value: dict[str, PlainData] = {
             "session_id": session_id,
             "availability_revision": availability_revision,
@@ -3156,6 +3220,7 @@ class LocalDaemonAgentHttpClient:
         return result
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
         (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
@@ -3629,6 +3694,8 @@ class LocalDaemonAgentHttpClient:
         pending = journal.next_unacknowledged_assignment_control()
         if pending is not None:
             control, code, evidence = pending
+            if self._service_progress and not _owns_assignment(control.assignment_id):
+                return None
             if control.session_id != session_id:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
@@ -3639,6 +3706,8 @@ class LocalDaemonAgentHttpClient:
             return control
         received = journal.next_received_assignment_control()
         if received is None:
+            if self._service_progress:
+                return None
             result = (yield from _steps(self._call, "assignment_control", {"session_id": session_id}))
             raw = result.get("control")
         else:
@@ -3651,6 +3720,9 @@ class LocalDaemonAgentHttpClient:
         if control.session_id != session_id:
             raise QueueConflictError("retained assignment control belongs to another session")
         self._received_cancellations.add(control.assignment_id)
+        if self._service_progress and not _owns_assignment(control.assignment_id):
+            journal.prepare_assignment_control(control)
+            return None
         prior = journal.prepare_assignment_control(control)
         if prior is not None:
             code, evidence = prior
@@ -3769,6 +3841,7 @@ class LocalDaemonAgentHttpClient:
             )
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def decline_assignment(
         self,
         session_id: str,
@@ -3792,6 +3865,7 @@ class LocalDaemonAgentHttpClient:
         journal = self._require_journal()
         journal.persist_reconciled_session(session)
         journal.resolve_assignment_reference(session_id, assignment_id)
+        self._next_resource_maintenance = 0
         return session
 
     @_cooperative
@@ -3898,6 +3972,7 @@ class LocalDaemonAgentHttpClient:
         ))
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def release_assignment(
         self,
         session_id: str,
@@ -3934,9 +4009,11 @@ class LocalDaemonAgentHttpClient:
         if session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
         journal.complete_assignment_release(session, assignment_id)
+        self._next_resource_maintenance = 0
         return session
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def release_contained_assignment(
         self, session_id: str, assignment_id: str, *, fence: str
     ) -> Generator[_Progress, Any, AgentSession]:
@@ -4110,8 +4187,8 @@ class LocalDaemonAgentHttpClient:
     def _receive_service_controls(self) -> Generator[_Progress, Any, None]:
         """Retain control intent without joining containment or changing sessions.
 
-        The serial lifecycle applies/acknowledges effects at its next boundary.
-        This separate receipt path can request an exact stop while that lifecycle
+        Each assignment view applies/acknowledges effects at its next boundary.
+        This separate receipt path can request an exact stop while that view
         owns an input/publication operation. It never writes that workspace.
         """
         journal = self._journal
@@ -4147,6 +4224,7 @@ class LocalDaemonAgentHttpClient:
         raw = response.get("control")
         if raw is not None:
             control = AgentControl.from_value(raw)
+            self._service_control_due = True
             journal.prepare_control(control)
             if control.kind.value in {"drain", "reload"}:
                 self._drained = True
@@ -4280,41 +4358,15 @@ class LocalDaemonAgentHttpClient:
                 (yield from _steps(self._maintain_resource_offer))
                 if final:
                     break
-        (yield from _external("bulk", workspace.accept))
+        if execution_journal.read_grant_fence(assignment.assignment_id) is None:
+            (yield from _external("bulk", workspace.accept))
         prepared = yield from _steps(
             execution_journal.prepare_composite, assignment, commands, providers
         )
+        self._next_resource_maintenance = 0
         if prepared is AssignmentState.DECLINED:
-            reason_code = execution_journal.read_decline_reason(
-                assignment.assignment_id
-            )
-            next_revision = self._availability_revision(
-                session, request.assignment_id, providers
-            )
-            execution_journal.release_declined(assignment.assignment_id, next_revision)
-            released_session = cast(
-                AgentSession,
-                (yield from _steps(self._assignment_call,
-                    session_id,
-                    request.assignment_id,
-                    lambda: _steps(self.decline_assignment,
-                        session_id,
-                        request.assignment_id,
-                        availability_revision=next_revision,
-                        reason_code=reason_code,
-                    ),
-                )),
-            )
-            return freeze_plain_data(
-                {
-                    "result": "assignment",
-                    "assignment_id": request.assignment_id,
-                    "state": "DECLINED",
-                    "reason_code": reason_code,
-                    "session": released_session.value(),
-                },
-                path="remote execution decline",
-            )
+            return (yield from _steps(self._decline_pregrant_assignment,
+                session, assignment, commands, providers, execution_journal))
         if prepared not in {
             AssignmentState.PREPARED,
             AssignmentState.ACCEPTED,
@@ -4398,6 +4450,9 @@ class LocalDaemonAgentHttpClient:
 
             def start_supervisor_launch() -> Generator[_Progress, Any, str]:
                 nonlocal launch
+                while self._epoch_reconciliation_pending:
+                    _raise_if_application_suspended(suspend_requested)
+                    yield from _delay(0.01)
                 try:
                     launch = build_supervisor_launch()
                 except (ValueError, QueueError, OSError) as exc:
@@ -4579,6 +4634,7 @@ class LocalDaemonAgentHttpClient:
         ))
 
     @_cooperative
+    @_serialized("_mutation_gate")
     def _resume_pending_poll(
         self,
         *,
@@ -4626,7 +4682,7 @@ class LocalDaemonAgentHttpClient:
                 journal.fence_poll(session_id, sequence)
                 return
         journal.complete_poll(session_id, sequence, result)
-        if result.get("result") == "assignment":
+        if result.get("result") == "assignment" and not self._service_progress:
             request = (yield from _steps(self._resolve_delivery, session_id, result.get("request")))
             (yield from _steps(self._execute_delivered_assignment,
                 session_id, request, suspend_requested=suspend_requested
@@ -4646,6 +4702,17 @@ class LocalDaemonAgentHttpClient:
         incarnation and never releases capacity or cancels its supervised work.
         """
 
+        return (yield from _steps(
+            self._resume_retained_assignments,
+            self._require_journal().unresolved_assignment_references(),
+            suspend_requested=suspend_requested,
+        ))
+
+    @_cooperative
+    def _resume_retained_assignments(
+        self, references, *, suspend_requested=None
+    ):
+        """Shared exact recovery transitions; the service gives each ID a view."""
         _raise_if_application_suspended(suspend_requested)
         journal = self._require_journal()
         execution_journal = self._execution_journal
@@ -4659,7 +4726,7 @@ class LocalDaemonAgentHttpClient:
         if execution_journal is None or supervisor is None:
             raise QueueConflictError("remote restart has no supervisor journal")
         completed: list[Mapping[str, PlainData]] = []
-        for session_id, assignment_id in journal.unresolved_assignment_references():
+        for session_id, assignment_id in references:
             _raise_if_application_suspended(suspend_requested)
             session = journal.session(session_id)
             workspace = _ResidentAssignmentWorkspace(
@@ -4704,11 +4771,19 @@ class LocalDaemonAgentHttpClient:
             if execution_journal.read_state(assignment_id) is AssignmentState.RELEASED:
                 # The release reply may be lost after coordinator acceptance.
                 # Replay its retained proof, not an already committed output manifest.
-                released = (yield from _steps(self.release_assignment,
-                    session_id, assignment_id,
-                    fence=cast(str, execution_journal.read_grant_fence(assignment_id)),
-                    availability_revision=cast(str, execution_journal.read_availability_revision(assignment_id)),
-                ))
+                retained_fence = execution_journal.read_grant_fence(assignment_id)
+                revision = cast(str, execution_journal.read_availability_revision(assignment_id))
+                if retained_fence is None:
+                    released = yield from _steps(
+                        self.decline_assignment, session_id, assignment_id,
+                        availability_revision=revision,
+                        reason_code=execution_journal.read_decline_reason(assignment_id),
+                    )
+                else:
+                    released = yield from _steps(
+                        self.release_assignment, session_id, assignment_id,
+                        fence=retained_fence, availability_revision=revision,
+                    )
                 completed.append(freeze_plain_data({
                     "result": "assignment", "assignment_id": assignment_id,
                     "state": "RELEASED", "session": released.value(),
@@ -4717,12 +4792,13 @@ class LocalDaemonAgentHttpClient:
             launch_json = workspace.supervisor_launch_json()
             if (
                 launch_json is None
-                and execution_journal.read_grant_fence(assignment_id) is None
                 and execution_journal.read_state(assignment_id)
                 in {
                     AssignmentState.REQUEST_DURABLE,
                     AssignmentState.PREPARED,
                     AssignmentState.ACCEPTED,
+                    AssignmentState.GRANTED,
+                    AssignmentState.ACTIVE,
                 }
             ):
                 # Continue this exact delivery; startup still forbids a new
@@ -4859,6 +4935,9 @@ class LocalDaemonAgentHttpClient:
             if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
                 # The complete exact operation was journaled before the service
                 # call. Submitting that operation is replay, never relaunch.
+                while self._epoch_reconciliation_pending:
+                    _raise_if_application_suspended(suspend_requested)
+                    yield from _delay(0.01)
                 receipt = (yield from _external("bulk", supervisor.launch, launch))
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
@@ -4917,7 +4996,8 @@ class LocalDaemonAgentHttpClient:
                     suspend_requested=suspend_requested,
                 ))
             )
-        self._restart_with_retained_work = self._has_retained_agent_work()
+        if not self._service_progress:
+            self._restart_with_retained_work = self._has_retained_agent_work()
         return tuple(completed)
 
     @_cooperative
@@ -5150,26 +5230,11 @@ class LocalDaemonAgentHttpClient:
         ))
         if completed_before_start:
             (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
-        next_revision = self._release_provider_claims(
-            session,
-            assignment,
-            commands,
-            providers,
-            execution_journal,
+        released_session = yield from _steps(
+            self._release_completed_assignment, session, assignment, commands,
+            providers, execution_journal, fence=fence,
         )
-        released_session = cast(
-            AgentSession,
-            (yield from _steps(self._assignment_call,
-                session.session_id,
-                request.assignment_id,
-                lambda: _steps(self.release_assignment,
-                    session.session_id,
-                    request.assignment_id,
-                    fence=fence,
-                    availability_revision=next_revision,
-                ),
-            )),
-        )
+        self._next_resource_maintenance = 0
         self._cancelled_assignments.discard(request.assignment_id)
         self._received_cancellations.discard(request.assignment_id)
         return freeze_plain_data(
@@ -5181,6 +5246,33 @@ class LocalDaemonAgentHttpClient:
             },
             path=result_path_label,
         )
+
+    @_cooperative
+    @_serialized("_mutation_gate")
+    def _release_completed_assignment(
+        self, session, assignment, commands, providers, execution_journal, *, fence
+    ):
+        next_revision = self._release_provider_claims(
+            session,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+        )
+        released_session = cast(
+            AgentSession,
+            (yield from _steps(self._assignment_call,
+                session.session_id,
+                assignment.assignment_id,
+                lambda: _steps(self.release_assignment,
+                    session.session_id,
+                    assignment.assignment_id,
+                    fence=fence,
+                    availability_revision=next_revision,
+                ),
+            )),
+        )
+        return released_session
 
     @_cooperative
     def _cancel_pregrant_if_requested(
@@ -5202,32 +5294,37 @@ class LocalDaemonAgentHttpClient:
                 return None
             if control.assignment_id != assignment_id:
                 continue
-            state = execution_journal.read_state(assignment_id)
-            if state is AssignmentState.REQUEST_DURABLE:
-                execution_journal.decline_before_prepare(assignment_id)
-            elif state in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
-                execution_journal.abort_pregrant(assignment_id, commands, providers)
-            else:
+            if execution_journal.read_state(assignment_id) not in {
+                AssignmentState.REQUEST_DURABLE, AssignmentState.PREPARED, AssignmentState.ACCEPTED,
+            }:
                 return None
-            next_revision = self._availability_revision(
-                session, assignment_id, providers
-            )
-            execution_journal.release_declined(assignment_id, next_revision)
-            released_session = (yield from _steps(self.decline_assignment,
-                session.session_id,
-                assignment.assignment_id,
-                availability_revision=next_revision,
-            ))
-            return freeze_plain_data(
-                {
-                    "result": "assignment",
-                    "assignment_id": assignment_id,
-                    "state": "CANCELLED_BEFORE_GRANT",
-                    "session": released_session.value(),
-                },
-                path="remote pre-grant cancellation",
-            )
+            return (yield from _steps(self._decline_pregrant_assignment,
+                session, assignment, commands, providers, execution_journal, cancelled=True))
         raise QueueConflictError("assignment control delivery exceeds its bound")
+
+    @_cooperative
+    @_serialized("_mutation_gate")
+    def _decline_pregrant_assignment(
+        self, session, assignment, commands, providers, execution_journal, *, cancelled=False
+    ):
+        assignment_id = assignment.assignment_id
+        if cancelled:
+            if execution_journal.read_state(assignment_id) is AssignmentState.REQUEST_DURABLE:
+                execution_journal.decline_before_prepare(assignment_id)
+            else:
+                execution_journal.abort_pregrant(assignment_id, commands, providers)
+        reason_code = execution_journal.read_decline_reason(assignment_id)
+        revision = self._availability_revision(session, assignment_id, providers)
+        execution_journal.release_declined(assignment_id, revision)
+        released = yield from _steps(self._assignment_call, session.session_id, assignment_id,
+            lambda: _steps(self.decline_assignment, session.session_id, assignment_id,
+                          availability_revision=revision, reason_code=reason_code))
+        return freeze_plain_data({
+            "result": "assignment", "assignment_id": assignment_id,
+            "state": "CANCELLED_BEFORE_GRANT" if cancelled else "DECLINED",
+            **({} if cancelled else {"reason_code": reason_code}),
+            "session": released.value(),
+        }, path="remote pre-grant completion")
 
     def _release_provider_claims(
         self,
@@ -5399,6 +5496,7 @@ class LocalDaemonAgentHttpClient:
                 epoch = current.get("coordinator_epoch")
                 if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
                     raise conflict
+                self._epoch_reconciliation_pending = True
                 (yield from _steps(self.reconcile,
                     session_id,
                     epoch,
@@ -5413,6 +5511,7 @@ class LocalDaemonAgentHttpClient:
                     epoch = current.get("coordinator_epoch")
                     prior = self._require_journal().session(session_id)
                     if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
+                        self._epoch_reconciliation_pending = True
                         (yield from _steps(self.reconcile,
                             session_id,
                             epoch,
@@ -5638,17 +5737,32 @@ class LocalDaemonAgentHttpClient:
     def _call(
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        while self._service_progress and self._epoch_reconciliation_pending and operation in {
+            "accept", "start_permit", "started", "event", "authorize", "input",
+            "output_manifest", "output", "result", "assignment_control_ack",
+        }:
+            _raise_if_application_suspended(self._suspend_requested)
+            yield from _delay(0.01)
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if (role, operation) in _FAILURE_REPORT_OPERATIONS:
             _decode(body, failure_report=True)
         connection, self._connection = self._connection, None
-        reply = yield from _external(
-            "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
-            _exchange_agent_request, self._config, operation, body, role, connection,
-            not self._service_progress,
-        )
+        while True:
+            try:
+                reply = yield from _external(
+                    "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
+                    _exchange_agent_request, self._config, operation, body, role, connection,
+                    not self._service_progress,
+                )
+                break
+            except _IndeterminateAgentProtocolError:
+                if not self._service_progress:
+                    raise
+                connection = None
+                _raise_if_application_suspended(self._suspend_requested)
+                yield from _delay(0.05)
         if self._connection is None and not self._closed and not self._service_progress:
             self._connection = reply.connection
         else:

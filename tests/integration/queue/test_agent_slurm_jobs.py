@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import closing
+import json
 from pathlib import Path
+import sqlite3
+from threading import Event, Thread
 import time
 
 import pytest
@@ -21,6 +25,9 @@ from loom.queue.agent_sessions import (
     AgentPrincipalPolicy,
     AgentRegistration,
     SLURM_SUBMISSION_CAPABILITY,
+    AgentControl,
+    AgentControlKind,
+    TransportPrincipalPolicy,
 )
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -29,6 +36,11 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpServer,
 )
 from loom.queue.errors import QueueConflictError
+import loom.queue.deployment as deployment
+from loom.queue.deployment import (
+    OutboundAgentRegistrationConfig,
+    OutboundAgentServiceConfig,
+)
 from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
 from tests.integration.queue.test_slurm_ready_stage import (
     _profile,
@@ -37,6 +49,249 @@ from tests.integration.queue.test_slurm_ready_stage import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("restart_with_job", [False, True])
+def test_outbound_service_settles_slurm_while_drained(
+    tmp_path: Path, monkeypatch, restart_with_job: bool
+):
+    credentials = mutual_tls_credentials(tmp_path / "tls")
+    runner = FakeSlurmCommandRunner(starting_job_id=6100)
+    profile = _profile(
+        runner,
+        containment_helper=_positive_containment_helper(),
+        capability_path=tmp_path / "capability",
+    )
+    capabilities = (SLURM_SUBMISSION_CAPABILITY,)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=None,
+        run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=None,
+        cpu_capacity=0,
+        slurm_profiles=(profile,),
+        agent_policy=AgentPolicyConfig(
+            agents=(
+                AgentPrincipalPolicy(
+                    "credential",
+                    "principal",
+                    "agent-a",
+                    ("default",),
+                    capabilities,
+                    external_slurm_profiles=(
+                        (profile.profile_id, profile.configuration_fingerprint),
+                    ),
+                ),
+            ),
+            principals=(
+                TransportPrincipalPolicy(
+                    "operator",
+                    "operator",
+                    "operator",
+                    ("drain",),
+                    ("agent-a",),
+                ),
+            ),
+        ),
+    )
+    run_uri = _persist_rejected_slurm_run(config.run_store_root / "one", profile)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                certificate_fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "credential"
+            },
+        ),
+    )
+    server.start()
+    agent_config = AgentTlsClientConfig(
+        url=f"https://localhost:{server.port}",
+        server_ca_path=credentials["ca"].with_suffix(".crt"),
+        certificate_path=credentials["agent"].with_suffix(".crt"),
+        private_key_path=credentials["agent"].with_suffix(".key"),
+        agent_root=tmp_path / "agent",
+        slurm_profiles=(profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
+    stop, failures = Event(), []
+    service = OutboundAgentServiceConfig(
+        agent_config,
+        OutboundAgentRegistrationConfig(
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("default",),
+            capabilities,
+        ),
+        0.01,
+        tmp_path / "agent.yaml",
+        "0" * 64,
+        "1" * 64,
+    )
+    monkeypatch.setattr(deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
+    drained_progress = Event()
+    retries = []
+    original_steps = deployment._steps
+
+    def observed_steps(function, *args, **kwargs):
+        if function.__name__ == "drive_slurm_jobs":
+            agent = function.__self__
+            if agent._drained and not agent._restart_with_retained_work:
+                drained_progress.set()
+        try:
+            result = yield from original_steps(function, *args, **kwargs)
+            if (
+                not restart_with_job
+                and function.__name__ == "drive_slurm_jobs"
+                and any(call[0] == "sbatch" for call in runner.calls)
+            ):
+                # Deliver drain between the scheduler step and the next poll,
+                # so this case tests the normal drained loop, not reconnect.
+                while not function.__self__._drained and not stop.is_set():
+                    yield from deployment._delay(0.01)
+            return result
+        except QueueConflictError as error:
+            retries.append((function.__name__, str(error)))
+            raise
+
+    monkeypatch.setattr(deployment, "_steps", observed_steps)
+
+    def serve():
+        try:
+            deployment.run_outbound_agent_service(service, stop=stop)
+        except BaseException as error:
+            failures.append(error)
+
+    def eventually(check):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            assert not failures
+            result = check()
+            if result:
+                return result
+            time.sleep(0.02)
+        pytest.fail(f"retained SLURM service progress timed out: {retries}")
+
+    thread = Thread(target=serve)
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    execution = daemon._execution
+    assert execution is not None
+    try:
+        if restart_with_job:
+            # Produce retained ownership through the supported direct client,
+            # then hand the same root/session/job to the actual service.
+            with closing(LocalDaemonAgentHttpClient(agent_config)) as agent:
+                handshake = agent.handshake()
+                agent.register(
+                    AgentRegistration(
+                        "register",
+                        str(handshake["coordinator_id"]),
+                        str(handshake["coordinator_epoch"]),
+                        agent.agent_root_id,
+                        "config-1",
+                        "inventory-1",
+                        "availability-1",
+                        ("default",),
+                        capabilities,
+                    )
+                )
+                agent.resume_retained_work()
+                agent.refresh_resource_offer()
+                client.submit(LocalDaemonAdmissionRequest("job", run_uri))
+                eventually(execution.slurm_assignments.list_unreleased)
+                agent.drive_slurm_jobs()
+                assert agent._has_retained_agent_work()
+                with pytest.raises(QueueConflictError, match="retained"):
+                    agent.shutdown_clean()
+            # Exercise session epoch recovery before the serial driver too.
+            daemon.stop()
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+        thread.start()
+        if not restart_with_job:
+            client.submit(LocalDaemonAdmissionRequest("job", run_uri))
+        eventually(lambda: any(call[0] == "sbatch" for call in runner.calls))
+        record = eventually(execution.slurm_assignments.list_unreleased)[0]
+        job_id = eventually(
+            lambda: (
+                execution.slurm_submissions.read(record.assignment.operation_id).job_id
+            )
+        )
+        with sqlite3.connect(tmp_path / "agent" / "control.sqlite") as conn:
+            session_id = json.loads(
+                conn.execute("SELECT value_json FROM agent_sessions_local").fetchone()[
+                    0
+                ]
+            )["session_id"]
+        daemon.operator_view(
+            LocalDaemonPrincipal(
+                "operator",
+                LocalDaemonRole.OPERATOR,
+                "operator",
+            )
+        ).control_agent(
+            AgentControl(
+                "drain",
+                AgentControlKind.DRAIN,
+                "agent-a",
+                session_id,
+                "config-1",
+                None,
+                False,
+                "settle retained scheduler job",
+            )
+        )
+
+        def drained():
+            with sqlite3.connect(tmp_path / "agent" / "control.sqlite") as conn:
+                return conn.execute(
+                    "SELECT value FROM root_metadata WHERE key = 'availability_state'"
+                ).fetchone() == ("drained",)
+
+        eventually(drained)
+        if not restart_with_job:
+            eventually(drained_progress.is_set)
+        client.cancel("job")
+        eventually(lambda: not execution.slurm_assignments.list_run_unreleased(run_uri))
+
+        def released_locally():
+            with sqlite3.connect(tmp_path / "agent" / "slurm.sqlite") as conn:
+                return (
+                    conn.execute(
+                        "SELECT 1 FROM agent_slurm_operations WHERE released=0 OR acknowledged=0"
+                    ).fetchone()
+                    is None
+                )
+
+        eventually(released_locally)
+        assert (
+            execution.slurm_submissions.read(record.assignment.operation_id).job_id
+            == job_id
+        )
+        assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+        assert any(call[0] == "scancel" and job_id in call[1] for call in runner.calls)
+    finally:
+        stop.set()
+        if thread.ident is not None:
+            thread.join(15)
+        server.stop()
+        daemon.stop()
+        assert not thread.is_alive()
+        assert not failures
+        # This fixture owns only the manager thread; the scheduler is simulated
+        # and a SLURM-only agent must never start a resident supervisor.
+        assert not (tmp_path / "agent" / "supervisor").exists()
 
 
 def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path: Path):

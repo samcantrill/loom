@@ -426,6 +426,7 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
         "1" * 64,
     )
     stop = Event()
+    release_pregrant_poll = Event()
     failure: list[BaseException] = []
 
     def serve() -> None:
@@ -478,21 +479,26 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
         first_pregrant_poll = Event()
-        release_pregrant_poll = Event()
         original_pregrant_poll = (
             LocalDaemonAgentHttpClient._cancel_pregrant_if_requested
         )
         pregrant_polls = 0
 
+        from loom.queue._agent_progress import _cooperative, _steps, _delay
+
+        @_cooperative
         def pause_after_first_pregrant_poll(
             client: LocalDaemonAgentHttpClient, *args: Any, **kwargs: Any
-        ) -> Mapping[str, PlainData] | None:
+        ):
             nonlocal pregrant_polls
-            result = original_pregrant_poll(client, *args, **kwargs)
+            result = yield from _steps(original_pregrant_poll, client, *args, **kwargs)
             pregrant_polls += 1
             if cancel_before_grant and pregrant_polls == 1:
                 first_pregrant_poll.set()
-                assert release_pregrant_poll.wait(10)
+                deadline = monotonic() + 10
+                while not release_pregrant_poll.is_set():
+                    assert monotonic() < deadline
+                    yield from _delay(0.01)
             return result
 
         monkeypatch.setattr(
@@ -545,6 +551,7 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
         # reconstruction per offer. Additional transport reconnects are valid.
         assert 1 <= provider_factory.calls <= client_incarnations
     finally:
+        release_pregrant_poll.set()
         stop.set()
         thread.join(timeout=7)
         server.stop()
@@ -1903,6 +1910,9 @@ def _prepare_remote_producer_run(
     native_failure: bool = False,
     reported_failure: bool = False,
     shared_scope: Mapping[str, PlainData] | None = None,
+    stage_factory: str | None = None,
+    stage_config: Mapping[str, object] | None = None,
+    independent_stages: int = 1,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1912,7 +1922,7 @@ def _prepare_remote_producer_run(
             {
                 "name": "build",
                 "factory": {
-                    "_target_": (
+                    "_target_": stage_factory or (
                         "tests.support.pipeline_execution_stages.NestedFailureStage"
                         if native_failure
                         else "tests.support.pipeline_execution_stages.ReportedFailureStage"
@@ -1923,6 +1933,7 @@ def _prepare_remote_producer_run(
                 "config": {
                     "value": value,
                     **({"structured_float": True} if reported_failure else {}),
+                    **(stage_config or {}),
                 },
                 "resources": {
                     "entries": (
@@ -1936,6 +1947,11 @@ def _prepare_remote_producer_run(
             }
         ],
     }
+    if independent_stages > 1:
+        pipeline_config["stages"] = [
+            {**pipeline_config["stages"][0], "name": f"build-{index}"}
+            for index in range(independent_stages)
+        ]
     if sequential:
         pipeline_config["stages"].append(
             {
@@ -1978,7 +1994,8 @@ def _prepare_remote_producer_run(
         plan=plan,
         pipeline=spec,
         options={
-            "resource_policy": {"account_for": account_for, "enforce": list(enforce)}
+            "resource_policy": {"account_for": account_for, "enforce": list(enforce)},
+            **({"execution": {"settings": {"max_parallel_stages": independent_stages}}} if independent_stages > 1 else {}),
         },
         execution_requirements={
             stage_name: (
