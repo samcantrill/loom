@@ -840,6 +840,14 @@ fence, partial closure or exceeded budget cannot commit success or replace a
 winner. Publication errors retain inspectable ownership and bytes for native
 reconciliation; they do not fabricate a successful result.
 
+Reconstructing a retained container command does not create writable mount
+directories: those are prepared at the launch boundary. After publication has
+renamed the staging tree, replay validates the immutable final tree even if an
+older supervisor recreated an empty staging directory. It still verifies primary
+checksums, every companion member, and the complete ownership receipt. A missing
+or changed final receipt or payload remains a conflict; replay neither falls back
+to staging nor repairs or overwrites the published tree.
+
 Downstream agents resolve the native binding through their own root mapping and
 verify every member before direct consumption. They neither download payload
 chunks nor copy companions beside each workspace. `LocalArtifactStore` validates

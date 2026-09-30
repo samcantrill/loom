@@ -972,6 +972,7 @@ def test_separate_service_accepts_shared_container_preparation(
     from examples.execution.containers.apptainer_fixture import fake_apptainer
     from loom.pipeline.planning import StageFingerprintRecord
     from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.queue._shared_publication import staging_tree
     from loom.queue.preparation import (
         PREPARATION_STAGE_TARGET,
         PreparationChildInput,
@@ -990,6 +991,19 @@ def test_separate_service_accepts_shared_container_preparation(
             "path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest(),
         },
     }}
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    (outputs / "challenge").write_bytes(b"shared")
+    roots["outputs"] = {
+        "host_path": str(outputs), "container_path": "/loom/outputs",
+        "access": "rw", "challenge": {
+            "path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest(),
+        },
+        "publication": {
+            "max_members": 1024, "max_payload_bytes": 268435456,
+            "max_manifest_bytes": 1048576,
+        },
+    }
     scope = {"capability": "shared-execution-v1", "roots": qualifications(roots), "locations": []}
     with fake_apptainer() as container:
         # Exercise the real supervisor process and command construction. The
@@ -1047,14 +1061,22 @@ def test_separate_service_accepts_shared_container_preparation(
                 _launch(client, agent / "assignments" / request.assignment_id),
                 assignment_id=request.assignment_id, profile=profile,
             )
+            staging = staging_tree(request, roots, "agent-A")
+            assert not staging.exists()
             started = client.launch(launch)
             assert started.state is SupervisorLaunchState.RUNNING
+            assert staging.is_dir()
             reopened = AgentProcessSupervisorClient(agent, configuration)
             assert reopened.service_process_id == client.service_process_id
             assert reopened.launch(launch).process_id == started.process_id
             assert reopened.query(launch).state is SupervisorLaunchState.RUNNING
             with sqlite3.connect(agent / "supervisor/supervisor.sqlite") as connection:
                 assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+            assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
+            staging.rmdir()
+            assert reopened.query(launch).state is SupervisorLaunchState.CONTAINED
+            assert reopened.launch(launch).state is SupervisorLaunchState.CONTAINED
+            assert not staging.exists()
         finally:
             if client._endpoint.exists():
                 if launch is not None:

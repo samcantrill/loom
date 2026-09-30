@@ -148,8 +148,10 @@ def retain(
         pub_id = publication_id(owner)
         final_relative = f"loom-artifacts/{pub_id}"
         final = contained(Path(roots[alias]["host_path"]), final_relative, exists=False)
-        # Lost replies replay the exact tree already renamed by the coordinator.
-        available = tree if tree.is_dir() else final
+        # Publication is authoritative after rename. Older container supervisors
+        # can recreate an empty staging mount while decoding a retained launch.
+        # Still verify the final primary bytes and complete receipt below.
+        available = final if final.exists() else tree
         members = inventory(available, limits)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}

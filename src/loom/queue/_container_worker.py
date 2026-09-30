@@ -106,6 +106,28 @@ def _base_worker_mounts(profile: ResidentWorkerLaunchProfile, workspace: Path, *
     return mounts
 
 
+def prepare_container_worker_paths(
+    profile: ResidentWorkerLaunchProfile, *, workspace: Path, agent_id: str
+) -> None:
+    """Create assignment-owned writable mounts only at the launch boundary."""
+    from ._remote_stage_execution import _ResidentAssignmentWorkspace
+    from ._shared_publication import selected, staging_tree
+    from ._shared_recovery import validate_wire, current_tree
+    from .shared_execution import assignment_scope
+
+    if not profile.shared_roots:
+        return
+    assignment = _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).request()
+    if assignment_scope(assignment.fingerprint) is None:
+        return
+    if selected(assignment) is not None:
+        staging_tree(assignment, profile.shared_roots, agent_id, create=True)
+    if validate_wire(assignment) is not None:
+        current_tree(assignment, profile.shared_roots, agent_id=agent_id).mkdir(
+            parents=True, exist_ok=True
+        )
+
+
 def build_container_worker(
     profile: ResidentWorkerLaunchProfile,
     *,
@@ -117,7 +139,7 @@ def build_container_worker(
     shared_snapshot: object = None,
     agent_id: str | None = None,
 ):
-    """Reuse container resource projection with assignment-owned path parity."""
+    """Project the command without creating writable mounts during replay."""
     from loom.pipeline.executors.containers import (
         ContainerEnvironment,
         ContainerMount,
@@ -155,7 +177,7 @@ def build_container_worker(
                 raise ValueError("shared output mount requires the assignment machine identity")
             alias, _ = selection
             root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
-            source = staging_tree(assignment, profile.shared_roots, agent_id, create=True)
+            source = staging_tree(assignment, profile.shared_roots, agent_id)
             target = Path(str(root["container_path"])) / source.relative_to(str(root["host_path"]))
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
         from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
@@ -163,7 +185,6 @@ def build_container_worker(
         if recovery is not None:
             root = cast(Mapping[str, PlainData], profile.shared_roots[recovery["root_id"]])
             source = current_tree(assignment, profile.shared_roots, agent_id=agent_id)
-            source.mkdir(parents=True, exist_ok=True)
             target = Path(str(root["container_path"])) / recovery["tree"]
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
             for reference in recovery["predecessors"]:
