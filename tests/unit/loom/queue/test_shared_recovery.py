@@ -87,6 +87,26 @@ def _write(workspace):
     return current
 
 
+def test_container_command_replay_does_not_recreate_writable_mounts(tmp_path):
+    from loom.queue._agent_process_supervisor import _launch_from_value
+    from loom.queue._container_worker import prepare_container_worker_paths
+    from loom.queue._shared_publication import staging_tree
+
+    workspace, profile, launch = _workspace(tmp_path, container=True)
+    current = recovery.current_tree(workspace.request(), profile.shared_roots, agent_id="agent-1")
+    staging = staging_tree(workspace.request(), profile.shared_roots, "agent-1")
+    assert not current.exists() and not staging.exists()
+    original_digest, original_argv = launch.spec_digest, launch.command_argv
+    prepare_container_worker_paths(profile.launch_profile, workspace=workspace.root, agent_id="agent-1")
+    assert current.is_dir() and staging.is_dir()
+    current.rmdir()
+    staging.rmdir()
+    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    assert restored.spec_digest == original_digest
+    assert restored.command_argv == original_argv
+    assert not current.exists() and not staging.exists()
+
+
 def test_interrupted_seal_replays_without_worker_result_and_preserves_every_member(
     tmp_path, monkeypatch
 ):

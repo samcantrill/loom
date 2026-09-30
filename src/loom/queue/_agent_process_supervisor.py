@@ -702,6 +702,12 @@ class AgentProcessSupervisor:
                 "SELECT 1 FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)
             ).fetchone()
         if existing is None:
+            if launch.profile.container is not None:
+                from ._container_worker import prepare_container_worker_paths
+
+                prepare_container_worker_paths(
+                    launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
+                )
             self.bind_execution_host()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -988,6 +994,12 @@ class AgentProcessSupervisor:
             # No database writer may span a daemon call, including replay of an
             # existing row. Other assignments need these short transitions.
             conn.commit()
+            if not cancel and (row is None or row["state"] == "starting"):
+                from ._container_worker import prepare_container_worker_paths
+
+                prepare_container_worker_paths(
+                    launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
+                )
             binding = launch.profile.container
             assert binding is not None
             owner = DockerWorker(

@@ -1442,14 +1442,24 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
     return workspace, profile, launch, result
 
 
-def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tmp_path):
+@pytest.mark.parametrize("container", [False, True])
+def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tmp_path, container):
     from loom.queue._shared_publication import publish
+    from loom.queue._agent_process_supervisor import _launch_from_value
     from loom.pipeline.stores.shared_artifacts import binding
-    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    workspace, profile, launch, _ = _shared_publication_workspace(tmp_path, container=container)
+    original_digest = launch.spec_digest
+    original_argv = launch.command_argv
     report = workspace.retain_outputs()
     assert report.schema_version == 4
     assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    # Recovery decodes the retained launch before retaining outputs again.
+    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    assert restored.spec_digest == original_digest
+    assert restored.command_argv == original_argv
+    from loom.queue._shared_publication import staging_tree
+    assert not staging_tree(workspace.request(), profile.shared_roots, "agent-1").exists()
     assert workspace.retain_outputs() == report
     assert publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1") == refs
     tree = Path(refs["result"].uri.removeprefix("file://")).parent
@@ -1462,6 +1472,35 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     with pytest.raises(QueueConflictError, match="identity"):
         publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="obsolete-fence")
     assert (tree / "values.bin").is_file()
+
+
+@pytest.mark.parametrize("damage", [None, "primary", "companion", "receipt", "missing_receipt"])
+def test_shared_publication_replay_prefers_verified_final_over_old_empty_staging(tmp_path, damage):
+    from loom.queue._shared_publication import publish, staging_tree
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path, container=True)
+    report = workspace.retain_outputs()
+    refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    final = Path(refs["result"].uri.removeprefix("file://")).parent
+    # Older installed supervisors recreated this empty mount path during replay.
+    staging = staging_tree(workspace.request(), profile.shared_roots, "agent-1", create=True)
+    receipt = final / ".loom-publication.json"
+    if damage == "primary":
+        (final / "primary.json").write_bytes(b"changed")
+    elif damage == "companion":
+        (final / "values.bin").write_bytes(b"changed")
+    elif damage == "receipt":
+        receipt.write_bytes(b"{}")
+    elif damage == "missing_receipt":
+        receipt.unlink()
+    before = {p.relative_to(final): p.read_bytes() for p in final.rglob("*") if p.is_file()}
+    if damage is None:
+        assert workspace.retain_outputs() == report
+    else:
+        with pytest.raises(QueueConflictError):
+            workspace.retain_outputs()
+    assert list(staging.iterdir()) == []
+    assert {p.relative_to(final): p.read_bytes() for p in final.rglob("*") if p.is_file()} == before
 
 
 @pytest.mark.parametrize("limit,value,error", [
