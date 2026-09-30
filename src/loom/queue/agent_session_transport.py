@@ -32,6 +32,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, is_plain_data, thaw_plain_data
+from loom.pipeline.executors.containers import ContainerOptionError
 from loom.queue._managed_local import (
     AgentResourceProvider,
     AssignmentState,
@@ -4669,7 +4670,7 @@ class LocalDaemonAgentHttpClient:
                     yield from _delay(0.01)
                 try:
                     launch = build_supervisor_launch()
-                except (ValueError, QueueError, OSError) as exc:
+                except (ValueError, QueueError, OSError, ContainerOptionError) as exc:
                     # No supervisor call has occurred: construction failure is
                     # definite no-start evidence, not an uncertain process.
                     raise ManagedProcessStartError(str(exc)) from exc

@@ -93,6 +93,17 @@ that many unique opaque `CUDA_VISIBLE_DEVICES` tokens on the invoking host and
 passes the validated value through `--cleanenv`. Project container options must
 not author `CUDA_VISIBLE_DEVICES` for that managed request.
 
+For resident managed Apptainer workers, the scheduler first matches exclusive GPU
+constraints (such as `models`) to provider claims. Container construction uses
+the exact active provider binding and checks its device count; the retained
+launch carries that same binding for replay. The original constraints remain in
+the assignment's runtime/provenance, and resource-control evidence still reports
+the container's CUDA visibility mechanism. This does not extend the direct
+GPU-count helper to scheduling constraints. Container-option errors established
+before supervisor submission produce a durable failed-before-start result and
+normal claim release, while other assignments continue. An uncertain submitted
+launch retains its claims until reconciled under its original launch identity.
+
 For SLURM `afterok` jobs, the same per-stage resource produces `--gres=gpu:N`
 and `--nv`. The generated script performs the visibility check only inside the
 allocation, then forwards the scheduler value through both

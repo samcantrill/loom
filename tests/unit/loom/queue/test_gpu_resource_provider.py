@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 
 import pytest
 
@@ -69,6 +70,14 @@ def test_gpu_provider_uses_only_the_journalled_claim_for_private_binding() -> No
     assert provider.worker_environment(command) == {
         "CUDA_VISIBLE_DEVICES": "private-device-binding"
     }
+    conflicting = replace(
+        command,
+        claim=replace(
+            claim, provider_data={**claim.provider_data, "snapshot_revision": "r2"}
+        ),
+    )
+    with pytest.raises(ManagedLocalError, match="differs from journalled claim"):
+        provider.worker_environment(conflicting)
     assert provider.release(command).outcome is ClaimOutcome.RELEASED
     try:
         provider.worker_environment(command)

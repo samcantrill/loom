@@ -4957,6 +4957,7 @@ def _worker_environment(
             )
         environment.update(contribution)
     if profile.container is not None and resource_selection is not None:
+        from loom.pipeline.executors.containers import ContainerOptionError
         from ._container_worker import build_container_worker
         from ._remote_stage_execution import _ResidentAssignmentWorkspace
 
@@ -4971,7 +4972,7 @@ def _worker_environment(
                 environment=environment,
                 runtime=request.resolved_runtime,
             )
-        except ValueError as exc:
+        except (ValueError, ContainerOptionError) as exc:
             raise ManagedProcessStartError(
                 "selected container resource control is unavailable"
             ) from exc
