@@ -249,6 +249,29 @@ def build_container_worker(
     from loom.pipeline.executors.apptainer.commands import build_apptainer_exec_command
     from loom.pipeline.executors.apptainer._timeout import namespace_argv
 
+    admitted_resources = cast(ContainerResourceIntent | None, container.resources)
+    if (
+        admitted_resources is not None
+        and selection is not None
+        and "gpu" in selection["enforce"]
+    ):
+        from loom.pipeline.resources import ResourceEntry
+
+        gpu = cast(ResourceEntry, admitted_resources.entries["gpu"])
+        if gpu.attributes.get("allocation_mode", "exclusive") == "exclusive":
+            # Scheduling already matched these constraints to the active claim.
+            # The generic container owner checks only its count against the
+            # provider binding (or the same binding in the retained launch).
+            container = replace(
+                container,
+                resources=replace(
+                    admitted_resources,
+                    entries={
+                        **admitted_resources.entries,
+                        "gpu": replace(gpu, attributes={}),
+                    },
+                ),
+            )
     command = build_apptainer_exec_command(
         container_options=container,
         worker_command=worker,
@@ -257,6 +280,13 @@ def build_container_worker(
         resource_policy=policy,
         resource_selection=selection,
     )
+    if admitted_resources is not None:
+        metadata = dict(command.metadata)
+        metadata["container"] = {
+            **cast(Mapping[str, PlainData], metadata["container"]),
+            "resources": admitted_resources.to_redacted_metadata(),
+        }
+        command = replace(command, metadata=metadata)
     def namespaced(argv: Sequence[str]) -> tuple[str, ...]:
         if profile.shared_roots:
             # Disable implicit host/home/tmp/cwd and administrator bind exposure;

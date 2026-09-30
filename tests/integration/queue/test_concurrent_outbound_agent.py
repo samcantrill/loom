@@ -105,6 +105,7 @@ def _service(
     gpu: bool | int = False,
     cpu=2,
     memory=0,
+    container=None,
 ):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
     with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
@@ -155,6 +156,7 @@ def _service(
             memory_capacity_bytes=memory,
             environment={"LOOM_TEST_GATE_ROOT": str(root)},
             shared_roots=roots,
+            container=container,
             gpu_devices=tuple(
                 ResidentGpuDevice(
                     device,
@@ -2389,6 +2391,90 @@ def test_exact_cancel_windows_preserve_unrelated_running_worker(monkeypatch, win
             _release_gate(b)
             if a is not None:
                 _release_gate(a)
+
+
+def test_container_option_rejection_releases_claims_while_peer_progresses(monkeypatch):
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+
+    monkeypatch.setattr(
+        NvidiaSmiGpuProcessObserver,
+        "observe",
+        lambda owner: {
+            "GPU-private": GpuProcessObservation(
+                "GPU-private", True, False, "available"
+            )
+        },
+    )
+    launches = []
+    original_launch = AgentProcessSupervisorClient.launch
+
+    def capture_launch(client, launch):
+        launches.append(launch)
+        return original_launch(client, launch)
+
+    monkeypatch.setattr(AgentProcessSupervisorClient, "launch", capture_launch)
+    with fake_apptainer() as binding:
+        binding["options"]["rocm"] = True
+        with _service(
+            monkeypatch,
+            ceiling=2,
+            cpu=4,
+            memory=4 * 1024**3,
+            gpu=True,
+            container=binding,
+        ) as case:
+            gates = []
+            try:
+                peer, _, _ = _submit_gated(case, "peer")
+                gates.append(peer)
+                _eventually(lambda: (peer / "build.started").exists())
+                held = _running(case)
+                assert len(held) == 1
+                gpu, uri, _ = _submit_gated(case, "rejected", gpu=True)
+                gates.append(gpu)
+                assert (
+                    case.client.wait("rejected", timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.FAILED
+                )
+                assert not (gpu / "build.started").exists()
+                assert len(launches) == 1
+                _eventually(
+                    lambda: _rows(
+                        case.database,
+                        "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                        (uri,),
+                    )
+                )
+                failure = case.store.read_stage_failure(uri, "build")
+                assert failure is not None
+                assert (
+                    "selected container resource control is unavailable"
+                    in failure["message"]
+                )
+                # A fresh assignment needs continuing offers and the released
+                # slot/capacity while the unrelated peer remains alive.
+                fresh_uri, _ = _submit(case, "fresh")
+                assert (
+                    case.client.wait("fresh", timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+                _eventually(
+                    lambda: _rows(
+                        case.database,
+                        "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? AND state = 'RELEASED'",
+                        (fresh_uri,),
+                    )
+                )
+                assert _running(case) == held
+                assert not case.failures
+                _release_gate(peer)
+                assert (
+                    case.client.wait("peer", timeout_seconds=30).state
+                    is LocalDaemonAdmissionState.SUCCEEDED
+                )
+            finally:
+                for gate in gates:
+                    _release_gate(gate)
 
 
 def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeypatch):

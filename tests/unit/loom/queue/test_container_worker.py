@@ -106,6 +106,173 @@ def test_installed_project_mount_cannot_be_replaced(tmp_path: Path):
         )
 
 
+@pytest.mark.parametrize("visibility", [None, "GPU-a,GPU-b", "GPU-a,GPU-a"])
+def test_managed_gpu_constraints_still_require_exact_binding(tmp_path, visibility):
+    from loom.pipeline.executors.apptainer import ApptainerOptionError
+    from loom.pipeline.executors.gpu_visibility import requested_gpu_count
+    from loom.pipeline.resources import ResourceEntry
+
+    gpu = ResourceEntry("gpu", 1, "count", {"models": ["model-0"]})
+    with pytest.raises(ApptainerOptionError, match="attributes are unsupported"):
+        requested_gpu_count({"gpu": gpu})
+    profile = ResidentWorkerLaunchProfile(
+        tmp_path,
+        Path(sys.executable),
+        {"profile_id": "installed"},
+        container={
+            "kind": "apptainer",
+            "container": {"image": {"reference": str(tmp_path / "fixture.sif")}},
+            "options": {"command": "/usr/bin/singularity"},
+            "python_executable": "python3",
+            "daemon_endpoint": None,
+        },
+    )
+    with pytest.raises(
+        ApptainerOptionError, match="requested GPU binding is unavailable"
+    ):
+        build_container_worker(
+            profile,
+            workspace=tmp_path,
+            worker=("python3",),
+            environment={}
+            if visibility is None
+            else {"CUDA_VISIBLE_DEVICES": visibility},
+            runtime={
+                "resources": {"schema_version": 2, "entries": {"gpu": gpu.to_dict()}},
+                "resource_policy": {"account_for": "all", "enforce": ["gpu"]},
+                "resource_selection": {"account_for": ["gpu"], "enforce": ["gpu"]},
+            },
+        )
+
+
+def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
+    import json
+    from dataclasses import replace
+    from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+    from loom.queue._agent_process_supervisor import (
+        ResidentWorkerLaunch,
+        _launch_from_value,
+        _launch_value,
+    )
+    from loom.queue._managed_local import (
+        ClaimCommand,
+        ClaimOutcome,
+        GpuResourceProvider,
+        ManagedAssignment,
+        _worker_environment,
+    )
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
+
+    image = tmp_path / "fixture.sif"
+    image.write_bytes(b"command construction fixture")
+    resident = replace(
+        _profile(tmp_path),
+        container={
+            "kind": "apptainer",
+            "container": {"image": {"reference": str(image)}},
+            "options": {"command": sys.executable},
+            "python_executable": "python3",
+            "daemon_endpoint": None,
+        },
+    )
+    atom = CapacityAtom(
+        "gpu", "agent-1:gpu-safe", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    provider = GpuResourceProvider(
+        GpuResourcePlanner().claim_contracts,
+        (atom,),
+        bindings={atom.local_capacity_key: "GPU-private"},
+    )
+    claim = ResourceClaim("gpu", GpuResourcePlanner().claim_contracts[0], (atom,), 1)
+    original = _request(resident)
+    request = replace(
+        original,
+        claims=(claim,),
+        provider_descriptors=(provider.descriptor,),
+        resolved_runtime={
+            **original.resolved_runtime,
+            "resources": {
+                "schema_version": 2,
+                "entries": {
+                    "gpu": {
+                        "kind": "gpu",
+                        "amount": 1,
+                        "unit": "count",
+                        "attributes": {
+                            "allocation_mode": "exclusive",
+                            "models": ["model-0"],
+                        },
+                    },
+                },
+            },
+            "resource_policy": {"account_for": "all", "enforce": ["gpu"]},
+            "resource_selection": {"account_for": ["gpu"], "enforce": ["gpu"]},
+        },
+    )
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, resident)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-1")
+    assignment = ManagedAssignment(
+        request.assignment_id,
+        "run-1",
+        request.stage_work_id,
+        request.stage_name,
+        request.attempt,
+        request.attempt_id,
+        "agent-1",
+        "session-1",
+        request.offer_id,
+        request.claim_id,
+    )
+    command = ClaimCommand(assignment, "prepare-1", claim, provider.descriptor)
+    assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
+    assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
+    profile = resident.launch_profile
+    environment = _worker_environment(
+        profile,
+        workspace.root,
+        (command,),
+        {"gpu": provider},
+        request.resolved_runtime["resource_selection"],
+    )
+    launch = ResidentWorkerLaunch(
+        "supervisor-1",
+        "epoch-1",
+        "agent-1",
+        "session-1",
+        request.assignment_id,
+        "process-1",
+        "fence-1",
+        "launch-1",
+        "a" * 64,
+        workspace.root,
+        profile,
+        environment,
+    )
+    encoded = json.dumps(_launch_value(launch))
+    workspace.persist_supervisor_launch(encoded)
+    replay = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    assert replay.spec_digest == launch.spec_digest
+    assert replay.command_argv == launch.command_argv
+    assert replay.resource_controls == launch.resource_controls
+    assert replay.environment["CUDA_VISIBLE_DEVICES"] == "GPU-private"
+    assert "CUDA_VISIBLE_DEVICES=GPU-private" in replay.command_argv
+    assert "--nv" in replay.command_argv
+    assert workspace.request().to_dict() == request.to_dict()
+    metadata = replay.container_command.metadata
+    assert metadata["container"]["resources"]["entries"]["gpu"]["attribute_count"] == 2
+    assert {
+        "resource": "gpu",
+        "owner": "apptainer",
+        "mechanism": "cuda_visibility_binding",
+        "disposition": "requested",
+    } in replay.resource_controls
+
+
 @pytest.mark.parametrize("runtime", ["docker", "apptainer"])
 def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_path, runtime):
     import hashlib
