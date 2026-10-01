@@ -424,6 +424,8 @@ def _read_run_status(run_uri: str) -> object | None:
             authority_store=_default_authority_store(run_uri=run_uri),
         ).read_run_status(run_uri)
     except Exception:
+        if LocalRunStore().local_run_dir(run_uri).exists():
+            raise
         return None
 
 

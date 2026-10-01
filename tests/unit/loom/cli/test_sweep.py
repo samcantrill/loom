@@ -183,3 +183,16 @@ def _write_pipeline_config(tmp_path: Path) -> Path:
     }
     config.write_text(json.dumps(payload), encoding="utf-8")
     return config
+
+
+def test_sweep_stopped_run_without_authority_is_unavailable(tmp_path: Path) -> None:
+    from loom.cli.sweep import build_sweep_status_result
+    from loom.cli.errors import CliError
+
+    spec = _write_spec(tmp_path)
+    sweep_dir = tmp_path / "sweep"
+    assert main(["sweep", "plan", str(spec), "--sweep-dir", str(sweep_dir)]) == 0
+    run_uri = path_to_run_uri(tmp_path / "runs" / "trial-0001")
+    LocalRunStore(tmp_path / "runs").create_run(run_uri)
+    with pytest.raises(CliError, match="authority"):
+        build_sweep_status_result(sweep_dir)
