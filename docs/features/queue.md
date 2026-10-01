@@ -463,6 +463,57 @@ either `null` for a pure coordinator or an explicit reference to a
 read a `loom.outbound-agent-service` document. Worker installation and resource
 settings belong to the agent. A pure coordinator requires no local worker or GPU.
 
+Python callers can separate protected declaration reading from execution
+qualification with `loom.queue.deployment.read_agent_spec(path, env_file=...)`
+and `qualify_agent_spec(spec)`. `AgentSpec` is an immutable snapshot: its
+`declarations` mapping contains normalized transport, profile and resource
+declarations, including absolute role/TLS paths, while `source_path` and
+`environment_path` retain input provenance. `agent_root` is also available as a
+`Path`. Reading enforces protected YAML/includes, explicit environment values,
+and declaration schemas; it does not construct execution profiles or trusted
+factories, launch worker/container probes, hash images, or discover hardware.
+Execution files may be absent. Factory arguments remain opaque authored values;
+their invocation directory is bound to the snapshot. Provider-specific behavior
+and installed resources are checked only by qualification.
+
+`declaration_digest` covers normalized declarations and private path bindings,
+including executable entry paths without following their leaf symlinks. Source
+and environment filenames do not affect it when effective declarations match.
+It is separate from software, immutable and active-configuration fingerprints,
+whose existing meanings and encodings are preserved. The digest is not evidence
+that software or hardware is ready. Qualification consumes the snapshot, runs
+the normal checks, and returns the existing `OutboundAgentServiceConfig` with
+declaration evidence on its client. `load_outbound_agent_service_config` still
+performs both steps. Programmatic client/service construction does not infer
+declaration evidence.
+
+`agent-init --check-report` adds a `check_report` to its normal result, assembled
+from the same qualified service after atomic initialization. It does not repeat
+software qualification or request active IO/GPU probes. Default output and
+existing-root refusal are unchanged. A failed post-init check returns failure
+but preserves the initialized root for inspection; existence is not a success
+receipt. Python callers can use `loom.queue.preflight.check_loaded_agent(service)`
+to assemble these checks without reloading configuration. Later startup still
+qualifies the actual execution environment afresh.
+
+Successful qualified initialization and guarded reload bind the declaration
+digest to the native root's immutable fingerprint, active fingerprint and active
+configuration revision. Reload writes these facts atomically. Programmatic
+reload without declaration evidence removes the old binding. The read-only
+`loom.queue.retirement.read_agent_declaration_binding(root, digest)` verifies this
+protected native evidence without execution probes. Missing legacy evidence
+returns `None`; conflicting or malformed evidence fails. The binding is never a
+substitute for current execution readiness.
+
+`agent_declaration_guard(root, digest)` holds native ownership while inspecting a
+bound, unretired root without execution probes. It permits retained work for
+normal startup recovery; it does not release work. A legacy `None` result is not
+an ownership proof. `verify_agent_candidate(spec)` instead requires a replacement
+that has never registered, has no retained work and has an empty or cleanly
+stopped supervisor. It never initializes a missing/partial root or starts a
+supervisor. These helpers live in `loom.queue.retirement`; they let current fleet
+launchers validate native ownership without constructing a qualified service.
+
 Outbound agents accept optional `max_concurrent_assignments`, a non-Boolean
 integer from 1 through 1024, defaulting to one. `AgentTlsClientConfig` and
 `AgentOffer` expose the same trailing defaulted field. The ceiling counts all

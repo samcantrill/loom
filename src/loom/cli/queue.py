@@ -91,6 +91,10 @@ def register_subparser(
         "agent-init", help="initialize one protected outbound-agent root"
     )
     _add_role_config_arguments(agent_init)
+    agent_init.add_argument(
+        "--check-report", action="store_true",
+        help="include post-init checks using the same qualified service; no active probes",
+    )
     _add_output_options(agent_init)
     agent_init.set_defaults(handler=handle_agent_init)
     reboot = queue_subparsers.add_parser("agent-recover-reboot", help="prove retained local launches contained after a Linux reboot")
@@ -377,21 +381,26 @@ def handle_agent_init(namespace: argparse.Namespace) -> int:
     """Atomically initialize one complete outbound-agent role root."""
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
     from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue.preflight import check_loaded_agent
+    from loom.diagnostics.models import PreflightStatus
 
     try:
         service = load_outbound_agent_service_config(
             namespace.config, env_file=namespace.env_file
         )
         LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+        report = check_loaded_agent(service) if namespace.check_report else None
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
+    payload: dict[str, PlainData] = {
+        "operation": "agent-initialize",
+        "agent_root": str(service.client.agent_root),
+        "coordinator_url": service.client.url,
+    }
+    if report is not None:
+        payload["check_report"] = report.to_dict()
     return _emit_daemon_payload(
-        namespace,
-        {
-            "operation": "agent-initialize",
-            "agent_root": str(service.client.agent_root),
-            "coordinator_url": service.client.url,
-        },
+        namespace, payload, ok=report is None or report.status is not PreflightStatus.FAIL,
     )
 
 
@@ -413,12 +422,12 @@ def handle_agent_recover_reboot(namespace: argparse.Namespace) -> int:
 
 
 def handle_agent_retire(namespace: argparse.Namespace) -> int:
-    from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue.deployment import read_agent_spec
     from loom.queue.retirement import retire_outbound_agent
 
     try:
         receipt = retire_outbound_agent(
-            load_outbound_agent_service_config(
+            read_agent_spec(
                 namespace.config, env_file=namespace.env_file
             ),
             operation_id=namespace.operation_id,
@@ -819,14 +828,14 @@ def _queue_cli_error(error: QueueError) -> CliError:
 
 
 def _emit_daemon_payload(
-    namespace: argparse.Namespace, payload: "Mapping[str, PlainData]"
+    namespace: argparse.Namespace, payload: "Mapping[str, PlainData]", *, ok: bool = True,
 ) -> int:
     output_format = output_format_from_namespace(namespace)
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(
                 schema_version=LOCAL_DAEMON_SCHEMA_VERSION,
-                ok=True,
+                ok=ok,
                 warnings=[],
                 payload_name="result",
                 payload=payload,
@@ -836,7 +845,7 @@ def _emit_daemon_payload(
         sys.stdout.write("local daemon:\n")
         for key, value in payload.items():
             sys.stdout.write(f"  {key}: {value}\n")
-    return int(ExitCode.SUCCESS)
+    return int(ExitCode.SUCCESS if ok else ExitCode.CONFIG)
 
 
 def _emit_daemon_admission_payload(

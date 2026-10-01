@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 from importlib import import_module
 import json
@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from loom.serialization import PlainData, thaw_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from ._remote_stage_execution import (
     AgentResourceInventory,
@@ -206,6 +206,31 @@ class OutboundAgentServiceConfig:
     active_fingerprint: str
     environment_path: Path | None = None
     effective_capacity: EffectiveAgentCapacity | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSpec:
+    """Protected outbound declarations, without execution qualification.
+
+    ``declarations`` is a deeply immutable tree with normalized defaults and
+    private path bindings. Its digest identifies declarations, not installed
+    software or observed hardware. Executable paths preserve their symlink
+    spelling. The source and environment filenames are provenance only.
+    Obtain a spec with :func:`read_agent_spec`; pass it to
+    :func:`qualify_agent_spec` when execution evidence is required.
+    """
+
+    source_path: Path
+    environment_path: Path | None
+    agent_root: Path
+    declaration_digest: str
+    declarations: Mapping[str, PlainData] = field(repr=False)
+    # Preserve the published fingerprint projections' authored representation.
+    _payload: Mapping[str, object] = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "declarations", freeze_plain_data(self.declarations))
+        object.__setattr__(self, "_payload", freeze_plain_data(self._payload))
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +437,24 @@ def load_outbound_agent_service_config(
     _allow_unready: bool = False,
     _deadline: float | None = None,
 ) -> OutboundAgentServiceConfig:
+    """Read protected declarations and fully qualify the selected installation."""
+    return qualify_agent_spec(
+        read_agent_spec(path, env_file=env_file),
+        _allow_unready=_allow_unready,
+        _deadline=_deadline,
+    )
+
+
+def read_agent_spec(
+    path: str | Path, *, env_file: str | Path | None = None
+) -> AgentSpec:
+    """Read and normalize an outbound declaration without probing execution.
+
+    Protected YAML/includes and the explicit environment remain mandatory.
+    No worker imports, container probes, image hashing, hardware discovery or
+    trusted factory construction occur. Referenced execution files need not
+    exist. This snapshot alone does not authorize execution or root ownership.
+    """
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
     )
@@ -453,6 +496,142 @@ def load_outbound_agent_service_config(
         )
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
+    registration = _outbound_registration(payload)
+    declarations = dict(payload)
+    for name in (
+        "agent_root",
+        "server_ca_path",
+        "certificate_path",
+        "private_key_path",
+    ):
+        declarations[name] = str(_path(payload, name, base))
+    # The transport constructor is inert with no execution profiles or factory.
+    AgentTlsClientConfig(
+        url=_string(payload, "url"),
+        server_ca_path=Path(cast(str, declarations["server_ca_path"])),
+        certificate_path=Path(cast(str, declarations["certificate_path"])),
+        private_key_path=Path(cast(str, declarations["private_key_path"])),
+    )
+    declarations["max_concurrent_assignments"] = max_concurrent_assignments
+    declarations["registration"] = asdict(registration)
+    declarations["resources"] = _agent_resource_declaration(payload.get("resources"))
+    occupancy_policy = _gpu_occupancy_policy(payload.get("resources"))
+    if occupancy_policy is not None and payload.get("provider_factory") is not None:
+        raise QueueConfigError(
+            "NVIDIA occupancy cannot be bypassed by a custom provider factory"
+        )
+    if declarations["resources"] is not None:
+        resources = cast(dict[str, object], declarations["resources"])
+        gpu = cast(dict[str, object], resources["gpu"])
+        gpu["occupancy"] = (
+            None if occupancy_policy is None else occupancy_policy.to_dict()
+        )
+    declarations["provider_factory"] = payload.get("provider_factory")
+    if payload.get("provider_factory") is not None:
+        _trusted_target_name(
+            _mapping(payload, "provider_factory"), "remote provider factory"
+        )
+    slurm = _slurm_profile_declarations(payload.get("slurm_profiles"))
+    declarations["slurm_profiles"] = slurm
+    preparation_staged = (
+        PREPARATION_STAGED_INPUT_CAPABILITY in registration.capabilities
+    )
+    preparation = (
+        PREPARATION_INPUT_CAPABILITY in registration.capabilities or preparation_staged
+    )
+    profiles = [
+        _resident_profile_declaration(
+            _mapping_value(value, f"resident_profiles[{index}]"),
+            base,
+            f"resident_profiles[{index}]",
+            preparation=preparation,
+            preparation_staged=preparation_staged,
+        )
+        for index, value in enumerate(_sequence(payload, "resident_profiles"))
+    ]
+    if not profiles and not slurm:
+        raise QueueConfigError(
+            "resident_profiles must not be empty without external SLURM profiles"
+        )
+    declarations["resident_profiles"] = profiles
+    if len(
+        {
+            cast(Mapping[str, object], profile["descriptor"])["profile_id"]
+            for profile in profiles
+        }
+    ) != len(profiles):
+        raise QueueConfigError("agent resident profile IDs must be unique")
+    if declarations["resources"] is not None and not profiles:
+        raise QueueConfigError("agent resource inventory requires a resident profile")
+    if declarations["resources"] is None and profiles:
+        capacities = [
+            (
+                profile["cpu_capacity"],
+                profile["memory_capacity_bytes"],
+                [
+                    device["descriptor"]
+                    for device in cast(list[dict[str, object]], profile["gpu_devices"])
+                ],
+            )
+            for profile in profiles
+        ]
+        if any(capacity != capacities[0] for capacity in capacities[1:]):
+            raise QueueConfigError(
+                "agent resident profiles must share one capacity domain"
+            )
+    # Trusted constructors own their opaque arguments, including any relative
+    # paths. Bind their invocation directory without interpreting those values.
+    if payload.get("provider_factory") is not None or slurm:
+        declarations["composition_directory"] = str(Path.cwd())
+    plain = cast(Mapping[str, object], thaw_plain_data(declarations))
+    return AgentSpec(
+        source,
+        environment_path,
+        Path(cast(str, declarations["agent_root"])),
+        _canonical_fingerprint(plain),
+        cast(Mapping[str, PlainData], declarations),
+        payload,
+    )
+
+
+def qualify_agent_spec(
+    spec: AgentSpec, *, _allow_unready: bool = False, _deadline: float | None = None
+) -> OutboundAgentServiceConfig:
+    """Qualify a declaration snapshot using the normal execution checks.
+
+    This observes software and resources and constructs trusted providers.
+    Existing software, immutable and active fingerprints retain their meanings;
+    declaration evidence is separate and is never inferred for programmatic
+    service configurations. Protected inputs are snapshotted by the reader.
+    """
+    source, environment_path = spec.source_path, spec.environment_path
+    payload = cast(dict[str, object], thaw_plain_data(spec._payload))
+    directory = spec.declarations.get("composition_directory")
+    if directory is not None and directory != str(Path.cwd()):
+        raise QueueConfigError(
+            "agent composition directory changed after declaration read"
+        )
+    for name in (
+        "agent_root",
+        "server_ca_path",
+        "certificate_path",
+        "private_key_path",
+    ):
+        payload[name] = spec.declarations[name]
+    for authored, declared in zip(
+        _sequence(payload, "resident_profiles"),
+        cast(Sequence[Mapping[str, PlainData]], spec.declarations["resident_profiles"]),
+        strict=True,
+    ):
+        profile = cast(dict[str, object], authored)
+        for name in ("project_root", "python_executable"):
+            profile[name] = declared[name]
+        if "preparation_shared_roots" in profile:
+            profile["preparation_shared_roots"] = thaw_plain_data(
+                declared["preparation_shared_roots"]
+            )
+    base = source.parent
+    max_concurrent_assignments = cast(int, payload.get("max_concurrent_assignments", 1))
     capabilities = _strings(
         _mapping(payload, "registration"), "capabilities", non_empty=True
     )
@@ -517,25 +696,7 @@ def load_outbound_agent_service_config(
             ),
         }
     )
-    registration_value = _mapping(payload, "registration")
-    _exact(
-        registration_value,
-        {
-            "config_revision",
-            "inventory_revision",
-            "availability_revision",
-            "pools",
-            "capabilities",
-        },
-        "outbound agent registration",
-    )
-    registration = OutboundAgentRegistrationConfig(
-        config_revision=_string(registration_value, "config_revision"),
-        inventory_revision=_string(registration_value, "inventory_revision"),
-        availability_revision=_string(registration_value, "availability_revision"),
-        pools=_strings(registration_value, "pools", non_empty=True),
-        capabilities=_strings(registration_value, "capabilities", non_empty=True),
-    )
+    registration = _outbound_registration(payload)
     provider_factory = None
     if payload.get("provider_factory") is not None:
         provider_factory = _trusted_target(
@@ -559,6 +720,7 @@ def load_outbound_agent_service_config(
         agent_resource_provider_factory=cast(Any, provider_factory),
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
+        declaration_digest=spec.declaration_digest,
     )
     return OutboundAgentServiceConfig(
         client,
@@ -569,6 +731,22 @@ def load_outbound_agent_service_config(
         active_fingerprint,
         environment_path,
         effective_capacity=effective_capacity,
+    )
+
+
+def _outbound_registration(payload: Mapping[str, object]) -> OutboundAgentRegistrationConfig:
+    value = _mapping(payload, "registration")
+    _exact(
+        value,
+        {"config_revision", "inventory_revision", "availability_revision", "pools", "capabilities"},
+        "outbound agent registration",
+    )
+    return OutboundAgentRegistrationConfig(
+        config_revision=_string(value, "config_revision"),
+        inventory_revision=_string(value, "inventory_revision"),
+        availability_revision=_string(value, "availability_revision"),
+        pools=_strings(value, "pools", non_empty=True),
+        capabilities=_strings(value, "capabilities", non_empty=True),
     )
 
 
@@ -1178,22 +1356,11 @@ def _agent_resource_inventory(
 ) -> tuple[AgentResourceInventory | None, EffectiveAgentCapacity | None]:
     """Load one agent-owned capacity declaration and its selected NVIDIA cards."""
 
-    if value is None:
+    resources = _agent_resource_declaration(value)
+    if resources is None:
         return None, None
-    resources = _mapping_value(value, "agent resources")
-    _exact(
-        resources,
-        {"cpu_capacity", "memory_capacity_bytes", "gpu"},
-        "agent resources",
-    )
     gpu = _mapping(resources, "gpu")
-    _required_allowed(
-        gpu, {"provider", "devices"}, {"occupancy"}, "agent GPU resources"
-    )
-    provider = _string(gpu, "provider")
     selection = _string(gpu, "devices")
-    if provider != "nvidia":
-        raise QueueConfigError("agent GPU resource provider is unsupported")
     devices: tuple[ResidentGpuDevice, ...] = ()
     if selection != "none":
         from .gpu.nvidia import (
@@ -1233,6 +1400,31 @@ def _agent_resource_inventory(
     except QueueServiceError as exc:
         raise QueueConfigError("agent resources exceed effective capacity") from exc
     return inventory, effective_capacity
+
+
+def _agent_resource_declaration(value: object) -> dict[str, object] | None:
+    """Validate declared capacity without discovering hardware or host limits."""
+    if value is None:
+        return None
+    resources = _mapping_value(value, "agent resources")
+    _exact(
+        resources,
+        {"cpu_capacity", "memory_capacity_bytes", "gpu"},
+        "agent resources",
+    )
+    gpu = _mapping(resources, "gpu")
+    _required_allowed(
+        gpu, {"provider", "devices"}, {"occupancy"}, "agent GPU resources"
+    )
+    provider = _string(gpu, "provider")
+    _string(gpu, "devices")
+    if provider != "nvidia":
+        raise QueueConfigError("agent GPU resource provider is unsupported")
+    return {
+        "cpu_capacity": _positive_int(resources, "cpu_capacity"),
+        "memory_capacity_bytes": _non_negative_int(resources, "memory_capacity_bytes"),
+        "gpu": dict(gpu),
+    }
 
 
 def _gpu_occupancy_policy(value: object) -> GpuOccupancyPolicy | None:
@@ -1408,15 +1600,12 @@ def _coordinator_authority_factory(
 def _trusted_target(value: Mapping[str, object], label: str) -> object:
     """Instantiate one protected `_target_` eagerly and without discovery."""
 
-    target = _string(value, "_target_")
+    module_name, attribute = _trusted_target_name(value, label)
     kwargs = {
         key: _construct_trusted_value(item, f"{label}.{key}")
         for key, item in value.items()
         if key != "_target_"
     }
-    module_name, separator, attribute = target.rpartition(".")
-    if not separator or not module_name or not attribute:
-        raise QueueConfigError(f"{label} target is invalid")
     try:
         constructor = getattr(import_module(module_name), attribute)
     except (ImportError, AttributeError) as exc:
@@ -1427,6 +1616,14 @@ def _trusted_target(value: Mapping[str, object], label: str) -> object:
         return constructor(**kwargs)
     except Exception as exc:  # trusted code, normalized at the config boundary
         raise QueueConfigError(f"{label} target is invalid") from exc
+
+
+def _trusted_target_name(value: Mapping[str, object], label: str) -> tuple[str, str]:
+    target = _string(value, "_target_")
+    module_name, separator, attribute = target.rpartition(".")
+    if not separator or not module_name or not attribute:
+        raise QueueConfigError(f"{label} target is invalid")
+    return module_name, attribute
 
 
 def _construct_trusted_value(value: object, label: str) -> object:
@@ -1507,13 +1704,40 @@ def _target_sequence(value: object, label: str) -> tuple[object, ...]:
 def _slurm_profile_composition(value: object) -> tuple[object, ...]:
     """Construct complete ready-stage profiles from one protected source."""
 
+    declarations = _slurm_profile_declarations(value)
+    if not declarations:
+        return ()
+    from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+
+    profiles: list[SlurmReadyStageProfile] = []
+    for index, mapping in enumerate(declarations):
+        label = f"slurm_profiles[{index}]"
+        if "_target_" in mapping:
+            target = _trusted_target(mapping, label)
+            if not isinstance(target, SlurmReadyStageProfile):
+                raise QueueConfigError(f"{label} target is not a ready-stage profile")
+            profiles.append(target)
+            continue
+        kwargs = {
+            key: _construct_trusted_value(item_value, f"{label}.{key}")
+            for key, item_value in mapping.items()
+        }
+        kwargs["bootstrap_argv"] = ("loom", "slurm-bootstrap")
+        try:
+            profile = SlurmReadyStageProfile(**cast(Any, kwargs))
+        except Exception as exc:
+            raise QueueConfigError(f"{label} is invalid") from exc
+        profiles.append(profile)
+    if len({profile.profile_id for profile in profiles}) != len(profiles):
+        raise QueueConfigError("slurm profile IDs must be unique")
+    return cast(tuple[object, ...], tuple(profiles))
+
+
+def _slurm_profile_declarations(value: object) -> tuple[Mapping[str, object], ...]:
     if value is None:
         return ()
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise QueueConfigError("slurm_profiles must be a sequence")
-    from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
-
-    profiles: list[SlurmReadyStageProfile] = []
     required = {
         "profile_id",
         "partition",
@@ -1541,29 +1765,16 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
         "containment_helper",
         "result_storage",
     }
+    declarations = []
     for index, item in enumerate(value):
         label = f"slurm_profiles[{index}]"
         mapping = _mapping_value(item, label)
         if "_target_" in mapping:
-            target = _trusted_target(mapping, label)
-            if not isinstance(target, SlurmReadyStageProfile):
-                raise QueueConfigError(f"{label} target is not a ready-stage profile")
-            profiles.append(target)
-            continue
-        _required_allowed(mapping, required, optional, label)
-        kwargs = {
-            key: _construct_trusted_value(item_value, f"{label}.{key}")
-            for key, item_value in mapping.items()
-        }
-        kwargs["bootstrap_argv"] = ("loom", "slurm-bootstrap")
-        try:
-            profile = SlurmReadyStageProfile(**cast(Any, kwargs))
-        except Exception as exc:
-            raise QueueConfigError(f"{label} is invalid") from exc
-        profiles.append(profile)
-    if len({profile.profile_id for profile in profiles}) != len(profiles):
-        raise QueueConfigError("slurm profile IDs must be unique")
-    return cast(tuple[object, ...], tuple(profiles))
+            _trusted_target_name(mapping, label)
+        else:
+            _required_allowed(mapping, required, optional, label)
+        declarations.append(mapping)
+    return tuple(declarations)
 
 
 def _coordinator_immutable_projection(
@@ -1795,6 +2006,35 @@ def _resident_profile(
     preparation: bool = False,
     preparation_staged: bool = False,
 ) -> ResidentExecutionProfile:
+    profile = ResidentExecutionProfile(
+        **_resident_profile_arguments(
+            value,
+            base,
+            label,
+            preparation=preparation,
+            preparation_staged=preparation_staged,
+        )
+    )
+    profile = qualified_resident_profile(profile, _deadline=deadline)
+    result = profile.readiness_result
+    assert result is not None
+    if not result.ok and not allow_unready:
+        failed = next(item for item in result.checks if item.status == "FAIL")
+        raise QueueConfigError(
+            f"resident profile readiness failed ({failed.check_id}): {failed.message}"
+        )
+    return profile
+
+
+def _resident_profile_arguments(
+    value: Mapping[str, object],
+    base: Path,
+    label: str,
+    *,
+    preparation: bool = False,
+    preparation_staged: bool = False,
+) -> dict[str, Any]:
+    """Parse profile fields without constructing an execution profile."""
     _required_allowed(
         value,
         {
@@ -1826,20 +2066,27 @@ def _resident_profile(
     environment = _mapping(value, "environment")
     if any(not isinstance(item, str) for item in environment.values()):
         raise QueueConfigError(f"{label}.environment values must be strings")
+    if any(not key for key in environment):
+        raise QueueConfigError(f"{label}.environment names must not be empty")
+    AgentResourceInventory(
+        _positive_int(value, "cpu_capacity"),
+        _non_negative_int(value, "memory_capacity_bytes"),
+        tuple(devices),
+    )
     requirements = _resident_readiness_requirements(value.get("readiness"))
     if preparation:
         requirements = replace(requirements, preparation=True)
     if preparation_staged:
         requirements = replace(requirements, preparation_staged=True)
-    profile = ResidentExecutionProfile(
-        _resident_descriptor_declaration(_mapping(value, "descriptor")),
-        _path(value, "project_root", base),
-        _executable_path(value, "python_executable", base),
-        _positive_int(value, "cpu_capacity"),
-        _non_negative_int(value, "memory_capacity_bytes"),
-        tuple(devices),
-        cast(Mapping[str, str], environment),
-        requirements,
+    return dict(
+        descriptor=_resident_descriptor_declaration(_mapping(value, "descriptor")),
+        project_root=_path(value, "project_root", base),
+        python_executable=_executable_path(value, "python_executable", base),
+        cpu_capacity=_positive_int(value, "cpu_capacity"),
+        memory_capacity_bytes=_non_negative_int(value, "memory_capacity_bytes"),
+        gpu_devices=tuple(devices),
+        environment=cast(Mapping[str, str], environment),
+        readiness_requirements=requirements,
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
         shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
         preparation_shared_roots={
@@ -1849,15 +2096,64 @@ def _resident_profile(
             ).items()
         },
     )
-    profile = qualified_resident_profile(profile, _deadline=deadline)
-    result = profile.readiness_result
-    assert result is not None
-    if not result.ok and not allow_unready:
-        failed = next(item for item in result.checks if item.status == "FAIL")
-        raise QueueConfigError(
-            f"resident profile readiness failed ({failed.check_id}): {failed.message}"
-        )
-    return profile
+
+
+def _resident_profile_declaration(
+    value: Mapping[str, object],
+    base: Path,
+    label: str,
+    *,
+    preparation: bool,
+    preparation_staged: bool,
+) -> dict[str, object]:
+    from ._agent_process_supervisor import _preparation_root_bindings
+    from ._container_worker import container_binding
+    from .shared_execution import root_bindings
+
+    arguments = _resident_profile_arguments(
+        value,
+        base,
+        label,
+        preparation=preparation,
+        preparation_staged=preparation_staged,
+    )
+    descriptor = arguments["descriptor"]
+    requirements = asdict(arguments.pop("readiness_requirements"))
+    project = arguments["project_root"]
+    # Readiness paths use the worker's project frame, which may be a container
+    # namespace. Preserve '..' since its meaning can depend on worker symlinks.
+    requirements["source_roots"] = [
+        str(project / root) for root in requirements["source_roots"]
+    ]
+    requirements["import_roots"] = {
+        name: str(project / root) for name, root in requirements["import_roots"].items()
+    }
+    requirements["lockfile"] = str(project / requirements["lockfile"])
+    return {
+        **arguments,
+        "descriptor": {
+            "profile_id": descriptor.profile_id,
+            "revision": descriptor.revision,
+        },
+        "project_root": str(project),
+        "python_executable": str(arguments["python_executable"]),
+        "gpu_devices": [
+            {
+                "descriptor": device.descriptor.to_dict(),
+                "binding_value": device.binding_value,
+            }
+            for device in arguments["gpu_devices"]
+        ],
+        "readiness": requirements,
+        "container": container_binding(arguments["container"]),
+        "shared_roots": root_bindings(arguments["shared_roots"]),
+        "preparation_shared_roots": {
+            alias: str(path)
+            for alias, path in _preparation_root_bindings(
+                arguments["preparation_shared_roots"]
+            ).items()
+        },
+    }
 
 
 def _resident_readiness_requirements(value: object) -> ResidentReadinessRequirements:
@@ -2146,6 +2442,7 @@ def _required_allowed(
 
 
 __all__ = [
+    "AgentSpec",
     "CoordinatorServiceConfig",
     "DEPLOYMENT_CONFIG_SCHEMA_VERSION",
     "OutboundAgentRegistrationConfig",
@@ -2154,5 +2451,7 @@ __all__ = [
     "load_coordinator_service_config",
     "load_outbound_agent_service_config",
     "load_run_inspection_client_config",
+    "qualify_agent_spec",
+    "read_agent_spec",
     "run_outbound_agent_service",
 ]

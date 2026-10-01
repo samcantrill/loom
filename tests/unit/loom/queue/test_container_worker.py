@@ -1,5 +1,6 @@
 """Installed binding, resource and environment ownership at the worker boundary."""
 
+from collections.abc import Mapping
 import sys
 from pathlib import Path
 from typing import cast
@@ -232,12 +233,14 @@ def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
     assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
     assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
     profile = resident.launch_profile
+    selection = request.resolved_runtime["resource_selection"]
+    assert isinstance(selection, Mapping)
     environment = _worker_environment(
         profile,
         workspace.root,
         (command,),
         {"gpu": provider},
-        request.resolved_runtime["resource_selection"],
+        selection,
     )
     launch = ResidentWorkerLaunch(
         "supervisor-1",
@@ -255,7 +258,9 @@ def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
     )
     encoded = json.dumps(_launch_value(launch))
     workspace.persist_supervisor_launch(encoded)
-    replay = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    retained = workspace.supervisor_launch_json()
+    assert retained is not None
+    replay = _launch_from_value(json.loads(retained))
     assert replay.spec_digest == launch.spec_digest
     assert replay.command_argv == launch.command_argv
     assert replay.resource_controls == launch.resource_controls
@@ -263,8 +268,17 @@ def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
     assert "CUDA_VISIBLE_DEVICES=GPU-private" in replay.command_argv
     assert "--nv" in replay.command_argv
     assert workspace.request().to_dict() == request.to_dict()
-    metadata = replay.container_command.metadata
-    assert metadata["container"]["resources"]["entries"]["gpu"]["attribute_count"] == 2
+    assert replay.container_command is not None
+    container = replay.container_command.metadata["container"]
+    assert isinstance(container, Mapping)
+    resources = container["resources"]
+    assert isinstance(resources, Mapping)
+    entries = resources["entries"]
+    assert isinstance(entries, Mapping)
+    gpu = entries["gpu"]
+    assert isinstance(gpu, Mapping)
+    assert gpu["attribute_count"] == 2
+    assert replay.resource_controls is not None
     assert {
         "resource": "gpu",
         "owner": "apptainer",

@@ -101,7 +101,9 @@ def test_container_command_replay_does_not_recreate_writable_mounts(tmp_path):
     assert current.is_dir() and staging.is_dir()
     current.rmdir()
     staging.rmdir()
-    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    retained = workspace.supervisor_launch_json()
+    assert retained is not None
+    restored = _launch_from_value(json.loads(retained))
     assert restored.spec_digest == original_digest
     assert restored.command_argv == original_argv
     assert not current.exists() and not staging.exists()

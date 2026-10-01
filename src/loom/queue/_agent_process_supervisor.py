@@ -8,6 +8,7 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
@@ -21,6 +22,7 @@ from multiprocessing.connection import Connection, answer_challenge, deliver_cha
 import secrets
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1439,7 +1441,7 @@ def _process_group_alive(child: OwnedProcessGroup) -> bool:
     return not child.settled()
 
 
-class AgentProcessSupervisorClient:
+class _SupervisorControlClient:
     """Authenticated private client for the independent process owner.
 
     This is intentionally not an HTTP/public queue protocol.  The endpoint and
@@ -1454,11 +1456,10 @@ class AgentProcessSupervisorClient:
     _EXCHANGE_TIMEOUT = 10.0
 
     def __init__(
-        self, agent_root: Path, configuration: SupervisorLaunchConfiguration
+        self, agent_root: Path, agent_id: str, configuration_fingerprint: str
     ) -> None:
         self._root = Path(agent_root).resolve() / "supervisor"
-        self._configuration = configuration
-        self.agent_id = configuration.agent_id
+        self.agent_id = agent_id
         self._endpoint = _endpoint_for_root(self._root)
         secret = self._root / "service.secret"
         if not secret.is_file() or secret.stat().st_mode & 0o077:
@@ -1471,7 +1472,7 @@ class AgentProcessSupervisorClient:
                 "managed_supervisor_state_requires_reinitialization"
             )
         status = self.status()
-        if status.get("configuration_fingerprint") != configuration.fingerprint:
+        if status.get("configuration_fingerprint") != configuration_fingerprint:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
             )
@@ -1492,6 +1493,83 @@ class AgentProcessSupervisorClient:
         if not isinstance(value, Mapping):
             raise AgentProcessSupervisorError("managed supervisor response is invalid")
         return value
+
+    def shutdown_clean(self) -> None:
+        self._call("shutdown_clean", None)
+        self._wait_for_shutdown()
+
+    def _wait_for_shutdown(self) -> None:
+        deadline = monotonic() + 2
+        while True:
+            try:
+                os.kill(self.service_process_id, 0)
+            except ProcessLookupError:
+                process_exists = False
+            except PermissionError:
+                process_exists = True
+            except OSError as exc:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor process state is unavailable"
+                ) from exc
+            else:
+                process_exists = True
+            if not self._endpoint.exists() and not process_exists:
+                return
+            if monotonic() >= deadline:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor process did not stop"
+                )
+            sleep(0.01)
+
+    def _call(self, operation: str, value: object) -> object:
+        deadline = monotonic() + self._EXCHANGE_TIMEOUT
+        if not self._endpoint.exists():
+            raise AgentProcessSupervisorError(
+                "managed supervisor endpoint is unavailable"
+            )
+        possibly_dispatched = False
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as transport:
+                with _DeadlineConnection(transport, deadline) as connection:
+                    transport.settimeout(connection._remaining())
+                    transport.connect(str(self._endpoint))
+                    answer_challenge(connection, self._secret)
+                    deliver_challenge(connection, self._secret)
+                    # Even a partial write cannot establish no-start. The peer
+                    # may complete an accepted effect after this call disconnects.
+                    possibly_dispatched = True
+                    connection.send({"operation": operation, "value": value})
+                    result = connection.recv()
+        except (ConnectionRefusedError, FileNotFoundError) as exc:
+            if not possibly_dispatched:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor endpoint is unavailable"
+                ) from exc
+            raise _SupervisorCommunicationError(possibly_dispatched=True) from exc
+        except (OSError, EOFError, AuthenticationError) as exc:
+            raise _SupervisorCommunicationError(
+                possibly_dispatched=possibly_dispatched
+            ) from exc
+        if not isinstance(result, Mapping):
+            raise AgentProcessSupervisorError("managed supervisor response is invalid")
+        if result.get("ok") is not True:
+            message = result.get("error")
+            raise AgentProcessSupervisorError(
+                message
+                if isinstance(message, str)
+                else "managed supervisor operation failed"
+            )
+        return result.get("value")
+
+
+class AgentProcessSupervisorClient(_SupervisorControlClient):
+    """Private authenticated execution client with qualified launch profiles."""
+
+    def __init__(
+        self, agent_root: Path, configuration: SupervisorLaunchConfiguration
+    ) -> None:
+        self._configuration = configuration
+        super().__init__(agent_root, configuration.agent_id, configuration.fingerprint)
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return self._join("launch", launch)
@@ -1559,8 +1637,7 @@ class AgentProcessSupervisorClient:
             launch = _launch_from_value(json.loads(encoded))
             if launch.continuity_epoch == self.continuity_epoch:
                 self.contain(launch)
-        self._call("shutdown_clean", None)
-        self._wait_for_shutdown()
+        super().shutdown_clean()
 
     def shutdown_empty_for_relocation(self) -> None:
         """Stop an initialized owner only before it has accepted any launch."""
@@ -1583,70 +1660,6 @@ class AgentProcessSupervisorClient:
     def _shutdown(self) -> None:
         self._call("shutdown", None)
         self._wait_for_shutdown()
-
-    def _wait_for_shutdown(self) -> None:
-        deadline = monotonic() + 2
-        while True:
-            try:
-                os.kill(self.service_process_id, 0)
-            except ProcessLookupError:
-                process_exists = False
-            except PermissionError:
-                process_exists = True
-            except OSError as exc:
-                raise AgentProcessSupervisorError(
-                    "managed supervisor process state is unavailable"
-                ) from exc
-            else:
-                process_exists = True
-            if not self._endpoint.exists() and not process_exists:
-                return
-            if monotonic() >= deadline:
-                raise AgentProcessSupervisorError(
-                    "managed supervisor process did not stop"
-                )
-            sleep(0.01)
-
-    def _call(self, operation: str, value: object) -> object:
-        deadline = monotonic() + self._EXCHANGE_TIMEOUT
-        if not self._endpoint.exists():
-            raise AgentProcessSupervisorError(
-                "managed supervisor endpoint is unavailable"
-            )
-        possibly_dispatched = False
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as transport:
-                with _DeadlineConnection(transport, deadline) as connection:
-                    transport.settimeout(connection._remaining())
-                    transport.connect(str(self._endpoint))
-                    answer_challenge(connection, self._secret)
-                    deliver_challenge(connection, self._secret)
-                    # Even a partial write cannot establish no-start. The peer
-                    # may complete an accepted effect after this call disconnects.
-                    possibly_dispatched = True
-                    connection.send({"operation": operation, "value": value})
-                    result = connection.recv()
-        except (ConnectionRefusedError, FileNotFoundError) as exc:
-            if not possibly_dispatched:
-                raise AgentProcessSupervisorError(
-                    "managed supervisor endpoint is unavailable"
-                ) from exc
-            raise _SupervisorCommunicationError(possibly_dispatched=True) from exc
-        except (OSError, EOFError, AuthenticationError) as exc:
-            raise _SupervisorCommunicationError(
-                possibly_dispatched=possibly_dispatched
-            ) from exc
-        if not isinstance(result, Mapping):
-            raise AgentProcessSupervisorError("managed supervisor response is invalid")
-        if result.get("ok") is not True:
-            message = result.get("error")
-            raise AgentProcessSupervisorError(
-                message
-                if isinstance(message, str)
-                else "managed supervisor operation failed"
-            )
-        return result.get("value")
-
 
 class AgentProcessSupervisorService:
     """Fresh-root initialization and independent service entry point."""
@@ -1811,6 +1824,84 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
             "managed_supervisor_state_requires_reinitialization"
         )
     return configuration
+
+
+@contextmanager
+def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
+    """Stop/hold an existing settled supervisor without loading workload profiles.
+
+    The caller holds the agent owner lock and has proved its journals settled.
+    This path never initializes or starts a service and never dispatches launch
+    or force-stop. A missing endpoint requires a durable clean cut (or an empty
+    process-free root), not an inference from PID absence.
+    """
+    root = Path(agent_root).resolve() / "supervisor"
+    database = root / "supervisor.sqlite"
+    config = root / AgentProcessSupervisorService._CONFIG_NAME
+    try:
+        for path in (root, database, config, root / "service.secret"):
+            details = path.stat()
+            if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
+                raise AgentProcessSupervisorError("retained supervisor is not protected")
+        raw = json.loads(config.read_text(encoding="utf-8"))
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"agent_id", "profiles", "configuration_fingerprint"}
+            or raw["agent_id"] != agent_id
+            or not isinstance(raw["profiles"], list)
+            or not raw["profiles"]
+        ):
+            raise AgentProcessSupervisorError("retained supervisor binding is invalid")
+        # Profiles were normalized before being persisted. Hash their inert
+        # serialized values; rebuilding executable objects would probe old IO.
+        fingerprint = _digest({
+            "agent_id": agent_id,
+            "profiles": [
+                {"profile_id": profile["descriptor"]["profile_id"],
+                 "fingerprint": _digest(profile)}
+                for profile in raw["profiles"]
+            ],
+        })
+        if raw["configuration_fingerprint"] != fingerprint:
+            raise AgentProcessSupervisorError("retained supervisor binding is invalid")
+        try:
+            client = _SupervisorControlClient(agent_root, agent_id, fingerprint)
+        except AgentProcessSupervisorError as exc:
+            if str(exc) != "managed supervisor endpoint is unavailable":
+                raise
+        else:
+            client.shutdown_clean()
+        with (root / "service.lock").open("a+") as lock:
+            (root / "service.lock").chmod(0o600)
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise AgentProcessSupervisorError("retained supervisor is still owned") from exc
+            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+                conn.execute("BEGIN")
+                metadata = dict(conn.execute("SELECT key,value FROM metadata"))
+                states = tuple(row[0] for row in conn.execute("SELECT state FROM launches"))
+                boot = json.loads(metadata.get("boot_evidence", "null"))
+                if (
+                    metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
+                    or metadata.get("agent_id") != agent_id
+                    or metadata.get("configuration_fingerprint") != fingerprint
+                    or metadata.get("execution_root") != str(root)
+                    or not isinstance(boot, dict)
+                    or boot.get("host") != _host_boot_evidence()["host"]
+                ):
+                    raise AgentProcessSupervisorError("retained supervisor identity changed")
+                if states and (
+                    not metadata.get("continuity_epoch")
+                    or metadata.get("clean_shutdown_epoch") != metadata["continuity_epoch"]
+                    or any(state not in {"contained", "exited"} for state in states)
+                ):
+                    raise AgentProcessSupervisorError("retained supervisor lacks clean shutdown proof")
+            yield
+    except (OSError, sqlite3.Error, KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, AgentProcessSupervisorError):
+            raise
+        raise AgentProcessSupervisorError("retained supervisor state is unavailable") from exc
 
 
 @dataclass
