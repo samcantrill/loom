@@ -56,11 +56,16 @@ def test_sweep_status_and_collect_commands_read_existing_plan(
     run_uri = path_to_run_uri(tmp_path / "runs" / "trial-0001")
     store = LocalRunStore(tmp_path / "runs")
     store.create_run(run_uri)
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    authority = SQLitePerRunAuthorityStore()
+    authority.create_run(run_uri)
+    authority.transition_run(run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+    authority.transition_run(run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED)
     store.write_run_status(
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
-            status=RunStatus.SUCCEEDED,
+            status=RunStatus.FAILED,
             created_at="2026-05-14T00:00:00Z",
             updated_at="2026-05-14T00:00:01Z",
         ),
@@ -178,3 +183,16 @@ def _write_pipeline_config(tmp_path: Path) -> Path:
     }
     config.write_text(json.dumps(payload), encoding="utf-8")
     return config
+
+
+def test_sweep_stopped_run_without_authority_is_unavailable(tmp_path: Path) -> None:
+    from loom.cli.sweep import build_sweep_status_result
+    from loom.cli.errors import CliError
+
+    spec = _write_spec(tmp_path)
+    sweep_dir = tmp_path / "sweep"
+    assert main(["sweep", "plan", str(spec), "--sweep-dir", str(sweep_dir)]) == 0
+    run_uri = path_to_run_uri(tmp_path / "runs" / "trial-0001")
+    LocalRunStore(tmp_path / "runs").create_run(run_uri)
+    with pytest.raises(CliError, match="authority"):
+        build_sweep_status_result(sweep_dir)

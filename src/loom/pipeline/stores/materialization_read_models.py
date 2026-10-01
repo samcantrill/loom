@@ -243,6 +243,7 @@ def read_authoritative_run(
     assembled = AuthoritativeRunSnapshot(
         run_uri=snapshot.run_uri,
         status=snapshot.status,
+        reason=snapshot.reason,
         schema_version=snapshot.schema_version,
         revision=snapshot.revision,
         metadata=snapshot.metadata,

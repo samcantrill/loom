@@ -14,7 +14,8 @@ from loom.io.errors import UnsupportedURIError
 from loom.io.uris import uri_to_path
 from loom.pipeline.events import PipelineEventRecord
 from loom.pipeline.planning import ExecutionPlan
-from loom.pipeline.status import StageStatusRecord
+from loom.pipeline.status import RunStatusRecord, StageStatusRecord
+from loom.pipeline.stores.authority import PerRunAuthorityStore
 from loom.pipeline.stores.atomic import atomic_write_json
 from loom.pipeline.stores.local_runs import LocalRunStore
 from loom.serialization import DeserializationError, PlainData, ensure_plain_data
@@ -496,16 +497,63 @@ def collect_offline_evidence_manifest(
     run_uri: str,
     *,
     generated_at: str | None = None,
+    authority_store: PerRunAuthorityStore | None = None,
 ) -> OfflineEvidenceManifest:
-    """Collect manifest evidence from an explicit offline local run."""
+    """Capture historical evidence, preferring a single authority snapshot.
+
+    Explicit authority or retained native state supplies lifecycle facts and a
+    revision/time label. Unavailable authority yields incomplete evidence;
+    legacy local-only bundles retain their historical projection reader.
+    """
 
     diagnostics: list[OfflineEvidenceDiagnostic] = []
     generated = generated_at or utc_timestamp()
-    run_status = _read_run_status(store, run_uri, diagnostics)
+    snapshot = None
+    source = offline_evidence_source()
+    authority_selected = authority_store is not None or (store.local_run_dir(run_uri) / ".loom").exists()
+    if authority_selected:
+        try:
+            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+            from loom.pipeline.stores import AuthoritativeReadOptions, read_authoritative_run
+
+            authority = authority_store or SQLitePerRunAuthorityStore(run_uri, read_only=True)
+            snapshot = read_authoritative_run(
+                authority, run_uri,
+                options=AuthoritativeReadOptions(include_materialized_refs=False, strict=True),
+            )
+            source["details"] = {
+                "historical": True, "observed_at": generated,
+                "authority_revision": snapshot.revision.to_dict(),
+            }
+        except Exception as exc:
+            diagnostics.append(_error("offline_evidence.authority_unavailable", str(exc)))
+            source["details"] = {"historical": True, "observed_at": generated, "unavailable_reason": str(exc)}
+    if snapshot is not None:
+        observed = snapshot.revision.created_at or generated
+        run_status = RunStatusRecord(
+            run_uri=run_uri, status=snapshot.status, created_at=observed, updated_at=observed,
+        ).to_dict()
+    else:
+        run_status = None if authority_selected else _read_run_status(store, run_uri, diagnostics)
     plan_payload = _read_plan(store, run_uri, diagnostics)
     runtime = _read_runtime(store, run_uri, diagnostics)
     plan = _execution_plan(plan_payload, diagnostics)
     stage_names = _stage_names(store, run_uri, plan, diagnostics)
+    authoritative_stages = {} if snapshot is None else {stage.stage_name: stage for stage in snapshot.stages}
+    stage_names = tuple(sorted(set(stage_names) | set(authoritative_stages)))
+    statuses = {}
+    for name in stage_names:
+        stage = authoritative_stages.get(name)
+        if stage is not None:
+            statuses[name] = StageStatusRecord(
+                run_uri=run_uri, stage_name=name, status=stage.status,
+                attempt=stage.attempts[-1].attempt if stage.attempts else 1,
+                updated_at=stage.revision.created_at or generated,
+                message=None if stage.reason is None else stage.reason.message,
+                metadata={} if stage.reason is None else stage.reason.detail,
+            )
+        else:
+            statuses[name] = None if authority_selected else _stage_status(store, run_uri, name, diagnostics)
     stages = tuple(
         _stage_evidence(
             store,
@@ -513,6 +561,7 @@ def collect_offline_evidence_manifest(
             stage_name=stage_name,
             plan_payload=_stage_plan_payload(plan, stage_name),
             runtime=runtime,
+            status_record=statuses[stage_name],
         )
         for stage_name in stage_names
     )
@@ -551,6 +600,7 @@ def collect_offline_evidence_manifest(
         events=events,
         artifact_index=artifact_index,
         diagnostics=tuple(diagnostics),
+        state_source=source,
     )
 
 
@@ -559,6 +609,7 @@ def write_offline_evidence_manifest(
     run_uri: str,
     *,
     generated_at: str | None = None,
+    authority_store: PerRunAuthorityStore | None = None,
 ) -> OfflineEvidenceManifest:
     """Collect and atomically write the canonical offline evidence manifest."""
 
@@ -566,6 +617,7 @@ def write_offline_evidence_manifest(
         store,
         run_uri,
         generated_at=generated_at,
+        authority_store=authority_store,
     )
     atomic_write_json(offline_evidence_manifest_path(store, run_uri), manifest.to_dict())
     return manifest
@@ -701,9 +753,9 @@ def _stage_evidence(
     stage_name: str,
     plan_payload: Mapping[str, PlainData],
     runtime: Mapping[str, PlainData] | None,
+    status_record: StageStatusRecord | None,
 ) -> OfflineStageEvidence:
     diagnostics: list[OfflineEvidenceDiagnostic] = []
-    status_record = _stage_status(store, run_uri, stage_name, diagnostics)
     attempt = None if status_record is None else status_record.attempt
     inputs = _stage_mapping(store.read_stage_inputs, run_uri, stage_name, "inputs", diagnostics)
     outputs = _stage_mapping(store.read_stage_outputs, run_uri, stage_name, "outputs", diagnostics)

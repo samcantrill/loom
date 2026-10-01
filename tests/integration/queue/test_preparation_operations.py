@@ -360,6 +360,7 @@ def test_prepared_native_failed_admission_explicit_retry(
             2,
         ]
         assert final_stages["produce"].attempts[0] == first_attempt
+        assert not list(uri_to_path(prepared.run_uri).rglob("status.json"))
         assert len(final_stages["other"].attempts) == 1
         assert final_stages["other"].status is StageStatus.SUCCEEDED
         assert workspace.request() == retained_request

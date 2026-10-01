@@ -896,43 +896,23 @@ class AuthorityBackedSerialRunStore:
         )
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
-        local_status = self.local_store.read_run_status(run_uri)
-        try:
-            snapshot = self.authority_store.snapshot(run_uri)
-        except Exception:
-            return local_status
-        created_at = _created_at(
-            self.local_store, run_uri, snapshot.revision.created_at
-        )
+        return self._run_status_record(self.authority_store.snapshot(run_uri))
+
+    def _run_status_record(self, snapshot: AuthoritativeRunSnapshot) -> RunStatusRecord:
+        run_uri = snapshot.run_uri
+        created_at = _created_at(self.local_store, run_uri, snapshot.revision.created_at)
         updated_at = snapshot.revision.created_at or created_at
-        local_matches = (
-            local_status is not None and local_status.status is snapshot.status
-        )
-        local_projection = local_status if local_matches else None
         return RunStatusRecord(
             run_uri=run_uri,
             status=snapshot.status,
+            message=None if snapshot.reason is None else snapshot.reason.message,
+            metadata=_reason_detail(snapshot.reason),
             created_at=created_at,
-            updated_at=local_projection.updated_at
-            if local_projection is not None
-            else updated_at,
-            started_at=(
-                local_projection.started_at
-                if local_projection is not None
-                else created_at
-                if snapshot.status not in {RunStatus.CREATED}
-                else None
-            ),
-            finished_at=(
-                local_projection.finished_at
-                if local_projection is not None
-                else updated_at
-                if snapshot.status
-                in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
-                else None
-            ),
-            message=local_projection.message if local_projection is not None else None,
-            metadata=local_projection.metadata if local_projection is not None else {},
+            updated_at=updated_at,
+            started_at=created_at if snapshot.status is not RunStatus.CREATED else None,
+            finished_at=updated_at if snapshot.status in {
+                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED
+            } else None,
         )
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
@@ -961,7 +941,6 @@ class AuthorityBackedSerialRunStore:
                     status.metadata,
                 ),
             )
-        self.local_store.write_run_status(run_uri, status)
 
     def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
         return self.local_store.read_plan(run_uri)
@@ -1331,46 +1310,50 @@ class AuthorityBackedSerialRunStore:
         )
 
     def inspect_run_state(self, run_uri: str) -> RunStateInspection:
-        return self.local_store.inspect_run_state(run_uri)
+        """Inspect one authority snapshot with retained local diagnostic evidence."""
+
+        snapshot = self.authority_store.snapshot(run_uri)
+        stages = {stage.stage_name: stage for stage in snapshot.stages}
+        stage_names = sorted(set(stages) | set(self.local_store.list_run_stages(run_uri)))
+        return RunStateInspection(
+            run_uri=snapshot.run_uri,
+            run_status=self._run_status_record(snapshot),
+            stage_inspections=tuple(
+                self.local_store._inspect_stage_state(
+                    run_uri, name,
+                    status=self._stage_status_record(run_uri, stages[name])
+                    if name in stages else None,
+                )
+                for name in stage_names
+            ),
+            artifact_count=sum(len(stage.artifact_facts) for stage in snapshot.stages),
+            submitted_operations=snapshot.submitted_operations,
+        )
 
     def read_stage_status(
         self, run_uri: str, stage_name: str
     ) -> StageStatusRecord | None:
-        local_status = self.local_store.read_stage_status(run_uri, stage_name)
         stage = self._stage_snapshot(run_uri, stage_name)
         if stage is None:
-            return local_status
+            return None
+        return self._stage_status_record(run_uri, stage)
+
+    def _stage_status_record(
+        self, run_uri: str, stage: StageLifecycleSnapshot
+    ) -> StageStatusRecord:
         attempt = stage.attempts[-1].attempt if stage.attempts else 1
         updated_at = stage.revision.created_at or utc_timestamp()
-        metadata = _reason_detail(stage.reason)
-        local_matches = (
-            local_status is not None
-            and local_status.status is stage.status
-            and local_status.attempt == attempt
-        )
-        local_projection = local_status if local_matches else None
-        if local_projection is not None:
-            metadata = {**metadata, **local_projection.metadata}
         return StageStatusRecord(
             run_uri=run_uri,
             stage_name=stage.stage_name,
             status=stage.status,
             attempt=attempt,
-            updated_at=local_projection.updated_at
-            if local_projection is not None
-            else updated_at,
-            started_at=local_projection.started_at
-            if local_projection is not None
-            else _stage_started_at(stage),
-            finished_at=local_projection.finished_at
-            if local_projection is not None
-            else _stage_finished_at(stage, updated_at),
-            message=(None if stage.reason is None else stage.reason.message)
-            or (None if local_status is None else local_status.message),
-            owner=local_projection.owner
-            if local_projection is not None and local_projection.owner
-            else _stage_owner(stage),
-            metadata=metadata,
+            updated_at=updated_at,
+            started_at=_stage_started_at(stage),
+            finished_at=_stage_finished_at(stage, updated_at),
+            message=None if stage.reason is None else stage.reason.message,
+            owner=_stage_owner(stage),
+            metadata=_reason_detail(stage.reason),
         )
 
     def write_stage_status(
@@ -1437,7 +1420,6 @@ class AuthorityBackedSerialRunStore:
             )
         if status.status in {StageStatus.FAILED, StageStatus.CANCELLED}:
             self._fail_stage_lease(run_uri, stage_name, status.attempt, status)
-        self.local_store.write_stage_status(run_uri, stage_name, status)
 
     def read_stage_inputs(
         self, run_uri: str, stage_name: str

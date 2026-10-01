@@ -1260,6 +1260,7 @@ class AuthoritativeRunSnapshot:
     reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    reason: LifecycleReason | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
@@ -1270,6 +1271,8 @@ class AuthoritativeRunSnapshot:
             _positive_int(self.schema_version, "schema_version"),
         )
         _revision(self.revision)
+        if self.reason is not None and not isinstance(self.reason, LifecycleReason):
+            raise AuthorityModelError("reason must be a LifecycleReason or None")
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
         object.__setattr__(
             self, "stages", _tuple_of(self.stages, StageLifecycleSnapshot, "stages")
@@ -1320,6 +1323,7 @@ class AuthoritativeRunSnapshot:
         return {
             "run_uri": self.run_uri,
             "status": self.status.value,
+            "reason": None if self.reason is None else self.reason.to_dict(),
             "schema_version": self.schema_version,
             "revision": self.revision.to_dict(),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
@@ -1352,6 +1356,7 @@ class AuthoritativeRunSnapshot:
             {
                 "run_uri",
                 "status",
+                "reason",
                 "schema_version",
                 "revision",
                 "metadata",
@@ -1369,6 +1374,7 @@ class AuthoritativeRunSnapshot:
         return cls(
             run_uri=_non_empty_string(_required(mapping, "run_uri"), "run_uri"),
             status=_run_status(_required(mapping, "status")),
+            reason=None if mapping.get("reason") is None else LifecycleReason.from_dict(mapping["reason"]),
             schema_version=_positive_int(
                 _required(mapping, "schema_version"), "schema_version"
             ),
