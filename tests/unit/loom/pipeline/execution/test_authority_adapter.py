@@ -643,3 +643,55 @@ def test_run_reason_remains_authoritative_without_status_projection(tmp_path: Pa
         assert record.message == "requested stop"
         assert record.metadata["reason_code"] == "early_stop"
         assert not list(run_uri_to_path(run_uri).rglob("status.json"))
+
+
+@pytest.mark.parametrize("projection", ["absent", "stale", "corrupt"])
+def test_public_adapter_inspection_uses_authority_with_local_diagnostics(
+    tmp_path: Path, projection: str
+) -> None:
+    from loom.pipeline.status import RunStatusRecord, StageStatus, StageStatusRecord
+    from tests.support.authority_read_fixture import seed_completed_authority_run
+
+    store = _store(tmp_path, SQLitePerRunAuthorityStore())
+    run_uri = _run_uri(tmp_path)
+    seed_completed_authority_run(store, run_uri)
+    local = store.local_store
+    root = run_uri_to_path(run_uri)
+    for path in root.rglob("status.json"):
+        path.unlink()
+    if projection == "stale":
+        local.write_run_status(run_uri, RunStatusRecord(
+            run_uri=run_uri, status=RunStatus.FAILED,
+            created_at="2020-01-01T00:00:00Z", updated_at="2020-01-01T00:00:00Z",
+        ))
+        for name in ("build", "report"):
+            local.write_stage_status(run_uri, name, StageStatusRecord(
+                run_uri=run_uri, stage_name=name, status=StageStatus.FAILED,
+                attempt=99, updated_at="2020-01-01T00:00:00Z",
+            ))
+    elif projection == "corrupt":
+        (root / "status.json").write_text("not JSON")
+        for name in ("build", "report"):
+            (local.local_stage_dir(run_uri, name) / "status.json").write_text("not JSON")
+    stdout = local.local_stage_log_path(run_uri, "build", "stdout")
+    stdout.parent.mkdir(parents=True, exist_ok=True)
+    stdout.write_text("retained diagnostic log")
+    local.write_stage_failure(run_uri, "build", {"message": "retained evidence"}, attempt=1)
+    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("status.json")}
+
+    result = store.inspect_run_state(run_uri)
+
+    assert result.run_status is not None
+    assert result.run_status.status is RunStatus.SUCCEEDED
+    assert result.artifact_count == 2
+    assert {stage.stage_name for stage in result.stage_inspections} == {"build", "report"}
+    for stage in result.stage_inspections:
+        assert stage.status is not None
+        assert stage.status.status is StageStatus.SUCCEEDED
+        assert stage.status.attempt == 1
+    build = next(stage for stage in result.stage_inspections if stage.stage_name == "build")
+    assert build.failure == {"message": "retained evidence"}
+    assert build.stdout_path == stdout
+    assert build.stdout_available
+    assert stdout.read_text() == "retained diagnostic log"
+    assert {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("status.json")} == before

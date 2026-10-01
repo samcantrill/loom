@@ -896,7 +896,10 @@ class AuthorityBackedSerialRunStore:
         )
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
-        snapshot = self.authority_store.snapshot(run_uri)
+        return self._run_status_record(self.authority_store.snapshot(run_uri))
+
+    def _run_status_record(self, snapshot: AuthoritativeRunSnapshot) -> RunStatusRecord:
+        run_uri = snapshot.run_uri
         created_at = _created_at(self.local_store, run_uri, snapshot.revision.created_at)
         updated_at = snapshot.revision.created_at or created_at
         return RunStatusRecord(
@@ -1307,7 +1310,25 @@ class AuthorityBackedSerialRunStore:
         )
 
     def inspect_run_state(self, run_uri: str) -> RunStateInspection:
-        return self.local_store.inspect_run_state(run_uri)
+        """Inspect one authority snapshot with retained local diagnostic evidence."""
+
+        snapshot = self.authority_store.snapshot(run_uri)
+        stages = {stage.stage_name: stage for stage in snapshot.stages}
+        stage_names = sorted(set(stages) | set(self.local_store.list_run_stages(run_uri)))
+        return RunStateInspection(
+            run_uri=snapshot.run_uri,
+            run_status=self._run_status_record(snapshot),
+            stage_inspections=tuple(
+                self.local_store._inspect_stage_state(
+                    run_uri, name,
+                    status=self._stage_status_record(run_uri, stages[name])
+                    if name in stages else None,
+                )
+                for name in stage_names
+            ),
+            artifact_count=sum(len(stage.artifact_facts) for stage in snapshot.stages),
+            submitted_operations=snapshot.submitted_operations,
+        )
 
     def read_stage_status(
         self, run_uri: str, stage_name: str
@@ -1315,6 +1336,11 @@ class AuthorityBackedSerialRunStore:
         stage = self._stage_snapshot(run_uri, stage_name)
         if stage is None:
             return None
+        return self._stage_status_record(run_uri, stage)
+
+    def _stage_status_record(
+        self, run_uri: str, stage: StageLifecycleSnapshot
+    ) -> StageStatusRecord:
         attempt = stage.attempts[-1].attempt if stage.attempts else 1
         updated_at = stage.revision.created_at or utc_timestamp()
         return StageStatusRecord(

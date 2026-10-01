@@ -7,6 +7,9 @@ execution adapter and managed preparation no longer refresh run or stage
 `status.json` files. Legacy `LocalRunStore` status methods remain explicit
 historical file readers/writers for portable imports and older bundles; they do
 not provide current lifecycle truth. Resume uses the authority-backed adapter.
+The adapter returned by `create_authority_backed_serial_run_store` also uses a
+single authoritative snapshot for `inspect_run_state()`, combining its run/stage
+status and attempts with retained local failure, input/output and log evidence.
 Worker requests, results, logs and output facts remain retained. Managed request
 preparation uses the admitted attempt number, including after a failed retry,
 and never infers identity from the latest status file.

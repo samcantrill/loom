@@ -238,7 +238,10 @@ class LocalRunStore:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         self.open_run(run_uri_text)
         stage_inspections = tuple(
-            self._inspect_stage_state(run_uri_text, stage_name)
+            self._inspect_stage_state(
+                run_uri_text, stage_name,
+                status=self.read_stage_status(run_uri_text, stage_name),
+            )
             for stage_name in self.list_run_stages(run_uri_text)
         )
         return RunStateInspection(
@@ -1198,8 +1201,9 @@ class LocalRunStore:
                 f"Malformed stage status at {path}: {exc}",
             ) from exc
 
-    def _inspect_stage_state(self, run_uri: str, stage_name: str) -> RunStageInspection:
-        status = self.read_stage_status(run_uri, stage_name)
+    def _inspect_stage_state(
+        self, run_uri: str, stage_name: str, *, status: StageStatusRecord | None
+    ) -> RunStageInspection:
         failure = ensure_failure_payload(self.read_stage_failure(run_uri, stage_name))
         inputs = self.read_stage_inputs(run_uri, stage_name)
         outputs = self.read_stage_outputs(run_uri, stage_name)
