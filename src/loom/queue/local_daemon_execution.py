@@ -3509,6 +3509,7 @@ class LocalDaemonExecution:
                     stage_plan=stage_plan,
                     produced_outputs=_produced_outputs(snapshot),
                     input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
+                authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=_worker_runtime(intent, record.stage_name),
                     metadata={
@@ -5292,35 +5293,22 @@ class LocalDaemonExecution:
         )
         produced = _produced_outputs(snapshot)
         runtime = _worker_runtime(intent, record.stage_name)
-        projected_status = self.run_store.read_stage_status(
-            record.run_uri, record.stage_name
-        )
-        projected_attempt = (
-            record.attempt if projected_status is None else projected_status.attempt
-        )
         raw_worker_request = self.run_store.read_stage_worker_request(
-            record.run_uri,
-            record.stage_name,
-            attempt=projected_attempt,
+            record.run_uri, record.stage_name, attempt=None,
         )
-        if raw_worker_request is not None and projected_attempt != record.attempt:
-            # The run-store document projects the last attempt. The authority
-            # has already prepared the successor; prior immutable execution
-            # evidence remains with its released assignment workspace.
-            prior_failed = any(
-                attempt.attempt == projected_attempt
-                and attempt.status is StageStatus.FAILED
-                for stage_fact in snapshot.stages
-                if stage_fact.stage_name == record.stage_name
-                for attempt in stage_fact.attempts
-            )
-            if (
-                projected_status is None
-                or not prior_failed
-                or projected_attempt + 1 != record.attempt
-            ):
-                raise QueueConflictError("managed retry worker projection conflicts")
-            raw_worker_request = None
+        if raw_worker_request is not None:
+            retained_request = StageWorkerRequest.from_dict(raw_worker_request)
+            if retained_request.attempt != record.attempt:
+                prior_failed = any(
+                    attempt.attempt == retained_request.attempt
+                    and attempt.status is StageStatus.FAILED
+                    for stage_fact in snapshot.stages
+                    if stage_fact.stage_name == record.stage_name
+                    for attempt in stage_fact.attempts
+                )
+                if not prior_failed or retained_request.attempt + 1 != record.attempt:
+                    raise QueueConflictError("managed retry worker request conflicts")
+                raw_worker_request = None
         worker_request = (
             StageWorkerRequest.from_dict(raw_worker_request)
             if raw_worker_request is not None
@@ -5331,6 +5319,7 @@ class LocalDaemonExecution:
                 stage_plan=stage_plan,
                 produced_outputs=produced,
                 input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
+                authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
                 fingerprint_context=intent.plan.fingerprint_context,
                 resolved_runtime=runtime,
                 metadata={

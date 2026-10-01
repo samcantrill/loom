@@ -5223,6 +5223,7 @@ def _run_snapshot(
     return AuthoritativeRunSnapshot(
         run_uri=run_uri,
         status=RunStatus(cast(str, run_row["status"])),
+        reason=_reason_from_json(cast(str | None, run_row["reason_json"])),
         schema_version=schema_version,
         revision=revision,
         stages=tuple(

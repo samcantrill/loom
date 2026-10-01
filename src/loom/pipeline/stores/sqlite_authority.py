@@ -354,7 +354,9 @@ class SQLitePerRunAuthorityStore:
     URI; materialization identity is unchanged. Its deployment owner validates
     this directory. Omitting it preserves the run-local layout. Only
     ``create_run`` initializes missing databases; all other operations open
-    existing state.
+    existing state. ``read_only`` reads a checkpointed retained database into
+    private memory and forbids mutations and schema migration. Retained WAL or
+    recovery journals are unavailable through that inspection path.
     """
 
     def __init__(
@@ -363,7 +365,9 @@ class SQLitePerRunAuthorityStore:
         *,
         clock: Callable[[], datetime | str] | None = None,
         state_root: Path | None = None,
+        read_only: bool = False,
     ) -> None:
+        self._read_only = read_only
         self._run_uri = run_uri
         self._clock = clock
         self._state_root = None if state_root is None else Path(state_root).resolve()
@@ -3127,7 +3131,7 @@ class SQLitePerRunAuthorityStore:
         with self._connect(database_path) as conn:
             version = _stored_schema_version(conn)
             needs_migration = version is not None and version < AUTHORITY_SCHEMA_VERSION
-        if needs_migration:
+        if needs_migration and not self._read_only:
             with self._write_connection(database_path, initialize=False) as conn:
                 _migrate_schema(conn)
         with self._connect(database_path) as conn:
@@ -3152,6 +3156,8 @@ class SQLitePerRunAuthorityStore:
     def _write_connection(
         self, database_path: Path, *, initialize: bool
     ) -> Iterator[sqlite3.Connection]:
+        if self._read_only:
+            raise AuthorityStoreError("retained authority is read-only")
         with self._connect(database_path, initialize=initialize) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -3168,6 +3174,27 @@ class SQLitePerRunAuthorityStore:
     def _connect(
         self, database_path: Path, *, initialize: bool = False
     ) -> Iterator[sqlite3.Connection]:
+        if self._read_only:
+            if initialize:
+                raise AuthorityStoreError("retained authority cannot initialize state")
+            for suffix in ("-wal", "-journal"):
+                sidecar = Path(str(database_path) + suffix)
+                if sidecar.exists() and sidecar.stat().st_size:
+                    raise AuthorityStoreError(
+                        "retained authority requires checkpointed state; recovery is unavailable"
+                    )
+            payload = database_path.read_bytes()
+            conn = sqlite3.connect(":memory:", isolation_level=None)
+            try:
+                # A checkpointed WAL database retains WAL header flags. The
+                # private memory copy uses rollback mode; retained bytes stay intact.
+                conn.deserialize(payload[:18] + b"\x01\x01" + payload[20:])
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA query_only = ON")
+                yield conn
+            finally:
+                conn.close()
+            return
         conn = sqlite3.connect(
             database_path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
             uri=True,
@@ -3952,6 +3979,7 @@ def _snapshot(
     return AuthoritativeRunSnapshot(
         run_uri=run_uri,
         status=RunStatus(cast(str, run_row["status"])),
+        reason=_reason_from_json(cast(str | None, run_row["reason_json"])),
         schema_version=AUTHORITY_SCHEMA_VERSION,
         revision=revision,
         stages=stages,

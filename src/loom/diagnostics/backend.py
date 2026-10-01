@@ -357,7 +357,7 @@ def _default_authority_store(
         from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
         if (run_uri_to_path(run_uri) / ".loom" / "authority.sqlite3").is_file():
-            return SQLitePerRunAuthorityStore(run_uri)
+            return SQLitePerRunAuthorityStore(run_uri, read_only=True)
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise BackendDiagnosticsError(
             "transitional SQLite authority is no longer a supported runtime backend; "
@@ -478,6 +478,7 @@ def _authority_state_source(
     return authoritative_service_source(
         backend_name=backend_name,
         authority=redacted_authority_summary(authority_config),
+        reference_source="retained_read_only" if getattr(authority_store, "_read_only", False) else None,
     )
 
 

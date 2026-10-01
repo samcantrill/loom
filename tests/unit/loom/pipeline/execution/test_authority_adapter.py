@@ -587,3 +587,59 @@ def test_http_authority_reports_a_confirmed_local_orphan(tmp_path: Path) -> None
     store.local_store.create_run(run_uri, metadata={"owner": "unit"})
     with pytest.raises(OrphanedLocalRunError):
         store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+
+
+def test_authority_status_never_reads_or_refreshes_legacy_projection(tmp_path: Path) -> None:
+    from loom.pipeline.status import RunStatusRecord, StageStatusRecord, StageStatus
+
+    authority = SQLitePerRunAuthorityStore()
+    store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    store.write_run_status(run_uri, RunStatusRecord(
+        run_uri=run_uri, status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z", updated_at="2020-01-01T00:00:00Z",
+    ))
+    store.write_stage_status(run_uri, "build", StageStatusRecord(
+        run_uri=run_uri, stage_name="build", status=StageStatus.PENDING,
+        attempt=1, updated_at="2020-01-01T00:00:00Z",
+    ))
+    root = run_uri_to_path(run_uri)
+    assert not list(root.rglob("status.json"))
+    root.joinpath("status.json").write_text("corrupt")
+    stage_dir = store.local_store.local_stage_dir(run_uri, "build")
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    stage_dir.joinpath("status.json").write_text("corrupt")
+    run_status = store.read_run_status(run_uri)
+    stage_status = store.read_stage_status(run_uri, "build")
+    assert run_status is not None and run_status.status is RunStatus.RUNNING
+    assert stage_status is not None and stage_status.attempt == 1
+    assert root.joinpath("status.json").read_text() == "corrupt"
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "http", "service"])
+def test_run_reason_remains_authoritative_without_status_projection(tmp_path: Path, backend: str) -> None:
+    from contextlib import ExitStack
+    from loom.pipeline.stores.service_authority import LocalAuthorityService, create_service_authority_store
+    from loom.pipeline.stores import read_authoritative_run
+
+    with ExitStack() as stack:
+        if backend == "http":
+            store = _http_authority_run_store(tmp_path)
+        elif backend == "service":
+            service = stack.enter_context(LocalAuthorityService.start())
+            store = _store(tmp_path, create_service_authority_store(service.config()))
+        else:
+            store = _store(tmp_path, SQLitePerRunAuthorityStore())
+        run_uri = _run_uri(tmp_path)
+        store.create_run(run_uri)
+        store.authority_store.transition_run(run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+        reason = LifecycleReason(code="early_stop", message="requested stop", detail={"reason_code": "early_stop"})
+        store.authority_store.transition_run(run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.CANCELLED, reason=reason)
+        snapshot = read_authoritative_run(store.authority_store, run_uri)
+        assert snapshot.reason == reason
+        record = store.read_run_status(run_uri)
+        assert record is not None
+        assert record.message == "requested stop"
+        assert record.metadata["reason_code"] == "early_stop"
+        assert not list(run_uri_to_path(run_uri).rglob("status.json"))

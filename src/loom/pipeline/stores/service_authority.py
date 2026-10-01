@@ -806,6 +806,7 @@ class _RunState:
     ):
         self.run_uri = run_uri
         self.status = status
+        self.reason: LifecycleReason | None = None
         self.revision = revision
         self.metadata = dict(metadata or {})
         self.idempotency_key = idempotency_key
@@ -999,6 +1000,7 @@ class _ServiceAuthorityCore:
             previous = state.status
             ensure_run_transition(previous, to_status, intent=intent)
             state.status = to_status
+            state.reason = _reason_from_wire(reason)
             state.revision = self._next_revision()
             return StatusTransition(
                 run_uri=run_uri,
@@ -1603,6 +1605,7 @@ class _ServiceAuthorityCore:
             return AuthoritativeRunSnapshot(
                 run_uri=run_uri,
                 status=state.status,
+                reason=state.reason,
                 schema_version=AUTHORITY_SCHEMA_VERSION,
                 revision=state.revision,
                 stages=stages,

@@ -391,6 +391,7 @@ class LocalRunStore:
             ) from exc
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
+        """Read a historical projection; current lifecycle requires authority."""
         run_dir = self.local_run_dir(run_uri)
         status_path = run_dir / "status.json"
         data = self._read_optional_json(status_path)
@@ -404,6 +405,7 @@ class LocalRunStore:
             ) from exc
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
+        """Write explicit legacy evidence; native execution does not use this writer."""
         self._validate_run_uri_for_status(run_uri, status.run_uri)
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         payload = status.to_dict()
@@ -1364,7 +1366,7 @@ class LocalRunStore:
         self._touch_run_freshness(run_uri, reason="stage_failure")
 
     def read_stage_worker_request(
-        self, run_uri: str, stage_name: str, *, attempt: int
+        self, run_uri: str, stage_name: str, *, attempt: int | None
     ) -> dict[str, PlainData] | None:
         path = self.local_stage_worker_request_path(run_uri, stage_name)
         data = self._read_optional_json(path)

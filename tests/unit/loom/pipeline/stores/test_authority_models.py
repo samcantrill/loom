@@ -290,6 +290,7 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
         reason=reason,
     )
     run_snapshot = AuthoritativeRunSnapshot(
+        reason=reason,
         run_uri="file:///runs/r1",
         status=RunStatus.SUCCEEDED,
         schema_version=AUTHORITY_SCHEMA_VERSION,

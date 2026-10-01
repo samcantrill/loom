@@ -486,3 +486,54 @@ def test_inspect_run_artifact_rejects_ambiguous_artifact_id(tmp_path: Path) -> N
 
     with pytest.raises(DiagnosticsInspectionError, match="ambiguous artifact"):
         inspect_run_artifact(run_uri, "duplicate/id", run_store=store)
+
+
+def _retained_files(root: Path) -> dict[str, tuple[bytes, int]]:
+    return {
+        str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in root.rglob("*") if path.is_file()
+    }
+
+
+def test_stopped_authority_inspection_preserves_all_retained_bytes(tmp_path: Path) -> None:
+    from loom.diagnostics.backend import inspect_backend
+
+    authority = SQLitePerRunAuthorityStore()
+    store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    seed_completed_authority_run(store, run_uri)
+    root = run_uri_to_path(run_uri)
+    for path in root.rglob("status.json"):
+        path.unlink()
+    expected = authority.snapshot(run_uri)
+    before = _retained_files(root)
+
+    status = inspect_run_status(run_uri)
+    backend = inspect_backend(run_uri)
+
+    assert status.status == "SUCCEEDED"
+    assert {stage.attempt for stage in status.stages} == {1}
+    details = status.state_source["details"]
+    assert isinstance(details, dict)
+    assert details["reference_source"] == "retained_read_only"
+    assert backend.revision == expected.revision.to_dict()
+    assert _retained_files(root) == before
+    assert not list(root.rglob("status.json"))
+
+
+def test_uncheckpointed_retained_authority_is_typed_unavailable(tmp_path: Path) -> None:
+    from loom.diagnostics.backend import BackendDiagnosticsError, inspect_backend
+
+    authority = SQLitePerRunAuthorityStore()
+    store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    # Reachable interrupted SQLite producer: retained WAL requires recovery.
+    database = _authority_database_path(run_uri)
+    Path(str(database) + "-wal").write_bytes(b"retained WAL")
+    before = _retained_files(run_uri_to_path(run_uri))
+    with pytest.raises(BackendDiagnosticsError) as failure:
+        inspect_backend(run_uri)
+    assert "schema" in failure.value.code
+    assert "checkpointed" in str(failure.value)
+    assert _retained_files(run_uri_to_path(run_uri)) == before

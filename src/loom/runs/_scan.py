@@ -322,7 +322,8 @@ class _AuthoritativeSummaryStore:
 
     def summary_state_source(self, _run_uri: str) -> dict[str, PlainData]:
         return authoritative_service_source(
-            backend_name=self._authority_store.capabilities().backend_name
+            backend_name=self._authority_store.capabilities().backend_name,
+            reference_source="retained_read_only" if getattr(self._authority_store, "_read_only", False) else None,
         )
 
     def _snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -432,7 +433,18 @@ def _authority_store_for_candidate(
                             ),
                         },
                     )
-                return None, None
+                try:
+                    from loom.diagnostics.backend import _default_authority_store
+                    retained = _default_authority_store(run_uri=run_uri)
+                    retained.snapshot(run_uri)
+                    return retained, None
+                except Exception as exc:
+                    return None, _warning(
+                        CatalogWarningCode.PARTIAL_RUN,
+                        "retained authority is unavailable",
+                        path=candidate,
+                        details={"state_source": unavailable_authority_source(reason=str(exc))},
+                    )
             return None, _warning(
                 CatalogWarningCode.PARTIAL_RUN,
                 "configured authority service is unavailable",

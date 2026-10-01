@@ -414,10 +414,15 @@ def _load_existing_plan(sweep_dir: str | Path) -> "SweepPlan":
 
 
 def _read_run_status(run_uri: str) -> object | None:
+    from loom.diagnostics.backend import _default_authority_store
+    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
     from loom.pipeline.stores import LocalRunStore
 
     try:
-        return LocalRunStore().read_run_status(run_uri)
+        return AuthorityBackedSerialRunStore(
+            local_store=LocalRunStore(),
+            authority_store=_default_authority_store(run_uri=run_uri),
+        ).read_run_status(run_uri)
     except Exception:
         return None
 

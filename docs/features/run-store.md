@@ -1,5 +1,35 @@
 # `loom.pipeline.stores.run_store` Specification
 
+## Current lifecycle status and historical evidence
+
+Native execution reads and transitions lifecycle state through authority. The
+execution adapter and managed preparation no longer refresh run or stage
+`status.json` files. Legacy `LocalRunStore` status methods remain explicit
+historical file readers/writers for portable imports and older bundles; they do
+not provide current lifecycle truth. Resume uses the authority-backed adapter.
+Worker requests, results, logs and output facts remain retained. Managed request
+preparation uses the admitted attempt number, including after a failed retry,
+and never infers identity from the latest status file.
+
+`inspect_run_status` and backend inspection use the selected live authority.
+Without an explicitly configured service, a stopped run with a checkpointed
+run-local SQLite authority can be inspected read-only. This path reads retained
+bytes into a private memory database, validates the existing schema, and neither
+migrates nor repairs it. It does not start a service or claim work. The source
+includes `reference_source: retained_read_only`; the backend result includes the
+committed revision. Retained WAL/journal requiring recovery, unsupported schemas,
+and absent authority produce unavailable diagnostics rather than a pending state
+or a stale status-file fallback. No application should query the private SQL.
+
+`write_offline_evidence_manifest(..., authority_store=...)` explicitly captures
+historical evidence. When authority is selected, status comes from one snapshot;
+`state_source.details` records `historical`, `observed_at`, and
+`authority_revision`. Later transitions do not refresh that export. Unavailable
+authority is recorded as incomplete evidence with a reason. Legacy manifests and
+projection-bearing historical imports retain their existing admission checks and
+remain non-authoritative. The layout and local status APIs described below also
+cover that historical format.
+
 ## 1. Purpose
 
 The run store is the persistent state layer for `loom` pipeline runs.
@@ -1662,12 +1692,9 @@ stubs only.
 Should read:
 
 ```text
-run.json
-status.json
-plan.json
-stages/*/status.json
-artifacts.json
-failure.json files for failed stages
+authoritative run and stage snapshots, attempts and output facts
+run.json and plan.json as supporting metadata
+failure.json and worker results as diagnostic evidence
 ```
 
 Should show:

@@ -360,7 +360,7 @@ def inspect_run_status(
         return RunStatusSummary(
             run_uri=snapshot.run_uri,
             status=snapshot.status.value,
-            message=None,
+            message=None if snapshot.reason is None else snapshot.reason.message,
             artifact_count=sum(len(stage.artifact_facts) for stage in snapshot.stages),
             import_provenance=_import_provenance(snapshot),
             state_source=source,
@@ -933,6 +933,7 @@ def _authority_state_source(
     return authoritative_service_source(
         backend_name=backend_name,
         authority=redacted_authority_summary(authority_config),
+        reference_source="retained_read_only" if getattr(authority_store, "_read_only", False) else None,
     )
 
 
@@ -1003,8 +1004,11 @@ def _stage_log_path(store: Any, run_uri: str, stage_name: str, stream: str) -> P
     if projected.exists():
         return projected
     try:
-        status = store.read_stage_status(run_uri, stage_name)
-        attempt = None if status is None else status.attempt
+        authoritative = _authoritative_read(run_uri, run_store=store)
+        stage = None if authoritative is None else next(
+            (item for item in authoritative.snapshot.stages if item.stage_name == stage_name), None
+        )
+        attempt = stage.attempts[-1].attempt if stage is not None and stage.attempts else None
         if attempt is not None:
             result = store.read_stage_worker_result(
                 run_uri, stage_name, attempt=attempt
