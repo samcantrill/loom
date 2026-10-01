@@ -1041,10 +1041,14 @@ class _RemoteAgentJournal:
         return 1 if row is None else int(row["sequence"]) + 1
 
     def pending_poll(self) -> tuple[str, str, int] | None:
+        """Return an unresolved poll, including an active session's legacy fence."""
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT session_id, availability_revision, sequence "
-                "FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
+                "FROM agent_poll_state_local p WHERE state = 'PENDING' OR "
+                "(state = 'FENCED' AND result_json IS NULL AND EXISTS "
+                "(SELECT 1 FROM agent_sessions_local s WHERE s.session_id = p.session_id "
+                "AND s.state = 'ACTIVE')) LIMIT 1"
             ).fetchone()
         if row is None:
             return None
@@ -1054,21 +1058,70 @@ class _RemoteAgentJournal:
             int(row["sequence"]),
         )
 
-    def discard_absent_poll(self, session_id: str, sequence: int) -> None:
+    def recovery_poll(self, wait_timeout_ms: int) -> tuple[str, dict[str, PlainData]] | None:
+        """Read an unresolved request, including legacy unconfirmed fences."""
         with self._connection() as conn:
-            if sequence == 1:
+            row = conn.execute(
+                "SELECT p.* FROM agent_poll_state_local p "
+                "JOIN agent_sessions_local s ON s.session_id = p.session_id "
+                "WHERE s.state = 'ACTIVE' AND p.state IN ('PENDING', 'FENCED') "
+                "AND p.result_json IS NULL LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        value: dict[str, PlainData] = {
+            "session_id": str(row["session_id"]),
+            "availability_revision": str(row["availability_revision"]),
+            "sequence": int(row["sequence"]),
+            "wait_timeout_ms": wait_timeout_ms,
+        }
+        if _canonical_digest(value) != row["request_digest"]:
+            raise QueueConflictError("retained poll request identity conflicts")
+        return str(row["state"]), value
+
+    def discard_absent_poll(
+        self, session_id: str, sequence: int, *,
+        predecessor_sequence: PlainData = None,
+        predecessor_delivery: PlainData = None,
+    ) -> None:
+        predecessor = sequence - 1 if predecessor_sequence is None else predecessor_sequence
+        if isinstance(predecessor, bool) or not isinstance(predecessor, int) or not 0 <= predecessor < sequence:
+            raise QueueServiceError("poll recovery predecessor is invalid")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if predecessor_delivery is not None:
+                if (
+                    not isinstance(predecessor_delivery, Mapping)
+                    or not isinstance(predecessor_delivery.get("assignment_id"), str)
+                    or not isinstance(predecessor_delivery.get("request_digest"), str)
+                ):
+                    raise QueueServiceError("poll recovery predecessor receipt is invalid")
+                retained = conn.execute(
+                    "SELECT reference_json FROM agent_session_references "
+                    "WHERE session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
+                    (session_id, predecessor_delivery["assignment_id"]),
+                ).fetchone()
+                if (
+                    retained is None or retained[0] is None
+                    or hashlib.sha256(str(retained[0]).encode()).hexdigest()
+                    != predecessor_delivery["request_digest"]
+                ):
+                    raise QueueConflictError("poll recovery predecessor delivery is not retained")
+            if predecessor == 0:
                 conn.execute(
                     "DELETE FROM agent_poll_state_local WHERE session_id = ? "
-                    "AND sequence = ? AND state = 'PENDING'",
+                    "AND sequence = ? AND state IN ('PENDING', 'FENCED') "
+                    "AND result_json IS NULL",
                     (session_id, sequence),
                 )
             else:
-                # Preserve the proven predecessor watermark so the same next
-                # sequence is submitted after current-session reconciliation.
+                # RECONCILED is an authority-confirmed watermark, unlike the
+                # old local FENCED state which did not prove consumption.
                 conn.execute(
-                    "UPDATE agent_poll_state_local SET sequence = ?, state = 'FENCED' "
-                    "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
-                    (sequence - 1, session_id, sequence),
+                    "UPDATE agent_poll_state_local SET sequence = ?, state = 'RECONCILED' "
+                    "WHERE session_id = ? AND sequence = ? AND state IN ('PENDING', 'FENCED') "
+                    "AND result_json IS NULL",
+                    (predecessor, session_id, sequence),
                 )
             conn.commit()
 
@@ -1396,6 +1449,7 @@ class _RemoteAgentJournal:
         session_id: str,
         sequence: int,
         result: Mapping[str, PlainData],
+        *, recovered: bool = False,
     ) -> None:
         encoded = _canonical_json(result)
         poll_result = result.get("result")
@@ -1413,7 +1467,8 @@ class _RemoteAgentJournal:
                     raise QueueConflictError("poll replay returned a different result")
                 conn.commit()
                 return
-            if str(row["state"]) != "PENDING":
+            previous_state = str(row["state"])
+            if previous_state != "PENDING" and not (recovered and previous_state == "FENCED"):
                 raise QueueConflictError("work poll was fenced")
             if poll_result == "assignment":
                 request_value = result.get("request")
@@ -1457,17 +1512,17 @@ class _RemoteAgentJournal:
                 raise QueueServiceError("agent poll result is invalid")
             conn.execute(
                 "UPDATE agent_poll_state_local SET state = ?, result_json = ? "
-                "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
-                (poll_state, encoded, session_id, sequence),
+                "WHERE session_id = ? AND sequence = ? AND state = ?",
+                (poll_state, encoded, session_id, sequence, previous_state),
             )
             conn.commit()
 
-    def fence_poll(self, session_id: str, sequence: int) -> None:
+    def fence_poll(self, session_id: str, sequence: int, *, confirmed: bool = False) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE agent_poll_state_local SET state = 'FENCED' "
+                "UPDATE agent_poll_state_local SET state = ? "
                 "WHERE session_id = ? AND sequence = ?",
-                (session_id, sequence),
+                ("RECONCILED" if confirmed else "FENCED", session_id, sequence),
             )
             conn.commit()
 
@@ -1569,7 +1624,7 @@ class _RemoteAgentJournal:
                 )
                 conn.execute(
                     "UPDATE agent_poll_state_local SET state = 'FENCED' "
-                    "WHERE session_id = ?",
+                    "WHERE session_id = ? AND state != 'RECONCILED'",
                     (session.session_id,),
                 )
                 conn.execute(
@@ -1843,10 +1898,7 @@ class _RemoteAgentJournal:
                 "SELECT 1 FROM agent_session_references WHERE "
                 "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
             ).fetchone()
-            pending_poll = conn.execute(
-                "SELECT 1 FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
-            ).fetchone()
-        return row is not None or pending_poll is not None
+        return row is not None or self.pending_poll() is not None
 
     def delivery_request(self, session_id: str, assignment_id: str) -> object:
         """Read the original authenticated wire representation, including unresolved references."""
@@ -2011,7 +2063,7 @@ class _RemoteAgentJournal:
             )
             conn.execute(
                 "UPDATE agent_poll_state_local SET state = 'FENCED' "
-                "WHERE session_id = ?",
+                "WHERE session_id = ? AND state != 'RECONCILED'",
                 (session_id,),
             )
             unresolved = conn.execute(
@@ -3242,14 +3294,11 @@ class LocalDaemonAgentHttpClient:
             # The original held request still owns this exact poll identity.
             # Preserve the local intent so the same identity can be retried.
             raise
-        except QueueConflictError:
-            journal.fence_poll(session_id, sequence)
+        except AgentPollFencedError:
+            journal.fence_poll(session_id, sequence, confirmed=True)
             raise
-        except _IndeterminateAgentProtocolError:
-            raise
-        except QueueServiceError:
-            journal.fence_poll(session_id, sequence)
-            raise
+        # Other rejection and indeterminate responses leave the exact request
+        # pending. Only native outcome evidence proves sequence consumption.
         journal.complete_poll(session_id, sequence, result)
         return result
 
@@ -4872,43 +4921,51 @@ class LocalDaemonAgentHttpClient:
 
         The retained request digest validates the configured timeout as well as
         session/revision/sequence. An incompatible restart keeps work retained.
-        Only an exact coordinator-confirmed fence can consume a pending poll
-        without a result while the same coordinator epoch is still running.
+        A rejection is not consumption. Native outcome evidence settles the
+        exact request or rewinds an absent legacy request to its proven owner
+        watermark; a predecessor delivery must already be retained unchanged.
         """
         journal = self._require_journal()
-        pending = journal.pending_poll()
+        pending = journal.recovery_poll(wait_timeout_ms)
         if pending is None:
             return
         _raise_if_application_suspended(suspend_requested)
-        session_id, revision, sequence = pending
-        value: dict[str, PlainData] = {
-            "session_id": session_id,
-            "availability_revision": revision,
-            "sequence": sequence,
-            "wait_timeout_ms": wait_timeout_ms,
-        }
-        journal.prepare_poll(session_id, revision, sequence, value)
+        state, value = pending
+        session_id, sequence = str(value["session_id"]), int(cast(int, value["sequence"]))
         prior_epoch = journal.session(session_id).coordinator_epoch
-        if (yield from _steps(self.handshake))["coordinator_epoch"] != prior_epoch:
+        result: Mapping[str, PlainData] | None = None
+        recover = state == "FENCED" or (yield from _steps(self.handshake))["coordinator_epoch"] != prior_epoch
+        if not recover:
+            try:
+                result = (yield from _steps(self._call, "poll", value))
+            except AgentPollActiveError:
+                raise
+            except AgentPollFencedError:
+                journal.fence_poll(session_id, sequence, confirmed=True)
+                return
+            except _IndeterminateAgentProtocolError:
+                raise
+            except (QueueConflictError, QueueServiceError):
+                recover = True
+        if recover:
             recovery = (yield from _steps(self._call,
                 "recover_poll", {**value, "coordinator_epoch": prior_epoch}
             ))
             if recovery.get("state") == "absent":
-                journal.discard_absent_poll(session_id, sequence)
+                journal.discard_absent_poll(
+                    session_id, sequence,
+                    predecessor_sequence=recovery.get("predecessor_sequence"),
+                    predecessor_delivery=recovery.get("predecessor_delivery"),
+                )
                 return
             if recovery.get("state") == "fenced":
-                journal.fence_poll(session_id, sequence)
+                journal.fence_poll(session_id, sequence, confirmed=True)
                 return
             if recovery.get("state") != "committed":
                 raise QueueServiceError("retained poll recovery result is invalid")
             result = {key: item for key, item in recovery.items() if key != "state"}
-        else:
-            try:
-                result = (yield from _steps(self._call, "poll", value))
-            except AgentPollFencedError:
-                journal.fence_poll(session_id, sequence)
-                return
-        journal.complete_poll(session_id, sequence, result)
+        assert result is not None
+        journal.complete_poll(session_id, sequence, result, recovered=True)
         if result.get("result") == "assignment" and not self._service_progress:
             request = (yield from _steps(self._resolve_delivery, session_id, result.get("request")))
             (yield from _steps(self._execute_delivered_assignment,
