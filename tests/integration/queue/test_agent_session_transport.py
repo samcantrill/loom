@@ -1163,9 +1163,13 @@ def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
         client.close()
 
 
+@pytest.mark.parametrize("declaration", ["programmatic", "bound", "clear-bound"])
 def test_agent_reload_recovers_crash_after_bound_replacement(
     tmp_path: Path,
+    declaration: str,
 ) -> None:
+    from loom.queue.resident_readiness import qualified_resident_profile
+    from loom.queue.retirement import read_agent_declaration_binding
     root = _fresh_remote_agent_root(tmp_path)
     profile = ResidentExecutionProfile(
         descriptor=ResidentProfileDescriptor(
@@ -1174,6 +1178,8 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         project_root=tmp_path,
         python_executable=Path(sys.executable),
     )
+    if declaration != "programmatic":
+        profile = qualified_resident_profile(profile)
     base = AgentTlsClientConfig(
         "https://localhost",
         tmp_path / "ca.crt",
@@ -1183,9 +1189,15 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         resident_profiles=(profile,),
         deployment_configuration_fingerprint="1" * 64,
         active_configuration_fingerprint="1" * 64,
+        declaration_digest=None if declaration == "programmatic" else "a" * 64,
     )
-    replacement = replace(base, active_configuration_fingerprint="2" * 64)
+    replacement = replace(
+        base, active_configuration_fingerprint="2" * 64,
+        declaration_digest="b" * 64 if declaration == "bound" else None,
+    )
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    before = read_agent_declaration_binding(root, "a" * 64)
+    assert (before is None) is (declaration == "programmatic")
     client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
     registration = AgentRegistration(
         idempotency_key="register-crash-reload",
@@ -1233,6 +1245,9 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         is None
     )
     client.close()  # Process loss before complete_reload leaves the bound intent.
+    if before is not None:
+        with pytest.raises(QueueError, match="pending agent reload"):
+            read_agent_declaration_binding(root, "a" * 64)
 
     recovered = LocalDaemonAgentHttpClient(replacement)
     try:
@@ -1257,6 +1272,17 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
             "active_configuration_revision": "2",
             "active_configuration_fingerprint": "2" * 64,
         }
+        after = read_agent_declaration_binding(root, "b" * 64)
+        if declaration == "bound":
+            assert after is not None and before is not None
+            assert after.root_id == before.root_id
+            assert after.active_configuration_revision == 2
+            assert after.active_fingerprint == "2" * 64
+            assert after.declaration_digest == "b" * 64
+        else:
+            assert after is None
+        recovered._require_journal().complete_reload(control, replacement, effect)
+        assert read_agent_declaration_binding(root, "b" * 64) == after
         recovered.shutdown_clean()
     finally:
         recovered.close()

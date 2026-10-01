@@ -4,10 +4,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from loom.serialization import PlainData
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from loom.diagnostics.models import PreflightResult, PreflightCheckResult
+    from .deployment import CoordinatorServiceConfig, OutboundAgentServiceConfig
 
 
 def run_role_preflight(
@@ -26,6 +27,52 @@ def run_role_preflight(
     claims until process containment and provider release are established.
     Connection and scientific checks remain with their actual owning operations.
     """
+    from .deployment import (
+        load_coordinator_service_config,
+        load_outbound_agent_service_config,
+    )
+    from .errors import QueueError
+
+    if role not in {"coordinator", "agent"}:
+        raise ValueError("unknown managed role")
+    loader = (
+        load_coordinator_service_config
+        if role == "coordinator"
+        else load_outbound_agent_service_config
+    )
+    try:
+        service = loader(config_path, env_file=env_file, _allow_unready=True)
+    except QueueError:
+        service = None
+    return _check_loaded_role(
+        service, role=role, probe_io=probe_io, probe_gpu=probe_gpu
+    )
+
+
+def check_loaded_agent(
+    service: OutboundAgentServiceConfig,
+    *,
+    probe_io: bool = False,
+    probe_gpu: bool = False,
+) -> "PreflightResult":
+    """Assemble native checks from one already qualified outbound service.
+
+    Software qualification is not repeated. Existing-root binding checks and
+    requested IO/GPU probes still run at this boundary. This report is not a
+    reusable qualification cache or permission to start a different declaration.
+    """
+    return _check_loaded_role(
+        service, role="agent", probe_io=probe_io, probe_gpu=probe_gpu
+    )
+
+
+def _check_loaded_role(
+    service: CoordinatorServiceConfig | OutboundAgentServiceConfig | None,
+    *,
+    role: str,
+    probe_io: bool,
+    probe_gpu: bool,
+) -> "PreflightResult":
     import os
     import sys
     from dataclasses import replace
@@ -35,11 +82,7 @@ def run_role_preflight(
         PreflightGroup as Group,
         PreflightResult,
     )
-    from .deployment import (
-        load_coordinator_service_config,
-        load_outbound_agent_service_config,
-    )
-    from .errors import QueueError
+    from .errors import QueueError, QueueServiceError
     from .resident_readiness import readiness_check
 
     checks: list[PreflightCheckResult] = []
@@ -70,10 +113,10 @@ def run_role_preflight(
         )
 
     try:
+        if service is None:
+            raise QueueServiceError("protected role configuration is unavailable")
         if role == "coordinator":
-            coordinator = load_coordinator_service_config(
-                config_path, env_file=env_file, _allow_unready=True
-            )
+            coordinator = cast("CoordinatorServiceConfig", service)
             gpu_configuration = coordinator
             agent = coordinator.local_agent
             profiles = () if agent is None else (agent.profile,)
@@ -85,9 +128,7 @@ def run_role_preflight(
             )
             capacity = coordinator.effective_capacity
         elif role == "agent":
-            outbound = load_outbound_agent_service_config(
-                config_path, env_file=env_file, _allow_unready=True
-            )
+            outbound = cast("OutboundAgentServiceConfig", service)
             gpu_configuration = outbound
             profiles = outbound.client.resident_profiles
             agent_root = outbound.client.agent_root
@@ -339,4 +380,4 @@ def _role_io_probe(root: Path, index: int) -> "PreflightCheckResult":
     )
 
 
-__all__ = ["run_role_preflight"]
+__all__ = ["run_role_preflight", "check_loaded_agent"]

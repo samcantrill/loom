@@ -257,6 +257,7 @@ class AgentTlsClientConfig:
 
     slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
     max_concurrent_assignments: int = 1
+    declaration_digest: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -343,6 +344,15 @@ class AgentTlsClientConfig:
             or any(character not in "0123456789abcdef" for character in active)
         ):
             raise QueueServiceError("agent active configuration fingerprint is invalid")
+        declaration = self.declaration_digest
+        if declaration is not None and (
+            not isinstance(declaration, str)
+            or len(declaration) != 64
+            or any(character not in "0123456789abcdef" for character in declaration)
+            or fingerprint is None
+            or active is None
+        ):
+            raise QueueServiceError("agent declaration binding is invalid")
 
     @property
     def capacity_profile(self) -> ResidentExecutionProfile:
@@ -816,6 +826,9 @@ class _RemoteAgentJournal:
                 "UPDATE root_metadata SET value = ? "
                 "WHERE key = 'active_configuration_fingerprint'",
                 (fingerprint,),
+            )
+            _record_agent_declaration_binding(
+                conn, config, int(str(revision["value"])) + 1
             )
             conn.execute(
                 "UPDATE agent_sessions_local SET value_json = ? WHERE session_id = ?",
@@ -2055,7 +2068,10 @@ class _RemoteAgentJournal:
             conn.commit()
         return proof
 
-    def persist_retired(self, session_id: str, retirement_operation_id: str) -> None:
+    def persist_retired(
+        self, session_id: str, retirement_operation_id: str,
+        *, role_receipt: Mapping[str, PlainData] | None = None,
+    ) -> None:
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT value_json, registration_operation_id, retirement_secret FROM agent_sessions_local WHERE session_id = ?",
@@ -2095,6 +2111,11 @@ class _RemoteAgentJournal:
                 "DELETE FROM agent_mutation_intents WHERE operation = 'retire' AND operation_id = ?",
                 (retirement_operation_id,),
             )
+            if role_receipt is not None:
+                conn.execute(
+                    "INSERT INTO root_metadata(key,value) VALUES ('role_retirement',?)",
+                    (_canonical_json(role_receipt),),
+                )
             conn.commit()
 
     def _persist_mutation(
@@ -2640,6 +2661,7 @@ class LocalDaemonAgentHttpClient:
                     "INSERT INTO root_metadata(key, value) VALUES "
                     "('availability_state', 'active')"
                 )
+                _record_agent_declaration_binding(conn, config, 1)
                 conn.commit()
             journal = _RemoteAgentJournal(
                 staging,
@@ -3509,20 +3531,8 @@ class LocalDaemonAgentHttpClient:
                     )
 
     def _has_retained_agent_work(self) -> bool:
-        return (
-            bool(
-                self._slurm_agent is not None and self._slurm_agent.has_retained_work()
-            )
-            or bool(
-                self._execution_journal.retained_claim_commands()
-                if self._execution_journal is not None
-                else ()
-            )
-            or bool(
-                self._journal.has_unresolved_assignment_references()
-                if self._journal is not None
-                else False
-            )
+        return _has_retained_agent_work(
+            self._journal, self._execution_journal, self._slurm_agent
         )
 
     def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
@@ -5930,17 +5940,10 @@ class LocalDaemonAgentHttpClient:
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
             raise QueueConflictError("agent has retained SLURM work")
-        journal = self._require_journal()
-        proof = journal.fence_and_prove_empty(session_id)
-        request: dict[str, PlainData] = {
-            "proof": proof.value(),
-            "idempotency_key": idempotency_key,
-        }
-        journal._persist_mutation("retire", idempotency_key, request)
-        result = (yield from _steps(self._call, "retire", request))
-        journal.complete_mutation("retire", idempotency_key, result)
-        journal.persist_retired(session_id, idempotency_key)
-        return result
+        return (yield from _steps(
+            _retire_agent_session, self._require_journal(), self._call,
+            session_id, idempotency_key=idempotency_key,
+        ))
 
     def _require_journal(self) -> "_RemoteAgentJournal":
         if self._journal is None:
@@ -5991,6 +5994,40 @@ class LocalDaemonAgentHttpClient:
         else:
             reply.connection.close()
         return reply.value
+
+
+def _has_retained_agent_work(
+    journal: _RemoteAgentJournal | None,
+    execution: SQLiteAgentJournal | None,
+    slurm: AgentSlurmJobs | None,
+) -> bool:
+    """One settlement predicate for execution and control-only native owners."""
+    return (
+        bool(slurm is not None and slurm.has_retained_work())
+        or bool(execution is not None and execution.retained_claim_commands())
+        or bool(journal is not None and journal.has_unresolved_assignment_references())
+    )
+
+
+@_cooperative
+def _retire_agent_session(
+    journal: _RemoteAgentJournal,
+    exchange: Callable[[str, Mapping[str, PlainData]], Mapping[str, PlainData]],
+    session_id: str,
+    *,
+    idempotency_key: str,
+    role_receipt: Mapping[str, PlainData] | None = None,
+) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+    """Fence, persist and replay the same native retirement protocol everywhere."""
+    proof = journal.fence_and_prove_empty(session_id)
+    request: dict[str, PlainData] = {
+        "proof": proof.value(), "idempotency_key": idempotency_key,
+    }
+    journal._persist_mutation("retire", idempotency_key, request)
+    result = yield from _steps(exchange, "retire", request)
+    journal.complete_mutation("retire", idempotency_key, result)
+    journal.persist_retired(session_id, idempotency_key, role_receipt=role_receipt)
+    return result
 
 
 def _start_once_steps(journal, assignment_id, execution_id, launcher, *, start_failure):
@@ -7431,6 +7468,41 @@ def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
                 device.descriptor.to_dict() for device in capacity.gpu_devices
             ],
         },
+    )
+
+
+def _record_agent_declaration_binding(
+    connection: sqlite3.Connection,
+    config: AgentTlsClientConfig,
+    revision: int,
+) -> None:
+    """Bind qualified declarations in the transaction activating this revision.
+
+    Programmatic configurations carry no source evidence by default. A reload
+    through such a configuration removes obsolete evidence rather than leaving
+    a prior declaration apparently attached to the new active revision.
+    """
+    if config.declaration_digest is None:
+        connection.execute(
+            "DELETE FROM root_metadata WHERE key = 'declaration_binding'"
+        )
+        return
+    if any(
+        profile.readiness_result is None or not profile.readiness_result.ok
+        for profile in config.resident_profiles
+    ):
+        raise QueueServiceError("agent declaration binding requires accepted readiness")
+    value = {
+        "version": 1,
+        "declaration_digest": config.declaration_digest,
+        "immutable_fingerprint": config.deployment_configuration_fingerprint,
+        "active_fingerprint": config.active_configuration_fingerprint,
+        "active_configuration_revision": revision,
+    }
+    connection.execute(
+        "INSERT INTO root_metadata(key, value) VALUES ('declaration_binding', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (json.dumps(value, sort_keys=True, separators=(",", ":")),),
     )
 
 

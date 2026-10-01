@@ -135,6 +135,32 @@ def test_queue_role_check_uses_only_its_explicit_environment(
     assert not (tmp_path / "deployment").exists()
 
 
+def test_agent_init_failed_post_init_report_preserves_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from loom.cli.errors import ExitCode
+    from loom.diagnostics.models import PreflightCheckStatus, PreflightGroup, PreflightResult
+    from loom.queue.resident_readiness import readiness_check
+
+    failure = readiness_check(
+        "filesystem.role_roots", PreflightGroup.FILESYSTEM, PreflightCheckStatus.FAIL,
+        "Execution root became unavailable after initialization.",
+        owner="role/workspace stores", consequence="Do not start.", repair="Repair access.",
+    )
+    monkeypatch.setattr("loom.queue.preflight.check_loaded_agent", lambda _service: PreflightResult((failure,), (PreflightGroup.FILESYSTEM,)))
+    config = _outbound_agent_service_config(tmp_path)
+    stdout = io.StringIO()
+    assert main(
+        ["queue", "agent-init", str(config), "--check-report", "--format", "json"],
+        stdout=stdout, stderr=io.StringIO(),
+    ) == ExitCode.CONFIG
+    result = json.loads(stdout.getvalue())
+    assert result["ok"] is False and result["result"]["check_report"]["status"] == "FAIL"
+    assert (tmp_path / "remote-agent/control.sqlite").is_file()
+    assert main(
+        ["queue", "agent-init", str(config), "--check-report", "--format", "json"],
+        stdout=io.StringIO(), stderr=io.StringIO(),
+    ) != 0  # No retry silently recreates the failed candidate.
+
+
 def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> None:
     result = main(
         [
@@ -154,18 +180,39 @@ def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> N
     assert result == 2
 
 
-def test_queue_agent_init_uses_one_protected_config(tmp_path: Path) -> None:
+@pytest.mark.parametrize("check_report", [False, True])
+def test_queue_agent_init_uses_one_protected_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check_report: bool) -> None:
+    from loom.queue import deployment
+
+    original = deployment.qualified_resident_profile
+    qualifications = []
+
+    def qualify(*args, **kwargs):
+        qualifications.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(deployment, "qualified_resident_profile", qualify)
     config = _outbound_agent_service_config(tmp_path)
     stdout = io.StringIO()
 
     result = main(
-        ["queue", "agent-init", str(config), "--format", "json"],
+        ["queue", "agent-init", str(config), "--format", "json", *(["--check-report"] if check_report else [])],
         stdout=stdout,
         stderr=io.StringIO(),
     )
 
     assert result == 0
-    assert json.loads(stdout.getvalue())["result"]["operation"] == "agent-initialize"
+    result_payload = json.loads(stdout.getvalue())["result"]
+    assert result_payload["operation"] == "agent-initialize"
+    assert qualifications == [True]
+    if check_report:
+        checks = {item["check_id"]: item for item in result_payload["check_report"]["checks"]}
+        assert checks["execution.retained_binding"]["status"] == "PASS"
+        assert checks["resources.gpu_compute"]["status"] == "SKIP"
+        assert checks["filesystem.io"]["status"] == "SKIP"
+        assert result_payload["check_report"]["status"] != "FAIL"
+    else:
+        assert "check_report" not in result_payload
     assert (tmp_path / "remote-agent/control.sqlite").is_file()
     assert (tmp_path / "remote-agent/role-binding.json").is_file()
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient

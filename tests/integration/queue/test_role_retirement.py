@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import json
+import sqlite3
 from threading import Event
 import time
 
@@ -18,9 +19,10 @@ from loom.queue.agent_sessions import AgentRegistration
 from loom.queue.deployment import (
     load_coordinator_service_config,
     load_outbound_agent_service_config,
+    read_agent_spec,
     run_outbound_agent_service,
 )
-from loom.queue.errors import QueueError
+from loom.queue.errors import QueueError, QueueServiceError
 from loom.queue.retirement import (
     retire_outbound_agent,
     retired_role_guard,
@@ -99,10 +101,24 @@ def test_pending_work_prevents_retirement_without_fencing_acceptance(tmp_path):
         client.retire("remove", client.status().coordinator_id)
 
 
-def test_agent_clean_retirement_before_revoke_and_native_guard(tmp_path):
+@pytest.mark.parametrize(
+    "mode", ["service", "spec", "broken-workload", "lost-response", "legacy"]
+)
+def test_agent_clean_retirement_before_revoke_and_native_guard(
+    tmp_path, monkeypatch, mode
+):
     with fleet(tmp_path) as (daemon, operator):
+        path = tmp_path / "agent.json"
+        workload = tmp_path / "old-workload"
+        if mode == "broken-workload":
+            workload.mkdir()
+            value = json.loads(path.read_text())
+            value["resident_profiles"][0]["project_root"] = str(workload)
+            path.write_text(json.dumps(value))
         service = load_outbound_agent_service_config(tmp_path / "agent.json")
         LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+        spec = read_agent_spec(path)
+        retirement_config = service if mode == "service" else spec
         agent = LocalDaemonAgentHttpClient(service.client)
         try:
             handshake = agent.handshake()
@@ -131,16 +147,64 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(tmp_path):
             )
             assert operator.agent_retirement_ready("worker", session.session_id)
             with pytest.raises(QueueError):
-                retire_outbound_agent(service, **args)
+                retire_outbound_agent(retirement_config, **args)
             with pytest.raises(QueueError):
                 operator.retire("remove-fleet", session.coordinator_id)
         finally:
             agent.close()
-        receipt = retire_outbound_agent(service, **args)
+        root = spec.agent_root
+        if mode == "legacy":
+            with sqlite3.connect(root / "control.sqlite") as conn:
+                conn.execute(
+                    "DELETE FROM root_metadata WHERE key='declaration_binding'"
+                )
+        elif mode != "service":
+            if mode == "broken-workload":
+                workload.rmdir()
+                with pytest.raises(QueueError):
+                    load_outbound_agent_service_config(path)
+
+            def forbidden(*_args, **_kwargs):
+                pytest.fail(
+                    "bound retirement requalified or started an old workload owner"
+                )
+
+            monkeypatch.setattr("loom.queue.deployment.qualify_agent_spec", forbidden)
+            monkeypatch.setattr(
+                "loom.queue._agent_process_supervisor._profile_from_value", forbidden
+            )
+            monkeypatch.setattr(
+                "loom.queue.agent_session_transport.LocalDaemonAgentHttpClient",
+                forbidden,
+            )
+        if mode == "lost-response":
+            from loom.queue import agent_session_transport as transport
+
+            original = transport._exchange_agent_request
+            lost = True
+
+            def exchange(*call_args, **kwargs):
+                nonlocal lost
+                result = original(*call_args, **kwargs)
+                if call_args[1] == "retire" and lost:
+                    lost = False
+                    raise QueueServiceError(
+                        "response lost after coordinator retirement"
+                    )
+                return result
+
+            monkeypatch.setattr(transport, "_exchange_agent_request", exchange)
+            with pytest.raises(QueueError, match="response lost"):
+                retire_outbound_agent(retirement_config, **args)
+            assert retirement_receipt(root) is None
+            assert operator.agent("worker").state == "RETIRED_CLEAN"
+        receipt = retire_outbound_agent(retirement_config, **args)
         assert operator.agent("worker").state == "RETIRED_CLEAN"
-        assert retire_outbound_agent(service, **args) == receipt
+        assert retire_outbound_agent(retirement_config, **args) == receipt
         with pytest.raises(QueueError):
-            retire_outbound_agent(service, **{**args, "expected_session_id": "stale"})
+            retire_outbound_agent(
+                retirement_config, **{**args, "expected_session_id": "stale"}
+            )
         agent_root = service.client.agent_root
         assert agent_root is not None
         with retired_role_guard(agent_root, receipt):

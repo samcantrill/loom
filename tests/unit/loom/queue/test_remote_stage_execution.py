@@ -1455,7 +1455,9 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     # Recovery decodes the retained launch before retaining outputs again.
-    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    retained = workspace.supervisor_launch_json()
+    assert retained is not None
+    restored = _launch_from_value(json.loads(retained))
     assert restored.spec_digest == original_digest
     assert restored.command_argv == original_argv
     from loom.queue._shared_publication import staging_tree
