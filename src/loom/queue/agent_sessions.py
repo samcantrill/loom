@@ -2919,7 +2919,12 @@ class AgentSessionService:
         wait_timeout_ms: int,
         coordinator_epoch: str,
     ) -> Mapping[str, PlainData]:
-        """Read an exact abandoned-epoch poll's committed or fenced outcome."""
+        """Read a retained poll's outcome without reserving new work.
+
+        Rejection recovery also proves a surviving predecessor watermark.
+        A predecessor delivery digest requires the agent to verify unchanged
+        durable ownership before discarding any rejected sequence.
+        """
         rule, policy_revision = self._authorize("poll")
         for value, name in (
             (session_id, "session_id"),
@@ -2936,8 +2941,6 @@ class AgentSessionService:
         ):
             raise QueueServiceError("work poll wait is outside the permitted range")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        if coordinator_epoch == epoch:
-            raise QueueConflictError("current-epoch poll must use ordinary replay")
         request: dict[str, PlainData] = {
             "session_id": session_id,
             "availability_revision": availability_revision,
@@ -2955,15 +2958,32 @@ class AgentSessionService:
             )
             self._check_current_session(session, rule, epoch, policy_revision)
             row = conn.execute(
-                "SELECT sequence, digest, active, result_json FROM agent_poll_state "
+                "SELECT sequence, coordinator_epoch, digest, active, result_json FROM agent_poll_state "
                 "WHERE principal_id = ? AND session_id = ?",
                 (rule.principal_id, session_id),
             ).fetchone()
+            current_epoch = coordinator_epoch == epoch
             if row is None:
-                # No request committed before the former process epoch ended.
+                if current_epoch:
+                    return {"state": "absent", "predecessor_sequence": 0}
                 if sequence != 1:
                     raise QueueConflictError("retained poll history is unavailable")
                 return {"state": "absent"}
+            if (current_epoch or coordinator_epoch == row["coordinator_epoch"]) and int(row["sequence"]) < sequence:
+                if bool(row["active"]):
+                    raise AgentPollActiveError("work poll is already active")
+                absent: dict[str, PlainData] = {
+                    "state": "absent", "predecessor_sequence": int(row["sequence"]),
+                }
+                if row["result_json"] is not None:
+                    predecessor = _plain_result(row["result_json"], "agent poll receipt")
+                    if predecessor.get("result") == "assignment":
+                        predecessor_request = cast(Mapping[str, PlainData], predecessor["request"])
+                        absent["predecessor_delivery"] = {
+                            "assignment_id": predecessor_request["assignment_id"],
+                            "request_digest": _digest(predecessor_request),
+                        }
+                return absent
             if int(row["sequence"]) == sequence - 1:
                 # The sole outstanding next request never reached this owner.
                 return {"state": "absent"}

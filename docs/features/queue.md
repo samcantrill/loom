@@ -536,6 +536,25 @@ intent, not proof of completed containment: claims remain held through positive
 no-start/containment evidence, durable output and acknowledged result commit.
 An outstanding poll is settled or replayed with its original identity before
 refreshing the offer or submitting another poll.
+An ordinary rejection does not prove that the coordinator reserved its sequence:
+offer expiry and availability changes can reject before reservation. The agent
+keeps the exact request pending and uses authenticated native poll recovery after
+an unsuccessful replay. Only a committed receipt, a confirmed fence, or proof of
+absence settles it. An active or indeterminate request remains pending.
+Recovery also repairs legacy locally fenced sequence gaps against the same
+session's surviving coordinator watermark, including across a coordinator
+restart when that row belongs to the retained request's epoch. Missing history
+from an abandoned epoch remains unresolved. It never skips a predecessor
+delivery: its original wire request must already be retained unchanged by
+assignment ID.
+The coordinator supplies its request digest, not another nested copy of the
+assignment, preserving the existing transport body and nesting limits.
+Otherwise recovery fails closed without changing the poll or delivery owners.
+The existing local poll row records a confirmed fence or rewound watermark as
+`RECONCILED`; historical unconfirmed `FENCED` rows remain recovery-required.
+No poll-table schema change is required. A coordinator lacking current-epoch
+recovery support leaves the request retained rather than consuming another
+sequence.
 Availability-changing exchanges are ordered through reply application, including
 exact replay after a lost release response. Every offer reflects the complete
 provider claim set. A held worker or publication does not prevent an independent

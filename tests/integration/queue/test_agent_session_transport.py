@@ -5491,6 +5491,11 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
                 idempotency_key="reconcile-rotated-credential",
             )
             assert resumed.policy_revision == "policy-3"
+            # Reauthorization does not settle a poll rejected by the old policy.
+            # Resolve its exact retained identity before advertising fresh work.
+            rotated._resume_pending_poll(wait_timeout_ms=1_000)
+            assert rotated._require_journal().pending_poll() is None
+            assert rotated.resume_retained_work() == ()
             rotated.publish_offer(
                 AgentOffer(
                     resumed.session_id,

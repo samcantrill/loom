@@ -1912,6 +1912,99 @@ def test_poll_sequence_rejects_stale_and_gap_and_keeps_one_replay_row(
         daemon.stop()
 
 
+@pytest.mark.parametrize("predecessor", [0, 2])
+@pytest.mark.parametrize("restart", [False, True])
+def test_recovery_proves_rejected_poll_watermark(tmp_path, predecessor, restart):
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        view = _view(daemon)
+        view.publish_offer(
+            _offer(session.session_id, session.coordinator_epoch),
+            idempotency_key="offer",
+        )
+        for sequence in range(1, predecessor + 1):
+            view.wait_for_work(
+                session.session_id, session.availability_revision,
+                sequence=sequence, wait_timeout_ms=1,
+            )
+        # A legacy client consumed several rejected, never reserved requests.
+        sequence = predecessor + 5
+        with pytest.raises(AgentPollSequenceGapError):
+            view.wait_for_work(
+                session.session_id, session.availability_revision,
+                sequence=sequence, wait_timeout_ms=1,
+            )
+        if restart:
+            daemon.stop()
+            daemon = LocalDaemon(config)
+            daemon.start()
+            view = _view(daemon)
+            if predecessor == 0:
+                # An abandoned epoch with no surviving history cannot prove
+                # a legacy multi-sequence predecessor. Keep it unresolved.
+                with pytest.raises(QueueConflictError, match="history is unavailable"):
+                    view.recover_poll(
+                        session.session_id, session.availability_revision,
+                        sequence=sequence, wait_timeout_ms=1,
+                        coordinator_epoch=session.coordinator_epoch,
+                    )
+                return
+        assert view.recover_poll(
+            session.session_id, session.availability_revision,
+            sequence=sequence, wait_timeout_ms=1,
+            coordinator_epoch=session.coordinator_epoch,
+        ) == {"state": "absent", "predecessor_sequence": predecessor}
+        if restart:
+            session = view.reconcile(session, str(view.handshake()["coordinator_epoch"]), idempotency_key="reconcile")
+            view.publish_offer(
+                _offer(session.session_id, session.coordinator_epoch), idempotency_key="restarted-offer",
+            )
+        assert view.wait_for_work(
+            session.session_id, session.availability_revision,
+            sequence=predecessor + 1, wait_timeout_ms=1,
+        )["sequence"] == predecessor + 1
+    finally:
+        daemon.stop()
+
+
+def test_current_epoch_recovery_preserves_exact_receipt_and_active_owner(tmp_path):
+    from loom.queue.agent_sessions import AgentPollActiveError, AgentSessionService
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        view = _view(daemon)
+        view.publish_offer(_offer(session.session_id, session.coordinator_epoch), idempotency_key="offer")
+        receipt = view.wait_for_work(session.session_id, session.availability_revision, sequence=1, wait_timeout_ms=1)
+        assert view.recover_poll(
+            session.session_id, session.availability_revision, sequence=1,
+            wait_timeout_ms=1, coordinator_epoch=session.coordinator_epoch,
+        ) == {**receipt, "state": "committed"}
+        with pytest.raises(QueueConflictError, match="identity conflicts"):
+            view.recover_poll(
+                session.session_id, session.availability_revision, sequence=1,
+                wait_timeout_ms=2, coordinator_epoch=session.coordinator_epoch,
+            )
+        service = AgentSessionService(daemon, LocalDaemonPrincipal("principal-a", LocalDaemonRole.AGENT, "agent-a"))
+        # Reserve through the native owner boundary but leave the live poll held.
+        service._begin_work_poll(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=1000)
+        for sequence in (2, 7):
+            with pytest.raises(AgentPollActiveError):
+                view.recover_poll(
+                    session.session_id, session.availability_revision, sequence=sequence,
+                    wait_timeout_ms=1000, coordinator_epoch=session.coordinator_epoch,
+                )
+    finally:
+        daemon.stop()
+
+
 def _delivery_journal(root):
     from loom.queue.agent_session_transport import _RemoteAgentJournal
 
@@ -2018,6 +2111,71 @@ def test_delivery_requests_survive_next_poll_and_restart(tmp_path, forms):
         assert journal.pending_poll() == (session.session_id, session.availability_revision, 3)
         journal.complete_poll(session.session_id, 3, {"result": "assignment", "request": wires[0]})
         assert len(journal.unresolved_assignment_references()) == 2
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_confirmed_recovery_retains_legacy_fenced_delivery(tmp_path, shared):
+    from loom.queue._shared_assignment import publish
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
+
+    profile, assignment, *_ = _assignment_reference_fixture(tmp_path)
+    journal, session = _delivery_journal(tmp_path / "agent")
+    wire = assignment.to_dict()
+    if shared:
+        wire = publish(
+            json.dumps(wire, sort_keys=True, separators=(",", ":")), assignment,
+            root_id="control", roots=profile.shared_roots,
+            session_id=session.session_id, issuer_epoch=session.coordinator_epoch,
+        )
+    try:
+        _prepare_delivery_poll(journal, session, 1)
+        journal.fence_poll(session.session_id, 1)
+        result = {"result": "assignment", "sequence": 1, "request": wire}
+        with pytest.raises(QueueConflictError, match="was fenced"):
+            journal.complete_poll(session.session_id, 1, result)
+        journal.complete_poll(session.session_id, 1, result, recovered=True)
+        assert journal.delivery_request(session.session_id, assignment.assignment_id) == wire
+        assert journal.unresolved_assignment_references() == ((session.session_id, assignment.assignment_id),)
+        assert journal.recovery_poll(1) is None
+    finally:
+        journal.close()
+
+
+def test_rejected_poll_rewind_requires_original_predecessor_delivery(tmp_path):
+    from loom.queue.agent_session_transport import _canonical_digest
+    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
+
+    _, assignment, *_ = _assignment_reference_fixture(tmp_path)
+    journal, session = _delivery_journal(tmp_path / "agent")
+    predecessor = {"result": "assignment", "sequence": 1, "request": assignment.to_dict()}
+    delivery = {"assignment_id": assignment.assignment_id, "request_digest": _canonical_digest(assignment.to_dict())}
+    try:
+        _prepare_delivery_poll(journal, session, 1)
+        journal.fence_poll(session.session_id, 1)
+        _prepare_delivery_poll(journal, session, 2)
+        journal.fence_poll(session.session_id, 2)
+        with pytest.raises(QueueConflictError, match="delivery is not retained"):
+            journal.discard_absent_poll(
+                session.session_id, 2, predecessor_sequence=1, predecessor_delivery=delivery,
+            )
+        assert journal.pending_poll()[2] == 2
+    finally:
+        journal.close()
+    journal, session = _delivery_journal(tmp_path / "owned-agent")
+    try:
+        _prepare_delivery_poll(journal, session, 1)
+        journal.complete_poll(session.session_id, 1, predecessor)
+        _prepare_delivery_poll(journal, session, 2)
+        journal.fence_poll(session.session_id, 2)
+        journal.discard_absent_poll(
+            session.session_id, 2, predecessor_sequence=1, predecessor_delivery=delivery,
+        )
+        assert journal.pending_poll() is None
+        assert journal.recovery_poll(1) is None
+        assert journal.next_poll_sequence(session.session_id) == 2
+        assert journal.delivery_request(session.session_id, assignment.assignment_id) == assignment.to_dict()
     finally:
         journal.close()
 
@@ -2516,6 +2674,22 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
             assert ref["sha256"] == hashlib.sha256(encoded.encode()).hexdigest()
             assert ref["issuer_epoch"] == issuer_epoch
         assert view.wait_for_work(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1) == delivered
+        assert view.recover_poll(
+            session.session_id, "availability-1", sequence=1, wait_timeout_ms=1,
+            coordinator_epoch=session.coordinator_epoch,
+        ) == {**delivered, "state": "committed"}
+        assert view.recover_poll(
+            session.session_id, "availability-1", sequence=5, wait_timeout_ms=1,
+            coordinator_epoch=session.coordinator_epoch,
+        ) == {
+            "state": "absent", "predecessor_sequence": 1,
+            "predecessor_delivery": {
+                "assignment_id": delivered["request"]["assignment_id"],
+                "request_digest": hashlib.sha256(json.dumps(
+                    thaw_plain_data(delivered["request"]), sort_keys=True, separators=(",", ":"),
+                ).encode()).hexdigest(),
+            },
+        }
         with sqlite3.connect(config.control_database) as conn:
             assert conn.execute("SELECT request_json FROM agent_deliveries").fetchone()[0] == encoded
         daemon.stop()

@@ -1705,6 +1705,145 @@ def test_stop_resume_preserves_running_owner_and_conservative_startup(monkeypatc
         ) == [(1,)]
 
 
+@pytest.mark.parametrize("reserved", [False, True])
+def test_rejected_poll_does_not_skip_sequence_and_work_still_runs(monkeypatch, reserved):
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.errors import QueueConflictError
+
+    original = transport._dispatch
+    boundary = "_check_work_poll" if reserved else "_require_current_offer"
+    original_boundary = getattr(AgentSessionService, boundary)
+    polls = []
+
+    def dispatch(view, operation, value):
+        if operation != "poll":
+            return original(view, operation, value)
+        polls.append(dict(value))
+        if len(polls) == 1:
+            # Offer expiry can reject before or after sequence reservation.
+            def expired(*args, **kwargs):
+                raise QueueConflictError("work poll requires a current offer")
+
+            monkeypatch.setattr(AgentSessionService, boundary, expired)
+            try:
+                return original(view, operation, value)
+            finally:
+                monkeypatch.setattr(AgentSessionService, boundary, original_boundary)
+        return original(view, operation, value)
+
+    monkeypatch.setattr(transport, "_dispatch", dispatch)
+    with _service(monkeypatch) as case:
+        _eventually(lambda: len(polls) >= 2)
+        assert polls[0] == polls[1]
+        _submit(case, "after-rejection")
+        assert case.client.wait("after-rejection", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+
+
+def test_unsupported_rejection_recovery_preserves_pending_sequence(monkeypatch):
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.errors import QueueConflictError
+
+    original = transport._dispatch
+    require_offer = AgentSessionService._require_current_offer
+    recovered = Event()
+    rejecting = [True]
+    polls = []
+
+    def dispatch(view, operation, value):
+        if operation == "recover_poll" and rejecting[0]:
+            recovered.set()
+            raise QueueConflictError("current-epoch poll must use ordinary replay")
+        if operation == "poll":
+            polls.append(dict(value))
+            if rejecting[0]:
+                def expired(*args, **kwargs):
+                    raise QueueConflictError("work poll requires a current offer")
+                monkeypatch.setattr(AgentSessionService, "_require_current_offer", expired)
+                try:
+                    return original(view, operation, value)
+                finally:
+                    monkeypatch.setattr(AgentSessionService, "_require_current_offer", require_offer)
+        return original(view, operation, value)
+
+    monkeypatch.setattr(transport, "_dispatch", dispatch)
+    with _service(monkeypatch) as case:
+        assert recovered.wait(10)
+        assert {item["sequence"] for item in polls} == {1}
+        assert _rows(case.agent_root / "control.sqlite", "SELECT sequence, state, result_json FROM agent_poll_state_local") == [(1, "PENDING", None)]
+        rejecting[0] = False
+        _submit(case, "after-supported-replay")
+        assert case.client.wait("after-supported-replay", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+
+
+@pytest.mark.parametrize("restart_coordinator", [False, True])
+def test_restart_repairs_legacy_rejected_poll_gap_without_losing_queued_work(monkeypatch, restart_coordinator):
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.errors import QueueConflictError
+
+    require_offer = AgentSessionService._require_current_offer
+    original = transport._dispatch
+    recoveries = []
+
+    def dispatch(view, operation, value):
+        result = original(view, operation, value)
+        if operation == "recover_poll":
+            recoveries.append(dict(result))
+        return result
+
+    monkeypatch.setattr(transport, "_dispatch", dispatch)
+    with _service(monkeypatch) as case:
+        if restart_coordinator:
+            # The cross-epoch repair deliberately requires surviving owner
+            # history, as in the deployed coordinator's committed WAIT row.
+            _eventually(lambda: _rows(
+                case.database,
+                "SELECT sequence FROM agent_poll_state WHERE result_json IS NOT NULL",
+            ))
+        case.stop.set()
+        case.thread.join(20)
+        assert not case.thread.is_alive()
+        owner = LocalDaemonAgentHttpClient(case.config.client)
+        try:
+            owner._resume_pending_poll(wait_timeout_ms=100)
+            journal = owner._require_journal()
+            session = journal.active_session()
+            assert session is not None
+            predecessor = journal.next_poll_sequence(session.session_id) - 1
+
+            def expired(*args, **kwargs):
+                raise QueueConflictError("work poll requires a current offer")
+
+            # Produce the retained gap through the pinned old client's actual
+            # prepare/exchange/fence transitions, not a forged SQLite counter.
+            monkeypatch.setattr(AgentSessionService, "_require_current_offer", expired)
+            for sequence in range(predecessor + 1, predecessor + 5):
+                value = {
+                    "session_id": session.session_id,
+                    "availability_revision": session.availability_revision,
+                    "sequence": sequence,
+                    "wait_timeout_ms": 100,
+                }
+                journal.prepare_poll(session.session_id, session.availability_revision, sequence, value)
+                with pytest.raises(QueueConflictError):
+                    owner._call("poll", value)
+                journal.fence_poll(session.session_id, sequence)
+            assert journal.next_poll_sequence(session.session_id) == predecessor + 5
+            assert journal.has_unresolved_assignment_references()
+        finally:
+            owner.close()
+            monkeypatch.setattr(AgentSessionService, "_require_current_offer", require_offer)
+        _submit(case, "queued-through-gap")
+        if restart_coordinator:
+            case.daemon.stop()
+            case.daemon.start()
+        case.stop.clear()
+        case.thread = Thread(target=case.serve)
+        case.thread.start()
+        assert case.client.wait("queued-through-gap", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert any(item.get("predecessor_sequence") == predecessor for item in recoveries)
+        assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-gap'")) == 1
+
+
 def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
     monkeypatch,
 ):
@@ -1781,8 +1920,9 @@ def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
             unblock.set()
 
 
+@pytest.mark.parametrize("shared", [False, True])
 def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission(
-    monkeypatch,
+    monkeypatch, shared,
 ):
     entered, unblock = Event(), Event()
     original = transport._dispatch
@@ -1803,7 +1943,7 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
         return result
 
     monkeypatch.setattr(transport, "_dispatch", dispatch)
-    with _service(monkeypatch, ceiling=2) as case:
+    with _service(monkeypatch, ceiling=2, shared=shared) as case:
         try:
             _submit(case, "late")
             assert entered.wait(20), case.failures
