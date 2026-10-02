@@ -1,6 +1,7 @@
 """Unit tests for offline evidence manifests."""
 
 from pathlib import Path
+from loom.serialization import PlainData
 
 import pytest
 
@@ -123,3 +124,25 @@ def test_export_records_unavailable_authority_without_stale_projection(tmp_path:
     assert not manifest.complete
     assert "offline_evidence.authority_unavailable" in {item.code for item in manifest.diagnostics}
     assert {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()} == before
+
+
+def test_export_resolves_retained_composition_and_rejects_corruption(tmp_path: Path) -> None:
+    import json
+    from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
+
+    store = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(tmp_path / "runs" / "referenced")
+    store.create_run(uri)
+    manifest: dict[str, PlainData] = {"metadata": {"final_value_authorship": [{"source_path": "gone.yaml", "path": ["input"]}]}}
+    store.write_composition_manifest(uri, manifest)
+    store.write_run_user_metadata(uri, {"config_provenance": {"metadata": manifest["metadata"]}})
+    exported = collect_offline_evidence_manifest(store, uri)
+    detached = OfflineEvidenceManifest.from_dict(json.loads(json.dumps(exported.to_dict())))
+    target = store.local_run_dir(uri) / "config/composition_manifest.json"
+    target.unlink()
+    assert detached.config["composition_manifest"] == manifest
+    broken = collect_offline_evidence_manifest(store, uri)
+    assert not broken.complete
+    diagnostic = next(d for d in broken.diagnostics if d.code == "offline_evidence.composition_manifest_unreadable")
+    assert diagnostic.severity.value == "error"
+    assert broken.config["composition_manifest"] is None

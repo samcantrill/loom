@@ -653,3 +653,31 @@ Existing schema 15 coordinator roots require the offline
 `loom queue daemon-upgrade` migration to schema 16. It preserves exact operation,
 cancellation and admission rows while allowing many submission references to one
 target. It retains a protected schema 15 backup; worker roots remain unchanged.
+
+### Retained configuration references
+
+New managed preparations keep the Weave composition/authorship definition in
+`config/composition_manifest.json`. The matching `config_provenance.metadata`
+copy in `run.json` is replaced by `metadata_ref`, a schema-1 `ResourceRef` with
+resource type `loom.composition_manifest`, JSON codec, SHA-256 checksum of the
+complete retained wrapper bytes, pointer `/composition_manifest/metadata`, and the exact projected field names.
+Other provenance fields, authored sources, overlays, recipe facts, and scientific
+fingerprints retain their meaning. Unique metadata such as the Native invocation
+stays inline; only equal fields are projected from the composition owner.
+
+`LocalRunStore.read_run_document`, `read_run_user_metadata`, and
+`read_composition_manifest` return logical facts for both formats. Every
+referenced read checks the fixed run-local resource, wrapper schema, pointer and
+digest; missing or altered evidence fails without consulting project files.
+Offline evidence exports resolve this resource into their existing inline
+composition closure, so detached inspection and import need no original run or
+working directory. Corrupt referenced evidence makes the export incomplete.
+
+Protected `config/managed_local_runtime.json` schemas 5/6 additionally bind this
+composition reference into admitted execution intent (6 also binds project
+contracts). Schema 3/4 records remain readable and exact replay preserves all
+legacy bytes and modification times. New-format replay is equally read-only.
+Changing a retained definition, even alongside its display metadata reference,
+does not change the protected admitted intent and fails admission. Protected
+runtime records remain mode 0600 and separate from safe `runtime.json` display
+metadata; neither display metadata nor offline evidence can authorize execution.

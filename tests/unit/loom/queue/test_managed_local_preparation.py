@@ -769,3 +769,93 @@ def test_separate_embedded_authority_replay_never_recreates_lost_database(tmp_pa
     with pytest.raises(QueueConflictError, match="partial, corrupt, or changed"):
         prepare_managed_local_run(coordinator, pipeline, "separate")
     assert not database.exists()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_configuration_reference_replay_preserves_all_files_and_authorship(
+    tmp_path: Path, legacy: bool,
+) -> None:
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    composed = compose_config(pipeline)
+    writer = LocalRunStore.write_run_user_metadata
+
+    def inline_writer(store: LocalRunStore, run_uri: str, metadata: object) -> None:
+        writer(store, run_uri, metadata)  # type: ignore[arg-type]
+        path = store.local_run_dir(run_uri) / "run.json"
+        document = json.loads(path.read_text())
+        document["metadata"] = metadata
+        path.write_text(json.dumps(document))
+
+    with patch.object(LocalRunStore, "write_run_user_metadata", inline_writer if legacy else writer):
+        receipt = prepare_managed_local_run(coordinator, pipeline, "configuration")
+    store = LocalRunStore(tmp_path / "runs")
+    root = store.local_run_dir(receipt.run_uri)
+    raw = json.loads((root / "run.json").read_text())["metadata"]["config_provenance"]
+    assert ("metadata" in raw) is legacy
+    assert ("metadata_ref" in raw) is not legacy
+    assert load_managed_local_runtime_record(store, receipt.run_uri)["schema_version"] == (3 if legacy else 5)
+    before = _run_files(root)
+    assert prepare_managed_local_run(coordinator, pipeline, "configuration") == receipt
+    assert store.read_composition_manifest(receipt.run_uri) == composed.manifest.to_dict()
+    assert store.read_run_user_metadata(receipt.run_uri)["config_provenance"] == composed.provenance.to_dict()
+    assert _run_files(root) == before
+
+
+@pytest.mark.parametrize("damage", ["missing", "altered", "rebound"])
+def test_protected_intent_rejects_changed_composition_before_admission(
+    tmp_path: Path, damage: str,
+) -> None:
+    import hashlib
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    receipt = prepare_managed_local_run(coordinator, pipeline, "configuration")
+    store = LocalRunStore(tmp_path / "runs")
+    root = store.local_run_dir(receipt.run_uri)
+    target = root / "config/composition_manifest.json"
+    if damage == "missing":
+        target.unlink()
+    else:
+        target.write_text(target.read_text().replace('"source_load"', '"changed"'))
+        if damage == "rebound":
+            path = root / "run.json"
+            document = json.loads(path.read_text())
+            document["metadata"]["config_provenance"]["metadata_ref"]["checksum"] = (
+                "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
+            )
+            path.write_text(json.dumps(document))
+            assert store.read_composition_manifest(receipt.run_uri) is not None
+    before = _run_files(root)
+    with pytest.raises(QueueServiceError, match="composition reference"):
+        load_managed_local_runtime_record(store, receipt.run_uri)
+    with pytest.raises(QueueConflictError, match="conflicts"):
+        prepare_managed_local_run(coordinator, pipeline, "configuration")
+    assert _run_files(root) == before
+
+
+def test_referenced_authorship_keeps_secrets_out_of_display_and_offline_evidence(tmp_path: Path) -> None:
+    from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    config = json.loads(pipeline.read_text())
+    config["api_token"] = "private-fixture-value"
+    pipeline.write_text(json.dumps(config))
+    receipt = prepare_managed_local_run(coordinator, pipeline, "redacted")
+    store = LocalRunStore(tmp_path / "runs")
+    root = store.local_run_dir(receipt.run_uri)
+    assert (root / "config/managed_local_runtime.json").stat().st_mode & 0o777 == 0o600
+    assert "private-fixture-value" in (store.read_config_snapshot(receipt.run_uri, "resolved") or "")
+    safe = {
+        "metadata": store.read_run_user_metadata(receipt.run_uri),
+        "composition": store.read_composition_manifest(receipt.run_uri),
+        "runtime": store.read_runtime_metadata(receipt.run_uri),
+        "offline": collect_offline_evidence_manifest(store, receipt.run_uri).to_dict(),
+    }
+    assert "private-fixture-value" not in json.dumps(safe)
+    assert "***REDACTED***" in json.dumps(safe)
+    assert "composition_manifest_ref" not in (store.read_runtime_metadata(receipt.run_uri) or {})
