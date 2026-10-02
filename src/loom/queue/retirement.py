@@ -305,12 +305,22 @@ def retire_outbound_agent(
     A protected ``AgentSpec`` uses accepted native declaration evidence without
     probing its old workload environment. Missing legacy evidence alone falls
     back to full qualification; conflicting evidence never does.
+    An unanswered service poll is reconciled through authenticated outcome
+    inspection, never replayed as a work request. A recovered delivery remains
+    owned and refuses retirement until normal retained-work settlement completes.
     """
     from .agent_session_transport import (
         LocalDaemonAgentHttpClient,
+        _has_retained_agent_work,
+        _reconcile_retirement_poll,
         _retire_agent_session,
     )
-    from .deployment import AgentSpec, OutboundAgentServiceConfig, qualify_agent_spec
+    from .deployment import (
+        AgentSpec,
+        OutboundAgentServiceConfig,
+        _OUTBOUND_POLL_WAIT_MS,
+        qualify_agent_spec,
+    )
 
     _identifiers(operation_id, expected_coordinator_id, expected_session_id)
     if isinstance(config, AgentSpec):
@@ -363,7 +373,20 @@ def retire_outbound_agent(
             != expected_coordinator_id
         ):
             raise QueueConflictError("retirement session or coordinator changed")
-        # This checks all local retained owners, not just foreground processes.
+        if (
+            _has_retained_agent_work(
+                None, client._execution_journal, client._slurm_agent
+            )
+            or journal.unresolved_assignment_references()
+        ):
+            raise QueueConflictError("agent has retained work")
+        _reconcile_retirement_poll(
+            journal,
+            client._call,
+            expected_session_id,
+            wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+        )
+        # Recovery may have retained a delivery; shutdown proves all owners empty.
         client.shutdown_clean()
         receipt = {**expected, "root_id": journal.root_id, "state": "retired"}
         if row["state"] != "RETIRED_CLEAN":
@@ -399,8 +422,10 @@ def _retire_bound_agent(
         _RemoteAgentJournal,
         _exchange_agent_request,
         _has_retained_agent_work,
+        _reconcile_retirement_poll,
         _retire_agent_session,
     )
+    from .deployment import _OUTBOUND_POLL_WAIT_MS
 
     root = spec.agent_root
     expected: dict[str, PlainData] = {
@@ -452,7 +477,10 @@ def _retire_bound_agent(
             raise QueueConflictError("retirement session or coordinator changed")
 
         execution, slurm = _retained_agent_owners(spec)
-        if _has_retained_agent_work(journal, execution, slurm):
+        if (
+            _has_retained_agent_work(None, execution, slurm)
+            or journal.unresolved_assignment_references()
+        ):
             raise QueueConflictError("agent has retained work")
 
         declarations = spec.declarations
@@ -472,6 +500,15 @@ def _retire_bound_agent(
             return _exchange_agent_request(
                 transport, operation, body, "agent", None, False
             ).value
+
+        _reconcile_retirement_poll(
+            journal,
+            exchange,
+            expected_session_id,
+            wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+        )
+        if _has_retained_agent_work(journal, execution, slurm):
+            raise QueueConflictError("agent has retained work")
 
         from contextlib import nullcontext
 
