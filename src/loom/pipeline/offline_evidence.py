@@ -927,7 +927,7 @@ def _config_evidence(
         composition_manifest = store.read_composition_manifest(run_uri)
     except Exception as exc:
         diagnostics.append(
-            _warning("offline_evidence.composition_manifest_unreadable", str(exc))
+            _error("offline_evidence.composition_manifest_unreadable", str(exc))
         )
     try:
         recipe_manifest = store.read_recipe_manifest(run_uri)

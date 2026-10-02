@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from loom.serialization import PlainData
 
 import pytest
 
@@ -91,3 +92,27 @@ def test_import_offline_evidence_maps_validation_diagnostics(tmp_path: Path) -> 
     assert {blocker.code for blocker in result.readiness.blockers} == {
         MigrationReadinessBlockerCode.HISTORICAL_ONLY_POLICY
     }
+
+
+def test_detached_import_keeps_resolved_composition_without_original_target(tmp_path: Path) -> None:
+    import json
+    from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
+    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+
+    local = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(tmp_path / "runs" / "source")
+    local.create_run(uri)
+    definition: dict[str, PlainData] = {"metadata": {"final_value_authorship": [{"path": ["output"], "source_path": "overlay.yaml"}]}}
+    local.write_composition_manifest(uri, definition)
+    local.write_run_user_metadata(uri, {"config_provenance": {"metadata": definition["metadata"]}})
+    collected = collect_offline_evidence_manifest(local, uri)
+    payload = _complete_manifest(tmp_path).to_dict()
+    payload["config"] = collected.to_dict()["config"]
+    detached = OfflineEvidenceManifest.from_dict(json.loads(json.dumps(payload)))
+    (local.local_run_dir(uri) / "config/composition_manifest.json").unlink()
+    record = build_offline_evidence_import_record(detached)
+    restored = OfflineEvidenceManifest.from_dict(thaw_plain_data(record.extensions["offline_evidence_manifest"]))
+    assert restored.config["composition_manifest"] == definition
+    repository = initialize_authority_repository(tmp_path / "authority", service_generation="generation-1")
+    result = import_offline_evidence(repository, detached)
+    assert result.status is RunExchangeOperationStatus.SUCCEEDED

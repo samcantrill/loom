@@ -12,6 +12,7 @@ from threading import Lock
 from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
+from loom.refs import ResourceRef, ResourceRefError
 from loom.pipeline.event_sinks import (
     EventObserverLinkRecord,
     EventSinkError,
@@ -330,15 +331,36 @@ class LocalRunStore:
         )
 
     def read_run_document(self, run_uri: str) -> dict[str, PlainData]:
-        return self._read_run_wrapper(validate_run_uri(run_uri, field="run_uri"))
+        """Read logical metadata, resolving digest-bound composition evidence."""
+        document = self._read_run_wrapper(validate_run_uri(run_uri, field="run_uri"))
+        document["metadata"] = self.read_run_user_metadata(run_uri)
+        return document
 
     def read_run_user_metadata(self, run_uri: str) -> dict[str, PlainData]:
-        return cast(
-            dict[str, PlainData],
-            self._read_run_wrapper(validate_run_uri(run_uri, field="run_uri"))[
-                "metadata"
-            ],
-        )
+        """Return detached logical metadata for inline and referenced saved runs.
+
+        Referenced authorship is admitted only from this run's retained composition
+        document with the expected schema and exact byte digest. Reads never rewrite
+        legacy evidence or consult original source files.
+        """
+        metadata = cast(dict[str, PlainData], self._read_run_wrapper(run_uri)["metadata"])
+        provenance = metadata.get("config_provenance")
+        if isinstance(provenance, dict) and "metadata_ref" in provenance:
+            manifest = self.read_composition_manifest(run_uri)
+            if manifest is None or not isinstance(manifest.get("metadata"), dict):
+                raise CorruptStoreDocumentError("composition reference metadata is missing")
+            reference = cast(dict[str, PlainData], provenance.pop("metadata_ref"))
+            projection = cast(dict[str, PlainData], reference["metadata"])
+            fields = cast(list[str], projection["fields"])
+            definition = cast(dict[str, PlainData], manifest["metadata"])
+            try:
+                remainder = provenance.get("metadata", {})
+                if not isinstance(remainder, dict) or set(remainder).intersection(fields):
+                    raise CorruptStoreDocumentError("composition metadata projection overlaps inline fields")
+                provenance["metadata"] = {**remainder, **{name: definition[name] for name in fields}}
+            except KeyError as exc:
+                raise CorruptStoreDocumentError("composition projection field is missing") from exc
+        return metadata
 
     def write_run_user_metadata(
         self, run_uri: str, metadata: Mapping[str, PlainData]
@@ -360,6 +382,25 @@ class LocalRunStore:
             created_at = existing["created_at"]
         else:
             created_at = utc_timestamp()
+
+        provenance = normalized_metadata.get("config_provenance")
+        if isinstance(provenance, dict) and isinstance(provenance.get("metadata"), dict):
+            manifest = self.read_composition_manifest(run_uri_text)
+            definition = None if manifest is None else manifest.get("metadata")
+            authored = cast(dict[str, PlainData], provenance["metadata"])
+            shared = [] if not isinstance(definition, dict) else sorted(
+                name for name, value in authored.items()
+                if name in definition and definition[name] == value
+            )
+            if shared:
+                provenance["metadata_ref"] = self._composition_manifest_reference(
+                    run_uri_text, fields=shared
+                )
+                remainder = {name: value for name, value in authored.items() if name not in shared}
+                if remainder:
+                    provenance["metadata"] = remainder
+                else:
+                    del provenance["metadata"]
 
         payload = {
             "schema_version": _SCHEMA_VERSION,
@@ -843,11 +884,23 @@ class LocalRunStore:
         self._touch_run_freshness(run_uri, reason="config_snapshot")
 
     def read_composition_manifest(self, run_uri: str) -> dict[str, PlainData] | None:
-        run_dir = self.local_run_dir(run_uri)
-        path = run_dir / "config" / "composition_manifest.json"
-        data = self._read_optional_json(path)
-        if data is None:
+        """Read retained composition facts, checking any referring metadata digest."""
+        path = self.local_generated_artifact_path(run_uri, "config/composition_manifest.json")
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError:
+            content = None
+        except OSError as exc:
+            raise CorruptStoreDocumentError(f"Expected composition file at {path}") from exc
+        if content is None:
+            reference = self._composition_reference_from_metadata(run_uri)
+            if reference is not None:
+                self._validate_composition_reference(run_uri, reference)
             return None
+        try:
+            data = json_loads(content.decode("utf-8"), path=str(path))
+        except (DeserializationError, UnicodeDecodeError) as exc:
+            raise CorruptStoreDocumentError(f"Malformed JSON at {path}: {exc}") from exc
         payload = _require_document_object(
             data, path, label="composition manifest document"
         )
@@ -864,9 +917,62 @@ class LocalRunStore:
         _require_timestamp_field(
             payload, path, "created_at", label="composition manifest document"
         )
-        return _require_mapping_field(
+        manifest = _require_mapping_field(
             payload, path, "composition_manifest", label="composition manifest document"
         )
+        reference = self._composition_reference_from_metadata(run_uri)
+        if reference is not None:
+            self._validate_composition_reference(run_uri, reference, content=content)
+            fields = cast(dict[str, PlainData], cast(dict[str, PlainData], reference)["metadata"])["fields"]
+            definition = manifest.get("metadata")
+            if not isinstance(definition, dict) or any(name not in definition for name in cast(list[str], fields)):
+                raise CorruptStoreDocumentError("composition projection field is missing")
+        return manifest
+
+    def _composition_reference_from_metadata(self, run_uri: str) -> PlainData:
+        if not (self.local_run_dir(run_uri) / "run.json").exists():
+            return None
+        metadata = cast(dict[str, PlainData], self._read_run_wrapper(run_uri)["metadata"])
+        provenance = metadata.get("config_provenance")
+        if isinstance(provenance, dict) and "metadata_ref" in provenance:
+            reference = provenance["metadata_ref"]
+            if reference is None:
+                raise CorruptStoreDocumentError("composition reference is null")
+            return reference
+        return None
+
+    def _composition_manifest_reference(
+        self, run_uri: str, *, fields: list[str], content: bytes | None = None
+    ) -> dict[str, PlainData]:
+        """Bind the existing retained definition, never an authored source path."""
+        path = self.local_generated_artifact_path(run_uri, "config/composition_manifest.json")
+        return ResourceRef(
+            uri="config/composition_manifest.json",
+            resource_type="loom.composition_manifest",
+            codec_key="json.v1",
+            checksum="sha256:" + hashlib.sha256(path.read_bytes() if content is None else content).hexdigest(),
+            metadata={
+                "document_schema_version": 1,
+                "pointer": "/composition_manifest/metadata",
+                "fields": list[PlainData](fields),
+            },
+        ).to_dict()
+
+    def _validate_composition_reference(
+        self, run_uri: str, value: object, *, content: bytes | None = None
+    ) -> None:
+        try:
+            reference = ResourceRef.from_dict(value)
+            payload = reference.to_dict()
+            fields = payload["metadata"].get("fields")
+            if not isinstance(fields, list) or any(not isinstance(name, str) for name in fields):
+                raise ValueError("projection fields must be strings")
+            if len(set(fields)) != len(fields):
+                raise ValueError("projection fields must be unique")
+            if payload != self._composition_manifest_reference(run_uri, fields=fields, content=content):
+                raise ValueError("reference fields or digest conflict")
+        except (ValueError, OSError, ResourceRefError) as exc:
+            raise CorruptStoreDocumentError("composition manifest reference is missing or changed") from exc
 
     def write_composition_manifest(
         self, run_uri: str, manifest: Mapping[str, PlainData]

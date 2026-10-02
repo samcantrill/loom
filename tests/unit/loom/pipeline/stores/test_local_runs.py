@@ -1360,3 +1360,60 @@ def test_local_run_wraps_stage_artifact_index_failures_as_corrupt(
     with pytest.raises(CorruptStoreDocumentError) as bad_ref_exc:
         store.read_stage_outputs(run_uri, "stage")
     assert str(path) in str(bad_ref_exc.value)
+
+
+@pytest.mark.parametrize("extra", [{}, {"loom_invocation": {"argv": ["input=other"]}}])
+def test_composition_reference_retains_one_definition_and_logical_metadata(tmp_path: Path, extra: dict[str, PlainData]) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    authorship: dict[str, PlainData] = {"final_value_authorship": [{"path": ["input"], "source_path": "overlay.yaml"}]}
+    manifest: dict[str, PlainData] = {"schema_version": 1, "metadata": authorship}
+    provenance: dict[str, PlainData] = {"schema_version": 2, "metadata": {**authorship, **extra}, "artifact_fingerprint": "unchanged"}
+    store.write_composition_manifest(run_uri, manifest)
+    store.write_run_user_metadata(run_uri, {"config_provenance": provenance})
+    run_dir = store.local_run_dir(run_uri)
+    raw = json.loads((run_dir / "run.json").read_text())
+    retained = raw["metadata"]["config_provenance"]
+    assert retained.get("metadata", {}) == extra
+    assert retained["metadata_ref"]["uri"] == "config/composition_manifest.json"
+    assert retained["metadata_ref"]["checksum"].startswith("sha256:")
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in run_dir.rglob("*") if p.is_file()}
+    assert store.read_composition_manifest(run_uri) == manifest
+    assert store.read_run_user_metadata(run_uri) == {"config_provenance": provenance}
+    assert store.read_run_document(run_uri)["metadata"] == {"config_provenance": provenance}
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    assert sum(b'"final_value_authorship":' in p.read_bytes() for p in before) == 1
+
+
+@pytest.mark.parametrize("damage", ["missing", "altered", "schema", "pointer", "outside"])
+def test_composition_reference_rejects_missing_changed_or_wrong_definition(tmp_path: Path, damage: str) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    store.write_composition_manifest(run_uri, {"metadata": {"source": "base.yaml"}})
+    store.write_run_user_metadata(run_uri, {"config_provenance": {"metadata": {"source": "base.yaml"}}})
+    run_dir = store.local_run_dir(run_uri)
+    target = run_dir / "config/composition_manifest.json"
+    run_path = run_dir / "run.json"
+    if damage == "missing":
+        target.unlink()
+    elif damage == "altered":
+        target.write_text(target.read_text().replace("base.yaml", "other.yaml"))
+    else:
+        raw = json.loads(run_path.read_text())
+        ref = raw["metadata"]["config_provenance"]["metadata_ref"]
+        if damage == "schema":
+            payload = json.loads(target.read_text())
+            payload["schema_version"] = 99
+            target.write_text(json.dumps(payload))
+            import hashlib
+            ref["checksum"] = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
+        elif damage == "pointer":
+            ref["metadata"]["pointer"] = "/resolved"
+        else:
+            ref["uri"] = "../mutable.yaml"
+        run_path.write_text(json.dumps(raw))
+    for reader in (store.read_composition_manifest, store.read_run_user_metadata, store.read_run_document):
+        with pytest.raises(CorruptStoreDocumentError):
+            reader(run_uri)

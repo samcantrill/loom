@@ -155,7 +155,7 @@ def test_scan_current_collection_treats_invalid_legacy_sqlite_authority_as_missi
     assert result.summaries == ()
     assert len(result.warnings) == 1
     assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
-    assert result.warnings[0].message == "run authoritative backend is missing"
+    assert result.warnings[0].message == "retained authority is unavailable"
 
 
 def test_scan_current_collection_warns_for_missing_authority_backend(
@@ -173,7 +173,7 @@ def test_scan_current_collection_warns_for_missing_authority_backend(
     assert result.summaries == ()
     assert len(result.warnings) == 1
     assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
-    assert result.warnings[0].message == "run authoritative backend is missing"
+    assert result.warnings[0].message == "retained authority is unavailable"
 
 
 def test_scan_current_collection_treats_future_legacy_sqlite_authority_as_missing(
@@ -196,7 +196,7 @@ def test_scan_current_collection_treats_future_legacy_sqlite_authority_as_missin
     assert result.summaries == ()
     assert len(result.warnings) == 1
     assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
-    assert result.warnings[0].message == "run authoritative backend is missing"
+    assert result.warnings[0].message == "retained authority is unavailable"
 
 
 def test_extract_current_summary_warns_when_freshness_keeps_changing(
@@ -213,3 +213,25 @@ def test_extract_current_summary_warns_when_freshness_keeps_changing(
     assert summary is None
     assert warning is not None
     assert warning.code == CatalogWarningCode.ACTIVELY_CHANGING_RUN
+
+
+def test_catalog_and_query_resolve_retained_composition_without_rewriting(tmp_path: Path) -> None:
+    from loom.pipeline.stores import LocalRunStore
+    from loom.runs._query_acquire import acquire_run
+    from loom.serialization import thaw_plain_data
+
+    local = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(tmp_path / "runs" / "referenced")
+    local.create_run(uri)
+    local.write_composition_manifest(uri, {"artifact_fingerprint": "science-unchanged", "metadata": {"source": "overlay.yaml"}})
+    metadata: dict[str, Any] = {"config_provenance": {"metadata": {"source": "overlay.yaml"}}}
+    local.write_run_user_metadata(uri, metadata)
+    root = local.local_run_dir(uri)
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+    summary, warning = extract_current_summary(local, run_uri=uri, path=root)
+    assert warning is None and summary is not None
+    assert thaw_plain_data(summary.metadata) == metadata
+    assert summary.config_fingerprint == "science-unchanged"
+    record = acquire_run(local.root, uri)
+    assert record.sources["native"]["config_fingerprint"] == "science-unchanged"
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
