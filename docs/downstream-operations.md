@@ -535,6 +535,17 @@ cannot authorize it.
 These contracts are tested with local native workers and local authenticated
 transport fixtures. Physical fleet/site qualification remains separate.
 
+When retiring a stopped, drained outbound agent, keep its credentials authorized
+and its coordinator available. `agent-retire` inspects the authenticated outcome
+of an unanswered service poll before proving the local owners empty. It does not
+offer capacity, replay a work poll, or launch a recovered delivery. A delivered
+assignment is durably retained and blocks retirement until ordinary retained-work
+recovery settles it. Unavailable, active, conflicting or unsupported poll recovery
+also blocks retirement without discarding the request; preserve the agent root
+and retry after the coordinator can confirm the outcome. Older coordinators that
+support only abandoned-epoch recovery need a deliberate coordinator restart or
+a compatible runtime; retirement never performs that restart itself.
+
 
 ### Agent-owned Slurm submission
 

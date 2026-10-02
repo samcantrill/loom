@@ -553,7 +553,9 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
 
     probe = LocalDaemonAgentHttpClient(work.service_config.client)
     try:
-        with pytest.raises(QueueConflictError, match="different content"):
+        with pytest.raises(
+            QueueConflictError, match="retained poll request identity conflicts"
+        ):
             probe._resume_pending_poll(wait_timeout_ms=1000)
     finally:
         probe.close()

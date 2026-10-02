@@ -6067,6 +6067,59 @@ def _has_retained_agent_work(
 
 
 @_cooperative
+def _reconcile_retirement_poll(
+    journal: _RemoteAgentJournal,
+    exchange: Callable[[str, Mapping[str, PlainData]], Mapping[str, PlainData]],
+    session_id: str,
+    *,
+    wait_timeout_ms: int,
+) -> Generator[_Progress, Any, None]:
+    """Read the stopped service's exact poll outcome without requesting work.
+
+    A committed delivery is retained by the ordinary journal transition; the
+    caller's empty-owner check must then refuse retirement. Unknown outcomes
+    preserve the request and cannot authorize a retirement proof.
+    """
+    pending = journal.recovery_poll(wait_timeout_ms)
+    if pending is None:
+        return
+    _, request = pending
+    if request["session_id"] != session_id:
+        raise QueueConflictError("retirement poll targets another agent session")
+    session = journal.session(session_id)
+    try:
+        outcome = yield from _steps(
+            exchange,
+            "recover_poll",
+            {**request, "coordinator_epoch": session.coordinator_epoch},
+        )
+    except QueueError as exc:
+        raise QueueConflictError(
+            "retirement cannot confirm unanswered poll; preserve agent state "
+            "and retry with an available compatible coordinator"
+        ) from exc
+    sequence = cast(int, request["sequence"])
+    if outcome.get("state") == "absent":
+        journal.discard_absent_poll(
+            session_id,
+            sequence,
+            predecessor_sequence=outcome.get("predecessor_sequence"),
+            predecessor_delivery=outcome.get("predecessor_delivery"),
+        )
+    elif outcome.get("state") == "fenced":
+        journal.fence_poll(session_id, sequence, confirmed=True)
+    elif outcome.get("state") == "committed":
+        journal.complete_poll(
+            session_id,
+            sequence,
+            {key: value for key, value in outcome.items() if key != "state"},
+            recovered=True,
+        )
+    else:
+        raise QueueServiceError("retained poll recovery result is invalid")
+
+
+@_cooperative
 def _retire_agent_session(
     journal: _RemoteAgentJournal,
     exchange: Callable[[str, Mapping[str, PlainData]], Mapping[str, PlainData]],

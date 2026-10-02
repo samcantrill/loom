@@ -3,19 +3,28 @@
 from contextlib import contextmanager
 import json
 import sqlite3
-from threading import Event
+from threading import Event, Thread
 import time
 
 import pytest
 
 from loom.coordinator import RunRequest
 from loom.preparation import CoordinatorPreparation
-from loom.queue import LocalDaemon, LocalDaemonSocketClient, LocalDaemonSocketServer
+from loom.serialization import thaw_plain_data
+from loom.queue import (
+    AgentControl,
+    LocalDaemon,
+    LocalDaemonAdmissionRequest,
+    LocalDaemonPrincipal,
+    LocalDaemonRole,
+    LocalDaemonSocketClient,
+    LocalDaemonSocketServer,
+)
 from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpClient,
     LocalDaemonAgentHttpServer,
 )
-from loom.queue.agent_sessions import AgentRegistration
+from loom.queue.agent_sessions import AgentControlKind, AgentRegistration
 from loom.queue.deployment import (
     load_coordinator_service_config,
     load_outbound_agent_service_config,
@@ -28,7 +37,11 @@ from loom.queue.retirement import (
     retired_role_guard,
     retirement_receipt,
 )
-from tests.integration.queue.test_service_lifetime import _mixed_selection, _request
+from tests.integration.queue.test_service_lifetime import (
+    _mixed_selection,
+    _request,
+    _stop_fixture_supervisor,
+)
 from tests.integration.queue.test_agent_service_lifecycle import (
     remote_owner,
     remote_work,
@@ -240,3 +253,334 @@ def test_busy_stopped_agent_cannot_retire_or_lose_native_state(remote_work):
     assert retirement_receipt(root) is None
     assert root.is_dir()
     assert work.daemon.agent("agent-a").state == "ACTIVE"
+
+
+def _poll_rows(root):
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        return conn.execute(
+            "SELECT sequence,state,result_json FROM agent_poll_state_local"
+        ).fetchall()
+
+
+@contextmanager
+def stopped_idle_poll(tmp_path, monkeypatch, *, drain=True, outcome="committed"):
+    """Stop with a lost idle reply, retaining and settling the drain receipt."""
+    from loom.queue import agent_session_transport as transport
+
+    committed, release, stop = Event(), Event(), Event()
+    original = transport._exchange_agent_request
+    errors = []
+    if outcome == "fenced":
+        from loom.queue.agent_sessions import AgentSessionService
+
+        def interrupt_delivery(*args, **kwargs):
+            # A failed native delivery lookup leaves a reserved, inactive poll
+            # with no result; its lost error response still needs confirmation.
+            raise QueueServiceError("delivery lookup interrupted")
+
+        monkeypatch.setattr(
+            AgentSessionService, "_take_targeted_delivery", interrupt_delivery
+        )
+
+    def exchange(*args, **kwargs):
+        try:
+            reply = original(*args, **kwargs)
+        except QueueError:
+            if args[1] != "poll" or outcome != "fenced":
+                raise
+            committed.set()
+            assert release.wait(15)
+            raise transport._IndeterminateAgentProtocolError(
+                "fenced reply was lost"
+            ) from None
+        if args[1] == "poll" and not committed.is_set():
+            assert reply.value["result"] == "wait"
+            committed.set()
+            assert release.wait(15)
+            reply.connection.close()
+            raise transport._IndeterminateAgentProtocolError("idle reply was lost")
+        return reply
+
+    monkeypatch.setattr(transport, "_exchange_agent_request", exchange)
+    with fleet(tmp_path) as (daemon, operator):
+        service = load_outbound_agent_service_config(tmp_path / "agent.json")
+        LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+
+        def serve():
+            try:
+                run_outbound_agent_service(service, stop=stop)
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            assert committed.wait(15), errors
+            session = operator.agent("worker")
+            if drain:
+                operator.control_agent(
+                    AgentControl(
+                        "drain-worker",
+                        AgentControlKind.DRAIN,
+                        "worker",
+                        session.session_id,
+                        session.config_revision,
+                        None,
+                        False,
+                        "retirement test",
+                    )
+                )
+            stop.set()
+            release.set()
+            thread.join(10)
+            assert not thread.is_alive(), errors
+            assert errors == []
+            assert _poll_rows(service.client.agent_root)[0][1:] == ("PENDING", None)
+            # Settle the explicit control after stopping the held response. This
+            # does not replay the work poll or obtain another execution offer.
+            if drain:
+                owner = LocalDaemonAgentHttpClient(service.client)
+                try:
+                    assert owner.poll_control(session.session_id) is not None
+                finally:
+                    owner.close()
+                assert (
+                    operator.wait_operation(
+                        "drain-worker", timeout_seconds=10
+                    ).operation.state
+                    == "applied"
+                )
+                assert _poll_rows(service.client.agent_root)[0][1:] == ("FENCED", None)
+            assert operator.agent_retirement_ready("worker", session.session_id)
+            yield daemon, operator, service
+        finally:
+            stop.set()
+            release.set()
+            thread.join(10)
+            _stop_fixture_supervisor(service.client.agent_root)
+            assert not thread.is_alive(), errors
+
+
+@pytest.mark.parametrize(
+    "mode,drain,outcome",
+    [
+        ("spec", True, "committed"),
+        ("service", True, "committed"),
+        ("spec", False, "committed"),
+        ("spec", True, "fenced"),
+    ],
+)
+def test_stopped_service_retires_after_lost_idle_poll(
+    tmp_path, monkeypatch, mode, drain, outcome
+):
+    from loom.queue import agent_session_transport as transport
+
+    with stopped_idle_poll(tmp_path, monkeypatch, drain=drain, outcome=outcome) as (
+        _,
+        operator,
+        service,
+    ):
+        root = service.client.agent_root
+        spec = read_agent_spec(tmp_path / "agent.json")
+        session = operator.agent("worker")
+        sequence = _poll_rows(root)[0][0]
+        operations = []
+        original = transport._exchange_agent_request
+
+        def exchange(*args, **kwargs):
+            operations.append(args[1])
+            assert args[1] in {"recover_poll", "retire"}
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(transport, "_exchange_agent_request", exchange)
+        if mode != "service":
+
+            def forbidden(*args, **kwargs):
+                pytest.fail("bound retirement must not requalify old software")
+
+            monkeypatch.setattr("loom.queue.deployment.qualify_agent_spec", forbidden)
+            monkeypatch.setattr(
+                "loom.queue._agent_process_supervisor._profile_from_value", forbidden
+            )
+        config = service if mode == "service" else spec
+        args = dict(
+            operation_id="retire-idle",
+            expected_coordinator_id=operator.status().coordinator_id,
+            expected_session_id=session.session_id,
+        )
+        receipt = retire_outbound_agent(config, **args)
+        assert operations == ["recover_poll", "retire"]
+        assert operator.agent("worker").state == "RETIRED_CLEAN"
+        # Retirement fences a committed receipt; an unanswered fenced request
+        # already has the explicit authority-confirmed watermark.
+        assert _poll_rows(root)[0][:2] == (
+            sequence,
+            "FENCED" if outcome == "committed" else "RECONCILED",
+        )
+        if outcome == "committed":
+            assert json.loads(_poll_rows(root)[0][2])["result"] == "wait"
+        else:
+            assert _poll_rows(root)[0][2] is None
+        assert retire_outbound_agent(config, **args) == receipt
+        assert operations == ["recover_poll", "retire"]
+        with retired_role_guard(root, receipt):
+            assert root.is_dir()
+
+
+@pytest.mark.parametrize("failure", ["active", "unsupported", "lost-response"])
+def test_retirement_keeps_unconfirmed_poll_when_recovery_is_unavailable(
+    tmp_path, monkeypatch, failure
+):
+    from loom.queue import agent_session_transport as transport
+    from loom.queue.agent_sessions import AgentPollActiveError
+    from loom.queue.errors import QueueConflictError
+
+    with stopped_idle_poll(tmp_path, monkeypatch) as (_, operator, service):
+        spec = read_agent_spec(tmp_path / "agent.json")
+        session = operator.agent("worker")
+        before = _poll_rows(spec.agent_root)
+        original = transport._exchange_agent_request
+        operations = []
+
+        def unavailable(*args, **kwargs):
+            operations.append(args[1])
+            assert args[1] == "recover_poll"
+            if failure == "active":
+                raise AgentPollActiveError("work poll is already active")
+            if failure == "unsupported":
+                raise QueueConflictError("current-epoch poll must use ordinary replay")
+            reply = original(*args, **kwargs)
+            reply.connection.close()
+            raise transport._IndeterminateAgentProtocolError("recovery reply was lost")
+
+        monkeypatch.setattr(transport, "_exchange_agent_request", unavailable)
+        args = dict(
+            operation_id="retire-retry",
+            expected_coordinator_id=operator.status().coordinator_id,
+            expected_session_id=session.session_id,
+        )
+        with pytest.raises(QueueConflictError, match="cannot confirm unanswered poll"):
+            retire_outbound_agent(spec, **args)
+        assert operations == ["recover_poll"]
+        assert _poll_rows(spec.agent_root) == before
+        assert retirement_receipt(spec.agent_root) is None
+        assert operator.agent("worker").state == "ACTIVE"
+        monkeypatch.setattr(transport, "_exchange_agent_request", original)
+        assert retire_outbound_agent(spec, **args)["state"] == "retired"
+
+
+def test_retirement_preserves_job_from_lost_poll_reply(remote_owner, monkeypatch):
+    from loom.queue import agent_session_transport as transport
+
+    work = remote_owner
+    coordinator = work.daemon.client_view(
+        LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+    )
+    coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
+    delivered = Event()
+    original = transport._exchange_agent_request
+    delivery = []
+
+    def lose_delivery(*args, **kwargs):
+        reply = original(*args, **kwargs)
+        if args[1] == "poll" and reply.value.get("result") == "assignment":
+            delivery.append(thaw_plain_data(reply.value))
+            work.services[-1].stop.set()
+            delivered.set()
+            reply.connection.close()
+            raise transport._IndeterminateAgentProtocolError("job reply was lost")
+        return reply
+
+    monkeypatch.setattr(transport, "_exchange_agent_request", lose_delivery)
+    service = work.start_agent()
+    assert delivered.wait(15), service.errors
+    service.thread.join(10)
+    assert not service.thread.is_alive(), service.errors
+    assert service.errors == []
+    assert work.launches() == ()
+    root = work.service_config.client.agent_root
+    assert _poll_rows(root)[0][1:] == ("PENDING", None)
+    session = work.daemon.agent("agent-a")
+    with pytest.raises(QueueError, match="retained work"):
+        retire_outbound_agent(
+            work.service_config,
+            operation_id="retire-lost-job",
+            expected_coordinator_id=work.daemon.status().coordinator_id,
+            expected_session_id=session.session_id,
+        )
+    assert _poll_rows(root)[0][1] == "DELIVERED"
+    assert json.loads(_poll_rows(root)[0][2]) == delivery[0]
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        (reference, resolved) = conn.execute(
+            "SELECT reference_json,resolved FROM agent_session_references "
+            "WHERE reference_kind='delivery'"
+        ).fetchone()
+    assert json.loads(reference) == delivery[0]["request"]
+    assert resolved == 0
+    assert work.launches() == ()
+    assert retirement_receipt(root) is None
+    assert work.daemon.agent("agent-a").state == "ACTIVE"
+
+
+def test_retirement_reconciles_rejected_legacy_poll_without_replaying_work(
+    tmp_path, monkeypatch
+):
+    from loom.queue import agent_session_transport as transport
+    from loom.queue.deployment import _OUTBOUND_POLL_WAIT_MS
+
+    with fleet(tmp_path) as (_, operator):
+        service = load_outbound_agent_service_config(tmp_path / "agent.json")
+        LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+        owner = LocalDaemonAgentHttpClient(service.client)
+        try:
+            handshake = owner.handshake()
+            registration = service.registration
+            session = owner.register(
+                AgentRegistration(
+                    "register-rejected",
+                    handshake["coordinator_id"],
+                    handshake["coordinator_epoch"],
+                    owner.agent_root_id,
+                    registration.config_revision,
+                    registration.inventory_revision,
+                    registration.availability_revision,
+                    registration.pools,
+                    registration.capabilities,
+                )
+            )
+            # A supported pre-reservation rejection (no current offer) retained
+            # the exact intent; the old client's fence did not prove consumption.
+            with pytest.raises(QueueError):
+                owner.wait_for_work(
+                    session.session_id,
+                    session.availability_revision,
+                    sequence=1,
+                    wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
+                )
+            owner._require_journal().fence_poll(session.session_id, 1)
+        finally:
+            owner.close()
+        spec = read_agent_spec(tmp_path / "agent.json")
+        assert _poll_rows(spec.agent_root) == [(1, "FENCED", None)]
+        operations = []
+        original = transport._exchange_agent_request
+
+        def exchange(*args, **kwargs):
+            operations.append(args[1])
+            assert args[1] in {"recover_poll", "retire"}
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(transport, "_exchange_agent_request", exchange)
+        try:
+            receipt = retire_outbound_agent(
+                spec,
+                operation_id="retire-rejected",
+                expected_coordinator_id=session.coordinator_id,
+                expected_session_id=session.session_id,
+            )
+            assert receipt["state"] == "retired"
+            assert operations == ["recover_poll", "retire"]
+            assert _poll_rows(spec.agent_root) == []
+            assert operator.agent("worker").state == "RETIRED_CLEAN"
+        finally:
+            _stop_fixture_supervisor(spec.agent_root)
