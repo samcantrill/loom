@@ -3519,6 +3519,12 @@ def run_managed_local_assignment(
                 "decision claim contract is not supported by configured provider"
             )
     profile = ResidentProfileDescriptor.from_dict(resident_launch_profile.descriptor)
+    workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
+    retained_inputs = (
+        {item.logical_name: item for item in workspace.request().inputs}
+        if workspace.has_request() and workspace.state() in {"GRANTED", "STARTED", "RESULT"}
+        else None
+    )
     remote_inputs: list[_RemoteArtifact] = []
     input_paths: dict[str, Path] = {}
     input_refs: dict[str, ArtifactRef] = {}
@@ -3527,6 +3533,8 @@ def run_managed_local_assignment(
         worker_request.inputs,
         cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
     )
+    if retained_inputs is not None and set(retained_inputs) != set(transfer_refs):
+        raise ManagedLocalError("retained resident input interface conflicts")
     for logical_name, ref in sorted(transfer_refs.items()):
         transfer_id = (
             "input-"
@@ -3540,16 +3548,32 @@ def run_managed_local_assignment(
                 ).encode("utf-8")
             ).hexdigest()
         )
-        artifact, source = _RemoteArtifact.from_local_ref(
-            transfer_id=transfer_id, logical_name=logical_name, ref=ref
-        )
+        if retained_inputs is None:
+            artifact, source = _RemoteArtifact.from_local_ref(
+                transfer_id=transfer_id, logical_name=logical_name, ref=ref
+            )
+            input_paths[transfer_id] = source
+            input_refs[transfer_id] = ref
+        else:
+            artifact = retained_inputs[logical_name]
+            if (
+                artifact.transfer_id != transfer_id
+                or artifact.artifact_id != ref.artifact_id
+                or artifact.artifact_type != ref.artifact_type
+                or artifact.codec_key != ref.codec_key
+                or artifact.artifact_schema_version != ref.schema_version
+                or artifact.fingerprint != ref.fingerprint
+                or artifact.producer_stage != ref.producer_stage
+                or artifact.created_at != ref.created_at
+                or artifact.metadata != ref.metadata
+                or ref.checksum is not None and ref.checksum != f"sha256:{artifact.digest}"
+            ):
+                raise ManagedLocalError("retained resident input identity conflicts")
         from loom.pipeline.stores.shared_artifacts import binding
         total_input_bytes += artifact.size_bytes if binding(artifact.metadata) is None else 0
         if total_input_bytes > MAX_TRANSFER_BYTES:
             raise ManagedLocalError("resident assignment inputs exceed the bound")
         remote_inputs.append(artifact)
-        input_paths[transfer_id] = source
-        input_refs[transfer_id] = ref
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
     from ._execution_binding import execution_binding
     from loom.pipeline._project_contracts import EXECUTION
@@ -3575,9 +3599,8 @@ def run_managed_local_assignment(
 
     _require_local_binding(_assignment_local_scope(delivered), resident_launch_profile,
                            agent_id=assignment.agent_id)
-    workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
     workspace.persist_request(delivered, resident_launch_profile)
-    for artifact in remote_inputs:
+    for artifact in remote_inputs if retained_inputs is None else ():
         from loom.pipeline.stores.shared_artifacts import binding
         if binding(artifact.metadata) is not None:
             continue
@@ -3641,11 +3664,15 @@ def run_managed_local_assignment(
             child_result = StageWorkerResult.from_dict(
                 json.loads(result_path.read_text())
             )
-        if workspace.supervisor_launch_json() is None:
-            result_path = workspace.root / "worker-result.json"
-            if not result_path.is_file():
-                atomic_write_bytes(result_path, _json(child_result.to_dict()).encode())
-            workspace.persist_failed_before_start(child_result, fence=retained_fence)
+        retained_launch = workspace.supervisor_launch_json() is not None
+        if retained_launch and not supervisor.reject_unstarted_assignment(assignment.assignment_id):
+            raise ManagedLocalError("failed launch ownership is unresolved")
+        result_path = workspace.root / "worker-result.json"
+        if not result_path.is_file():
+            atomic_write_bytes(result_path, _json(child_result.to_dict()).encode())
+        workspace.persist_failed_before_start(
+            child_result, fence=retained_fence, supervisor_rejected=retained_launch
+        )
         journal.record_result(
             assignment.assignment_id,
             _map_resident_result_identity(
@@ -3982,6 +4009,12 @@ def run_managed_local_assignment(
         ),
     )
     encoded_launch = workspace.supervisor_launch_json()
+    if expected_launch.profile.container is not None:
+        from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+        expected_launch = replace(expected_launch, resource_controls=_validated_resource_controls(
+            expected_launch.container_command.metadata.get("resource_controls")
+        ))
     launch = (
         expected_launch
         if encoded_launch is None
@@ -3996,7 +4029,11 @@ def run_managed_local_assignment(
         try:
             receipt = supervisor.launch(launch)
         except AgentProcessSupervisorError as exc:
-            if str(exc) == "resident root was not created":
+            from ._agent_process_supervisor import _SupervisorNoStartError
+
+            if isinstance(exc, _SupervisorNoStartError):
+                if not supervisor.reject_unstarted_assignment(assignment.assignment_id):
+                    raise ManagedLocalError("rejected launch ownership is unresolved") from exc
                 raise ManagedProcessStartError(str(exc)) from exc
             raise
         if (
@@ -4023,6 +4060,17 @@ def run_managed_local_assignment(
             worker_result = cast(
                 StageWorkerResult, journal.read_result(assignment.assignment_id)
             )
+            if not supervisor.reject_unstarted_assignment(assignment.assignment_id):
+                raise ManagedLocalError("failed launch ownership is unresolved")
+            child_result = _map_resident_result_identity(
+                worker_result, worker_request=workspace.worker_request(), outputs={}
+            )
+            atomic_write_bytes(
+                workspace.root / "worker-result.json", _json(child_result.to_dict()).encode()
+            )
+            workspace.persist_failed_before_start(
+                child_result, fence=fence.fencing_token, supervisor_rejected=True
+            )
             journal.record_result(assignment.assignment_id, worker_result.to_dict())
             return finalize_result(worker_result, coordinator_expected="granted")
         except Exception:
@@ -4037,7 +4085,29 @@ def run_managed_local_assignment(
             )
         receipt = supervisor.query_wait(launch)
         if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
-            receipt = supervisor.launch(launch)
+            from ._agent_process_supervisor import _SupervisorNoStartError
+
+            try:
+                receipt = supervisor.launch(launch)
+            except _SupervisorNoStartError as exc:
+                if not supervisor.reject_unstarted_assignment(assignment.assignment_id):
+                    raise ManagedLocalError("rejected launch ownership is unresolved") from exc
+                worker_result = start_failure(ManagedProcessStartError(str(exc)))
+                journal.record_supervisor_rejected_start(
+                    assignment.assignment_id, fence=fence.fencing_token, result=worker_result
+                )
+                child_result = _map_resident_result_identity(
+                    worker_result, worker_request=workspace.worker_request(), outputs={}
+                )
+                atomic_write_bytes(
+                    workspace.root / "worker-result.json", _json(child_result.to_dict()).encode()
+                )
+                workspace.persist_failed_before_start(
+                    child_result, fence=fence.fencing_token, supervisor_rejected=True
+                )
+                return finalize_result(
+                    worker_result, coordinator_expected=coordinator.state(assignment.assignment_id)
+                )
         if receipt.state is SupervisorLaunchState.UNKNOWN or not receipt.started:
             raise ManagedLocalError("supervisor process outcome is unknown")
         workspace.mark_process_started(process_id, receipt.process_id)

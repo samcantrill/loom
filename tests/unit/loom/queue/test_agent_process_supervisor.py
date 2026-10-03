@@ -32,6 +32,8 @@ from loom.queue._agent_process_supervisor import (
     _launch_from_value,
     _launch_value,
     _receipt_from_value,
+    _receipt_value,
+    SupervisorReceipt,
     _SupervisorCommunicationError,
     _SupervisorDispatch,
     _serve,
@@ -63,6 +65,62 @@ def _launch(
         profile=_profile(),
         environment={},
     )
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_saved_container_launch_and_receipt_decode_without_storage_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+) -> None:
+    profile = replace(_profile(), container={
+        "kind": "apptainer", "container": {"image": {"reference": "/original/image.sif"}},
+        "options": {"command": "/usr/bin/singularity"},
+        "python_executable": "/original/bin/python", "daemon_endpoint": None,
+    }, preparation_shared_roots={"projects": Path("/original/snapshots")})
+    launch = ResidentWorkerLaunch(
+        "owner", "epoch", "agent-A", "session-A", "assignment-A", "execution-A",
+        "fence-A", "operation-A", "a" * 64, tmp_path, profile, {},
+        schema_version=None if legacy else 2,
+    )
+    saved = _launch_value(launch)
+    digest = launch.spec_digest
+    receipt = _receipt_value(SupervisorReceipt(SupervisorLaunchState.NOT_ACCEPTED, launch, 0))
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("saved identity decoding must not inspect storage")
+
+    with monkeypatch.context() as blocked:
+        for name in ("resolve", "exists", "is_dir", "is_file", "stat", "lstat"):
+            blocked.setattr(Path, name, forbid)
+        restored = _launch_from_value(saved)
+        restored_receipt = _receipt_from_value(receipt)
+        assert _launch_value(restored) == saved
+        assert restored.spec_digest == digest
+        assert _receipt_value(restored_receipt) == receipt
+
+
+@pytest.mark.parametrize("missing", ["workspace", "project", "python"])
+def test_new_launch_qualifies_required_local_paths_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str,
+) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    profile = replace(_profile(),
+        project_root=tmp_path / "absent" if missing == "project" else Path.cwd(),
+        python_executable=tmp_path / "absent" if missing == "python" else Path(sys.executable))
+    supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(profile,))
+    launch = replace(_launch(supervisor, workspace), profile=profile,
+                     workspace_root=tmp_path / "absent" if missing == "workspace" else workspace)
+
+    def forbid_spawn(*args, **kwargs):
+        raise AssertionError("unqualified input must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_spawn)
+    with pytest.raises(AgentProcessSupervisorError, match="unavailable"):
+        supervisor.launch(launch)
+    with supervisor._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
 
 
 @contextmanager
@@ -128,6 +186,194 @@ def _named_launch(client, tmp_path, profile, name):
         _launch(client, workspace), profile=profile, assignment_id=name,
         launch_operation_id="launch-" + name, process_execution_id="process-" + name,
     )
+
+
+def _shared_container_request(tmp_path, *, backend="apptainer"):
+    from loom.pipeline.planning import StageFingerprintRecord
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile as resident_profile, _request
+
+    data = tmp_path / "input-tree"
+    data.mkdir()
+    (data / "challenge").write_bytes(b"shared")
+    (data / "payload.bin").write_bytes(b"synthetic input")
+    roots = {"data": {"host_path": str(data), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}}
+    (tmp_path / "fixture.sif").write_bytes(b"synthetic container image")
+    profile = replace(resident_profile(tmp_path), shared_roots=roots, container={
+        "kind": backend, "container": {"image": {"reference": str(tmp_path / "fixture.sif")
+            if backend == "apptainer" else "sha256:" + "a" * 64}},
+        "options": {"command": sys.executable}, "python_executable": "/container/python",
+        "daemon_endpoint": None if backend == "apptainer" else "unix:///fixture",
+    })
+    request = _request(profile)
+    selection = {"input": {"kind": "loom.shared-location", "schema_version": 1,
+                           "root_id": "data", "path": "."}}
+    selected = stage_scope(selection, {}, {"roots": qualifications(roots)})
+    fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+    request = replace(request, resolved_runtime={**request.resolved_runtime,
+        "resources": {"schema_version": 2, "entries": {}}}, fingerprint=StageFingerprintRecord.create(
+            algorithm=fingerprint.algorithm,
+            payload=replace(fingerprint.payload, fingerprint_fields={SHARED_EXECUTION_SCOPE: selected}),
+            inputs_summary=fingerprint.inputs_summary,
+        ).to_dict())
+    return profile, request, data
+
+
+def _retain_shared_launch(client, tmp_path, resident, request, *, project_controls=True):
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    workspace.persist_request(request, resident)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("fence-A")
+    launch = replace(_launch(client, workspace.root), assignment_id=request.assignment_id,
+                     profile=resident.launch_profile,
+                     bundle_digest=hashlib.sha256(json.dumps(request.to_dict(), sort_keys=True,
+                         separators=(",", ":")).encode()).hexdigest())
+    if not project_controls:
+        return launch
+    return replace(launch, resource_controls=_validated_resource_controls(
+        launch.container_command.metadata.get("resource_controls")))
+
+
+@pytest.mark.parametrize("damage", ["missing", "challenge", "special", "controls", "gpu_binding"])
+def test_shared_new_launch_qualification_rejects_before_spawning(tmp_path, monkeypatch, damage):
+    resident, request, data = _shared_container_request(tmp_path)
+    if damage == "gpu_binding":
+        request = replace(request, resolved_runtime={**request.resolved_runtime,
+            "resources": {"schema_version": 2, "entries": {
+                "gpu": {"kind": "gpu", "amount": 1, "unit": "count", "attributes": {}}}},
+            "resource_policy": {"account_for": "all", "enforce": ["gpu"]},
+            "resource_selection": {"account_for": ["gpu"], "enforce": ["gpu"]}})
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(resident.launch_profile,))
+    launch = _retain_shared_launch(supervisor, tmp_path, resident, request,
+                                  project_controls=damage != "gpu_binding")
+    if damage == "missing":
+        data.rename(tmp_path / "unavailable")
+    elif damage == "challenge":
+        (data / "challenge").write_bytes(b"changed")
+    elif damage == "special":
+        os.mkfifo(data / "unsupported-pipe")
+    elif damage == "controls":
+        launch = replace(launch, resource_controls=None)
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("unqualified shared launch must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid)
+    from loom.queue._agent_process_supervisor import _SupervisorNoStartError
+    with pytest.raises(_SupervisorNoStartError):
+        supervisor.launch(launch)
+    with supervisor._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+
+
+def test_shared_docker_replay_observes_without_original_inputs_or_new_container(tmp_path, monkeypatch):
+    from loom.queue._docker_worker import DockerWorker
+    from tests.unit.loom.queue.test_docker_worker import Daemon
+
+    resident, request, data = _shared_container_request(tmp_path, backend="docker")
+    daemon = Daemon()
+    monkeypatch.setattr(DockerWorker, "_run", lambda owner, *args: daemon((*owner.prefix, *args)))
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(resident.launch_profile,))
+    launch = _retain_shared_launch(supervisor, tmp_path, resident, request)
+    started = supervisor.launch(launch)
+    assert started.state is SupervisorLaunchState.RUNNING
+    data.rename(tmp_path / "unavailable")
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("retained Docker observation must not qualify inputs")
+
+    monkeypatch.setattr(os, "walk", forbid)
+    assert supervisor.query(launch).backend_id == started.backend_id
+    assert supervisor.launch(launch).backend_id == started.backend_id
+    assert sum(call[0] == "create" for call in daemon.calls) == 1
+    assert sum(call[0] == "start" for call in daemon.calls) == 1
+    daemon.finish()
+    assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+
+
+def test_accepted_docker_launch_without_backend_intent_never_creates_on_replay(tmp_path, monkeypatch):
+    from loom.queue._docker_worker import DockerWorker
+    from tests.unit.loom.queue.test_docker_worker import Daemon
+
+    resident, request, data = _shared_container_request(tmp_path, backend="docker")
+    daemon = Daemon()
+    monkeypatch.setattr(DockerWorker, "_run", lambda owner, *args: daemon((*owner.prefix, *args)))
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(resident.launch_profile,))
+    launch = _retain_shared_launch(supervisor, tmp_path, resident, request)
+    original = DockerWorker.launch
+
+    def interrupted(owner):
+        raise RuntimeError("owner interrupted before backend intent")
+
+    monkeypatch.setattr(DockerWorker, "launch", interrupted)
+    with pytest.raises(RuntimeError, match="before backend intent"):
+        supervisor.launch(launch)
+    monkeypatch.setattr(DockerWorker, "launch", original)
+    data.rename(tmp_path / "unavailable")
+    from loom.queue import _container_worker
+
+    def forbid_preparation(*args, **kwargs):
+        raise AssertionError("accepted Docker replay must not prepare writable paths")
+
+    monkeypatch.setattr(_container_worker, "prepare_container_worker_paths", forbid_preparation)
+    assert supervisor.query(launch).state is SupervisorLaunchState.STARTING
+    assert supervisor.launch(launch).state is SupervisorLaunchState.STARTING
+    assert supervisor.reject_unstarted_assignment(launch.assignment_id) is False
+    assert daemon.calls == []
+
+
+def test_real_shared_tree_qualification_does_not_block_other_ipc_control(tmp_path, monkeypatch):
+    resident, request, _ = _shared_container_request(tmp_path)
+    other_profile = _sleeping_profile(tmp_path)
+    entered = Event()
+    release = Event()
+    original_walk = os.walk
+    original_spawn = subprocess.Popen
+    container_spawns = []
+
+    def blocked_walk(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        yield from original_walk(*args, **kwargs)
+
+    def spawn(argv, **kwargs):
+        if argv[0] == sys.executable:
+            container_spawns.append(tuple(argv))
+            return original_spawn((str(other_profile.python_executable),), **kwargs)
+        return original_spawn(argv, **kwargs)
+
+    with _ipc_owner(tmp_path, monkeypatch, (other_profile, resident.launch_profile)) as (client, _, _):
+        other = _named_launch(client, tmp_path, other_profile, "other")
+        client.launch(other)
+        launch = _retain_shared_launch(client, tmp_path, resident, request)
+        monkeypatch.setattr(os, "walk", blocked_walk)
+        monkeypatch.setattr(subprocess, "Popen", spawn)
+        monkeypatch.setattr("loom.pipeline.executors.apptainer._timeout._capture_init",
+                            lambda process, group: os.pidfd_open(process.pid))
+        try:
+            client._call("launch", _launch_value(launch))
+            assert entered.wait(3)
+            assert client.query(other).state is SupervisorLaunchState.RUNNING
+            assert client.request_stop(other).state is SupervisorLaunchState.RUNNING
+            assert not release.is_set()
+            assert container_spawns == []
+        finally:
+            release.set()
+        started = client.launch(launch)
+        assert started.state is SupervisorLaunchState.RUNNING
+        assert client.launch(launch).process_id == started.process_id
+        assert len(container_spawns) == 1
 
 
 @pytest.mark.parametrize("held", ["spawn", "namespace", "contain"])
@@ -1041,16 +1287,15 @@ def test_separate_service_accepts_shared_container_preparation(
         launch = None
         try:
             if snapshot_alias == "unmapped-projects":
-                from loom.queue.errors import QueueServiceError
-
                 with pytest.raises(
-                    QueueServiceError, match="shared snapshot root is not mapped"
+                    AgentProcessSupervisorError, match="shared snapshot root is not mapped"
                 ):
-                    replace(
+                    invalid = replace(
                         _launch(client, workspace.root),
                         assignment_id=request.assignment_id,
                         profile=profile,
                     )
+                    client.launch(invalid)
                 assert workspace.supervisor_launch_json() is None
                 with sqlite3.connect(agent / "supervisor/supervisor.sqlite") as connection:
                     assert connection.execute(
@@ -1061,6 +1306,10 @@ def test_separate_service_accepts_shared_container_preparation(
                 _launch(client, agent / "assignments" / request.assignment_id),
                 assignment_id=request.assignment_id, profile=profile,
             )
+            from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+            launch = replace(launch, resource_controls=_validated_resource_controls(
+                launch.container_command.metadata.get("resource_controls")))
             staging = staging_tree(request, roots, "agent-A")
             assert not staging.exists()
             started = client.launch(launch)

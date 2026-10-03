@@ -27,6 +27,7 @@ def test_software_container_probe_does_not_infer_gpu_request(tmp_path, monkeypat
     image.write_bytes(b"command-only fixture")
     profile = replace(
         _profile(tmp_path),
+        preparation_shared_roots={"optional": tmp_path / "missing-snapshots"},
         container={
             "kind": "apptainer",
             "container": {"image": {"reference": str(image)}},
@@ -40,6 +41,7 @@ def test_software_container_probe_does_not_infer_gpu_request(tmp_path, monkeypat
     def run(_runner, command, **kwargs):
         calls.append(command)
         assert "--nv" not in command.argv
+        assert all(str(tmp_path / "missing-snapshots") not in item for item in command.argv)
         index = command.argv.index(str(image))
         Path(command.argv[index + 4]).write_text(json.dumps({"ok": True}))
         return SimpleNamespace(error=None, returncode=0, timed_out=False)

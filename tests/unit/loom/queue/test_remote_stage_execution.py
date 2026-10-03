@@ -1387,11 +1387,75 @@ def test_shared_assignment_requires_versioned_scope_and_live_root_binding(tmp_pa
     workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
     workspace.persist_request(request, profile)
     (root / "challenge").write_bytes(b"wrong")
+    # Exact replay joins the retained request rather than qualifying new work.
+    workspace.persist_request(request, profile)
+    fresh = _ResidentAssignmentWorkspace(tmp_path / "fresh-agent", request.assignment_id)
     with pytest.raises(QueueServiceError, match="bytes mismatch"):
-        workspace.persist_request(request, profile)
+        fresh.persist_request(request, profile)
+    assert not fresh.has_request()
 
 
-def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False):
+def test_exact_request_replay_does_not_touch_unavailable_shared_input(tmp_path, monkeypatch):
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path, data=True)
+    request = workspace.request()
+    (tmp_path / "data").rename(tmp_path / "unavailable-input")
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("request replay must not qualify input storage")
+
+    monkeypatch.setattr(remote_stage_execution, "require_bindings", forbid)
+    workspace.persist_request(request, profile)
+    with pytest.raises(QueueConflictError, match="conflicts with durable state"):
+        workspace.persist_request(replace(request, prepared_at="2020-01-02T00:00:00Z"), profile)
+
+
+@pytest.mark.parametrize("backend", ["apptainer", "docker"])
+def test_owner_rejected_saved_launch_retains_identity_and_truthful_no_start_report(tmp_path, backend):
+    from loom.queue._agent_process_supervisor import (
+        AgentProcessSupervisor, SupervisorLaunchState, _SupervisorNoStartError,
+    )
+    from loom.queue._managed_local import ManagedProcessStartError, _start_failed_worker_result
+    from tests.unit.loom.queue.test_agent_process_supervisor import (
+        _shared_container_request, _retain_shared_launch,
+    )
+
+    profile, request, data = _shared_container_request(tmp_path, backend=backend)
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        agent, agent_id="agent-A", profiles=(profile.launch_profile,)
+    )
+    launch = _retain_shared_launch(supervisor, tmp_path, profile, request)
+    workspace = _ResidentAssignmentWorkspace(agent, request.assignment_id)
+    encoded = json.dumps(_launch_value(launch))
+    workspace.persist_supervisor_launch(encoded)
+    retained_launch = workspace.supervisor_launch_json()
+    assert retained_launch is not None
+    assert json.loads(retained_launch) == json.loads(encoded)
+    data.rename(tmp_path / "unavailable")
+    with pytest.raises(_SupervisorNoStartError):
+        supervisor.launch(launch)
+    result = _start_failed_worker_result(workspace.worker_request(), ManagedProcessStartError("input unavailable"))
+    with pytest.raises(QueueConflictError, match="supervisor launch"):
+        workspace.persist_failed_before_start(result, fence=launch.execution_fence)
+    assert supervisor.reject_unstarted_assignment(request.assignment_id)
+    assert supervisor.query(launch).state is SupervisorLaunchState.NOT_ACCEPTED
+    workspace.persist_failed_before_start(
+        result, fence=launch.execution_fence, supervisor_rejected=True
+    )
+    report = workspace.retain_outputs()
+    assert report.status is StageStatus.FAILED
+    assert report.process_created is False
+    assert workspace.supervisor_launch_json() == retained_launch
+    assert not any(record["disposition"] == "applied"
+                   for record in report.executor_metadata["resource_controls"])
+    (tmp_path / "unavailable").rename(data)
+    with pytest.raises(_SupervisorNoStartError, match="durably rejected"):
+        supervisor.launch(launch)
+    assert workspace.retain_outputs() == report
+
+
+def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False, data=False, legacy=False):
     from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
     from loom.queue._shared_publication import worker_artifact_root
     root = tmp_path / "shared"
@@ -1400,6 +1464,16 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
     roots = {"outputs": {"host_path": str(root), "container_path": "/loom/outputs", "access": "rw",
         "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()},
         "publication": limits or {"max_members": 1024, "max_payload_bytes": 256 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024}}}
+    selection = {}
+    if data:
+        source = tmp_path / "data"
+        source.mkdir()
+        (source / "challenge").write_bytes(b"shared")
+        (source / "payload.bin").write_bytes(b"original input")
+        roots["data"] = {"host_path": str(source), "container_path": "/loom/data", "access": "ro",
+            "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}
+        selection = {"input": {"kind": "loom.shared-location", "schema_version": 1,
+                               "root_id": "data", "path": "."}}
     profile = replace(_profile(tmp_path), shared_roots=roots)
     if container:
         image = tmp_path / "worker.sif"
@@ -1407,7 +1481,7 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         profile = replace(profile, container={"kind": "apptainer", "container": {"image": {"reference": str(image)}},
             "options": {"command": sys.executable}, "python_executable": "/opt/python", "daemon_endpoint": None})
     request = _request(profile)
-    scoped = stage_scope({}, {}, {"roots": qualifications(roots)})
+    scoped = stage_scope(selection, {}, {"roots": qualifications(roots)})
     fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
     request = replace(request, assignment_id=assignment_id, fingerprint=StageFingerprintRecord.create(
         algorithm=fingerprint.algorithm, payload=replace(fingerprint.payload, fingerprint_fields={SHARED_EXECUTION_SCOPE: scoped}),
@@ -1424,6 +1498,13 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         execution_fence="fence-1", launch_operation_id="launch-1",
         bundle_digest=hashlib.sha256(remote_stage_execution._canonical_json(request.to_dict()).encode()).hexdigest(),
         workspace_root=workspace.root, profile=profile.launch_profile, environment={})
+    if container and not legacy:
+        from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+        launch = replace(launch, resource_controls=_validated_resource_controls(
+            launch.container_command.metadata.get("resource_controls")))
+    if legacy:
+        launch = replace(launch, schema_version=None, resource_controls=None)
     workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
     workspace.mark_process_started("execution-1", 101)
     artifacts = worker_artifact_root(workspace)
@@ -1440,6 +1521,27 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         executor_metadata={})
     workspace.persist_worker_result(result)
     return workspace, profile, launch, result
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_completed_shared_container_reports_and_publishes_without_original_input(tmp_path, legacy):
+    from loom.queue._shared_publication import publish
+    from loom.queue._agent_process_supervisor import _launch_from_value
+
+    workspace, profile, launch, _ = _shared_publication_workspace(tmp_path, container=True, data=True, legacy=legacy)
+    original_digest = launch.spec_digest
+    original_command = launch.container_command
+    (tmp_path / "data").rename(tmp_path / "unavailable-input")
+
+    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    assert restored.spec_digest == original_digest
+    assert restored.container_command == original_command
+    report = workspace.retain_outputs()
+    assert report.status is StageStatus.SUCCEEDED
+    assert (report.executor_metadata.get("resource_controls") is None) is legacy
+    refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    assert workspace.retain_outputs() == report
+    assert publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1") == refs
 
 
 @pytest.mark.parametrize("container", [False, True])

@@ -1644,6 +1644,114 @@ def test_cancel_accepted_starting_keeps_truthful_receipt_until_exact_containment
             unblock.set()
 
 
+@pytest.mark.parametrize("interruption", [None, "rejection", "failure_record"])
+def test_qualification_rejection_settles_saved_launch_without_starting_on_restart(monkeypatch, interruption):
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+
+    qualify = supervisor_module.AgentProcessSupervisor._require_new_launch_inputs
+    reject = AgentProcessSupervisorClient.reject_unstarted_assignment
+    persist = _ResidentAssignmentWorkspace.persist_failed_before_start
+    interrupted = Event()
+
+    with _service(monkeypatch, shared=True, threaded_supervisor=True) as case:
+        challenge = case.root / "shared/challenge"
+
+        def unavailable(owner, launch):
+            challenge.write_bytes(b"changed after delivery")
+            try:
+                return qualify(owner, launch)
+            finally:
+                challenge.write_bytes(b"publication")
+
+        def reject_then_interrupt(client, assignment_id):
+            result = reject(client, assignment_id)
+            if interruption == "rejection" and not interrupted.is_set():
+                interrupted.set()
+                raise RuntimeError("application interrupted after owner rejection")
+            return result
+
+        def interrupt_failure(workspace, *args, **kwargs):
+            if interruption == "failure_record" and not interrupted.is_set():
+                interrupted.set()
+                raise RuntimeError("application interrupted before no-start workspace result")
+            return persist(workspace, *args, **kwargs)
+
+        monkeypatch.setattr(supervisor_module.AgentProcessSupervisor, "_require_new_launch_inputs", unavailable)
+        monkeypatch.setattr(AgentProcessSupervisorClient, "reject_unstarted_assignment", reject_then_interrupt)
+        monkeypatch.setattr(_ResidentAssignmentWorkspace, "persist_failed_before_start", interrupt_failure)
+        _submit(case, "rejected")
+        if interruption is not None:
+            assert interrupted.wait(20)
+            case.thread.join(20)
+            assert not case.thread.is_alive()
+            case.expected_failures.append(RuntimeError)
+            monkeypatch.setattr(supervisor_module.AgentProcessSupervisor, "_require_new_launch_inputs", qualify)
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+        assert case.client.wait("rejected", timeout_seconds=30).state is LocalDaemonAdmissionState.FAILED
+        assert _rows(case.agent_root / "journal.sqlite", "SELECT state, start_failed FROM assignments") == [("released", 1)]
+        assert _rows(case.agent_root / "supervisor/supervisor.sqlite", "SELECT operation_id FROM launches") == []
+        (assignment_id,) = _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                                "SELECT assignment_id FROM rejected_assignments")[0]
+        workspace = _ResidentAssignmentWorkspace(case.agent_root, assignment_id)
+        launch = supervisor_module._launch_from_value(json.loads(workspace.supervisor_launch_json()))
+        assert workspace.worker_result().status.value == "FAILED"
+        assert workspace.retain_outputs().process_created is False
+        with pytest.raises(supervisor_module._SupervisorNoStartError, match="durably rejected"):
+            case.supervisor_owner.launch(launch)
+        assert len(case.failures) == (0 if interruption is None else 1)
+
+
+def test_recovery_transport_failure_is_logged_and_peer_work_still_progresses(monkeypatch, caplog):
+    from loom.queue._agent_progress import _cooperative, _external, _steps
+    from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
+
+    original_resume = LocalDaemonAgentHttpClient._resume_retained_assignments
+    failed = Event()
+
+    def query_retained_receipt():
+        error = _SupervisorCommunicationError(possibly_dispatched=True)
+        raise error from TimeoutError("private credential and input path")
+
+    @_cooperative
+    def interrupted(client, references=None, **kwargs):
+        if references and not failed.is_set():
+            failed.set()
+            yield from _external("bulk", query_retained_receipt)
+        return (yield from _steps(original_resume, client, references, **kwargs))
+
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "held")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            original = _running(case)
+            case.stop.set()
+            case.thread.join(10)
+            assert not case.thread.is_alive()
+            monkeypatch.setattr(LocalDaemonAgentHttpClient, "_resume_retained_assignments", interrupted)
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            _eventually(lambda: any("retained assignment recovery pending" in record.message
+                                    for record in caplog.records))
+            diagnostic = next(record.message for record in caplog.records
+                              if "retained assignment recovery pending" in record.message)
+            evidence = json.loads(diagnostic.split(": ", 1)[1])
+            assert evidence["step"] == "query_retained_receipt"
+            assert evidence["cause_type"] == "TimeoutError"
+            assert evidence["possibly_dispatched"] is True
+            assert evidence["retry_count"] == 1
+            assert "private credential" not in diagnostic
+            _submit(case, "peer")
+            assert case.client.wait("peer", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+            assert _running(case) == original
+            assert not case.failures
+            _release_gate(gate)
+            assert case.client.wait("held", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+        finally:
+            _release_gate(gate)
+
+
 def test_stop_resume_preserves_running_owner_and_conservative_startup(monkeypatch):
     with _service(monkeypatch, ceiling=2) as case:
         uri, _ = _prepare_remote_sleep_run(

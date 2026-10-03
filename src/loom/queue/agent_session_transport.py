@@ -4738,7 +4738,15 @@ class LocalDaemonAgentHttpClient:
                         _launch_value(launch), sort_keys=True, separators=(",", ":")
                     )
                 )
-                receipt = (yield from _external("bulk", supervisor.launch, launch))
+                from ._agent_process_supervisor import _SupervisorNoStartError
+
+                try:
+                    receipt = (yield from _external("bulk", supervisor.launch, launch))
+                except _SupervisorNoStartError as exc:
+                    if not (yield from _external("control", supervisor.reject_unstarted_assignment,
+                                                request.assignment_id)):
+                        raise QueueConflictError("rejected launch ownership is unresolved") from exc
+                    raise ManagedProcessStartError(str(exc)) from exc
                 self._observe_supervisor_ownership(receipt)
                 if (
                     receipt.state
@@ -4765,7 +4773,7 @@ class LocalDaemonAgentHttpClient:
                         request.resolved_runtime.get("resource_selection"),
                     ),
                 )
-                return ResidentWorkerLaunch(
+                candidate = ResidentWorkerLaunch(
                     supervisor_id=supervisor.supervisor_id,
                     continuity_epoch=supervisor.continuity_epoch,
                     agent_id=supervisor.agent_id,
@@ -4784,6 +4792,13 @@ class LocalDaemonAgentHttpClient:
                         request.resolved_runtime, bindings_prepared=True
                     ),
                 )
+                if candidate.profile.container is not None:
+                    from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+                    candidate = replace(candidate, resource_controls=_validated_resource_controls(
+                        candidate.container_command.metadata.get("resource_controls")
+                    ))
+                return candidate
 
             with self._control_lock:
                 _raise_if_application_suspended(suspend_requested)
@@ -4846,7 +4861,9 @@ class LocalDaemonAgentHttpClient:
                         execution_journal.require_failed_before_start(
                             assignment.assignment_id, fence=fence
                         )
-                        workspace.persist_failed_before_start(result, fence=fence)
+                        workspace.persist_failed_before_start(
+                            result, fence=fence, supervisor_rejected=launch is not None
+                        )
                         execution_journal.record_result(
                             assignment.assignment_id, result.to_dict()
                         )
@@ -4872,7 +4889,7 @@ class LocalDaemonAgentHttpClient:
             retained_launch = workspace.supervisor_launch_json()
             if retained_launch is not None:
                 launch = _launch_from_value(json.loads(retained_launch))
-        if launch is not None:
+        if launch is not None and not completed_before_start:
             while True:
                 _raise_if_application_suspended(suspend_requested)
                 receipt = (yield from _external("control", supervisor.query, launch))
@@ -5095,8 +5112,12 @@ class LocalDaemonAgentHttpClient:
                 )
                 continue
             commands = execution_journal.assignment_claim_commands(assignment_id)
-            if launch_json is None:
+            if launch_json is None or execution_journal.definitive_start_failed(assignment_id):
                 retained_fence = execution_journal.read_grant_fence(assignment_id)
+                if launch_json is not None and not (yield from _external(
+                    "control", supervisor.reject_unstarted_assignment, assignment_id
+                )):
+                    raise QueueConflictError("failed launch ownership is unresolved")
                 with self._control_lock:
                     if (
                         retained_fence is not None
@@ -5149,7 +5170,8 @@ class LocalDaemonAgentHttpClient:
                             _canonical_json(retained_result.to_dict()).encode(),
                         )
                     workspace.persist_failed_before_start(
-                        retained_result, fence=retained_fence
+                        retained_result, fence=retained_fence,
+                        supervisor_rejected=launch_json is not None,
                     )
                     execution_journal.record_result(
                         assignment_id, retained_result.to_dict()
@@ -5223,7 +5245,25 @@ class LocalDaemonAgentHttpClient:
                 while self._epoch_reconciliation_pending:
                     _raise_if_application_suspended(suspend_requested)
                     yield from _delay(0.01)
-                receipt = (yield from _external("bulk", supervisor.launch, launch))
+                from ._agent_process_supervisor import _SupervisorNoStartError
+
+                try:
+                    receipt = (yield from _external("bulk", supervisor.launch, launch))
+                except _SupervisorNoStartError as exc:
+                    if not (yield from _external("control", supervisor.reject_unstarted_assignment,
+                                                assignment_id)):
+                        raise QueueConflictError("rejected launch ownership is unresolved") from exc
+                    execution_journal.record_supervisor_rejected_start(
+                        assignment_id, fence=launch.execution_fence,
+                        result=_start_failed_worker_result(
+                            workspace.worker_request(), ManagedProcessStartError(str(exc))
+                        ),
+                    )
+                    completed.extend((yield from _steps(
+                        self._resume_retained_assignments, ((session_id, assignment_id),),
+                        suspend_requested=suspend_requested,
+                    )))
+                    continue
                 self._observe_supervisor_ownership(receipt)
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
@@ -5403,13 +5443,23 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote completion has no durable result")
         completed_before_start = (
             result.status in {StageStatus.CANCELLED, StageStatus.FAILED}
-            and workspace.supervisor_launch_json() is None
+            and (workspace.supervisor_launch_json() is None
+                 or execution_journal.definitive_start_failed(request.assignment_id))
         )
         if completed_before_start and result.status is StageStatus.FAILED:
             execution_journal.require_failed_before_start(
                 request.assignment_id, fence=fence
             )
-            workspace.persist_failed_before_start(result, fence=fence)
+            retained_launch = workspace.supervisor_launch_json() is not None
+            if retained_launch and (
+                self._supervisor is None or not (yield from _external(
+                    "control", self._supervisor.reject_unstarted_assignment, request.assignment_id
+                ))
+            ):
+                raise QueueConflictError("failed launch ownership is unresolved")
+            workspace.persist_failed_before_start(
+                result, fence=fence, supervisor_rejected=retained_launch
+            )
         if persist_result:
             retained = workspace.worker_result()
             if retained is not None:

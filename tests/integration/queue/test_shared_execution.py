@@ -31,7 +31,7 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "cancel_missing", "missing_selector"])
+@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
     scientific = scenario == "scientific"
     _service(tmp_path)
@@ -177,7 +177,16 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 def interrupt_result(*args, **kwargs):
                     raise RuntimeError("application restart")
                 monkeypatch.setattr(remote, "commit_result", interrupt_result)
-            if scenario in {"unresolved_restart", "workspace_restart", "started_restart", "cancel_missing"}:
+            elif scenario == "completed_input_unavailable":
+                original_commit = remote.commit_result
+
+                def lost_completion_reply(*args, **kwargs):
+                    original_commit(*args, **kwargs)
+                    second.rename(second.parent / "unavailable-input")
+                    raise RuntimeError("application restart after lost completion reply")
+
+                monkeypatch.setattr(remote, "commit_result", lost_completion_reply)
+            if scenario in {"unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing"}:
                 from loom.queue.errors import QueueServiceError
                 with pytest.raises((QueueServiceError, RuntimeError), match="unavailable|application restart"):
                     remote.execute_one(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=5000)
@@ -219,7 +228,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                     payload_path = control / json.loads(reference_json)["location"]["path"]
                     payload_backup = payload_path.read_bytes()
                     payload_path.unlink()
-                if scenario in {"unresolved_restart", "started_restart"}:
+                if scenario in {"unresolved_restart", "started_restart", "completed_input_unavailable"}:
                     import multiprocessing
                     from tests.integration.queue.test_agent_session_transport import _reconcile_remote_agent_application
                     remote.close()
@@ -254,6 +263,14 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 executed = remote.execute_one(session.session_id, session.availability_revision, sequence=2, wait_timeout_ms=5000)
             assert executed["state"] == "RELEASED", executed
             assert client.wait("target", timeout_seconds=25).state.value == "SUCCEEDED"
+            if scenario == "completed_input_unavailable":
+                assert not second.exists()
+                with sqlite3.connect(service.daemon.control_database) as conn:
+                    state, proof = conn.execute(
+                        "SELECT state, provider_release_proof_json FROM remote_assignments WHERE run_uri = ?",
+                        (target_uri,),
+                    ).fetchone()
+                assert state == "RELEASED" and proof is not None
             with sqlite3.connect(service.daemon.execution_database) as conn:
                 owners = conn.execute("SELECT run_uri, agent_id FROM coordinator_assignments").fetchall()
             assert (child.run_uri, service.daemon.machine_id) in owners

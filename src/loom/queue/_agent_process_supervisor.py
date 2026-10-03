@@ -41,6 +41,10 @@ class AgentProcessSupervisorError(ValueError):
     """A supervisor identity, schema, or launch contract is invalid."""
 
 
+class _SupervisorNoStartError(AgentProcessSupervisorError):
+    """The process owner rejected qualification before accepting a launch."""
+
+
 class _SupervisorCommunicationError(AgentProcessSupervisorError):
     """Transport failure; no-dispatch applies only to this particular attempt."""
 
@@ -117,13 +121,8 @@ class ResidentWorkerLaunchProfile:
         from ._container_worker import container_binding
 
         object.__setattr__(self, "container", container_binding(self.container))
-        root = Path(self.project_root).resolve()
+        root = Path(os.path.abspath(self.project_root))
         executable = Path(os.path.abspath(self.python_executable))
-        if ((not root.is_dir() and not (self.container is not None and self.shared_roots))
-            or (self.container is None and not executable.is_file())):
-            raise AgentProcessSupervisorError(
-                "resident worker launch profile is unavailable"
-            )
         try:
             descriptor = freeze_plain_data(self.descriptor, path="resident profile")
         except ValueError as exc:
@@ -234,17 +233,15 @@ class ResidentWorkerLaunch:
 
     @property
     def container_command(self):
-        from ._container_worker import build_container_worker
+        from ._container_worker import project_container_worker
         from ._remote_stage_execution import _ResidentAssignmentWorkspace
         from .shared_execution import assignment_scope
 
         binding = self.profile.container
         assert binding is not None
-        workspace = _ResidentAssignmentWorkspace(
-            self.workspace_root.parent.parent, self.assignment_id
-        )
-        preparation = workspace.request().preparation_input
-        return build_container_worker(
+        assignment = _ResidentAssignmentWorkspace.read_request(self.workspace_root)
+        preparation = assignment.preparation_input
+        return project_container_worker(
             self.profile,
             workspace=self.workspace_root,
             worker=(
@@ -257,10 +254,11 @@ class ResidentWorkerLaunch:
             environment=self.environment,
             # Worker materialization validates this retained launch; reading only
             # the assignment runtime avoids recursively decoding it here.
-            runtime=workspace.request().resolved_runtime,
-            shared_scope=assignment_scope(workspace.request().fingerprint),
+            runtime=assignment.resolved_runtime,
+            shared_scope=assignment_scope(assignment.fingerprint),
             agent_id=self.agent_id,
             shared_snapshot=None if preparation is None else preparation.input_receipt,
+            assignment=assignment,
         )
 
     @property
@@ -290,9 +288,7 @@ class ResidentWorkerLaunch:
             character not in "0123456789abcdef" for character in self.bundle_digest
         ):
             raise AgentProcessSupervisorError("bundle_digest must be a SHA-256 digest")
-        workspace = Path(self.workspace_root).resolve()
-        if not workspace.is_dir():
-            raise AgentProcessSupervisorError("resident workspace is unavailable")
+        workspace = Path(os.path.abspath(self.workspace_root))
         if not isinstance(self.profile, ResidentWorkerLaunchProfile):
             raise AgentProcessSupervisorError("resident launch profile is invalid")
         environment = dict(self.environment)
@@ -313,10 +309,6 @@ class ResidentWorkerLaunch:
             controls = _validated_resource_controls(self.resource_controls)
         except ValueError as exc:
             raise AgentProcessSupervisorError(str(exc)) from exc
-        if self.profile.container is not None:
-            controls = _validated_resource_controls(
-                self.container_command.metadata.get("resource_controls")
-            )
         object.__setattr__(self, "resource_controls", controls)
 
     @property
@@ -683,7 +675,7 @@ class AgentProcessSupervisor:
         if conn.execute(
             "SELECT 1 FROM rejected_assignments WHERE assignment_id = ?", (assignment_id,)
         ).fetchone() is not None:
-            raise AgentProcessSupervisorError("assignment was durably rejected before launch")
+            raise _SupervisorNoStartError("assignment was durably rejected before launch")
 
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         with self._assignment_lock(launch):
@@ -700,10 +692,12 @@ class AgentProcessSupervisor:
         require_group_wait_support()
         encoded = _launch_json(launch)
         with self._connect() as conn:
+            self._require_not_rejected(conn, launch.assignment_id)
             existing = conn.execute(
                 "SELECT 1 FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)
             ).fetchone()
         if existing is None:
+            self._qualify_new_launch(launch)
             if launch.profile.container is not None:
                 from ._container_worker import prepare_container_worker_paths
 
@@ -799,6 +793,37 @@ class AgentProcessSupervisor:
             ).fetchone()
             conn.commit()
         return self._receipt(launch, row)
+
+    def _qualify_new_launch(self, launch: ResidentWorkerLaunch) -> None:
+        """Inspect input storage only before this owner accepts a new launch."""
+        from .errors import QueueError
+        from loom.pipeline.errors import RuntimeResourceError
+
+        try:
+            self._require_new_launch_inputs(launch)
+        except (ValueError, OSError, QueueError, RuntimeResourceError) as exc:
+            raise _SupervisorNoStartError(str(exc)) from exc
+
+    def _require_new_launch_inputs(self, launch: ResidentWorkerLaunch) -> None:
+        profile = launch.profile
+        if not launch.workspace_root.is_dir():
+            raise AgentProcessSupervisorError("resident workspace is unavailable")
+        if ((not profile.project_root.is_dir()
+             and not (profile.container is not None and profile.shared_roots))
+            or (profile.container is None and not profile.python_executable.is_file())):
+            raise AgentProcessSupervisorError("resident worker launch profile is unavailable")
+        if profile.shared_roots:
+            from ._container_worker import qualify_shared_worker_inputs
+            from ._remote_stage_execution import _ResidentAssignmentWorkspace
+
+            assignment = _ResidentAssignmentWorkspace.read_request(launch.workspace_root)
+            qualify_shared_worker_inputs(profile, assignment, agent_id=launch.agent_id)
+        if profile.container is not None and launch.schema_version is not None:
+            expected = _validated_resource_controls(
+                launch.container_command.metadata.get("resource_controls")
+            )
+            if expected != launch.resource_controls:
+                raise AgentProcessSupervisorError("resident container resource controls conflict")
 
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         with self._assignment_lock(launch):
@@ -967,8 +992,17 @@ class AgentProcessSupervisor:
 
         self._validate_launch(launch)
         with self._connect() as conn:
+            if start:
+                self._require_not_rejected(conn, launch.assignment_id)
+            existing = conn.execute(
+                "SELECT 1 FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)
+            ).fetchone()
+        if existing is None and start:
+            self._qualify_new_launch(launch)
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._require_not_rejected(conn, launch.assignment_id)
+            if start:
+                self._require_not_rejected(conn, launch.assignment_id)
             row = conn.execute(
                 "SELECT * FROM launches WHERE operation_id = ?",
                 (launch.launch_operation_id,),
@@ -996,7 +1030,7 @@ class AgentProcessSupervisor:
             # No database writer may span a daemon call, including replay of an
             # existing row. Other assignments need these short transitions.
             conn.commit()
-            if not cancel and (row is None or row["state"] == "starting"):
+            if row is None:
                 from ._container_worker import prepare_container_worker_paths
 
                 prepare_container_worker_paths(
@@ -1012,11 +1046,13 @@ class AgentProcessSupervisor:
                 endpoint=str(binding["daemon_endpoint"]),
                 environment=launch.environment,
             )
-            # Authority granted this exact launch before the durable supervisor call.
-            (launch.workspace_root / "run.grant").write_text(
-                "granted\n", encoding="utf-8"
-            )
-            observation = owner.cancel() if cancel else owner.launch()
+            if row is None:
+                # Authority granted this exact new launch before acceptance.
+                (launch.workspace_root / "run.grant").write_text(
+                    "granted\n", encoding="utf-8"
+                )
+            observation = (owner.cancel() if cancel else
+                           owner.launch() if row is None else owner.observe())
             state = {
                 "not_accepted": SupervisorLaunchState.STARTING,
                 "starting": SupervisorLaunchState.RUNNING,
@@ -1554,7 +1590,8 @@ class _SupervisorControlClient:
             raise AgentProcessSupervisorError("managed supervisor response is invalid")
         if result.get("ok") is not True:
             message = result.get("error")
-            raise AgentProcessSupervisorError(
+            error_type = _SupervisorNoStartError if result.get("no_start") is True else AgentProcessSupervisorError
+            raise error_type(
                 message
                 if isinstance(message, str)
                 else "managed supervisor operation failed"
@@ -2167,7 +2204,10 @@ def _serve(root: Path) -> None:
                 TypeError,
                 ValueError,
             ) as exc:
-                _send_supervisor_reply(connection, {"ok": False, "error": str(exc)})
+                _send_supervisor_reply(connection, {
+                    "ok": False, "error": str(exc),
+                    **({"no_start": True} if isinstance(exc, _SupervisorNoStartError) else {}),
+                })
             except (AuthenticationError, EOFError, OSError):
                 pass
             finally:

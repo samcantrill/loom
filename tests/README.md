@@ -148,6 +148,12 @@ They exercise direct timeout/startup/interruption, root-first exit, TERM-resista
 descendants, uncertain cleanup, ordinary results, and both managed group owners.
 They neither pull/build an image nor request CPU/RAM cgroups or GPUs.
 
+`test_completed_container_recovery.py` additionally requires
+`LOOM_APPTAINER_WORKER_PYTHON` naming the image's absolute installed Python path.
+It runs a synthetic project with the image's installed Loom worker, then observes
+and publishes its result after the original fixture input becomes unavailable.
+It does not update a fleet or qualify compatibility with an existing live owner.
+
 ## Stage workflow tooling
 
 `tests/integration/tools/test_phase_workflow.py` exercises the repository Git

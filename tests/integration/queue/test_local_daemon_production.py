@@ -1834,6 +1834,92 @@ def test_daemon_overlaps_independent_local_stages_in_one_run(
         daemon.stop()
 
 
+def test_embedded_restart_reuses_retained_input_descriptors_and_staged_bytes(tmp_path, monkeypatch):
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root, run_name="input-replay", stage_name="consumer", seconds=2,
+        independent_stage_names=("producer", "consumer"), sequential_inputs=True,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
+        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    first = LocalDaemon(config)
+    first.start()
+    replacement = LocalDaemon(config)
+    try:
+        client = first.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("input-replay", run_uri))
+        _wait_for_supervisor_launch_count(config, expected=2)
+        first.stop()
+        retained = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False).retained_claim_commands()
+        assert len(retained) == 1
+        workspace = _ResidentAssignmentWorkspace(config.agent_root, retained[0].assignment.assignment_id)
+        assert len(workspace.request().inputs) == 1
+        saved_launch = workspace.supervisor_launch_json()
+
+        def forbid(*args, **kwargs):
+            raise AssertionError("joining an accepted execution must not read or restage original inputs")
+
+        monkeypatch.setattr(managed_local._RemoteArtifact, "from_local_ref", forbid)
+        monkeypatch.setattr(managed_local, "_stage_same_host_input_closure", forbid)
+        replacement.start()
+        resumed = replacement.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        assert resumed.wait("input-replay", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 2
+        assert workspace.supervisor_launch_json() == saved_launch
+        assert SQLiteAgentJournal(config.agent_journal, _allow_initialize=False).retained_claim_commands() == ()
+    finally:
+        first.stop()
+        replacement.stop()
+
+
+def test_embedded_qualification_rejection_settles_without_accepting_a_launch(tmp_path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _, run_uri, _ = _persist_single_stage_run(run_root)
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
+    project = tmp_path / "project"
+    project.mkdir()
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=replace(_launch_profile(), project_root=project),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None and execution.supervisor is not None
+    original = execution.supervisor.launch
+
+    def unavailable(launch):
+        project.rename(tmp_path / "unavailable-project")
+        try:
+            return original(launch)
+        finally:
+            (tmp_path / "unavailable-project").rename(project)
+
+    monkeypatch.setattr(execution.supervisor, "launch", unavailable)
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("rejected", run_uri))
+        assert client.wait("rejected", timeout_seconds=10).state is LocalDaemonAdmissionState.FAILED
+        assert _supervisor_launch_count(config) == 0
+        assert execution.journal.retained_claim_commands() == ()
+        with sqlite3.connect(config.agent_root / "supervisor/supervisor.sqlite") as conn:
+            rejected = conn.execute("SELECT assignment_id FROM rejected_assignments").fetchall()
+        assert len(rejected) == 1
+        workspace = _ResidentAssignmentWorkspace(config.agent_root, rejected[0][0])
+        assert workspace.supervisor_launch_json() is not None
+        assert workspace.retain_outputs().process_created is False
+        daemon.stop()
+        daemon.start()
+        assert _supervisor_launch_count(config) == 0
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize("retained_change", [None, "resources", "policy"])
 def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
     tmp_path: Path,
@@ -3372,6 +3458,7 @@ def _persist_sleep_run(
     retry_max_attempts: int | None = None,
     independent_stage_names: tuple[str, ...] | None = None,
     max_parallel_stages: int | None = None,
+    sequential_inputs: bool = False,
 ) -> str:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / run_name)
@@ -3386,7 +3473,7 @@ def _persist_sleep_run(
                     "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
                 "config": {
-                    "seconds": seconds,
+                    "seconds": 0.01 if sequential_inputs and current_stage_name == stage_names[0] else seconds,
                 },
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
@@ -3396,6 +3483,10 @@ def _persist_sleep_run(
             for current_stage_name in stage_names
         ],
     }
+    if sequential_inputs:
+        for index, stage in enumerate(pipeline_config["stages"][1:], start=1):
+            stage["depends_on"] = [stage_names[index - 1]]
+            stage["inputs"] = {"data": f"{stage_names[index - 1]}.data"}
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,

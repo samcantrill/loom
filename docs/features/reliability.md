@@ -188,6 +188,35 @@ the supported behavior; the authoritative contracts and phase ownership remain i
   degrades and pauses new scheduling, withholds retained offers, and requires
   coherent time/session reconciliation rather than extending stale capacity.
 
+### Retained resident launch observation
+
+Saved launch/profile/receipt decoding validates serialized identity without
+inspecting the original inputs. Command projection uses the retained runtime,
+environment and allocation evidence; it does not resolve or traverse dataset,
+snapshot or predecessor trees. Existing launch replay observes the same accepted
+operation rather than preparing another execution. Current and supported legacy
+launch digests and resource-control representations retain their interpretation.
+
+Before accepting a genuinely new launch, the process owner qualifies actual
+paths, root challenges, supported file types and container resource bindings.
+Those checks use the bounded external-work path, outside database writer
+transactions. A positive pre-acceptance rejection may establish no-start;
+transport failure, timeout or lost reply never supplies that proof.
+
+Completed result collection can proceed with original inputs unavailable when
+the exact ownership records, result evidence and retained outputs remain
+available. It still requires qualified containment, result integrity, verified
+output closure and publication before releasing provider claims. Command
+reporting does not revisit inputs. Corrupt or missing outputs remain conflicts,
+not successful completion.
+
+Foreground recovery reports redacted assignment/operation identity, the failing
+external step, underlying exception type and dispatch uncertainty. Identical
+failures are rate-limited and use bounded cooperative backoff, reset on journal
+progress. This does not add persisted recovery state or change unknown outcomes.
+Replacing an old live supervisor requires a separately qualified terminal
+handoff; a new client or worker-result success alone is insufficient.
+
 ### Guarded-recovery operator procedure
 
 Use guarded recovery only for an assignment whose ordinary result is unknown.

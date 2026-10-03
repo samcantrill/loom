@@ -256,6 +256,10 @@ def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
         profile,
         environment,
     )
+    from loom.pipeline.runtime._resource_controls import _validated_resource_controls
+
+    launch = replace(launch, resource_controls=_validated_resource_controls(
+        launch.container_command.metadata.get("resource_controls")))
     encoded = json.dumps(_launch_value(launch))
     workspace.persist_supervisor_launch(encoded)
     retained = workspace.supervisor_launch_json()
