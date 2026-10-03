@@ -12,6 +12,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from ._remote_stage_execution import _ResidentAssignmentBundle
 
 
 def container_binding(
@@ -79,7 +80,7 @@ def _base_worker_mounts(profile: ResidentWorkerLaunchProfile, workspace: Path, *
         **{
             str(path): "ro"
             for path in profile.preparation_shared_roots.values()
-            if shared_scope is None and (runtime is not None or path.exists())
+            if shared_scope is None
         },
     }
     mounts = {
@@ -139,7 +140,79 @@ def build_container_worker(
     shared_snapshot: object = None,
     agent_id: str | None = None,
 ):
-    """Project the command without creating writable mounts during replay."""
+    """Qualify inputs and build a command at a new execution/probe boundary."""
+    from ._remote_stage_execution import _ResidentAssignmentWorkspace
+
+    if shared_scope is None and runtime is None:
+        # Standalone software probes historically omit optional, unavailable
+        # preparation roots. Make that IO decision here, never in projection.
+        profile = replace(profile, preparation_shared_roots={
+            alias: path for alias, path in profile.preparation_shared_roots.items()
+            if path.exists()
+        })
+    assignment = None
+    if shared_scope is not None:
+        from .shared_execution import require_bindings, snapshot_mount
+
+        require_bindings(shared_scope, profile.shared_roots)
+        assignment = _ResidentAssignmentWorkspace.read_request(workspace)
+        qualify_shared_worker_inputs(profile, assignment, agent_id=agent_id)
+        if shared_snapshot is not None:
+            snapshot_mount(profile, shared_snapshot)
+    return project_container_worker(
+        profile, workspace=workspace, worker=worker, environment=environment,
+        runtime=runtime, shared_scope=shared_scope, shared_snapshot=shared_snapshot,
+        agent_id=agent_id, assignment=assignment,
+    )
+
+
+def qualify_shared_worker_inputs(
+    profile: ResidentWorkerLaunchProfile,
+    assignment: _ResidentAssignmentBundle,
+    *,
+    agent_id: str | None,
+) -> None:
+    """Validate live shared paths only before a genuinely new execution."""
+    from .shared_execution import assignment_scope, require_bindings, snapshot_mount
+    from ._shared_publication import selected, staging_tree, resolve_input
+    from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
+    from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+
+    shared_scope = assignment_scope(assignment.fingerprint)
+    if shared_scope is None:
+        return
+    require_bindings(shared_scope, profile.shared_roots)
+    if selected(assignment) is not None:
+        if agent_id is None:
+            raise ValueError("shared output mount requires the assignment machine identity")
+        staging_tree(assignment, profile.shared_roots, agent_id)
+    recovery = validate_wire(assignment)
+    if recovery is not None:
+        current_tree(assignment, profile.shared_roots, agent_id=agent_id)
+        for reference in recovery["predecessors"]:
+            resolve_recovery(reference, profile.shared_roots)
+    for item in assignment.inputs:
+        if shared_binding(item.metadata) is not None:
+            resolve_input(item, profile.shared_roots)
+    preparation = assignment.preparation_input
+    if (profile.container is not None and preparation is not None
+        and preparation.input_receipt is not None):
+        snapshot_mount(profile, preparation.input_receipt)
+
+
+def project_container_worker(
+    profile: ResidentWorkerLaunchProfile,
+    *,
+    workspace: Path,
+    worker: Sequence[str],
+    environment: Mapping[str, str],
+    runtime: Mapping[str, PlainData] | None = None,
+    shared_scope: Mapping[str, PlainData] | None = None,
+    shared_snapshot: object = None,
+    agent_id: str | None = None,
+    assignment: _ResidentAssignmentBundle | None = None,
+):
+    """Project original argv and metadata without filesystem access or writes."""
     from loom.pipeline.executors.containers import (
         ContainerEnvironment,
         ContainerMount,
@@ -152,13 +225,12 @@ def build_container_worker(
     container = parse_container_options(binding["container"])
     mounts = _base_worker_mounts(profile, workspace, runtime=runtime, shared_scope=shared_scope)
     if shared_scope is not None:
-        from .shared_execution import require_bindings, resolve
-        require_bindings(shared_scope, profile.shared_roots)
+        from .shared_execution import project_path
         for item in cast(Sequence[Mapping[str, PlainData]], shared_scope["locations"]):
             root = cast(Mapping[str, PlainData], profile.shared_roots[str(item["root_id"])])
             if root["container_path"] is None:
                 raise ValueError("shared container target is missing")
-            source = str(resolve(root, str(item["path"])))
+            source = str(project_path(root, str(item["path"])))
             target = str(Path(str(root["container_path"])) / str(item["path"]))
             mounts[target] = ContainerMount(source=source, target=target, mode="ro")
         # Root challenge files permit the child to recheck its actual namespace.
@@ -166,45 +238,50 @@ def build_container_worker(
             root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
             challenge = cast(Mapping[str, PlainData], root["challenge"])
             target = str(Path(str(root["container_path"])) / str(challenge["path"]))
-            mounts[target] = ContainerMount(source=str(resolve(root, str(challenge["path"]))), target=target, mode="ro")
-        from ._remote_stage_execution import _ResidentAssignmentWorkspace
-        from ._shared_publication import selected, staging_tree, resolve_input
+            mounts[target] = ContainerMount(source=str(project_path(root, str(challenge["path"]))), target=target, mode="ro")
+        from ._shared_publication import selected, staging_relative
         from loom.pipeline.stores.shared_artifacts import binding as shared_binding
-        assignment = _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).request()
+        assert assignment is not None
         selection = selected(assignment)
         if selection is not None:
             if agent_id is None:
                 raise ValueError("shared output mount requires the assignment machine identity")
             alias, _ = selection
             root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
-            source = staging_tree(assignment, profile.shared_roots, agent_id)
+            if root.get("publication") != selection[1]["publication"] or root["access"] != "rw":
+                raise ValueError("shared publication policy conflicts")
+            source = project_path(root, staging_relative(assignment, agent_id))
             target = Path(str(root["container_path"])) / source.relative_to(str(root["host_path"]))
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
-        from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
+        from ._shared_recovery import validate_wire, current_relative
         recovery = validate_wire(assignment)
         if recovery is not None:
             root = cast(Mapping[str, PlainData], profile.shared_roots[recovery["root_id"]])
-            source = current_tree(assignment, profile.shared_roots, agent_id=agent_id)
+            if agent_id is not None and recovery["tree"] != current_relative(assignment, agent_id):
+                raise ValueError("recovery destination machine ownership conflicts")
+            if root["access"] != "rw" or selection is None or root.get("publication") != selection[1]["publication"]:
+                raise ValueError("recovery root qualification conflicts")
+            source = project_path(root, recovery["tree"])
             target = Path(str(root["container_path"])) / recovery["tree"]
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
             for reference in recovery["predecessors"]:
-                source = resolve_recovery(reference, profile.shared_roots)
-                target = Path(str(root["container_path"])) / reference["tree"]
+                predecessor = cast(Mapping[str, PlainData], profile.shared_roots[reference["root_id"]])
+                source = project_path(predecessor, reference["tree"])
+                target = Path(str(predecessor["container_path"])) / reference["tree"]
                 mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
         for item in assignment.inputs:
             reference = shared_binding(item.metadata)
             if reference is None:
                 continue
-            resolve_input(item, profile.shared_roots)
             root = cast(Mapping[str, PlainData], profile.shared_roots[str(reference["root_id"])])
-            source = resolve(root, str(reference["tree"]))
+            source = project_path(root, str(reference["tree"]))
             target = Path(str(root["container_path"])) / str(reference["tree"])
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
         if shared_snapshot is not None:
             from .preparation import SharedInputReceipt
             assert isinstance(shared_snapshot, SharedInputReceipt)
-            from .shared_execution import snapshot_mount
-            source, target = snapshot_mount(profile, shared_snapshot)
+            from .shared_execution import project_snapshot_mount
+            source, target = project_snapshot_mount(profile, shared_snapshot)
             mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="ro")
     declared = cast(ContainerEnvironment, container.environment)
     merged = {**declared.variables, **environment}

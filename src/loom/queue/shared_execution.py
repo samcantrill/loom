@@ -81,10 +81,15 @@ def root_bindings(value: object) -> dict[str, PlainData]:
     return result
 
 
+def project_path(root: Mapping[str, PlainData], path: str) -> Path:
+    """Project an admitted relative location without inspecting storage."""
+    return Path(str(root["host_path"])) / _relative(path)
+
+
 def resolve(root: Mapping[str, PlainData], path: str) -> Path:
     """Resolve an existing selected file/tree without traversal or symbolic links."""
     base = Path(str(root["host_path"]))
-    target = base / _relative(path)
+    target = project_path(root, path)
     if not base.is_dir() or not target.exists() or not target.resolve().is_relative_to(base.resolve()):
         raise QueueServiceError("shared root or selected location is unavailable or escaping")
     current = base
@@ -270,8 +275,8 @@ def execution_roots(roots: Mapping[str, PlainData], *, container: bool) -> dict[
             if container else raw for alias, raw in roots.items()}
 
 
-def snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path]:
-    """Bind the native captured snapshot below exactly one permitted shared root."""
+def project_snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path]:
+    """Project a captured snapshot's declared mount without touching its bytes."""
     from .preparation import SharedInputReceipt
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
     assert isinstance(profile, ResidentWorkerLaunchProfile)
@@ -285,10 +290,25 @@ def snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path]:
         host = Path(str(root["host_path"]))
         if source_root.is_relative_to(host):
             relative = source_root.relative_to(host) / receipt.path
-            source = resolve(root, relative.as_posix())
+            source = project_path(root, relative.as_posix())
             if root["container_path"] is None:
                 raise QueueServiceError("shared snapshot container target is missing")
             matches.append((source, Path(str(root["container_path"])) / relative))
     if len(matches) != 1:
         raise QueueServiceError("shared snapshot must select one protected root")
     return matches[0]
+
+
+def snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path]:
+    """Qualify the native captured snapshot below its one permitted shared root."""
+    source, target = project_snapshot_mount(profile, receipt)
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+
+    assert isinstance(profile, ResidentWorkerLaunchProfile)
+    for raw in profile.shared_roots.values():
+        root = cast(Mapping[str, PlainData], raw)
+        host = Path(str(root["host_path"]))
+        if source.is_relative_to(host):
+            resolve(root, source.relative_to(host).as_posix())
+            break
+    return source, target

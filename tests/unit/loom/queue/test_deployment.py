@@ -48,6 +48,50 @@ from tests.support.stage29_composition import (
 pytestmark = pytest.mark.unit
 
 
+def test_recovery_retry_is_redacted_rate_limited_and_resets_on_progress(monkeypatch, caplog):
+    from loom.queue.deployment import _RecoveryRetry
+    from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
+
+    clock = [0.0]
+    monkeypatch.setattr("loom.queue.deployment.monotonic", lambda: clock[0])
+    retry = _RecoveryRetry()
+    error = _SupervisorCommunicationError(possibly_dispatched=True)
+    error.__cause__ = TimeoutError("do not disclose /private/input or a credential")
+    error.__dict__["_agent_external_step"] = "query_wait"
+    context = dict(assignment_id="assignment-A", operation_id="launch-A", state="process_started")
+    assert [retry.failed(error, **context) for _ in range(4)] == [0.1, 0.2, 0.4, 0.8]
+    assert len(caplog.records) == 1
+    payload = json.loads(caplog.records[0].message.split(": ", 1)[1])
+    assert payload == {"assignment_id": "assignment-A", "operation_id": "launch-A",
+                       "step": "query_wait", "cause_type": "TimeoutError",
+                       "possibly_dispatched": True, "retry_count": 1}
+    assert "/private" not in caplog.text and "credential" not in caplog.text
+    clock[0] = 30
+    assert retry.failed(error, **context) == 1.6
+    assert len(caplog.records) == 2
+    context["state"] = "result_durable"
+    assert retry.failed(error, **context) == 0.1
+    assert error.possibly_dispatched is True
+
+
+def test_external_failure_keeps_its_step_without_changing_the_exception():
+    from loom.queue._agent_progress import _cooperative, _external
+
+    failure = TimeoutError("private transport context")
+
+    def query_wait():
+        raise failure
+
+    @_cooperative
+    def progress():
+        return (yield from _external("bulk", query_wait))
+
+    with pytest.raises(TimeoutError) as caught:
+        progress()
+    assert caught.value is failure
+    assert failure.__dict__["_agent_external_step"] == "query_wait"
+
+
 def test_coordinator_config_is_protected_exact_and_path_bound(tmp_path: Path) -> None:
     source = _coordinator_config(tmp_path)
     source.chmod(0o644)

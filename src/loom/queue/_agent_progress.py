@@ -144,7 +144,13 @@ def _cooperative[**P, R](
 def _external(
     lane: str, function: Callable[..., Any], *args: Any, **kwargs: Any
 ) -> Generator[_Progress, Any, Any]:
-    return (yield _External(lane, function, args, tuple(kwargs.items())))
+    try:
+        return (yield _External(lane, function, args, tuple(kwargs.items())))
+    except Exception as error:
+        # Preserve the original error and its dispatch uncertainty. This finite
+        # operation label lets the service diagnose recovery without its message.
+        error.__dict__.setdefault("_agent_external_step", getattr(function, "__name__", "external_operation"))
+        raise
 
 
 def _delay(seconds: float) -> Generator[_Progress, Any, None]:

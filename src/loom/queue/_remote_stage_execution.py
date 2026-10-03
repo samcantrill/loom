@@ -1575,10 +1575,25 @@ class _ResidentAssignmentWorkspace:
 
         launch_profile = profile.launch_profile if isinstance(profile, ResidentExecutionProfile) else profile
         _require_local_binding(_assignment_local_scope(request), launch_profile)
+        encoded = _canonical_json(request.to_dict())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value_json FROM request WHERE singleton = 1"
+            ).fetchone()
+            if row is not None:
+                if str(row[0]) != encoded:
+                    raise QueueConflictError(
+                        "resident assignment bundle conflicts with durable state"
+                    )
+                return
         shared = assignment_scope(request.fingerprint)
         if shared is not None:
             require_bindings(shared, launch_profile.shared_roots)
-        encoded = _canonical_json(request.to_dict())
+        for item in request.inputs:
+            if shared_binding(item.metadata) is not None:
+                from ._shared_publication import resolve_input
+
+                resolve_input(item, launch_profile.shared_roots)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT value_json FROM request WHERE singleton = 1"
@@ -1595,9 +1610,6 @@ class _ResidentAssignmentWorkspace:
                 (encoded,),
             )
             for item in request.inputs:
-                if shared_binding(item.metadata) is not None:
-                    from ._shared_publication import resolve_input
-                    resolve_input(item, launch_profile.shared_roots)
                 conn.execute(
                     "INSERT INTO transfers(transfer_id, logical_name, digest, "
                     "size_bytes, direction, received_bytes, finalized) VALUES (?, ?, ?, ?, 'input', ?, ?)",
@@ -1779,7 +1791,17 @@ class _ResidentAssignmentWorkspace:
             _require_local_binding(scope, launch.profile)
         shared = assignment_scope(self.request().fingerprint)
         if shared is not None:
-            require_bindings(shared, _launch_from_value(decoded).profile.shared_roots)
+            from .shared_execution import qualified_roots
+
+            roots = _launch_from_value(decoded).profile.shared_roots
+            facts = {
+                alias: {key: item for key, item in cast(Mapping[str, PlainData], raw).items()
+                        if key != "host_path"}
+                for alias, raw in roots.items()
+            }
+            if any(qualified_roots(facts).get(alias) != raw
+                   for alias, raw in cast(Mapping[str, PlainData], shared["roots"]).items()):
+                raise QueueConflictError("supervisor launch shared scope conflicts")
         canonical = _canonical_json(decoded)
         with self._connect() as conn:
             row = conn.execute(
@@ -1797,6 +1819,16 @@ class _ResidentAssignmentWorkspace:
 
     def supervisor_launch_json(self) -> str | None:
         return self.read_supervisor_launch_json(self.root.parent.parent, self.assignment_id)
+
+    @staticmethod
+    def read_request(workspace: Path) -> _ResidentAssignmentBundle:
+        """Read retained request facts without creating or initializing a workspace."""
+        database = Path(workspace) / "resident.sqlite"
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+            row = conn.execute("SELECT value_json FROM request WHERE singleton = 1").fetchone()
+        if row is None:
+            raise QueueServiceError("resident assignment request is unavailable")
+        return _ResidentAssignmentBundle.from_dict(json.loads(row[0]))
 
     @staticmethod
     def read_supervisor_launch_json(agent_root: Path, assignment_id: str) -> str | None:
@@ -2093,9 +2125,13 @@ class _ResidentAssignmentWorkspace:
             )
 
     def persist_failed_before_start(
-        self, result: StageWorkerResult, *, fence: str
+        self, result: StageWorkerResult, *, fence: str, supervisor_rejected: bool = False
     ) -> None:
-        """Persist a proved pre-supervisor setup failure for terminal replay."""
+        """Persist a no-start failure after setup or positive owner rejection.
+
+        A saved launch requires the caller to obtain the supervisor's durable
+        assignment rejection first; absence or a lost reply is not that proof.
+        """
 
         request = self.request()
         if (
@@ -2115,7 +2151,9 @@ class _ResidentAssignmentWorkspace:
                 raise QueueConflictError(
                     "resident no-start result requires a durable grant"
                 )
-            if row["fence"] != fence or row["supervisor_launch_json"] is not None:
+            if row["fence"] != fence or (
+                row["supervisor_launch_json"] is not None and not supervisor_rejected
+            ):
                 raise QueueConflictError(
                     "resident no-start proof conflicts with grant or supervisor launch"
                 )
@@ -2235,25 +2273,31 @@ class _ResidentAssignmentWorkspace:
         elif process_row["supervisor_launch_json"] is None:
             process_created = False
         else:
-            # A retained supervisor request without a process receipt is not a
-            # proof either way; do not manufacture a no-start conclusion.
-            process_created = None
+            # Only owner-proved no-start persistence can retain a terminal
+            # failure/cancellation without a process identity alongside a launch.
+            process_created = (
+                False if result.status in {StageStatus.FAILED, StageStatus.CANCELLED} else None
+            )
         route_metadata = dict(result.executor_metadata)
         if process_row["supervisor_launch_json"] is not None:
             launch = _launch_from_value(
                 json.loads(str(process_row["supervisor_launch_json"]))
             )
+            command_argv = launch.command_argv if launch.profile.container is None else ()
             if launch.profile.container is not None:
                 command = launch.container_command
+                command_argv = tuple(cast(Sequence[str], command.redacted_argv))
                 route_metadata.update(command.metadata)
                 route_metadata["resource_controls"] = with_resource_control_disposition(
-                    {"resource_controls": command.metadata["resource_controls"]}, "applied"
+                    {"resource_controls": None if launch.resource_controls is None else
+                     cast(PlainData, [dict(record) for record in launch.resource_controls])},
+                    "applied" if process_created is True else
+                    "unavailable" if process_created is False else "requested"
                 )["resource_controls"]
             route_metadata.update(
                 {
                     "execution_kind": "resident_stage_worker",
-                    "command": list(launch.command_argv if launch.profile.container is None
-                                    else cast(Sequence[str], launch.container_command.redacted_argv)),
+                    "command": list(command_argv),
                     "cwd": str(launch.profile.project_root),
                 }
             )

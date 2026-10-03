@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field, replace
 import hashlib
 from importlib import import_module
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -67,6 +68,43 @@ from .preparation import (
     PREPARATION_INPUT_CAPABILITY,
     PREPARATION_STAGED_INPUT_CAPABILITY,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class _RecoveryRetry:
+    """Volatile retry pacing and redacted diagnostics for one retained owner."""
+
+    attempts: int = 0
+    state: object = None
+    signature: object = None
+    reported_at: float = -math.inf
+
+    def observe_progress(self, state: object) -> None:
+        if state != self.state:
+            self.attempts = 0
+            self.state = state
+
+    def failed(self, error: Exception, *, assignment_id: str,
+               operation_id: str | None, state: object) -> float:
+        self.observe_progress(state)
+        self.attempts += 1
+        cause = error.__cause__ or error
+        step = getattr(error, "_agent_external_step", "resume_retained_assignment")
+        dispatched = getattr(error, "possibly_dispatched", None)
+        signature = (step, type(cause).__name__, dispatched)
+        now = monotonic()
+        if signature != self.signature or now - self.reported_at >= 30:
+            _LOGGER.warning("retained assignment recovery pending: %s", json.dumps({
+                "assignment_id": assignment_id, "operation_id": operation_id,
+                "step": step, "cause_type": type(cause).__name__,
+                "possibly_dispatched": dispatched, "retry_count": self.attempts,
+            }, sort_keys=True))
+            self.signature = signature
+            self.reported_at = now
+        return min(5.0, 0.1 * 2 ** min(self.attempts - 1, 6))
 
 
 @dataclass(frozen=True, slots=True)
@@ -898,17 +936,33 @@ def _outbound_service_steps(
         def recover(reference):
             assert client is not None
             _set_assignment_owner(reference[1])
+            retry = _RecoveryRetry()
+
+            def progress():
+                assert client is not None
+                journal = client._execution_journal
+                state = None if journal is None else journal.find_state(reference[1])
+                fence = None if journal is None or state is None else journal.read_grant_fence(reference[1])
+                return state, fence
+
             while not suspending():
+                delay = 0.1
                 try:
                     yield from _steps(
                         client._resume_retained_assignments, (reference,),
                         suspend_requested=suspending,
                     )
-                except (QueueError, AgentProcessSupervisorError):
-                    pass
+                except (QueueError, AgentProcessSupervisorError) as error:
+                    state, fence = progress()
+                    delay = retry.failed(
+                        error, assignment_id=reference[1],
+                        operation_id=None if fence is None else f"{reference[1]}:launch:{fence}",
+                        state=state,
+                    )
                 if reference not in client._require_journal().unresolved_assignment_references():
                     return
-                yield from _delay(0.1)
+                retry.observe_progress(progress()[0])
+                yield from _delay(delay)
 
         def delivered(reference, delivery):
             assert client is not None
