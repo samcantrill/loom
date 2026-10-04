@@ -1,5 +1,7 @@
 """Unit tests for local artifact store behavior."""
 
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from loom.pipeline.stores import (
     ArtifactChecksumMismatchError,
     ArtifactChecksumUnsupportedError,
+    ArtifactNotFoundError,
     ArtifactTypeMismatchError,
     ArtifactStoreError,
     LocalRunArtifactStore,
@@ -66,9 +69,7 @@ def test_local_artifact_load_accepts_frozen_nested_metadata(tmp_path: Path) -> N
     )
 
     assert store.load(ref, expected_type="json") == {"ok": True}
-    assert ref.to_dict()["metadata"] == {
-        "nested": {"labels": ["raw", "processed"]}
-    }
+    assert ref.to_dict()["metadata"] == {"nested": {"labels": ["raw", "processed"]}}
 
 
 def test_local_artifact_load_requires_codec(tmp_path: Path) -> None:
@@ -154,6 +155,97 @@ def test_local_artifact_load_rejects_directory_artifacts(tmp_path: Path) -> None
 
     with pytest.raises(ArtifactTypeMismatchError):
         store.load(registered)
+
+
+def test_large_native_checkpoint_validation_streams_and_detects_corruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalArtifactStore(root=tmp_path / "run")
+    source = tmp_path / "run" / "fit" / "selected_checkpoint.ckpt"
+    source.parent.mkdir(parents=True)
+    block = bytes(range(256)) * 4096
+    expected = hashlib.sha256()
+    with source.open("wb") as output:
+        for _ in range(128):
+            output.write(block)
+            expected.update(block)
+    ref = store.register(
+        source, stage_name="fit", name="selected_checkpoint", artifact_type="checkpoint"
+    )
+    assert not ref.metadata
+    assert ref.checksum == f"sha256:{expected.hexdigest()}"
+
+    original_open = Path.open
+    original_read_bytes = Path.read_bytes
+    read_lengths: list[int] = []
+
+    class ObservedReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def read(self, size=-1):
+            assert 0 < size <= 64 * 1024
+            chunk = self.stream.read(size)
+            read_lengths.append(len(chunk))
+            return chunk
+
+    def observed_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        return ObservedReader(stream) if path == source and mode == "rb" else stream
+
+    def no_whole_checkpoint_read(path):
+        if path == source:
+            raise AssertionError("native validation must not load the whole checkpoint")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "open", observed_open)
+    monkeypatch.setattr(Path, "read_bytes", no_whole_checkpoint_read)
+    assert store.validate(ref, expected_type="checkpoint") is None
+    assert store.verify_checksum(ref) is True
+    assert sum(read_lengths) == 2 * 128 * 1024 * 1024
+    assert max(read_lengths) == 64 * 1024
+
+    with source.open("r+b") as output:
+        output.write(b"changed!")
+    assert source.stat().st_size == 128 * 1024 * 1024
+    with pytest.raises(ArtifactChecksumMismatchError, match="Checksum mismatch"):
+        store.validate(ref)
+    with source.open("ab") as output:
+        output.write(b"extra")
+    with pytest.raises(ArtifactChecksumMismatchError, match="Checksum mismatch"):
+        store.verify_checksum(ref)
+
+
+def test_checksum_validation_preserves_absent_and_non_file_errors(
+    tmp_path: Path,
+) -> None:
+    store = LocalArtifactStore(root=tmp_path / "run")
+    ref = store.save(
+        b"checkpoint",
+        stage_name="fit",
+        name="checkpoint",
+        artifact_type="checkpoint",
+        codec_key="bytes.v1",
+    )
+    path = store.local_path(ref)
+    assert store.verify_checksum(replace(ref, checksum=None)) is False
+    path.unlink()
+    with pytest.raises(ArtifactNotFoundError, match="Artifact file does not exist"):
+        store.validate(ref)
+    with pytest.raises(ArtifactNotFoundError, match="Artifact file does not exist"):
+        store.verify_checksum(ref)
+    path.mkdir()
+    with pytest.raises(ArtifactChecksumUnsupportedError, match="directory artifact"):
+        store.validate(ref)
+    with pytest.raises(ArtifactChecksumUnsupportedError, match="non-regular"):
+        store.verify_checksum(ref)
 
 
 def test_local_artifact_type_mismatch_raises(tmp_path: Path) -> None:
