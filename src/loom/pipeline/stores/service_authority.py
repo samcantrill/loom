@@ -32,6 +32,7 @@ from loom.pipeline.transition_policy import (
     TransitionIntent,
     ensure_run_transition,
     ensure_stage_transition,
+    run_transition_timestamps,
 )
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, thaw_plain_data
@@ -808,6 +809,10 @@ class _RunState:
         self.status = status
         self.reason: LifecycleReason | None = None
         self.revision = revision
+        self.started_at, self.finished_at = run_transition_timestamps(
+            started_at=None, started_at_known=True, to_status=status,
+            timestamp=cast(str, revision.created_at),
+        )
         self.metadata = dict(metadata or {})
         self.idempotency_key = idempotency_key
         self.stage_statuses: dict[str, StageStatus] = {}
@@ -1002,6 +1007,10 @@ class _ServiceAuthorityCore:
             state.status = to_status
             state.reason = _reason_from_wire(reason)
             state.revision = self._next_revision()
+            state.started_at, state.finished_at = run_transition_timestamps(
+                started_at=state.started_at, started_at_known=True,
+                to_status=to_status, timestamp=cast(str, state.revision.created_at),
+            )
             return StatusTransition(
                 run_uri=run_uri,
                 previous_status=previous,
@@ -1606,6 +1615,9 @@ class _ServiceAuthorityCore:
                 run_uri=run_uri,
                 status=state.status,
                 reason=state.reason,
+                started_at=state.started_at,
+                finished_at=state.finished_at,
+                started_at_known=True,
                 schema_version=AUTHORITY_SCHEMA_VERSION,
                 revision=state.revision,
                 stages=stages,

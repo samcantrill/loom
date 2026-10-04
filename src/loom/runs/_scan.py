@@ -12,7 +12,7 @@ from loom.state_sources import (
     local_materialization_source,
     unavailable_authority_source,
 )
-from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.status import RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
@@ -251,11 +251,8 @@ class _AuthoritativeSummaryStore:
             status=snapshot.status,
             created_at=created_at,
             updated_at=updated_at,
-            started_at=created_at if snapshot.status is not RunStatus.CREATED else None,
-            finished_at=updated_at
-            if snapshot.status
-            in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
-            else None,
+            started_at=snapshot.started_at,
+            finished_at=snapshot.finished_at,
         )
 
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:

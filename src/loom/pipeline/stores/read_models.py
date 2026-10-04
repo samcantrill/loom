@@ -1247,6 +1247,15 @@ class StageLifecycleSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class AuthoritativeRunSnapshot:
+    """One revision's run facts, including durable lifecycle timestamps.
+
+    ``started_at`` is the first authoritative running transition, preserved on
+    retry. ``started_at_known`` distinguishes a new run that has never started
+    from historical unknown timing; absent legacy fields remain unknown.
+    ``finished_at`` is the current success/failure/cancellation time and clears
+    on reopening. All populated timestamps use Loom's UTC timestamp format.
+    """
+
     run_uri: str
     status: RunStatus
     schema_version: int
@@ -1261,6 +1270,9 @@ class AuthoritativeRunSnapshot:
     warnings: tuple[ReadModelWarning, ...] = ()
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     reason: LifecycleReason | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    started_at_known: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
@@ -1271,6 +1283,14 @@ class AuthoritativeRunSnapshot:
             _positive_int(self.schema_version, "schema_version"),
         )
         _revision(self.revision)
+        if not isinstance(self.started_at_known, bool):
+            raise AuthorityModelError("started_at_known must be a bool")
+        if self.started_at is not None:
+            _timestamp(self.started_at, "started_at")
+            if not self.started_at_known:
+                raise AuthorityModelError("a retained started_at must be known")
+        if self.finished_at is not None:
+            _timestamp(self.finished_at, "finished_at")
         if self.reason is not None and not isinstance(self.reason, LifecycleReason):
             raise AuthorityModelError("reason must be a LifecycleReason or None")
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
@@ -1325,6 +1345,9 @@ class AuthoritativeRunSnapshot:
             "status": self.status.value,
             "reason": None if self.reason is None else self.reason.to_dict(),
             "schema_version": self.schema_version,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "started_at_known": self.started_at_known,
             "revision": self.revision.to_dict(),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
             "stages": [stage.to_dict() for stage in self.stages],
@@ -1361,6 +1384,9 @@ class AuthoritativeRunSnapshot:
                 "revision",
                 "metadata",
                 "stages",
+                "started_at",
+                "finished_at",
+                "started_at_known",
                 "submitted_operations",
                 "cleanup_candidates",
                 "cleanup_reports",
@@ -1375,6 +1401,9 @@ class AuthoritativeRunSnapshot:
             run_uri=_non_empty_string(_required(mapping, "run_uri"), "run_uri"),
             status=_run_status(_required(mapping, "status")),
             reason=None if mapping.get("reason") is None else LifecycleReason.from_dict(mapping["reason"]),
+            started_at=None if mapping.get("started_at") is None else _timestamp(mapping["started_at"], "started_at"),
+            finished_at=None if mapping.get("finished_at") is None else _timestamp(mapping["finished_at"], "finished_at"),
+            started_at_known=cast(bool, mapping.get("started_at_known", False)),
             schema_version=_positive_int(
                 _required(mapping, "schema_version"), "schema_version"
             ),

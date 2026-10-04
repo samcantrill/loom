@@ -81,6 +81,73 @@ class _MutableClock:
         return self.value
 
 
+@pytest.mark.parametrize("backend", ["sqlite", "service"])
+def test_run_status_retains_actual_start_and_finish_across_recovery(tmp_path, backend):
+    from loom.pipeline.transition_policy import TransitionIntent
+
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    repository = None
+    if backend == "sqlite":
+        store = _store(tmp_path, SQLitePerRunAuthorityStore(clock=clock))
+    else:
+        repository = AuthorityRepository(tmp_path / "authority", clock=clock)
+        repository.initialize(service_generation="timing-test")
+        store = _http_authority_run_store(tmp_path, repository=repository)
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    def transition(status, *, intent=TransitionIntent.NORMAL):
+        previous = store.authority_store.snapshot(run_uri).status
+        store.authority_store.transition_run(
+            run_uri, from_status=previous, to_status=status, intent=intent
+        )
+        result = store.read_run_status(run_uri)
+        assert result is not None
+        return result
+
+    clock.value = "2020-01-01T00:00:01Z"
+    planned = transition(RunStatus.PLANNED)
+    assert planned.started_at is None
+    assert planned.finished_at is None
+    clock.value = "2020-01-01T00:00:02Z"
+    submitted = transition(RunStatus.SUBMITTED)
+    assert submitted.started_at is None
+    assert submitted.finished_at is None
+    clock.value = "2020-01-01T00:00:03Z"
+    running = transition(RunStatus.RUNNING)
+    assert running.started_at == clock.value
+    assert running.finished_at is None
+    clock.value = "2020-01-01T00:00:04Z"
+    failed = transition(RunStatus.FAILED)
+    assert failed.started_at == running.started_at
+    assert failed.finished_at == clock.value
+    clock.value = "2020-01-01T00:00:05Z"
+    planned = transition(RunStatus.PLANNED, intent=TransitionIntent.RESUME)
+    assert planned.started_at == running.started_at
+    assert planned.finished_at is None
+    clock.value = "2020-01-01T00:00:06Z"
+    resumed = transition(RunStatus.RUNNING)
+    assert resumed.started_at == running.started_at
+    clock.value = "2020-01-01T00:00:07Z"
+    succeeded = transition(RunStatus.SUCCEEDED)
+    assert succeeded.started_at == running.started_at
+    assert succeeded.finished_at == clock.value
+    clock.value = "2020-01-01T00:00:08Z"
+    event = PipelineEvent(
+        scope=EventScope.run(), event_type="inspection.recorded", payload={}
+    )
+    if backend == "sqlite":
+        store.append_event(run_uri, event)
+    else:
+        assert repository is not None
+        repository.append_audit_event(run_uri, event)
+    later = store.read_run_status(run_uri)
+    assert later is not None
+    assert later.updated_at == clock.value
+    assert later.started_at == running.started_at
+    assert later.finished_at == succeeded.finished_at
+
+
 class _AuthorityRequestKwargs(TypedDict):
     authority_attempt_id: str
     authority_lease_id: str

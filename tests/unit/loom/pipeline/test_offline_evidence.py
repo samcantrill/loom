@@ -98,6 +98,7 @@ def test_explicit_export_is_revision_labelled_immutable_history(tmp_path: Path) 
     assert manifest.state_source["details"] == {
         "historical": True, "observed_at": "2026-10-01T00:00:00Z",
         "authority_revision": revision.to_dict(),
+        "run_timing": {"started_at_known": True},
     }
     authority.transition_run(run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED)
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before

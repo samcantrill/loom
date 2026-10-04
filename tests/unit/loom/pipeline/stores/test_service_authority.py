@@ -93,6 +93,27 @@ def test_service_health_reports_revision_and_run_count(tmp_path) -> None:
         assert health["revision"] == 1
 
 
+def test_local_service_transports_lifecycle_timestamps(tmp_path) -> None:
+    from loom.pipeline.status import RunStatus
+
+    uri = f"file://{tmp_path}/runs/timing"
+    with LocalAuthorityService.start() as service:
+        store = create_service_authority_store(service.config())
+        store.create_run(uri)
+        created = store.snapshot(uri)
+        assert created.started_at_known is True
+        assert created.started_at is None
+        assert created.finished_at is None
+        started = store.transition_run(uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+        running = store.snapshot(uri)
+        assert running.started_at == started.revision.created_at
+        assert running.finished_at is None
+        terminal = store.transition_run(uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED)
+        completed = store.snapshot(uri)
+        assert completed.started_at == running.started_at
+        assert completed.finished_at == terminal.revision.created_at
+
+
 def test_service_controller_lease_matches_sqlite_exclusion_and_expiry(tmp_path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "r1")
     with LocalAuthorityService.start() as service:

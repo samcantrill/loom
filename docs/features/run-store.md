@@ -17,8 +17,9 @@ and never infers identity from the latest status file.
 `inspect_run_status` and backend inspection use the selected live authority.
 Without an explicitly configured service, a stopped run with a checkpointed
 run-local SQLite authority can be inspected read-only. This path reads retained
-bytes into a private memory database, validates the existing schema, and neither
-migrates nor repairs it. It does not start a service or claim work. The source
+bytes into a private memory database and validates the schema. The preceding
+SQLite schema (v10) can be normalized in that private copy; retained files are
+never migrated or repaired. It does not start a service or claim work. The source
 includes `reference_source: retained_read_only`; the backend result includes the
 committed revision. Retained WAL/journal requiring recovery, unsupported schemas,
 and absent authority produce unavailable diagnostics rather than a pending state
@@ -32,6 +33,30 @@ authority is recorded as incomplete evidence with a reason. Legacy manifests and
 projection-bearing historical imports retain their existing admission checks and
 remain non-authoritative. The layout and local status APIs described below also
 cover that historical format.
+
+Run lifecycle timing is retained transactionally by both authority backends.
+`AuthoritativeRunSnapshot.started_at` records the first authoritative transition
+to `RUNNING`, including managed worker start confirmation, and survives recovery.
+Admission directly as `RUNNING` records the admission time. Creation, planning,
+submission, and attempt allocation do not imply a start. `finished_at` records
+the current transition to `SUCCEEDED`, `FAILED`, or `CANCELLED`; reopening clears
+that finish. Cancellation before execution has a finish and no start.
+`INTERRUPTED` retains unfinished, recoverable timing semantics. Audit, cleanup,
+and other revision updates do not alter either lifecycle timestamp. The execution
+status adapter projects these facts without substituting creation/revision times.
+
+New runs have `started_at_known=True`; a null start then means never started.
+Migrated databases and old serialized snapshots have `started_at_known=False`
+and null timing where historical facts are unavailable. Retrying such a run must
+not invent its original start. Existing SQLite v10 databases migrate to v11;
+service repository v11 databases migrate to v12. Established earlier writable
+migration routes remain supported.
+
+New authority-backed offline exports preserve the lifecycle timestamps in
+`run_status` and record `state_source.details.run_timing.started_at_known`.
+Offline import retains timing only when this knowledge declaration is present;
+older status projections may have substituted unrelated times and are admitted
+with unknown run timing. Import time is never substituted for execution time.
 
 ## 1. Purpose
 

@@ -888,8 +888,10 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
     run_status: RunStatus,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "explicit-retry")
-    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    clock = FrozenClock()
+    store = SQLitePerRunAuthorityStore(clock=clock)
     store.create_run(run_uri, status=RunStatus.RUNNING)
+    first_start = store.open_run(run_uri).started_at
     admission = CoordinatorAdmissionRequest(
         "admit-1", "coordinator-1", run_uri, "intent-1"
     )
@@ -919,6 +921,7 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
         ),
     )
     snapshot = store.open_run(run_uri)
+    clock.value = "2020-01-01T00:00:03Z"
     failed = store.transition_run(
         run_uri,
         from_status=snapshot.status,
@@ -941,6 +944,8 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
     assert replies[0] == replies[1]
     snapshot = store.open_run(run_uri)
     assert snapshot.status is RunStatus.PLANNED
+    assert snapshot.started_at == first_start
+    assert snapshot.finished_at is None
     assert snapshot.stages[0].status is StageStatus.STALE
     assert snapshot.stages[0].attempts == (previous,)
     assert snapshot.stages[1].attempts == (pending.attempt,)
@@ -969,8 +974,10 @@ def test_managed_admission_retry_retains_failure_and_prepares_one_next_attempt(
         attempt_id=next_attempt.attempt.attempt_id,
     )
     assert store.open_run(run_uri).status is RunStatus.PLANNED
+    clock.value = "2020-01-01T00:00:06Z"
     store.confirm_execution_started(run_uri, fence=next_fence)
     assert store.open_run(run_uri).status is RunStatus.RUNNING
+    assert store.open_run(run_uri).started_at == first_start
     with pytest.raises(AuthorityStoreError, match="terminal result conflicts"):
         store.record_managed_attempt_terminal(
             run_uri,

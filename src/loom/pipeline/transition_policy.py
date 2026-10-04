@@ -23,6 +23,31 @@ class InvalidStageTransition(ValueError):
     """Raised when a requested stage transition is not meaningful."""
 
 
+def run_transition_timestamps(
+    *,
+    started_at: str | None,
+    started_at_known: bool,
+    to_status: RunStatus,
+    timestamp: str,
+) -> tuple[str | None, str | None]:
+    """Project timing for an admitted lifecycle transition, in its transaction.
+
+    Start means the first authoritative RUNNING transition. A migrated unknown
+    first start stays unknown even after recovery. Finish is the current terminal
+    completion (success, failure or cancellation); reopening clears it.
+    INTERRUPTED retains the established unfinished/recoverable timing semantics.
+    Generic revision updates must not call this function.
+    """
+    if to_status is RunStatus.RUNNING and started_at is None and started_at_known:
+        started_at = timestamp
+    finished_at = (
+        timestamp
+        if to_status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+        else None
+    )
+    return started_at, finished_at
+
+
 _RUN_NORMAL = frozenset(
     {
         (RunStatus.CREATED, RunStatus.PLANNED),
