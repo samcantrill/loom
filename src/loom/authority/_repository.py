@@ -33,6 +33,7 @@ from loom.pipeline.transition_policy import (
     TransitionIntent,
     ensure_run_transition,
     ensure_stage_transition,
+    run_transition_timestamps,
 )
 from loom.pipeline.stores.authority import (
     ActionProducerBinding,
@@ -98,7 +99,7 @@ from loom.pipeline.stores._run_annotations import NOTE_COLUMNS, RECEIPT_COLUMNS,
 from loom.runs.annotations import RunNote, RunNotePage
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 11
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 12
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
@@ -120,6 +121,9 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "created_revision_sequence",
             "updated_revision_sequence",
             "reason_json",
+            "started_at",
+            "finished_at",
+            "started_at_known",
         }
     ),
     "controller_leases": frozenset(
@@ -512,6 +516,7 @@ class AuthorityRepository:
                     _migrate_v8_run_annotations(conn, current_version=self.schema_version)
                     _migrate_v9_annotation_mutations(conn, current_version=self.schema_version)
                     _migrate_v10_input_lineage(conn, current_version=self.schema_version)
+                    _migrate_v11_run_timing(conn, current_version=self.schema_version)
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -573,9 +578,9 @@ class AuthorityRepository:
                 """
                 INSERT INTO authority_runs (
                     run_uri, status, metadata_json, created_revision_sequence,
-                    updated_revision_sequence, reason_json
+                    updated_revision_sequence, reason_json, started_at_known
                 )
-                VALUES (?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, NULL, 1)
                 """,
                 (
                     run_uri,
@@ -585,6 +590,7 @@ class AuthorityRepository:
                     revision.sequence,
                 ),
             )
+            _update_run_timing(conn, run_uri, run_status, revision)
             return revision
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -669,6 +675,7 @@ class AuthorityRepository:
                     run_uri,
                 ),
             )
+            _update_run_timing(conn, run_uri, to_status, revision)
             return StatusTransition(
                 run_uri=run_uri,
                 previous_status=current,
@@ -1524,6 +1531,7 @@ class AuthorityRepository:
                     run_uri,
                 ),
             )
+            _update_run_timing(conn, run_uri, RunStatus.CANCELLED, revision)
             return RunStatus.CANCELLED
 
     def bind_prepared_attempt(
@@ -1785,6 +1793,7 @@ class AuthorityRepository:
                     "UPDATE authority_runs SET status = ? WHERE run_uri = ?",
                     (RunStatus.RUNNING.value, run_uri),
                 )
+                _update_run_timing(conn, run_uri, RunStatus.RUNNING, revision)
             _touch_run(conn, run_uri=run_uri, revision=revision)
 
     def record_managed_attempt_terminal(
@@ -3359,13 +3368,15 @@ class AuthorityRepository:
             run_metadata["authority_import"] = import_provenance
             run_metadata["historical_lineage"] = (manifest.runtime or {}).get("historical_lineage")
             run_revision = self._next_revision(conn)
+            started_at, finished_at, started_at_known = _offline_import_run_timing(manifest)
             conn.execute(
                 """
                 INSERT INTO authority_runs (
                     run_uri, status, metadata_json, created_revision_sequence,
-                    updated_revision_sequence, reason_json
+                    updated_revision_sequence, reason_json,
+                    started_at, finished_at, started_at_known
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_uri,
@@ -3374,6 +3385,9 @@ class AuthorityRepository:
                     run_revision.sequence,
                     run_revision.sequence,
                     _json_dumps(_offline_import_reason(import_provenance).to_dict()),
+                    started_at,
+                    finished_at,
+                    int(started_at_known),
                 ),
             )
             _insert_import_audit_event(
@@ -4376,6 +4390,8 @@ def _migrate_v3_output_commits(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name == "authority_runs":
+            expected_columns -= {"started_at", "finished_at", "started_at_known"}
         if table_name in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
             continue
         v3_columns = (
@@ -4482,6 +4498,8 @@ def _migrate_v5_coordinator_principals(
             )
         )
     for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table_name == "authority_runs":
+            expected_columns -= {"started_at", "finished_at", "started_at_known"}
         if table_name in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
             continue
         v5_columns = (
@@ -4521,7 +4539,7 @@ def _migrate_v5_coordinator_principals(
 
 
 def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {8, 9, 10, 11}:
+    if current_version not in {8, 9, 10, 11, 12}:
         return
     tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
     if _METADATA_TABLE not in tables:
@@ -4530,6 +4548,8 @@ def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: in
     if row is None or row["value"] != "7":
         return
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "authority_runs":
+            columns -= {"started_at", "finished_at", "started_at_known"}
         if table in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
             continue
         actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
@@ -4543,7 +4563,7 @@ def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: in
 
 
 def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {9, 10, 11}:
+    if current_version not in {9, 10, 11, 12}:
         return
     if conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
                     (_METADATA_TABLE,)).fetchone() is None:
@@ -4552,6 +4572,8 @@ def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: in
     if row is None or row["value"] != "8":
         return
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "authority_runs":
+            columns -= {"started_at", "finished_at", "started_at_known"}
         if table in {"run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
             continue
         actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
@@ -4563,7 +4585,7 @@ def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: in
 
 
 def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {10, 11}:
+    if current_version not in {10, 11, 12}:
         return
     if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
         return
@@ -4571,6 +4593,8 @@ def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_versio
     if row is None or row["value"] != "9":
         return
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "authority_runs":
+            columns -= {"started_at", "finished_at", "started_at_known"}
         if table in {"run_annotation_notes", "run_annotation_mutations"}:
             continue
         actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
@@ -4581,7 +4605,7 @@ def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_versio
 
 
 def _migrate_v10_input_lineage(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version != 11:
+    if current_version not in {11, 12}:
         return
     if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
         return
@@ -4589,6 +4613,8 @@ def _migrate_v10_input_lineage(conn: sqlite3.Connection, *, current_version: int
     if row is None or row["value"] != "10":
         return
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        if table == "authority_runs":
+            columns -= {"started_at", "finished_at", "started_at_known"}
         actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
         if not columns.issubset(actual):
             raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v10 schema is incomplete", current_version=current_version))
@@ -4597,6 +4623,32 @@ def _migrate_v10_input_lineage(conn: sqlite3.Connection, *, current_version: int
         if name not in columns:
             conn.execute(f"ALTER TABLE stage_attempts ADD COLUMN {name} {kind}")
     conn.execute(f"UPDATE {_METADATA_TABLE} SET value='11' WHERE key='schema_version'")
+
+
+def _migrate_v11_run_timing(conn: sqlite3.Connection, *, current_version: int) -> None:
+    if current_version != 12:
+        return
+    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
+        return
+    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key='schema_version'").fetchone()
+    if row is None or row["value"] != "11":
+        return
+    timing_columns = {"started_at", "finished_at", "started_at_known"}
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        expected = columns - timing_columns if table == "authority_runs" else columns
+        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
+        if not expected.issubset(actual):
+            raise AuthorityRepositoryCompatibilityError(_corrupt_failure(
+                "authority repository v11 schema is incomplete", current_version=current_version))
+    columns = {str(info["name"]) for info in conn.execute("PRAGMA table_info(authority_runs)")}
+    for name, kind in (
+        ("started_at", "TEXT"),
+        ("finished_at", "TEXT"),
+        ("started_at_known", "INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE authority_runs ADD COLUMN {name} {kind}")
+    conn.execute(f"UPDATE {_METADATA_TABLE} SET value='12' WHERE key='schema_version'")
 
 
 def _initialize_schema(
@@ -4627,7 +4679,10 @@ def _initialize_schema(
             metadata_json TEXT NOT NULL,
             created_revision_sequence INTEGER NOT NULL,
             updated_revision_sequence INTEGER NOT NULL,
-            reason_json TEXT
+            reason_json TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            started_at_known INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))
         )
         """,
         """
@@ -5224,6 +5279,9 @@ def _run_snapshot(
         run_uri=run_uri,
         status=RunStatus(cast(str, run_row["status"])),
         reason=_reason_from_json(cast(str | None, run_row["reason_json"])),
+        started_at=run_row["started_at"],
+        finished_at=run_row["finished_at"],
+        started_at_known=bool(run_row["started_at_known"]),
         schema_version=schema_version,
         revision=revision,
         stages=tuple(
@@ -5336,6 +5394,25 @@ def _offline_import_run_status(
     return manifest.run_status
 
 
+def _offline_import_run_timing(
+    manifest: OfflineEvidenceManifest,
+) -> tuple[str | None, str | None, bool]:
+    from loom.pipeline.status import RunStatusRecord
+
+    details = manifest.state_source.get("details")
+    timing = details.get("run_timing") if isinstance(details, Mapping) else None
+    if timing is None:
+        # Older projections could substitute creation/latest revision times.
+        return None, None, False
+    if not isinstance(timing, Mapping) or not isinstance(timing.get("started_at_known"), bool):
+        raise AuthorityRepositoryError("offline run timing requires started_at_known")
+    status = RunStatusRecord.from_dict(_offline_import_run_status(manifest))
+    known = cast(bool, timing["started_at_known"])
+    if status.started_at is not None and not known:
+        raise AuthorityRepositoryError("offline run start cannot be both retained and unknown")
+    return status.started_at, status.finished_at, known
+
+
 def _offline_import_stage_status(
     stage: OfflineStageEvidence,
 ) -> Mapping[str, PlainData]:
@@ -5415,6 +5492,20 @@ def _require_run_row(conn: sqlite3.Connection, run_uri: str) -> sqlite3.Row:
 def _current_run_revision(conn: sqlite3.Connection, run_uri: str) -> BackendRevision:
     row = _require_run_row(conn, run_uri)
     return _revision_for(conn, cast(int, row["updated_revision_sequence"]))
+
+
+def _update_run_timing(
+    conn: sqlite3.Connection, run_uri: str, status: RunStatus, revision: BackendRevision
+) -> None:
+    row = _require_run_row(conn, run_uri)
+    started, finished = run_transition_timestamps(
+        started_at=row["started_at"], started_at_known=bool(row["started_at_known"]),
+        to_status=status, timestamp=cast(str, revision.created_at),
+    )
+    conn.execute(
+        "UPDATE authority_runs SET started_at = ?, finished_at = ? WHERE run_uri = ?",
+        (started, finished, run_uri),
+    )
 
 
 def _touch_run(

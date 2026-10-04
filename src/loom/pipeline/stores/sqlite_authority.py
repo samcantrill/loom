@@ -31,6 +31,7 @@ from loom.pipeline.transition_policy import (
     TransitionIntent,
     ensure_run_transition,
     ensure_stage_transition,
+    run_transition_timestamps,
 )
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
@@ -158,6 +159,9 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "created_revision_sequence",
             "updated_revision_sequence",
             "reason_json",
+            "started_at",
+            "finished_at",
+            "started_at_known",
         }
     ),
     "stages": frozenset({"stage_name", "status", "revision_sequence", "reason_json"}),
@@ -479,9 +483,9 @@ class SQLitePerRunAuthorityStore:
                 """
                 INSERT INTO run_state (
                     id, status, metadata_json, created_revision_sequence,
-                    updated_revision_sequence, reason_json
+                    updated_revision_sequence, reason_json, started_at_known
                 )
-                VALUES (1, ?, ?, ?, ?, NULL)
+                VALUES (1, ?, ?, ?, ?, NULL, 1)
                 """,
                 (
                     RunStatus(status).value,
@@ -490,6 +494,7 @@ class SQLitePerRunAuthorityStore:
                     revision.sequence,
                 ),
             )
+            _update_run_timing(conn, RunStatus(status), revision)
             return revision
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -559,6 +564,7 @@ class SQLitePerRunAuthorityStore:
                     _json_dumps_or_none(reason),
                 ),
             )
+            _update_run_timing(conn, RunStatus(to_status), revision)
             return StatusTransition(
                 run_uri=run_uri,
                 previous_status=current,
@@ -1159,6 +1165,7 @@ class SQLitePerRunAuthorityStore:
                     _json_dumps(reason.to_dict()),
                 ),
             )
+            _update_run_timing(conn, RunStatus.PLANNED, revision)
             conn.execute(
                 "INSERT INTO metadata(key, value) VALUES (?, ?)",
                 (
@@ -1427,6 +1434,7 @@ class SQLitePerRunAuthorityStore:
                     _json_dumps(reason.to_dict()),
                 ),
             )
+            _update_run_timing(conn, RunStatus.CANCELLED, revision)
             return RunStatus.CANCELLED
 
     def bind_prepared_attempt(
@@ -1653,6 +1661,7 @@ class SQLitePerRunAuthorityStore:
                     "UPDATE run_state SET status = ? WHERE id = 1",
                     (RunStatus.RUNNING.value,),
                 )
+                _update_run_timing(conn, RunStatus.RUNNING, revision)
             _touch_run(conn, revision)
 
     def record_managed_attempt_terminal(
@@ -3190,6 +3199,9 @@ class SQLitePerRunAuthorityStore:
                 # private memory copy uses rollback mode; retained bytes stay intact.
                 conn.deserialize(payload[:18] + b"\x01\x01" + payload[20:])
                 conn.row_factory = sqlite3.Row
+                # Admit legacy state in this private copy; never change retained bytes.
+                if _stored_schema_version(conn) == 10:
+                    _migrate_schema(conn)
                 conn.execute("PRAGMA query_only = ON")
                 yield conn
             finally:
@@ -3265,7 +3277,10 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             metadata_json TEXT NOT NULL,
             created_revision_sequence INTEGER NOT NULL,
             updated_revision_sequence INTEGER NOT NULL,
-            reason_json TEXT
+            reason_json TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            started_at_known INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))
         )
         """,
         """
@@ -3580,11 +3595,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+    if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
-    historical_columns.pop("run_annotation_notes")
-    historical_columns.pop("run_annotation_mutations")
+    historical_columns["run_state"] -= {"started_at", "finished_at", "started_at_known"}
+    if version < 10:
+        historical_columns.pop("run_annotation_notes")
+        historical_columns.pop("run_annotation_mutations")
     if version < 8:
         historical_columns.pop("run_annotations")
     if version < 7:
@@ -3725,6 +3742,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     for name, kind in (("input_bindings_json", "TEXT"), ("start_confirmed", "INTEGER"), ("start_confirmed_at", "TEXT")):
         if name not in columns:
             conn.execute(f"ALTER TABLE attempts ADD COLUMN {name} {kind}")
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(run_state)")}
+    for name, kind in (
+        ("started_at", "TEXT"),
+        ("finished_at", "TEXT"),
+        ("started_at_known", "INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE run_state ADD COLUMN {name} {kind}")
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -3980,6 +4005,9 @@ def _snapshot(
         run_uri=run_uri,
         status=RunStatus(cast(str, run_row["status"])),
         reason=_reason_from_json(cast(str | None, run_row["reason_json"])),
+        started_at=run_row["started_at"],
+        finished_at=run_row["finished_at"],
+        started_at_known=bool(run_row["started_at_known"]),
         schema_version=AUTHORITY_SCHEMA_VERSION,
         revision=revision,
         stages=stages,
@@ -4411,6 +4439,20 @@ def _require_no_cancellation_epoch(conn: sqlite3.Connection, *, attempt_id: str 
         if attempt_id is not None and conn.execute("SELECT 1 FROM action_producers WHERE attempt_id = ? AND active = 1", (attempt_id,)).fetchone():
             return
         raise AuthorityStoreError("run cancellation epoch is effective")
+
+
+def _update_run_timing(
+    conn: sqlite3.Connection, status: RunStatus, revision: BackendRevision
+) -> None:
+    row = conn.execute("SELECT started_at, started_at_known FROM run_state WHERE id = 1").fetchone()
+    started, finished = run_transition_timestamps(
+        started_at=row["started_at"], started_at_known=bool(row["started_at_known"]),
+        to_status=status, timestamp=cast(str, revision.created_at),
+    )
+    conn.execute(
+        "UPDATE run_state SET started_at = ?, finished_at = ? WHERE id = 1",
+        (started, finished),
+    )
 
 
 def _touch_run(conn: sqlite3.Connection, revision: BackendRevision) -> None:

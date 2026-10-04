@@ -909,10 +909,8 @@ class AuthorityBackedSerialRunStore:
             metadata=_reason_detail(snapshot.reason),
             created_at=created_at,
             updated_at=updated_at,
-            started_at=created_at if snapshot.status is not RunStatus.CREATED else None,
-            finished_at=updated_at if snapshot.status in {
-                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED
-            } else None,
+            started_at=snapshot.started_at,
+            finished_at=snapshot.finished_at,
         )
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:

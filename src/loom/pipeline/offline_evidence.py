@@ -524,6 +524,7 @@ def collect_offline_evidence_manifest(
             source["details"] = {
                 "historical": True, "observed_at": generated,
                 "authority_revision": snapshot.revision.to_dict(),
+                "run_timing": {"started_at_known": snapshot.started_at_known},
             }
         except Exception as exc:
             diagnostics.append(_error("offline_evidence.authority_unavailable", str(exc)))
@@ -532,6 +533,7 @@ def collect_offline_evidence_manifest(
         observed = snapshot.revision.created_at or generated
         run_status = RunStatusRecord(
             run_uri=run_uri, status=snapshot.status, created_at=observed, updated_at=observed,
+            started_at=snapshot.started_at, finished_at=snapshot.finished_at,
         ).to_dict()
     else:
         run_status = None if authority_selected else _read_run_status(store, run_uri, diagnostics)
