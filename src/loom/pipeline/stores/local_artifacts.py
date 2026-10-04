@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Literal, Mapping, Sequence, cast
 
@@ -36,6 +37,7 @@ class LocalArtifactStore:
 
     ``shared_roots`` translates native immutable publication references under the
     consumer's qualified root prefixes, preserving identity and full integrity.
+    Checksum validation streams file bytes without retaining the full payload.
     """
 
     _SUFFIX_BY_CODEC: dict[str, str] = {
@@ -54,8 +56,14 @@ class LocalArtifactStore:
         self.root = Path(root).resolve()
         if shared_roots is not None and not isinstance(shared_roots, Mapping):
             raise ArtifactStoreError("shared_roots must be a protected mapping")
-        self._shared_roots = None if shared_roots is None else cast(
-            Mapping[str, PlainData], freeze_plain_data(shared_roots, path="shared_roots"))
+        self._shared_roots = (
+            None
+            if shared_roots is None
+            else cast(
+                Mapping[str, PlainData],
+                freeze_plain_data(shared_roots, path="shared_roots"),
+            )
+        )
         if codec_registry is None:
             codec_registry = create_default_codec_registry()
         self._registry = codec_registry
@@ -225,7 +233,11 @@ class LocalArtifactStore:
                 f"Cannot verify checksum for non-regular artifact path {path}"
             )
 
-        current = hash_bytes(path.read_bytes())
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(64 * 1024):
+                digest.update(chunk)
+        current = f"sha256:{digest.hexdigest()}"
         if current != ref.checksum:
             raise ArtifactChecksumMismatchError(
                 f"Checksum mismatch for artifact {ref.uri}: expected {ref.checksum}, got {current}",
@@ -277,6 +289,7 @@ class LocalArtifactStore:
 
     def _reference_path(self, ref: ArtifactRef) -> Path:
         from .shared_artifacts import binding, reference_path
+
         reference = binding(ref.metadata)
         if reference is not None and self._shared_roots is not None:
             return reference_path(reference, self._shared_roots)
@@ -289,6 +302,7 @@ class LocalArtifactStore:
         URIs belong to another host; the reference's identity stays unchanged.
         """
         from .shared_artifacts import verify_ref
+
         path = self._reference_path(ref)
         verify_ref(ref, path)
         return path
