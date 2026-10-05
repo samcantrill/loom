@@ -62,9 +62,11 @@ never treat synthetic tests as physical fleet qualification.
   namespace-qualified suppression IDs, read-only empty checks, capability
   fallback and separate bounded wait capacity. Receipt does not apply a drain
   or fence a locally unanswered work poll.
-- Store-validation deduplication, recovery backoff, conditional connection
-  pooling decision, final affected-suite evidence and downstream qualification
-  remain outstanding. No runtime or image pin has changed.
+- Owner-store validation deduplicated within construction and each operation;
+  live ownership and agent-journal structure checks remain mandatory.
+- Recovery backoff, the final connection-pooling decision, affected-suite evidence
+  and downstream qualification remain outstanding. No runtime or image pin has
+  changed.
 - No implementation or deployment completion is claimed yet.
 
 ## Baseline evidence
@@ -153,3 +155,20 @@ Long control waits need independent executor and server admission capacity.
 Existing work-poll subscription/shutdown/authorization behavior is reusable.
 Do not let assignment monitoring continue issuing redundant remote control
 checks after the dedicated receipt path becomes authoritative.
+
+## Owner-store validation selection
+
+Consolidate construction and `open_owner_stores()` on the existing required-owner
+validation helper. Keep the agent-journal schema check separately: the helper
+checks its owner binding but does not validate its entire journal structure.
+No cross-operation cache, connection reuse or durable schema change is introduced.
+Cover one structural open per operation and repeated validation on the next
+operation, alongside the complete `test_local_daemon.py` owner-loss/substitution,
+startup/shutdown, scheduling and recovery assertions. Repeat the selected mixed
+CPU/GPU service case as the coordinator-only consumer. Expand if another owner
+or store contract changes; current control-protocol evidence remains reusable.
+
+Result: 66 passed in `build/idle-efficiency/owner-store-validation.xml`, with
+changed-file Ruff, selected Pyright and diff checks passing. These checks cover
+the exact deduplication tree after the control-wait checkpoint. No schema cache
+or skipped ownership validation is used.

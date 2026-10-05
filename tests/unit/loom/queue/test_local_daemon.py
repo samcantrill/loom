@@ -2166,6 +2166,43 @@ def test_start_rejects_current_schema_owner_substitution(
         LocalDaemon(config).start()
 
 
+def test_owner_store_validation_is_once_per_operation_not_cached_across_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections import Counter
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        counts = Counter()
+        stores = (
+            execution.stage_work_store, execution.coordinator,
+            execution.slurm_submissions, execution.slurm_assignments, execution.journal,
+        )
+        for store in stores:
+            assert store is not None
+            owner = type(store)
+            original = owner._open_existing
+
+            def counted(self, original=original, name=owner.__name__):
+                counts[name] += 1
+                return original(self)
+
+            monkeypatch.setattr(owner, "_open_existing", counted)
+        expected = {type(store).__name__: 1 for store in stores}
+        execution.open_owner_stores()
+        assert counts == expected
+        execution.open_owner_stores()
+        assert counts == {name: 2 for name in expected}
+    finally:
+        daemon.stop()
+
+
 def test_live_control_loss_never_recreates_control_state(tmp_path: Path) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)

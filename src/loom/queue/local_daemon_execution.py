@@ -1356,12 +1356,7 @@ class LocalDaemonExecution:
             if config.agent_root is not None
             else None
         )
-        self.stage_work_store._open_existing()
-        self.coordinator._open_existing()
-        self.slurm_submissions._open_existing()
-        self.slurm_assignments._open_existing()
-        if self.journal is not None:
-            self.journal._open_existing()
+        self.open_owner_stores()
         self.supervisor = None
         if config.agent_root is not None:
             profile = config.resident_worker_launch_profile
@@ -1370,12 +1365,6 @@ class LocalDaemonExecution:
             self.supervisor = AgentProcessSupervisorClient(
                 config.agent_root, SupervisorLaunchConfiguration(agent_id, (profile,))
             )
-        if not local_daemon_owner_stores_available(
-            self.config,
-            coordinator_id=self.coordinator_id,
-            agent_id=self.agent_id,
-        ):
-            raise QueueServiceError("retained daemon owner state is unavailable")
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
@@ -1851,18 +1840,15 @@ class LocalDaemonExecution:
         """Recheck retained owners before any new scheduling mutation."""
 
         try:
-            self.stage_work_store._open_existing()
-            self.coordinator._open_existing()
-            self.slurm_submissions._open_existing()
-            self.slurm_assignments._open_existing()
             if self.journal is not None:
                 self.journal._open_existing()
-            if not local_daemon_owner_stores_available(
+            # This boundary validates coordinator structures and live owner
+            # bindings together; do not open those same structures twice.
+            _require_local_daemon_owner_stores(
                 self.config,
                 coordinator_id=self.coordinator_id,
                 agent_id=self.agent_id,
-            ):
-                raise QueueServiceError("retained daemon owner state is unavailable")
+            )
         except Exception:
             raise QueueServiceError(
                 "retained daemon owner state is unavailable"
