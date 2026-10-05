@@ -399,9 +399,10 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
     ) -> Mapping[str, PlainData]:
         result = original_dispatch(view, operation, value)
         if (
-            operation == "assignment_control"
+            operation in {"assignment_control", "control_wait"}
             and isinstance(result, Mapping)
-            and (result.get("control") is not None) is cancel_before_grant
+            and (result.get("assignment_control" if operation == "control_wait" else "control")
+                 is not None) is cancel_before_grant
             and not lost_control_response.is_set()
         ):
             lost_control_response.set()
@@ -506,6 +507,10 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
             "_cancel_pregrant_if_requested",
             pause_after_first_pregrant_poll,
         )
+        if not cancel_before_grant:
+            # The negotiated quiet control request may wait for five seconds.
+            # Establish the actual lost reply before allowing the job to start.
+            assert lost_control_response.wait(10)
         coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
         if cancel_before_grant:
             assert first_pregrant_poll.wait(10)
@@ -522,6 +527,7 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
                     break
                 sleep(0.02)
             assert control is not None
+            assert lost_control_response.wait(10)
             release_pregrant_poll.set()
             assert (
                 coordinator.wait("idle-renewal-item", timeout_seconds=30).state

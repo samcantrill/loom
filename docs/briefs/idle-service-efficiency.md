@@ -66,9 +66,9 @@ never treat synthetic tests as physical fleet qualification.
   live ownership and agent-journal structure checks remain mandatory.
 - Admission and outbound retained-assignment recovery now have independent
   jittered pacing, scoped progress resets and redacted retry-deadline diagnostics.
-  Remaining transport/local-observer retry audit, final affected-suite evidence
-  and downstream qualification remain outstanding. No runtime or image pin has
-  changed.
+  Exact transport replay and embedded-observer pacing are now implemented as
+  well. Final affected-suite evidence and downstream qualification remain
+  outstanding. No runtime or image pin has changed.
 - No implementation or deployment completion is claimed yet.
 
 ## Baseline evidence
@@ -216,10 +216,81 @@ there is no measured justification for adding connection ownership machinery.
 
 ## Remaining delivery work
 
-- Audit and pace indeterminate transport retries and embedded assignment observer
-  retries without delaying renewals/urgent controls or changing exact replay.
-- Extend regression coverage for any changes from that audit and collect final
-  affected-suite evidence against the completed tree.
+- Collect final affected-suite evidence against the completed retry tree.
 - Collect physical before/after service CPU and control/submit latency evidence;
   publish a downstream Loom pin and qualify rphys against that release. Local
   synthetic tests do not discharge this gate. No fleet has been changed here.
+
+## Transport and embedded-observer retry selection
+
+Service transport failures now pace exact encoded requests independently; the
+existing renewal, resource-offer and urgent-control retry cadence is unchanged.
+Suspending during a delay prevents a later dispatch, without asserting that the
+retained operation had no effect. Synchronous callers still receive the original
+unknown-outcome error. Embedded failed observers retain the original assignment,
+use independent deadlines, and reset on journal state/fence or run cancellation.
+No executor slot is occupied by a pending observer delay. The coordinator wakes
+at the earliest applicable deadline or its safety interval.
+
+Focused evidence: 17 retry/external-error unit cases passed (95 explicitly
+deselected non-retry cases in the initial selection), and six embedded production
+cases passed: same-assignment replay, frozen-clock backoff with healthy peer and
+prompt cancellation, active cancellation and daemon restart/worker rejoin.
+Selected source/tests Pyright and changed-file Ruff passed. Final selections cover
+the complete affected queue unit files, production daemon, concurrent outbound
+service, control-wait capacity, transport, and retirement recovery. Lost-reply
+observers recognize the negotiated control-wait operation rather than requiring
+legacy empty polling. No physical qualification is inferred from these tests.
+
+## Physical no-active-work sample
+
+Read-only measurements on 2026-10-05 at 04:27:58 UTC sampled explicit owned PIDs
+for 30 seconds with `tools/service_cpu_sample.py`. Coordinator status before and
+after reported healthy, with zero active/waiting admissions and zero running
+assignments. The unchanged deployment was `upgrade-26308d4f2ffc4b4c`, reference
+revision `93f70b84e7c093efa7a7283f7edfbe61e3f5be6d`; its coordinator interval is
+explicitly 0.2 seconds. These are process-window deltas, not lifetime `ps %CPU`.
+
+| Host / role | PID | CPU seconds | One-core CPU |
+| --- | ---: | ---: | ---: |
+| sleipnir coordinator | 3072806 | 7.72 | 25.73% |
+| shazza agent | 2167137 | 11.86 | 39.53% |
+| shazza process supervisor | 2167725 | 0.07 | 0.23% |
+
+Unrelated validation was running on sleipnir; child CPU is excluded. No service
+was changed for these samples. A subsequent native agent observation showed
+`available: false` and GPU observations stale since 03:28:56 UTC, preceding the
+sample. Therefore these numbers do **not** establish a healthy-idle baseline;
+coordinator health and zero admissions were insufficient to prove agent health.
+The exact instrumented launcher reports the agent process ready. Read-only
+agent inspection found all 47 assignments released, all 47 launches contained,
+no unresolved references/mutation intents, and poll 2158 pending. Subsequent
+normal guarded stop succeeded; starting the unchanged runtime created PID
+2236545 but timed out after 300 seconds waiting for native readiness. The owner
+was preserved; no database edits, forced signals or job cancellations were used.
+The prior upgrade is complete. Physical after-change measurements and workload
+latencies are still outstanding. Verified SSH to shazza works; `sudo -n true` on
+sleipnir requires an interactive password, so an administrator image build may
+need operator assistance. The downstream consumer worktree is
+`../rphys-worktrees/loom-idle-service-efficiency`, branch
+`chore/loom-idle-service-efficiency`, based on clean `790532a6b`. Fresh bootstrap
+and both coordinator templates now select the one-second fallback, with native
+template/bootstrap assertions and documentation that upgrades preserve explicit
+existing settings. The dependency pin and downstream validation are pending.
+Control checkouts and deployed sources remain unchanged.
+
+## Final local validation in progress
+
+The completed retry tree passed 313 affected queue unit tests and 145 baseline
+import/control/retry tests in the separate locked no-extra environment. The
+full selected integration run executed 301 cases: 278 passed, 18 failed with
+overlong Unix socket paths, four failed because their lost-reply injection still
+intercepted only legacy control polling, and one retirement setup exceeded its
+short fixture deadline. No runtime-source correction was needed. All five
+production variants passed under a fresh short `--basetemp`
+(`production-short-path.xml`). The complete retirement file, corrected
+lost-reply cases and optional/sequence narrowing assertion changes passed all
+29 cases in `final-corrections.xml`. Lost-reply assertions require injection to
+occur before the grant is allowed, including the negotiated five-second wait.
+All changed source/tests/tools pass Ruff and Pyright; `git diff --check` passes.
+These are affected-suite results, not a full repository or deployed-fleet gate.

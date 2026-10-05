@@ -61,6 +61,7 @@ from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from ._agent_slurm import AgentSlurmJobs
+from ._recovery_retry import _RecoveryRetry
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.pipeline.stores.errors import InvalidRunURIError
 from loom.pipeline.stores.run_uri import validate_run_uri
@@ -6152,12 +6153,14 @@ class LocalDaemonAgentHttpClient:
         }:
             _raise_if_application_suspended(self._suspend_requested)
             yield from _delay(0.01)
+        operation_id, assignment_id = value.get("operation_id"), value.get("assignment_id")
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if (role, operation) in _FAILURE_REPORT_OPERATIONS:
             _decode(body, failure_report=True)
         connection, self._connection = self._connection, None
+        retry = _RecoveryRetry()
         while True:
             try:
                 reply = yield from _external(
@@ -6166,12 +6169,24 @@ class LocalDaemonAgentHttpClient:
                     not self._service_progress,
                 )
                 break
-            except _IndeterminateAgentProtocolError:
+            except _IndeterminateAgentProtocolError as error:
                 if not self._service_progress:
                     raise
                 connection = None
                 _raise_if_application_suspended(self._suspend_requested)
-                yield from _delay(0.05)
+                delay = 0.05
+                if operation not in {
+                    "offer", "renew", "control", "assignment_control", "control_wait",
+                    "control_ack", "assignment_control_ack",
+                }:
+                    delay = retry.failed(
+                        error, protocol_operation=operation,
+                        operation_id=operation_id if isinstance(operation_id, str) else None,
+                        assignment_id=assignment_id if isinstance(assignment_id, str) else None,
+                        state=(role, operation),
+                    )
+                yield from _delay(delay)
+                _raise_if_application_suspended(self._suspend_requested)
         if self._connection is None and not self._closed and not self._service_progress:
             self._connection = reply.connection
         else:

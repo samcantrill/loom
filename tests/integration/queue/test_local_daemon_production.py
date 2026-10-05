@@ -1602,6 +1602,73 @@ def test_completed_background_failure_replays_the_same_local_assignment(
         daemon.stop()
 
 
+def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_path, monkeypatch):
+    import loom.queue._recovery_retry as retry_module
+
+    clock = [0.0]
+    monkeypatch.setattr(retry_module, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(retry_module, "uniform", lambda low, high: high)
+    run_root = tmp_path / "runs"
+    failing_uri = _persist_sleep_run(run_root, run_name="failed-observer", stage_name="build", seconds=30)
+    peer_uri = _persist_sleep_run(run_root, run_name="healthy-observer", stage_name="build", seconds=0.1)
+    config = replace(_daemon_config(tmp_path, cpu_capacity=2), poll_interval_seconds=0.02)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None and execution.supervisor is not None
+    original_query = execution.supervisor.query
+    failed_assignment = []
+    failed_calls = []
+    allow_recovery = Event()
+
+    def query(launch):
+        if not failed_assignment:
+            failed_assignment.append(launch.assignment_id)
+        if launch.assignment_id == failed_assignment[0] and not allow_recovery.is_set():
+            failed_calls.append(launch.launch_operation_id)
+            raise OSError("simulated assignment-local observer outage")
+        return original_query(launch)
+
+    def await_retry(attempts):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with daemon._cycle_lock:
+                retry = (execution._local_assignment_retries.get(failed_assignment[0])
+                         if failed_assignment else None)
+                if retry is not None and retry.attempts == attempts:
+                    return retry
+            time.sleep(0.02)
+        pytest.fail("failed observer did not retain its retry")
+
+    monkeypatch.setattr(execution.supervisor, "query", query)
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        client.submit(LocalDaemonAdmissionRequest("failed-observer", failing_uri))
+        retry = await_retry(1)
+        assert retry.retry_at == 0.1
+        client.submit(LocalDaemonAdmissionRequest("healthy-observer", peer_uri))
+        assert client.wait("healthy-observer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        with daemon._cycle_lock:
+            assert len(failed_calls) == 1
+            assert execution.local_assignment_reconciliation_pending(failing_uri)
+            assert execution.next_local_retry_at(clock[0]) == 0.1
+            clock[0] = retry.retry_at
+        retry = await_retry(2)
+        assert retry.retry_at == pytest.approx(0.3)
+        assert len(set(failed_calls)) == 1
+        # A new cancellation is relevant progress, even with retry time frozen.
+        allow_recovery.set()
+        client.cancel("failed-observer")
+        assert client.wait("failed-observer", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert _supervisor_launch_count(config) == 2
+        assert execution.coordinator.retained_assignments(agent_id=config.machine_id) == ()
+    finally:
+        allow_recovery.set()
+        client.cancel("failed-observer")
+        daemon.stop()
+
+
 def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
     tmp_path: Path,
 ) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
+from ._recovery_retry import _RecoveryRetry
 
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
 
@@ -1418,6 +1419,7 @@ class LocalDaemonExecution:
         )
         self._local_assignment_futures: dict[str, Future[None]] = {}
         self._pending_local_assignment_reconciliation: dict[str, str] = {}
+        self._local_assignment_retries: dict[str, _RecoveryRetry] = {}
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
@@ -1428,6 +1430,7 @@ class LocalDaemonExecution:
         self._local_assignment_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
         self._pending_local_assignment_reconciliation.clear()
+        self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
 
     def shutdown_clean(self) -> None:
@@ -1512,7 +1515,7 @@ class LocalDaemonExecution:
             self._local_assignment_futures.pop(assignment_id, None)
             try:
                 future.result()
-            except Exception:
+            except Exception as error:
                 # The retained assignment is the replay identity; a failed
                 # observer must not disappear and permit replacement work.
                 run_uri = self._retained_local_assignment_run_uri(assignment_id)
@@ -1521,6 +1524,13 @@ class LocalDaemonExecution:
                         run_uri
                     )
                     self._record_assignment_health(run_uri, "unavailable")
+                    progress = self._local_recovery_progress(assignment_id, run_uri)
+                    fence = None if progress is None else progress[1]
+                    self._local_assignment_retries.setdefault(assignment_id, _RecoveryRetry()).failed(
+                        error, assignment_id=assignment_id,
+                        operation_id=None if fence is None else f"{assignment_id}:launch:{fence}",
+                        state=progress,
+                    )
             else:
                 run_uri = self._pending_local_assignment_reconciliation.get(
                     assignment_id
@@ -1530,8 +1540,12 @@ class LocalDaemonExecution:
                     self._pending_local_assignment_reconciliation.pop(
                         assignment_id, None
                     )
-        for assignment_id in tuple(self._pending_local_assignment_reconciliation):
+                    self._local_assignment_retries.pop(assignment_id, None)
+        for assignment_id, run_uri in tuple(self._pending_local_assignment_reconciliation.items()):
             if assignment_id in self._local_assignment_futures:
+                continue
+            retry = self._local_assignment_retries[assignment_id]
+            if not retry.ready(self._local_recovery_progress(assignment_id, run_uri)):
                 continue
             future = self._local_assignment_workers.submit(
                 self._reconcile_exact_local_assignment, assignment_id
@@ -1551,6 +1565,26 @@ class LocalDaemonExecution:
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
         self._cycle_contexts.clear()
+
+    def next_local_retry_at(self, now: float) -> float | None:
+        """Wake for a pending replay without rescheduling its running observer."""
+        return min(
+            (retry.retry_at for assignment_id, retry in self._local_assignment_retries.items()
+             if assignment_id not in self._local_assignment_futures and retry.retry_at > now),
+            default=None,
+        )
+
+    def _local_recovery_progress(
+        self, assignment_id: str, run_uri: str,
+    ) -> tuple[AssignmentState | None, str | None, str | None] | None:
+        try:
+            assert self.journal is not None
+            state = self.journal.find_state(assignment_id)
+            fence = None if state is None else self.journal.read_grant_fence(assignment_id)
+            return state, fence, self._run_cancellation_operation(run_uri)
+        except (ManagedLocalError, QueueServiceError, sqlite3.Error, OSError):
+            # An unavailable progress hint cannot discard the retained replay.
+            return None
 
     def _record_assignment_health(self, run_uri: str, health: str) -> None:
         daemon = self.daemon

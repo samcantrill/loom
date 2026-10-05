@@ -1698,8 +1698,12 @@ def test_qualification_rejection_settles_saved_launch_without_starting_on_restar
         (assignment_id,) = _rows(case.agent_root / "supervisor/supervisor.sqlite",
                                 "SELECT assignment_id FROM rejected_assignments")[0]
         workspace = _ResidentAssignmentWorkspace(case.agent_root, assignment_id)
-        launch = supervisor_module._launch_from_value(json.loads(workspace.supervisor_launch_json()))
-        assert workspace.worker_result().status.value == "FAILED"
+        encoded_launch = workspace.supervisor_launch_json()
+        assert encoded_launch is not None
+        launch = supervisor_module._launch_from_value(json.loads(encoded_launch))
+        worker_result = workspace.worker_result()
+        assert worker_result is not None
+        assert worker_result.status.value == "FAILED"
         assert workspace.retain_outputs().process_created is False
         with pytest.raises(supervisor_module._SupervisorNoStartError, match="durably rejected"):
             case.supervisor_owner.launch(launch)
@@ -1974,7 +1978,7 @@ def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
 
     def dispatch(view, operation, value):
         if operation != "poll":
-            if operation == "assignment_control" and entered.is_set():
+            if operation in {"assignment_control", "control_wait"} and entered.is_set():
                 control_progress.set()
             return original(view, operation, value)
         active_polls.append(value)
@@ -2144,7 +2148,9 @@ def test_control_receipts_survive_lost_reply_from_reconnecting_client(
     def lost_control_reply(view, operation, value):
         result = dispatch(view, operation, value)
         if operation == "handshake" and legacy:
-            result = {**result, "capabilities": [item for item in result["capabilities"]
+            capabilities = result["capabilities"]
+            assert isinstance(capabilities, (list, tuple))
+            result = {**result, "capabilities": [item for item in capabilities
                       if item != "agent-control-wait-v1"]}
         if operation in {"assignment_control", "control_wait"} and armed.is_set() and not held.is_set():
             held.set()
@@ -2237,7 +2243,7 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
             entered.set()
             assert unblock.wait(20)
             raise ConnectionError("release committed but reply was lost")
-        if operation == "assignment_control" and entered.is_set():
+        if operation in {"assignment_control", "control_wait"} and entered.is_set():
             observed.set()
         return result
 
@@ -2247,7 +2253,7 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
         try:
             _submit(case, "first")
             assert entered.wait(20), case.failures
-            assert observed.wait(5), case.failures
+            assert observed.wait(10), case.failures
             _submit(case, "later")
             first = next(
                 index

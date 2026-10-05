@@ -2654,6 +2654,10 @@ class LocalDaemon:
                          if retry.retry_at > now),
                         default=self.config.poll_interval_seconds,
                     )
+                    if self._execution is not None:
+                        local_retry = self._execution.next_local_retry_at(now)
+                        if local_retry is not None:
+                            delay = min(delay, local_retry - now)
                 self._wake.wait_for_change(observed, min(delay, self.config.poll_interval_seconds))
 
     def _wake_admission(self, run_uri: str) -> None:

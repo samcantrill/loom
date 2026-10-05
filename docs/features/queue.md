@@ -986,6 +986,16 @@ freshness, control receipt or execution ownership, and it never authorizes a
 replacement launch for an uncertain existing operation. Retry timing is volatile;
 restart reconstructs recovery work from its existing durable owners.
 
+An embedded assignment whose background observer fails retains that exact
+assignment and an independent retry deadline. Its journal state/fence or a new
+run cancellation resets the delay; other jobs continue using their own observers.
+An indeterminate outbound service exchange also backs off while replaying its
+original encoded request. Synchronous callers still receive the unknown-outcome
+error. Resource offers/renewals, control receipt and control acknowledgement keep
+their existing retry cadence; sleeping replays do not occupy a transport worker.
+Stopping the application during that delay prevents another dispatch but does
+not resolve the retained operation or release its claims.
+
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
 scheduler dispatch/observation, transfer/result, and service-health/freshness
