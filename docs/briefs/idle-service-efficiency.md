@@ -298,6 +298,9 @@ lost-reply cases and optional/sequence narrowing assertion changes passed all
 occur before the grant is allowed, including the negotiated five-second wait.
 All changed source/tests/tools pass Ruff and Pyright; `git diff --check` passes.
 These are affected-suite results, not a full repository or deployed-fleet gate.
+A final JUnit identity audit matched all 23 failed/errored cases from the
+301-case run to passing cases in `production-short-path.xml` or
+`final-corrections.xml`; none is unresolved or counted as passed through a skip.
 
 Final synthetic checkpoint at commit `1d54b3ae` (same ten-second fixture windows,
 no concurrent task validation): idle 3.96%, silent running job 28.54%, retained
