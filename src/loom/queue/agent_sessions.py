@@ -3699,7 +3699,7 @@ class AgentSessionService:
             )
             conn.commit()
         self._daemon._poll_waiters.notify(session_id)
-        self._daemon._wake.set()
+        self._daemon._wake_admission(str(row["run_uri"]))
         return resumed
 
     @_serialized_session_operation
@@ -3733,7 +3733,8 @@ class AgentSessionService:
                 (assignment_id, fence),
             )
             conn.commit()
-        self._daemon._wake.set()
+        if str(row["state"]) != "RUNNING":
+            self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "RUNNING"},
             path="remote start confirmation",
@@ -4074,7 +4075,7 @@ class AgentSessionService:
                 (assignment_id,),
             )
             conn.commit()
-        self._daemon._wake.set()
+        self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "TERMINAL"},
             path="remote result commit",
@@ -4379,7 +4380,7 @@ class AgentSessionService:
                 )
             conn.commit()
         self._daemon._poll_waiters.notify(session_id)
-        self._daemon._wake.set()
+        self._daemon._wake_admission(str(row["run_uri"]))
         return resumed
 
     def _require_remote_session(

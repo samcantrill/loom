@@ -64,7 +64,9 @@ never treat synthetic tests as physical fleet qualification.
   or fence a locally unanswered work poll.
 - Owner-store validation deduplicated within construction and each operation;
   live ownership and agent-journal structure checks remain mandatory.
-- Recovery backoff, the final connection-pooling decision, affected-suite evidence
+- Admission and outbound retained-assignment recovery now have independent
+  jittered pacing, scoped progress resets and redacted retry-deadline diagnostics.
+  Remaining transport/local-observer retry audit, final affected-suite evidence
   and downstream qualification remain outstanding. No runtime or image pin has
   changed.
 - No implementation or deployment completion is claimed yet.
@@ -172,3 +174,52 @@ Result: 66 passed in `build/idle-efficiency/owner-store-validation.xml`, with
 changed-file Ruff, selected Pyright and diff checks passing. These checks cover
 the exact deduplication tree after the control-wait checkpoint. No schema cache
 or skipped ownership validation is used.
+
+## Recovery pacing selection
+
+Share process-local pacing between the existing retained-assignment recovery
+loop and coordinator admission failures. Retain the five-second retry ceiling,
+add bounded jitter and a reported next deadline, preserve per-assignment fences
+and exact requests, and reset coordinator delays only for that run's owner
+progress/revision or changed scheduling epoch. Conflicts retain their existing
+terminal behavior. No resource-renewal, GPU freshness or control timing changes.
+Select deployment retry unit cases, coordinator/status units, real independent
+admission recovery and outbound recovery-with-peer-work cases, and mixed-device
+service release (the committed-progress reset consumer). Remaining transport
+indeterminate-reply and local-assignment observer retry loops still need audit.
+
+Result: 88 passed in `build/idle-efficiency/recovery-pacing.xml` (retry units,
+status/coordinator units, scoped admission pacing, independent healthy admission,
+outbound peer progress and mixed-device release). An additional 84 passed in
+`recovery-boundaries.xml` cover session operations, embedded input replay,
+qualification rejection and mixed-device release after tightening start-replay
+notifications. Selected Pyright, changed-file Ruff and diff checks pass. Two
+existing embedded-worker tests now explicitly assert their configured non-null
+agent root/journal before using them, resolving their optional-type diagnostics.
+
+Latest ten-second fixture windows after deduplication and recovery pacing:
+
+| Scenario | CPU seconds | One-core CPU | DB opens | Schema table checks | Cycles | TLS connections | Control requests | Renewals | Recovery attempts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Healthy idle | 0.371 | 3.71% | 164 | 80 | 10 | 6 | 2 | 2 | 0 |
+| Running without output | 2.824 | 28.24% | 1319 | 2403 | 9 | 6 | 2 | 2 | 0 |
+| Retained terminal history | 0.302 | 3.02% | 143 | 80 | 10 | 4 | 1 | 1 | 0 |
+| Recoverable error | 0.460 | 4.60% | 219 | 112 | 13 | 6 | 2 | 2 | 7 |
+
+Deduplication halves quiet schema checks. The early exponential retry ramp can
+add cheap coordinator cycles before reaching its five-second ceiling, while
+reducing failed admission attempts. These short CPU windows are noisy (the
+running-job figure did not improve over the preceding checkpoint); counters
+establish the removed work, not a guarantee of monotonic CPU improvements.
+With only four to six TLS connections per ten seconds, defer connection pooling:
+there is no measured justification for adding connection ownership machinery.
+
+## Remaining delivery work
+
+- Audit and pace indeterminate transport retries and embedded assignment observer
+  retries without delaying renewals/urgent controls or changing exact replay.
+- Extend regression coverage for any changes from that audit and collect final
+  affected-suite evidence against the completed tree.
+- Collect physical before/after service CPU and control/submit latency evidence;
+  publish a downstream Loom pin and qualify rphys against that release. Local
+  synthetic tests do not discharge this gate. No fleet has been changed here.

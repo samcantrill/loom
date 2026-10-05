@@ -68,6 +68,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 from ._service_signals import _ChangeConnection, _ServiceSignal
+from ._recovery_retry import _RecoveryRetry
 
 if TYPE_CHECKING:
     from ._preparation_operations import PreparationCallbacks
@@ -1584,6 +1585,7 @@ class LocalDaemon:
 
         self._poll_waiters = _PollWaiters()
         self._service_error: str | None = None
+        self._admission_retries: dict[str, _RecoveryRetry] = {}
         self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
@@ -1944,6 +1946,7 @@ class LocalDaemon:
         self._epoch = epoch
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
+        self._admission_retries.clear()
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
@@ -2537,19 +2540,32 @@ class LocalDaemon:
                 )
             schedulable: dict[str, LocalDaemonAdmission] = {}
             waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
+            active_runs = {admission.run_uri for admission in admissions}
+            for run_uri in self._admission_retries.keys() - active_runs:
+                del self._admission_retries[run_uri]
             for admission in admissions:
+                progress = (admission.revision, self._scheduling_epoch)
+                retry = self._admission_retries.get(admission.run_uri)
+                if retry is not None and not retry.ready(progress):
+                    continue
                 try:
                     outcome = execution.reconcile_admission(admission)
                 except QueueConflictError:
+                    self._admission_retries.pop(admission.run_uri, None)
                     self._record_admission_health(admission.admission_id, "failed")
                     self._set_state(
                         admission.admission_id,
                         LocalDaemonAdmissionState.BLOCKED,
                         reason="authority_or_intent_conflict",
                     )
-                except Exception:  # one unhealthy run cannot stop other admissions
+                except Exception as error:  # one unhealthy run cannot stop other admissions
                     self._record_admission_health(admission.admission_id, "unavailable")
+                    self._admission_retries.setdefault(admission.run_uri, _RecoveryRetry()).failed(
+                        error, admission_id=admission.admission_id,
+                        operation_id=admission.authority_operation_id, state=progress,
+                    )
                 else:
+                    self._admission_retries.pop(admission.run_uri, None)
                     if outcome.state in {
                         LocalDaemonAdmissionState.SUCCEEDED,
                         LocalDaemonAdmissionState.FAILED,
@@ -2631,7 +2647,20 @@ class LocalDaemon:
             else:
                 self._service_error = None
             if not self._stop.is_set():
-                self._wake.wait_for_change(observed, self.config.poll_interval_seconds)
+                now = time.monotonic()
+                with self._cycle_lock:
+                    delay = min(
+                        (retry.retry_at - now for retry in self._admission_retries.values()
+                         if retry.retry_at > now),
+                        default=self.config.poll_interval_seconds,
+                    )
+                self._wake.wait_for_change(observed, min(delay, self.config.poll_interval_seconds))
+
+    def _wake_admission(self, run_uri: str) -> None:
+        """Retry this run after committed owner progress, not another run's heartbeat."""
+        with self._cycle_lock:
+            self._admission_retries.pop(run_uri, None)
+        self._wake.set()
 
     def _submit(
         self,

@@ -973,6 +973,19 @@ The receipt list accepts up to 1025 unique bounded identifiers within the existi
 or whose coordinator lacks the capability, uses compatibility control polling.
 Resource renewal and GPU freshness policies are unchanged.
 
+Recoverable admission and retained-assignment failures are paced independently
+with exponential backoff (initial ceiling 0.1 seconds, maximum ceiling five
+seconds, jitter between 80% and 100% of that ceiling). Retry diagnostics report
+the operation identity, redacted failure type, delay and process-local monotonic
+deadline; unchanged failures are logged at most every 30 seconds. Relevant owner
+progress resets its delay; unrelated renewals do not. Coordinator admission
+revision/scheduling-epoch changes and committed remote start/result/release
+progress make that run eligible for immediate retry. Terminal authority conflicts
+still block the admission. This pacing does not modify resource renewal, GPU
+freshness, control receipt or execution ownership, and it never authorizes a
+replacement launch for an uncertain existing operation. Retry timing is volatile;
+restart reconstructs recovery work from its existing durable owners.
+
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
 scheduler dispatch/observation, transfer/result, and service-health/freshness

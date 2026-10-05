@@ -49,11 +49,12 @@ pytestmark = pytest.mark.unit
 
 
 def test_recovery_retry_is_redacted_rate_limited_and_resets_on_progress(monkeypatch, caplog):
-    from loom.queue.deployment import _RecoveryRetry
+    from loom.queue._recovery_retry import _RecoveryRetry
     from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
 
     clock = [0.0]
-    monkeypatch.setattr("loom.queue.deployment.monotonic", lambda: clock[0])
+    monkeypatch.setattr("loom.queue._recovery_retry.monotonic", lambda: clock[0])
+    monkeypatch.setattr("loom.queue._recovery_retry.uniform", lambda low, high: high)
     retry = _RecoveryRetry()
     error = _SupervisorCommunicationError(possibly_dispatched=True)
     error.__cause__ = TimeoutError("do not disclose /private/input or a credential")
@@ -64,7 +65,8 @@ def test_recovery_retry_is_redacted_rate_limited_and_resets_on_progress(monkeypa
     payload = json.loads(caplog.records[0].message.split(": ", 1)[1])
     assert payload == {"assignment_id": "assignment-A", "operation_id": "launch-A",
                        "step": "query_wait", "cause_type": "TimeoutError",
-                       "possibly_dispatched": True, "retry_count": 1}
+                       "possibly_dispatched": True, "retry_count": 1,
+                       "retry_delay_seconds": 0.1, "next_retry_monotonic": 0.1}
     assert "/private" not in caplog.text and "credential" not in caplog.text
     clock[0] = 30
     assert retry.failed(error, **context) == 1.6
@@ -72,6 +74,26 @@ def test_recovery_retry_is_redacted_rate_limited_and_resets_on_progress(monkeypa
     context["state"] = "result_durable"
     assert retry.failed(error, **context) == 0.1
     assert error.possibly_dispatched is True
+
+
+def test_recovery_retry_is_bounded_independent_and_reset_only_by_owner_progress(monkeypatch):
+    from loom.queue._recovery_retry import _RecoveryRetry
+
+    clock = [0.0]
+    monkeypatch.setattr("loom.queue._recovery_retry.monotonic", lambda: clock[0])
+    retry, peer = _RecoveryRetry(), _RecoveryRetry()
+    progress = ("process_started", "original-fence")
+    for attempt in range(12):
+        delay = retry.failed(TimeoutError(), assignment_id="A", operation_id="launch-A", state=progress)
+        ceiling = min(5.0, 0.1 * 2 ** attempt)
+        assert 0.8 * ceiling <= delay <= ceiling
+        assert not retry.ready(progress)
+        assert peer.ready(progress)
+        clock[0] = retry.retry_at
+        assert retry.ready(progress)
+    assert retry.attempts == 12
+    assert retry.ready(("result_durable", "original-fence"))
+    assert retry.attempts == 0
 
 
 def test_external_failure_keeps_its_step_without_changing_the_exception():

@@ -1657,6 +1657,69 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
         daemon.stop()
 
 
+def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections import Counter
+    from loom.queue import _recovery_retry
+
+    clock = [100.0]
+    monkeypatch.setattr(_recovery_retry, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(_recovery_retry, "uniform", lambda low, high: high)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    run_root = tmp_path / "runs"
+    unhealthy_uri = _persist_sleep_run(run_root, run_name="unhealthy", stage_name="unhealthy")
+    healthy_uri = _persist_sleep_run(run_root, run_name="healthy", stage_name="healthy")
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, run_root, None, cpu_capacity=0)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        original = execution.reconcile_admission
+        attempts = Counter()
+        error: list[Exception] = [QueueServiceError("private unavailable input")]
+
+        def reconcile(admission):
+            attempts[admission.run_uri] += 1
+            if admission.run_uri == unhealthy_uri:
+                raise error[0]
+            return original(admission)
+
+        monkeypatch.setattr(execution, "reconcile_admission", reconcile)
+        client = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
+        unhealthy = client.submit(LocalDaemonAdmissionRequest("unhealthy", unhealthy_uri))
+        client.submit(LocalDaemonAdmissionRequest("healthy", healthy_uri))
+        for _ in range(8):
+            daemon.reconcile_once()
+            retry = daemon._admission_retries[unhealthy_uri]
+            assert retry.retry_at > clock[0]
+            before = attempts.copy()
+            for _ in range(5):
+                daemon.reconcile_once()
+            assert attempts[unhealthy_uri] == before[unhealthy_uri]
+            assert attempts[healthy_uri] == before[healthy_uri] + 5
+            clock[0] = retry.retry_at
+        assert attempts[unhealthy_uri] == 8
+        # A notification for another run must not erase the failed owner's delay.
+        clock[0] -= 0.1
+        daemon._wake_admission(healthy_uri)
+        daemon.reconcile_once()
+        assert attempts[unhealthy_uri] == 8
+        daemon._wake_admission(unhealthy_uri)
+        daemon.reconcile_once()
+        assert attempts[unhealthy_uri] == 9
+        assert daemon._admission_retries[unhealthy_uri].attempts == 1
+        error[0] = QueueConflictError("authority conflict")
+        daemon._wake_admission(unhealthy_uri)
+        daemon.reconcile_once()
+        assert daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED
+        assert unhealthy_uri not in daemon._admission_retries
+    finally:
+        daemon.stop()
+
+
 def test_admission_reconciliation_failure_does_not_stop_other_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1855,6 +1918,7 @@ def test_embedded_restart_reuses_retained_input_descriptors_and_staged_bytes(tmp
         first.stop()
         retained = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False).retained_claim_commands()
         assert len(retained) == 1
+        assert config.agent_root is not None
         workspace = _ResidentAssignmentWorkspace(config.agent_root, retained[0].assignment.assignment_id)
         assert len(workspace.request().inputs) == 1
         saved_launch = workspace.supervisor_launch_json()
@@ -1906,6 +1970,7 @@ def test_embedded_qualification_rejection_settles_without_accepting_a_launch(tmp
         client.submit(LocalDaemonAdmissionRequest("rejected", run_uri))
         assert client.wait("rejected", timeout_seconds=10).state is LocalDaemonAdmissionState.FAILED
         assert _supervisor_launch_count(config) == 0
+        assert execution.journal is not None and config.agent_root is not None
         assert execution.journal.retained_claim_commands() == ()
         with sqlite3.connect(config.agent_root / "supervisor/supervisor.sqlite") as conn:
             rejected = conn.execute("SELECT assignment_id FROM rejected_assignments").fetchall()
