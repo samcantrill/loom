@@ -367,3 +367,12 @@ consumer commit and physical shazza host and writes only the fresh owned local
 directory `/data/can134/loom/rphys/image-build.idle-efficiency.7IDBE7Eu`. The image
 will be verified and placed on shared storage before the normal coordinated
 upgrade; no deployed source or image is modified in place.
+
+For that upgrade, retain the currently deployed operational launcher from
+`../rphys-worktrees/fleet-upgrade-efficiency/tools/loom-fleet/rphys-fleet` on both
+hosts, and select the new consumer checkout with coordinator `--source`.
+Its agent lifecycle recognizes the current instrumented Python command as well
+as the plain legacy command; the consumer checkout's plain launcher does not
+recognize the current instrumented process. The operational wrapper and target
+project source are separate inputs. Do not interpret that launcher mismatch as
+an absent service or bypass native ownership checks.
