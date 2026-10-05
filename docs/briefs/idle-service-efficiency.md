@@ -41,7 +41,9 @@ never treat synthetic tests as physical fleet qualification.
 
 ## Current state
 
-- Dedicated clean worktree created; unrelated checkouts and fleet untouched.
+- Implementation and downstream consumption use dedicated worktrees; unrelated
+  checkouts remain untouched. Normal unchanged-service fleet recovery is recorded
+  below; no new image or runtime has been deployed.
 - Baseline captured at `51f327c9` plus the diagnostic harness only, using
   `uv run --python 3.12 --isolated --locked --group dev python -m
   tools.service_benchmark --seconds 10 --coordinator-interval 0.2`.
@@ -67,8 +69,9 @@ never treat synthetic tests as physical fleet qualification.
 - Admission and outbound retained-assignment recovery now have independent
   jittered pacing, scoped progress resets and redacted retry-deadline diagnostics.
   Exact transport replay and embedded-observer pacing are now implemented as
-  well. Final affected-suite evidence and downstream qualification remain
-  outstanding. No runtime or image pin has changed.
+  well. Final affected-suite evidence is recorded below; downstream checks and
+  physical after-change qualification remain outstanding. The downstream source
+  pin is updated; the deployed runtime and image remain unchanged.
 - No implementation or deployment completion is claimed yet.
 
 ## Baseline evidence
@@ -216,10 +219,11 @@ there is no measured justification for adding connection ownership machinery.
 
 ## Remaining delivery work
 
-- Collect final affected-suite evidence against the completed retry tree.
-- Collect physical before/after service CPU and control/submit latency evidence;
-  publish a downstream Loom pin and qualify rphys against that release. Local
-  synthetic tests do not discharge this gate. No fleet has been changed here.
+- Build and deploy the pinned consumer image, then collect physical after-change
+  service CPU and control/submit latency evidence and concurrent CPU/GPU checks.
+  Local synthetic tests do not discharge this gate. No new fleet software is
+  deployed yet. Existing explicit coordinator timing must be changed deliberately
+  through guarded configuration reload, not silently rewritten by upgrade.
 
 ## Transport and embedded-observer retry selection
 
@@ -276,10 +280,10 @@ need operator assistance. The downstream consumer worktree is
 `chore/loom-idle-service-efficiency`, based on clean `790532a6b`. Fresh bootstrap
 and both coordinator templates now select the one-second fallback, with native
 template/bootstrap assertions and documentation that upgrades preserve explicit
-existing settings. The dependency pin and downstream validation are pending.
+existing settings. The dependency pin and downstream validation are complete.
 Control checkouts and deployed sources remain unchanged.
 
-## Final local validation in progress
+## Final local validation
 
 The completed retry tree passed 313 affected queue unit tests and 145 baseline
 import/control/retry tests in the separate locked no-extra environment. The
@@ -294,3 +298,72 @@ lost-reply cases and optional/sequence narrowing assertion changes passed all
 occur before the grant is allowed, including the negotiated five-second wait.
 All changed source/tests/tools pass Ruff and Pyright; `git diff --check` passes.
 These are affected-suite results, not a full repository or deployed-fleet gate.
+
+Final synthetic checkpoint at commit `1d54b3ae` (same ten-second fixture windows,
+no concurrent task validation): idle 3.96%, silent running job 28.54%, retained
+history 3.14%, recoverable error 4.43% of one core. Corresponding DB opens were
+163/1315/146/220; schema checks 80/2403/80/112; TLS connections 6/6/5/6; control
+requests two per window; error retries seven. Running-job overhead remains
+measurable; these results are not a claim of negligible supervision cost.
+
+The validated Loom checkpoint is published on `codex/idle-service-efficiency`;
+the downstream reference pin and matching extension lock now select its full
+commit `1d54b3ae97c88f4c2acb9400676a95d5c3efcb2b`. Consumer checks select native
+templates, fresh setup, detached operations, upgrades, and pinned native/extension
+identity. Physical concurrent CPU/GPU/cancellation cases remain a separate gate.
+
+The unchanged fleet recovered after a normal coordinator stop/start, without
+editing retained records. Coordinator PID is now 1740750, agent PID 2236545,
+supervisor PID 2167725. Agent availability and all four fresh GPU observations
+were confirmed after epoch reconciliation. No new image or software was deployed
+for recovery.
+
+## Healthy physical baseline
+
+Thirty-second healthy-idle samples ended at 2026-10-05T05:14:44Z, after confirming
+current agent availability and all four fresh GPU observations. The coordinator
+used 6.14 CPU seconds (20.47% of one core), agent 7.11 seconds (23.70%), and
+supervisor 0.02 seconds (0.07%). The same PIDs and unchanged explicit 0.2-second
+coordinator interval apply. These are service-only process deltas, not lifetime
+CPU averages or child workload CPU.
+
+The finite owned probe `idle-efficiency-before-20261005T0515` succeeded and its
+assignment was released. Its running window ended before sampling; no running
+CPU claim is made from that probe. A second automated owned probe,
+`idle-efficiency-before-20261005T052319`, requested one CPU on shazza and slept
+silently for up to 180 seconds. Samples ended at 05:24:48Z; the exact assignment
+was RUNNING on shazza before and after the window. Coordinator CPU was 20.75
+seconds (69.17%), agent 7.13 seconds (23.77%), supervisor 1.51 seconds (5.03%).
+Submission reply took 0.577 seconds, and the assignment reached RUNNING after
+48.699 seconds including shared preparation and container startup. Cancellation
+of only that freshly created probe returned after 0.122 seconds and reached
+CANCELLED with its assignment RELEASED after 5.564 seconds. No unrelated work
+was cancelled. Protected request/result receipts and the automated measurement
+script are retained in the downstream worktree's ignored `build/idle-efficiency/`.
+
+The running-job coordinator overhead is substantial and is an important physical
+after-change comparison; the synthetic fixture does not predict its exact value.
+
+## Downstream validation and image handoff
+
+The consumer is committed at `693dcebda183e044a468ab2cad5e411667e241d4`. Targeted
+reference validation at tree fingerprint
+`1df7fc59748e202654485c786c55e042996fc05b94d3767083a0009c21c2342d` executed all 93
+selected cases. In `build/test-targeted/reference-p8igljpf/`, 89 passed and four
+failed because the temporary test roots were on tmpfs, which the existing
+persistent-local-storage guard correctly rejects. The same four cases passed
+unchanged using a fresh short ext4 `/tmp/lrie.*` pytest base in
+`build/test-targeted/reference-dovessmd/`; isolated environments remained on
+task-owned tmpfs. No skips, errors, source corrections or relaxed assertions.
+Both executions passed the three selected reference distribution builds.
+Changed Python files pass Ruff lint/format checks; diff checks pass. This remains
+targeted evidence, not full repository or physical SIF qualification.
+
+No new image is built yet. Both hosts require an interactive sudo password;
+sleipnir has only 8.5 GB free, versus 567 GB on shazza. A guarded operator build
+launcher is prepared under the consumer's ignored
+`build/idle-efficiency/build-image-on-shazza.sh`. It requires the clean exact
+consumer commit and physical shazza host and writes only the fresh owned local
+directory `/data/can134/loom/rphys/image-build.idle-efficiency.7IDBE7Eu`. The image
+will be verified and placed on shared storage before the normal coordinated
+upgrade; no deployed source or image is modified in place.
