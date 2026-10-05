@@ -58,9 +58,13 @@ never treat synthetic tests as physical fleet qualification.
 - Changed-file Ruff and selected-source/test/tool Pyright passed. Pyright used
   the isolated environment's interpreter; no environment was installed in a
   control checkout. `git diff --check` passed.
-- Control waiting, store-validation deduplication, recovery backoff, conditional
-  connection pooling decision, final affected-suite evidence and downstream
-  qualification remain outstanding. No runtime or image pin has changed.
+- Control waiting implemented with authenticated session-scoped receipts,
+  namespace-qualified suppression IDs, read-only empty checks, capability
+  fallback and separate bounded wait capacity. Receipt does not apply a drain
+  or fence a locally unanswered work poll.
+- Store-validation deduplication, recovery backoff, conditional connection
+  pooling decision, final affected-suite evidence and downstream qualification
+  remain outstanding. No runtime or image pin has changed.
 - No implementation or deployment completion is claimed yet.
 
 ## Baseline evidence
@@ -98,7 +102,46 @@ No additional implementation changes occurred while either measurement ran.
 The remaining control/TLS counts are expected: agent control waiting is the next
 slice. Do not treat this checkpoint as completion of the approved brief.
 
-## Next implementation constraints
+## Control-wait checkpoint
+
+- Unit selection: 121 passed (`build/idle-efficiency/control-waits.xml`):
+  `test_agent_control_waiting.py`, `test_agent_waiting.py`,
+  `test_agent_sessions.py` under `tests/unit/loom/queue/`.
+- Integration selection: 13 passed in `control-service.xml`: late-poll drain
+  (inline/shared), lost control replies across reconnect/close and legacy
+  capability fallback, cancellation during held input/publication (six cases),
+  and four exclusive devices with mixed CPU/excess GPU.
+- The same run found two test defects: the new capacity test used a zero wait
+  for the existing work-poll protocol (which requires at least one millisecond),
+  and the 32-worker test's pool-budget assertion omitted the new wait lane.
+  Both corrected, with 8 passing cases in `control-boundaries.xml`: the two
+  affected tests plus protocol decoding, authenticated role rejection,
+  client/operator views and query-role result/permission boundaries.
+- The 32-worker test covers independent observation, ten offer renewals,
+  assignment-scoped cancellation and eventual release of all assignments.
+- Changed-file Ruff, selected Pyright and diff checks passed. Source/tests are
+  validated in the locked Python 3.12 config-extra environment. This is targeted
+  evidence, not full-suite or physical-fleet qualification.
+- Disk-full failures in an earlier run were environmental; the selected runs
+  above completed after space became available. The isolated validation runtime
+  and pytest temporary files use task-owned tmpfs storage; production is unchanged.
+
+Same ten-second instrumented fixture windows, with no concurrent task validation:
+
+| Scenario | CPU seconds | One-core CPU | DB opens | Schema table checks | Cycles | TLS connections | Control requests | Renewals | Recovery attempts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Healthy idle | 0.434 | 4.34% | 204 | 160 | 10 | 6 | 2 | 2 | 0 |
+| Running without output | 2.747 | 27.47% | 1392 | 2547 | 9 | 6 | 2 | 2 | 0 |
+| Retained terminal history | 0.387 | 3.87% | 189 | 160 | 10 | 5 | 2 | 1 | 0 |
+| Recoverable error | 0.428 | 4.28% | 223 | 160 | 9 | 6 | 2 | 2 | 10 |
+
+The empty-control hot loop is removed: two control waits per window, down from
+roughly ninety short requests. TLS counts are now five or six per window;
+connection pooling is not yet justified by these counts. Remaining running-job
+database/schema work and recoverable-error pacing are the next slices. CPU
+figures remain synthetic combined-process observations, not fleet measurements.
+
+## Control-wait implementation constraints
 
 Control receipts must not fence/discard a locally unanswered work poll. Reuse
 the durable control journals, separating receipt from effect preparation where

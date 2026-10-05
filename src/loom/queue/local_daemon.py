@@ -3029,8 +3029,7 @@ class LocalDaemon:
                     if admission_row is not None:
                         _request_admission_cancellation(conn, str(admission_row[0]), principal_id=principal.subject, request_operation_id=cancellation_operation_id)
             conn.commit()
-        if control.kind.value in {"drain", "reload"}:
-            self._poll_waiters.notify(control.expected_session_id)
+        self._poll_waiters.notify(control.expected_session_id)
         self._wake.set()
         return freeze_plain_data(
             {

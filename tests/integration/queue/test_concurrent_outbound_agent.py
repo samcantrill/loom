@@ -1322,6 +1322,7 @@ def test_thirty_two_live_workers_fair_observation_and_five_renewal_cycles(monkey
                 "loom-agent-bulk": 2,
                 "loom-agent-control": 2,
                 "loom-agent-poll": 1,
+                "loom-agent-control_wait": 1,
             }
             assert all(pool.maximum <= pool._max_workers for pool in pools)
         finally:
@@ -1448,7 +1449,10 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
         try:
             if entered.is_set() and not unblock.is_set():
                 exchanged.append(operation)
-            return exchange(config, operation, body, role, connection, keep_alive)
+            result = exchange(config, operation, body, role, connection, keep_alive)
+            if entered.is_set() and not unblock.is_set():
+                exchanged.append(operation)
+            return result
         finally:
             live_connections.discard((get_ident(), operation))
 
@@ -1483,7 +1487,7 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
             later_uri, later_authority = _submit(case, "later")
             case.client.cancel("held")
             assert retained.wait(5), case.failures
-            assert "assignment_control" in exchanged
+            assert {"assignment_control", "control_wait"}.intersection(exchanged)
             assert owner_threads == {case.thread.ident}
             offers = _rows(case.database, "SELECT offer_json FROM agent_offers")
             assert all(
@@ -2074,6 +2078,12 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
                     "settle already delivered work",
                 )
             )
+            _eventually(lambda: _rows(
+                case.agent_root / "control.sqlite",
+                "SELECT operation_id FROM agent_controls_local WHERE operation_id = 'drain-late'",
+            ))
+            assert _rows(case.agent_root / "control.sqlite",
+                "SELECT state FROM agent_poll_state_local") == [("PENDING",)]
             unblock.set()
             assert (
                 case.client.wait("late", timeout_seconds=30).state
@@ -2100,8 +2110,9 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
 
 
 @pytest.mark.parametrize("after_close", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
 def test_control_receipts_survive_lost_reply_from_reconnecting_client(
-    monkeypatch, after_close
+    monkeypatch, after_close, legacy
 ):
     armed, held, release, reconnecting, closed = (Event() for _ in range(5))
     publishing, release_publication, control_suspended = (Event() for _ in range(3))
@@ -2132,7 +2143,10 @@ def test_control_receipts_survive_lost_reply_from_reconnecting_client(
 
     def lost_control_reply(view, operation, value):
         result = dispatch(view, operation, value)
-        if operation == "assignment_control" and armed.is_set() and not held.is_set():
+        if operation == "handshake" and legacy:
+            result = {**result, "capabilities": [item for item in result["capabilities"]
+                      if item != "agent-control-wait-v1"]}
+        if operation in {"assignment_control", "control_wait"} and armed.is_set() and not held.is_set():
             held.set()
             assert release.wait(30)
             raise ConnectionError("lost control reply from the closing client")

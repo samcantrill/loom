@@ -70,6 +70,8 @@ if TYPE_CHECKING:
 
 
 PROTOCOL_VERSION = "13"
+CONTROL_WAIT_CAPABILITY = "agent-control-wait-v1"
+_MAX_RECEIVED_CONTROLS = 1025
 SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
@@ -1631,6 +1633,20 @@ class AgentSessionView:
     def handshake(self) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).handshake()
 
+    def wait_for_controls(
+        self, session_id: str, *, received_operation_ids: Sequence[str],
+        wait_timeout_ms: int,
+    ) -> Mapping[str, PlainData]:
+        """Wait up to five seconds for controls not durably received locally.
+
+        Suppression is not acknowledgement or resource release. Waiting holds
+        neither a store transaction nor the coordinator's scheduling lock.
+        """
+        return AgentSessionService(self._daemon, self._principal).wait_for_controls(
+            session_id, received_operation_ids=received_operation_ids,
+            wait_timeout_ms=wait_timeout_ms,
+        )
+
     def register(self, request: AgentRegistration) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).register(request)
 
@@ -2008,6 +2024,7 @@ class AgentSessionService:
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
                     "agent-sessions-v12",
+                    CONTROL_WAIT_CAPABILITY,
                     "concurrent-resident-assignments-v1",
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
@@ -2021,26 +2038,85 @@ class AgentSessionService:
             path="agent handshake",
         )
 
+    def wait_for_controls(
+        self, session_id: str, *, received_operation_ids: Sequence[str],
+        wait_timeout_ms: int,
+    ) -> Mapping[str, PlainData]:
+        _identifier(session_id, "session_id")
+        if (
+            isinstance(received_operation_ids, (str, bytes))
+            or not isinstance(received_operation_ids, Sequence)
+            or len(received_operation_ids) > _MAX_RECEIVED_CONTROLS
+        ):
+            raise QueueServiceError("received control IDs must be a bounded collection")
+        for operation_id in received_operation_ids:
+            if not isinstance(operation_id, str):
+                raise QueueServiceError("received control ID must be a string")
+            kind, _, identifier = operation_id.partition(":")
+            if kind not in {"agent", "assignment"}:
+                raise QueueServiceError("received control ID requires its control kind")
+            _identifier(identifier, "received control ID")
+        if len(set(received_operation_ids)) != len(received_operation_ids):
+            raise QueueServiceError("received control IDs must be unique")
+        if (isinstance(wait_timeout_ms, bool) or not isinstance(wait_timeout_ms, int)
+            or not 0 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS):
+            raise QueueServiceError("control wait must be between zero and 5000 milliseconds")
+        received = frozenset(received_operation_ids)
+        deadline = monotonic() + wait_timeout_ms / 1000
+        daemon = self._daemon
+        # Share session invalidation/shutdown hints with work waits. A hint
+        # never acknowledges a control or authorizes its physical effect.
+        with daemon._poll_waiters.subscribe(session_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                with daemon._cycle_lock:
+                    self._require_poll_running()
+                    assignment = self.next_assignment_control(session_id, received=received)
+                    control = self.next_control(session_id, received=received)
+                    if assignment is not None or control is not None or monotonic() >= deadline:
+                        return {
+                            "assignment_control": None if assignment is None else assignment.value(),
+                            "control": None if control is None else control.value(),
+                        }
+                signal.wait_for_change(observed, max(0, deadline - monotonic()))
+
+    def _control_session(
+        self, conn: sqlite3.Connection, session_id: str, rule: AgentPrincipalPolicy,
+        revision: str,
+    ) -> AgentSession:
+        session = _session_from_row(
+            conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(),
+            self._daemon._require_started(), expected_principal=rule.principal_id,
+        )
+        self._check_current_session(session, rule, self._daemon._epoch or "", revision)
+        return session
+
+    @staticmethod
+    def _pending_control(
+        conn: sqlite3.Connection, session_id: str, *, assignment: bool,
+        received: frozenset[str],
+    ) -> sqlite3.Row | None:
+        table = "remote_assignment_controls" if assignment else "agent_controls"
+        kind = "assignment" if assignment else "agent"
+        return next((row for row in conn.execute(
+            f"SELECT operation_id, request_json FROM {table} WHERE session_id = ? "
+            "AND state IN ('pending_delivery', 'applying') ORDER BY operation_id",
+            (session_id,),
+        ) if f"{kind}:{row['operation_id']}" not in received), None)
+
     @_serialized_session_operation
-    def next_control(self, session_id: str) -> AgentControl | None:
+    def next_control(
+        self, session_id: str, *, received: frozenset[str] = frozenset(),
+    ) -> AgentControl | None:
         rule, revision = self._authorize("control")
         _identifier(session_id, "session_id")
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._control_session(conn, session_id, rule, revision)
+            if self._pending_control(conn, session_id, assignment=False, received=received) is None:
+                return None
             conn.execute("BEGIN IMMEDIATE")
-            session = _session_from_row(
-                conn.execute(
-                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
-                ).fetchone(),
-                self._daemon._require_started(),
-                expected_principal=rule.principal_id,
-            )  # type: ignore[attr-defined]
-            self._check_current_session(
-                session, rule, self._daemon._epoch or "", revision
-            )  # type: ignore[attr-defined]
-            row = conn.execute(
-                "SELECT operation_id, request_json FROM agent_controls WHERE session_id = ? AND state IN ('pending_delivery', 'applying') ORDER BY operation_id LIMIT 1",
-                (session_id,),
-            ).fetchone()
+            session = self._control_session(conn, session_id, rule, revision)
+            row = self._pending_control(conn, session_id, assignment=False, received=received)
             if row is None:
                 conn.commit()
                 return None
@@ -2181,30 +2257,18 @@ class AgentSessionService:
         )
 
     @_serialized_session_operation
-    def next_assignment_control(self, session_id: str) -> AgentAssignmentControl | None:
+    def next_assignment_control(
+        self, session_id: str, *, received: frozenset[str] = frozenset(),
+    ) -> AgentAssignmentControl | None:
         rule, revision = self._authorize("assignment_control")
         _identifier(session_id, "session_id")
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._control_session(conn, session_id, rule, revision)
+            if self._pending_control(conn, session_id, assignment=True, received=received) is None:
+                return None
             conn.execute("BEGIN IMMEDIATE")
-            session = _session_from_row(
-                conn.execute(
-                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
-                ).fetchone(),
-                self._daemon._require_started(),  # type: ignore[attr-defined]
-                expected_principal=rule.principal_id,
-            )
-            self._check_current_session(
-                session,
-                rule,
-                self._daemon._epoch or "",
-                revision,  # type: ignore[attr-defined]
-            )
-            row = conn.execute(
-                "SELECT operation_id, request_json FROM remote_assignment_controls "
-                "WHERE session_id = ? AND state IN ('pending_delivery', 'applying') "
-                "ORDER BY operation_id LIMIT 1",
-                (session_id,),
-            ).fetchone()
+            self._control_session(conn, session_id, rule, revision)
+            row = self._pending_control(conn, session_id, assignment=True, received=received)
             if row is None:
                 conn.commit()
                 return None

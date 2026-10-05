@@ -3273,6 +3273,8 @@ class LocalDaemonExecution:
                     ),
                 )
                 conn.commit()
+                if self.daemon is not None:
+                    self.daemon._poll_waiters.notify(control.session_id)
                 return "pending", None
             retained = AgentAssignmentControl.from_value(
                 json.loads(str(row["request_json"]))
@@ -4602,6 +4604,7 @@ class LocalDaemonExecution:
         from .agent_sessions import AgentAssignmentControl
 
         settling = False
+        changed_sessions: set[str] = set()
         with sqlite3.connect(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
@@ -4673,6 +4676,7 @@ class LocalDaemonExecution:
                             encoded,
                         ),
                     )
+                    changed_sessions.add(control.session_id)
                 else:
                     retained = AgentAssignmentControl.from_value(
                         json.loads(str(prior["request_json"]))
@@ -4692,6 +4696,9 @@ class LocalDaemonExecution:
                             "remote cancellation operation conflicts"
                         )
             conn.commit()
+        if self.daemon is not None:
+            for session_id in changed_sessions:
+                self.daemon._poll_waiters.notify(session_id)
         return settling
 
     def _candidate(self) -> Candidate:

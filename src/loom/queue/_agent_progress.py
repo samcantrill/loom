@@ -183,7 +183,7 @@ def _run_manager(
     primary: Generator[_Progress, Any, Any], controls: Generator[_Progress, Any, Any]
 ) -> Any:
     """Rotate ready views with no executor queue beyond the occupied slots."""
-    budgets = {"bulk": 2, "control": 2, "poll": 1}
+    budgets = {"bulk": 2, "control": 2, "poll": 1, "control_wait": 1}
     pools = {
         lane: ThreadPoolExecutor(
             max_workers=limit, thread_name_prefix=f"loom-agent-{lane}"

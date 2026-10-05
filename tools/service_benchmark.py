@@ -81,7 +81,7 @@ def measured_calls(patch):
 
     @wraps(exchange)
     def counted_exchange(config, operation, *args, **kwargs):
-        if operation in {"control", "assignment_control", "wait_controls"}:
+        if operation in {"control", "assignment_control", "control_wait"}:
             counters.increment("control_requests")
         if operation == "renew":
             counters.increment("resource_renewals")
