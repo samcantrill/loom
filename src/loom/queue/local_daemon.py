@@ -67,6 +67,7 @@ from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from ._preparation_policy import PreparationPolicy
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
+from ._service_signals import _ChangeConnection, _ServiceSignal
 
 if TYPE_CHECKING:
     from ._preparation_operations import PreparationCallbacks
@@ -654,7 +655,7 @@ class LocalDaemonConfig:
     gpu_devices: tuple[ConfiguredGpuDevice, ...] = ()
     agent_resource_providers: tuple[AgentResourceProvider, ...] | None = None
     agent_resource_capacity: tuple[CapacityAtom, ...] = field(init=False, repr=False)
-    poll_interval_seconds: float = 0.05
+    poll_interval_seconds: float = 1.0
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
     slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
@@ -1574,7 +1575,8 @@ class LocalDaemon:
         self._epoch: str | None = None
         self._scheduling_epoch: str | None = None
         self._stop = Event()
-        self._wake = Event()
+        self._wake = _ServiceSignal()
+        self._status_changed = _ServiceSignal()
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
@@ -1986,6 +1988,7 @@ class LocalDaemon:
             self._stop.set()
             self._poll_waiters.close()
             self._wake.set()
+            self._status_changed.set()
         self._poll_waiters.drain()
         thread = self._thread
         self._thread = None
@@ -2395,6 +2398,8 @@ class LocalDaemon:
             raise QueueServiceError("operation wait timeout is invalid")
         deadline = None if timeout is None else time.monotonic() + float(timeout)
         while True:
+            observed = self._status_changed.snapshot()
+            self._require_wait_running()
             operation = self.operation(operation_id)
             state = operation.state
             if operation.kind == "slurm_stage_assignment":
@@ -2402,7 +2407,7 @@ class LocalDaemon:
                     return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
                 if deadline is not None and time.monotonic() >= deadline:
                     return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-                time.sleep(min(self.config.poll_interval_seconds, 0.05))
+                self._wait_for_status_change(observed, deadline)
                 continue
             if state not in {
                 "pending_delivery",
@@ -2415,7 +2420,7 @@ class LocalDaemon:
                 return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
             if deadline is not None and time.monotonic() >= deadline:
                 return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-            time.sleep(min(self.config.poll_interval_seconds, 0.05))
+            self._wait_for_status_change(observed, deadline)
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
@@ -2440,6 +2445,8 @@ class LocalDaemon:
             LocalDaemonAdmissionState.BLOCKED,
         }
         while True:
+            observed = self._status_changed.snapshot()
+            self._require_wait_running()
             with self._connection() as conn:
                 row = conn.execute(
                     "SELECT * FROM managed_admissions WHERE admission_id = ?",
@@ -2465,7 +2472,17 @@ class LocalDaemon:
                 return AdmissionWaitResult(
                     AdmissionWaitKind.TIMEOUT, admission, current
                 )
-            time.sleep(min(self.config.poll_interval_seconds, 0.05))
+            self._wait_for_status_change(observed, deadline)
+
+    def _require_wait_running(self) -> None:
+        if self._stop.is_set():
+            raise QueueServiceError("coordinator is stopping")
+
+    def _wait_for_status_change(self, observed: int, deadline: float | None) -> None:
+        # Other owner databases and external processes can change without this
+        # process observing their commit. Re-read at the bounded safety deadline.
+        remaining = 1.0 if deadline is None else max(0.0, deadline - time.monotonic())
+        self._status_changed.wait_for_change(observed, min(1.0, remaining))
 
     def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
         """Read the installed execution owners, including owners retained by reload."""
@@ -2586,6 +2603,10 @@ class LocalDaemon:
                         ),
                     )
                     self._set_state(admission_id, outcome.state, reason=outcome.reason)
+                else:
+                    # A full batch may leave runnable work. Yield the cycle lock
+                    # but do not impose the safety interval on the next batch.
+                    self._wake.set()
             for admission_id, outcome in waiting_outcomes.items():
                 if admission_id in started_admissions:
                     continue
@@ -2602,14 +2623,15 @@ class LocalDaemon:
 
     def _serve(self) -> None:
         while not self._stop.is_set():
-            self._wake.clear()
+            observed = self._wake.snapshot()
             try:
                 self.reconcile_once()
             except Exception:  # keep the durable owner alive and diagnosable
                 self._service_error = "reconciliation_unavailable"
             else:
                 self._service_error = None
-            self._wake.wait(self.config.poll_interval_seconds)
+            if not self._stop.is_set():
+                self._wake.wait_for_change(observed, self.config.poll_interval_seconds)
 
     def _submit(
         self,
@@ -3700,6 +3722,8 @@ class LocalDaemon:
             LocalDaemonAdmissionState.BLOCKED,
         }
         while True:
+            observed = self._status_changed.snapshot()
+            self._require_wait_running()
             admission = self._admission_for_queue_item(queue_item_id)
             if admission.state in terminal:
                 return admission
@@ -3707,7 +3731,7 @@ class LocalDaemon:
                 raise TimeoutError(
                     "managed local admission did not reach terminal state"
                 )
-            time.sleep(min(self.config.poll_interval_seconds, 0.05))
+            self._wait_for_status_change(observed, deadline)
 
     def _cancellation_operation_id(self, admission_id: str) -> str | None:
         return self._admission(admission_id).cancellation_operation_id
@@ -3967,7 +3991,9 @@ class LocalDaemon:
                 f"{self.config.control_database.resolve().as_uri()}?mode=rw",
                 uri=True,
                 timeout=30,
+                factory=_ChangeConnection,
             )
+            conn.on_commit = self._status_changed.set
             conn.row_factory = sqlite3.Row
             expected = self._coordinator_id
             if expected is not None:

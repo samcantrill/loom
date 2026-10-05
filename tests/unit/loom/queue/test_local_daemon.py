@@ -21,7 +21,6 @@ import pytest
 
 from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.local_daemon_execution as local_daemon_execution
-import loom.queue.local_daemon as local_daemon_module
 from loom.queue import (
     AdmissionNotFoundError,
     AgentControl,
@@ -350,11 +349,11 @@ def test_nonterminal_admission_waits_are_passive(
     def record_wake() -> None:
         wake_calls.append(None)
 
-    def stop_after_observation(_seconds: float) -> None:
+    def stop_after_observation(_observed: int, _deadline: float | None) -> None:
         raise RuntimeError("stop after one nonterminal observation")
 
     monkeypatch.setattr(daemon._wake, "set", record_wake)
-    monkeypatch.setattr(local_daemon_module.time, "sleep", stop_after_observation)
+    monkeypatch.setattr(daemon, "_wait_for_status_change", stop_after_observation)
     with pytest.raises(RuntimeError, match="stop after one"):
         daemon.wait_admission(
             "admission-1",

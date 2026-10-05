@@ -2170,6 +2170,7 @@ class AgentSessionService:
             conn.commit()
         if applied:
             self._daemon._poll_waiters.notify(session_id)
+            self._daemon._wake.set()
         return freeze_plain_data(
             {
                 "operation_id": control.operation_id,
@@ -2908,6 +2909,7 @@ class AgentSessionService:
                 conn, rule.principal_id, "offer", idempotency_key, digest, value
             )
             conn.commit()
+        self._daemon._wake.set()
         return freeze_plain_data(value, path="agent offer receipt")
 
     def recover_poll(
@@ -3633,6 +3635,7 @@ class AgentSessionService:
             )
             conn.commit()
         self._daemon._poll_waiters.notify(session_id)
+        self._daemon._wake.set()
         return resumed
 
     @_serialized_session_operation
@@ -3666,6 +3669,7 @@ class AgentSessionService:
                 (assignment_id, fence),
             )
             conn.commit()
+        self._daemon._wake.set()
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "RUNNING"},
             path="remote start confirmation",
@@ -4006,6 +4010,7 @@ class AgentSessionService:
                 (assignment_id,),
             )
             conn.commit()
+        self._daemon._wake.set()
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "TERMINAL"},
             path="remote result commit",
@@ -4310,6 +4315,7 @@ class AgentSessionService:
                 )
             conn.commit()
         self._daemon._poll_waiters.notify(session_id)
+        self._daemon._wake.set()
         return resumed
 
     def _require_remote_session(

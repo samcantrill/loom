@@ -929,6 +929,22 @@ deliberately changed profile or deployment.
 
 ### Status and cancellation
 
+Coordinator reconciliation uses change notifications with a bounded safety
+fallback. `LocalDaemonConfig.poll_interval_seconds` defaults to one second;
+explicit protected configurations retain their authored value. Submissions,
+cancellations, changed offers and assignment transitions can wake scheduling
+immediately. A notification arriving during reconciliation is retained for the
+next cycle, and exhausting a scheduling batch does not impose a safety-interval
+delay on the next batch. An unchanged offer renewal does not itself request a
+new scheduling cycle.
+
+Operation and admission waits are passive: they check durable state, wait for a
+committed-change hint, then check again. They do not drive scheduling and do not
+query every 50 milliseconds. A one-second fallback covers changes made by other
+owners/processes and missed notifications; timeout expiry always performs a
+final state check. Shutdown wakes waiters. These intervals bound observation,
+not job duration, and never acknowledge controls or release resource claims.
+
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
 scheduler dispatch/observation, transfer/result, and service-health/freshness
