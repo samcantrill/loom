@@ -6356,7 +6356,7 @@ class _Handler(BaseHTTPRequestHandler):
         query_credential = False
         payload: dict[str, object] = {}
         new_client = (
-            self.path.startswith("/v1/client/")
+            self.path.startswith(("/v1/client/", "/v1/operator/"))
             and self.headers.get("X-Loom-Client") == CONTROL_CAPABILITY
         )
         operation = self.path.rsplit("/", 1)[-1] or "unknown"
@@ -6917,7 +6917,11 @@ def _dispatch_application(
     inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
     daemon_control: bool = False,
 ) -> Mapping[str, PlainData]:
-    if role == "client":
+    if role == "operator" and daemon_control:
+        from ._coordinator_control import OPERATOR_OPERATIONS
+        if operation not in OPERATOR_OPERATIONS:
+            raise control_error("unauthorized", operation, value, boundary="authentication")
+    if role == "client" or (role == "operator" and daemon_control):
         result = dict(
             dispatch_control(
                 daemon,

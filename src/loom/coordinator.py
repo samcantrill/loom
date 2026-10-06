@@ -47,6 +47,8 @@ from loom.queue._coordinator_transport import (
 from loom.queue.errors import QueueError
 from loom.queue.preparation import PrepareRunRequest
 from loom.queue.run import RunRequest
+from loom.queue.operations import OperatorObservation
+from loom.queue.agent_sessions import AgentControl
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +409,7 @@ class CoordinatorClient(NativeCoordinatorClient):
 
 
 __all__ = [
+    "CoordinatorOperatorClient",
     "CoordinatorClient",
     "CoordinatorClientError",
     "CoordinatorConnectionDescription",
@@ -414,3 +417,66 @@ __all__ = [
     "RunRequest",
     "RunObservation",
 ]
+
+
+class CoordinatorOperatorClient(NativeCoordinatorClient):
+    """Explicit operator-role connection; ordinary client credentials cannot use it.
+
+    Controls require an expected coordinator ID and retain native operation and
+    intent identity. A transport timeout reports unknown, never non-application.
+    """
+
+    _handshake_operation = "operator_handshake"
+    _retained_status: OperatorObservation | None = None
+
+    @classmethod
+    def from_unix_socket(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> CoordinatorOperatorClient:
+        return cls(UnixControlTransport(path), expected_coordinator_id=expected_coordinator_id)
+
+    @classmethod
+    def from_connection_file(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> CoordinatorOperatorClient:
+        from loom.queue.deployment import load_coordinator_connection_file
+        config = load_coordinator_connection_file(path)
+        try:
+            selected = optional_id(expected_coordinator_id)
+        except ValueError as exc:
+            raise control_error("invalid_request", "connection", {}) from exc
+        if selected is not None and config.expected_coordinator_id not in {None, selected}:
+            raise control_error("conflict", "connection", {})
+        return cls(HttpsControlTransport(config.url, config.server_ca_path, config.certificate_path, config.private_key_path, role="operator"), expected_coordinator_id=selected if selected is not None else config.expected_coordinator_id)
+
+    def observe_status(self) -> OperatorObservation:
+        """Read accepted configuration; unreachable services retain known identity."""
+        from loom.queue.operations import OperatorObservation
+        from loom.timestamps import utc_timestamp
+        try:
+            result = cast(OperatorObservation, self._native_call("operator_status", {}))
+            self._retained_status = result
+            return result
+        except CoordinatorClientError as exc:
+            if exc.code not in {"unavailable", "deadline_exceeded"}:
+                raise
+            owner = self._expected_coordinator_id
+            if owner is None and self._last_connection is not None:
+                owner = self._last_connection.coordinator_id
+            retained = self._retained_status
+            return OperatorObservation(owner, utc_timestamp(), None if retained is None else retained.revision,
+                "unknown" if retained is None else "retained", "unavailable",
+                {} if retained is None else {**retained.value, "retained_observed_at": retained.observed_at}, exc.code)
+
+    def observe_agent(self, agent_id: str) -> OperatorObservation:
+        """Observe one agent without interpreting stale capacity as available."""
+        return self._native_call("operator_agent", {"agent_id": agent_id})
+
+    def observe_assignment(self, assignment_id: str) -> OperatorObservation:
+        """Observe one assignment; local claims remain independently sourced."""
+        return self._native_call("operator_assignment", {"assignment_id": assignment_id})
+
+    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Commit or replay one exact native control; never retry automatically."""
+        from loom.queue.operations import control_intent_digest
+        return self._native_call("operator_control", {"control": control.value(), "intent_digest": control_intent_digest(control.value())}, expected_coordinator_id)
+
+    def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Resolve the original operation after a lost mutation response."""
+        return self._native_call("operator_operation", {"operation_id": operation_id})
