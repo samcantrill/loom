@@ -1404,3 +1404,24 @@ request's `managed_output_predecessor` metadata and supplies that exact predeces
 to initial and replayed managed output commits. The authority's existing fenced
 transaction owns immutable output history and terminal success; replay after a
 lost response does not substitute the new head for the original predecessor.
+
+## Outbound Agent Session Boundaries
+
+`queue/agent_session_transport.py` retains the public TLS configuration, HTTP
+client/server and application integration. Its private collaborators separate
+current responsibilities without adding processes or durable formats:
+
+- `_agent_session_codec.py`: bounded wire decoding and explicit transport
+  uncertainty; no session replay policy.
+- `_agent_session_protocol.py`: registration, reconciliation, resource-offer and
+  delivery decisions using the existing cooperative client owner. The client
+  entry points retain serialization and invoke these functions directly.
+- `_agent_session_journal.py`: the single outbound session journal, its durable
+  identity calculations and transaction boundaries. Retirement and GPU probing
+  use this same journal; assignment references remain in its existing store.
+
+The protocol and journal refer to client/configuration types only during type
+checking. Runtime dependencies flow from the public adapter to these private
+owners, and from protocol decisions through the journal to the existing native
+session models. Assignment execution and settlement retain their current owner.
+See [Queue](features/queue.md) for replay and concurrency behavior.

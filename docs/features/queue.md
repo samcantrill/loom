@@ -152,6 +152,17 @@ simultaneously; its all-or-none multi-agent reservation is gang scheduling and
 requires a different candidate, batch-commit, rendezvous, launch, and group-
 failure contract.
 
+The outbound client's transport, session decisions and persistence have separate
+private owners. `agent_session_transport` keeps the public client/server imports,
+TLS/authentication, HTTP deadlines and bounded progress lanes;
+`_agent_session_codec` owns wire limits and decoding. `_agent_session_protocol`
+owns registration, offer revisions, delivery sequence and reconnect decisions on
+the same cooperative application owner. `_agent_session_journal` alone owns the
+outbound session transactions, including references shared with assignment
+recovery. Transport uncertainty preserves the exact pending intent; it does not
+select a fresh session or a new delivery. The public entry points retain their
+existing serialization gates and bulk/control/poll budgets.
+
 A reconnect normally resumes the durable session. A clean new session is
 allowed only after the authenticated old session withdraws/fences delivery and
 coordinator plus agent reconciliation proves the complete assignment/claim/
