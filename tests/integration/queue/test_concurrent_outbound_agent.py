@@ -2725,6 +2725,42 @@ def test_container_option_rejection_releases_claims_while_peer_progresses(monkey
                     _release_gate(gate)
 
 
+def test_reconnect_after_gpu_activation_restores_binding_without_new_attempt(monkeypatch):
+    from loom.queue._managed_local import SQLiteAgentJournal, AssignmentState
+
+    monkeypatch.setattr(
+        NvidiaSmiGpuProcessObserver, "observe",
+        lambda owner: {"GPU-private": GpuProcessObservation("GPU-private", True, False, "available")},
+    )
+    interrupted = Event()
+    activate = SQLiteAgentJournal.activate_composite
+
+    def interrupt_once(journal, assignment_id, *args):
+        result = activate(journal, assignment_id, *args)
+        if result is AssignmentState.ACTIVE and not interrupted.is_set():
+            interrupted.set()
+            raise transport.QueueServiceError("fixture reconnect after durable activation")
+        return result
+
+    monkeypatch.setattr(SQLiteAgentJournal, "activate_composite", interrupt_once)
+    with _service(monkeypatch, gpu=True, memory=2 * 1024**3) as case:
+        gate, _, _ = _submit_gated(case, "gpu-reconnect", gpu=True)
+        try:
+            assert interrupted.wait(20), case.retries
+            _eventually(lambda: (gate / "build.started").exists(), seconds=30)
+            launches = _rows(case.agent_root / "supervisor/supervisor.sqlite", "SELECT launch_json FROM launches")
+            assert len(launches) == 1
+            launch = json.loads(launches[0][0])
+            assert launch["environment"]["CUDA_VISIBLE_DEVICES"] == "GPU-private"
+            _release_gate(gate)
+            assert case.client.wait("gpu-reconnect", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+            _eventually(lambda: _rows(case.database, "SELECT state FROM remote_assignments") == [("RELEASED",)])
+            assert _rows(case.agent_root / "journal.sqlite", "SELECT state FROM assignments") == [("released",)]
+            assert not case.failures
+        finally:
+            _release_gate(gate)
+
+
 def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeypatch):
     monkeypatch.setattr(
         NvidiaSmiGpuProcessObserver,

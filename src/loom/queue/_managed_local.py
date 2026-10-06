@@ -1463,17 +1463,27 @@ class SQLiteAgentJournal:
         commands: Sequence[ClaimCommand],
         providers: Mapping[str, AgentResourceProvider],
     ) -> AssignmentState:
+        """Activate granted claims, reconciling restored providers before launch.
+
+        An ACTIVE journal records prior activation, but reconstructed providers
+        may hold only a PREPARED reservation. Reconcile that exact claim and
+        reactivate only a positively prepared reservation under the same grant.
+        Uncertain restoration leaves the durable activation record intact and
+        blocks launch; process-started and later states never reactivate here.
+        """
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
             state = AssignmentState(row["state"])
-            if _agent_at_or_after(state, AssignmentState.ACTIVE):
+            restoring_active = state is AssignmentState.ACTIVE
+            if _agent_at_or_after(state, AssignmentState.ACTIVE) and not restoring_active:
                 return state
             if state not in {
                 AssignmentState.GRANTED,
+                AssignmentState.ACTIVE,
                 AssignmentState.ACTIVATION_UNKNOWN,
             }:
                 raise ManagedLocalError("assignment is not grant-activatable")
-            reconcile = state is AssignmentState.ACTIVATION_UNKNOWN
+            reconcile = restoring_active or state is AssignmentState.ACTIVATION_UNKNOWN
         for command in sorted(commands, key=lambda item: item.claim.resource_kind):
             provider = providers.get(command.claim.resource_kind)
             if provider is None:
@@ -1482,10 +1492,16 @@ class SQLiteAgentJournal:
                 provider.reconcile if reconcile else provider.activate,
                 command,
             )
+            if restoring_active and result.outcome is ClaimOutcome.PREPARED:
+                result = _provider_call(provider.activate, command)
             if result.outcome is not ClaimOutcome.ACTIVE:
+                if restoring_active:
+                    raise ManagedLocalError("retained active provider claim is unavailable")
                 return self._set_state(
                     assignment_id, AssignmentState.ACTIVATION_UNKNOWN
                 )
+        if restoring_active:
+            return state
         return self._set_state(assignment_id, AssignmentState.ACTIVE)
 
     def start_once(

@@ -133,6 +133,61 @@ def test_gpu_provider_rejects_retained_claim_after_private_mapping_drift() -> No
         replacement.restore_capacity_holding(retained)
 
 
+@pytest.mark.parametrize("activated", [False, True])
+def test_restored_granted_gpu_claim_supplies_binding_before_launch(tmp_path, monkeypatch, activated):
+    planner = GpuResourcePlanner()
+    atom = CapacityAtom("gpu", "gpu-1", ExactQuantity(1), "count", ExactQuantity(1))
+
+    def new_provider():
+        return GpuResourceProvider(
+            planner.claim_contracts, (atom,), bindings={"gpu-1": "GPU-private"}
+        )
+
+    provider = new_provider()
+    assignment = ManagedAssignment(
+        "assignment-1", "run-1", "work-1", "train", 1, "train-1",
+        "agent-1", "session-1", "offer-1", "claim-1",
+    )
+    command = ClaimCommand(
+        assignment, "prepare-1",
+        ResourceClaim("gpu", planner.claim_contracts[0], (atom,), 1),
+        provider.descriptor,
+    )
+    journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
+    journal.persist_request(assignment, {"test": "gpu-recovery"})
+    journal.prepare_composite(assignment, (command,), {"gpu": provider})
+    journal.accept(assignment.assignment_id)
+    journal.grant(assignment.assignment_id, "fence-1")
+    if activated:
+        journal.activate_composite(assignment.assignment_id, (command,), {"gpu": provider})
+
+    replacement = new_provider()
+    for retained in journal.retained_claim_commands():
+        replacement.restore_capacity_holding(retained)
+    assert replacement.reconcile(command).outcome is ClaimOutcome.PREPARED
+    assert journal.activate_composite(
+        assignment.assignment_id, (command,), {"gpu": replacement}
+    ) is AssignmentState.ACTIVE
+    assert replacement.worker_environment(command) == {"CUDA_VISIBLE_DEVICES": "GPU-private"}
+    assert journal.read_grant_fence(assignment.assignment_id) == "fence-1"
+    monkeypatch.setattr(replacement, "activate", lambda command: pytest.fail("active claim must only reconcile"))
+    assert journal.activate_composite(
+        assignment.assignment_id, (command,), {"gpu": replacement}
+    ) is AssignmentState.ACTIVE
+
+    # A supported provider can report an uncertain outcome on reconstruction.
+    # The saved grant cannot turn that uncertainty into permission to launch.
+    from loom.queue._managed_local import ClaimResult
+
+    monkeypatch.setattr(replacement, "reconcile", lambda command: ClaimResult(
+        ClaimOutcome.INDETERMINATE, command.operation_id, command.claim.fingerprint,
+    ))
+    with pytest.raises(ManagedLocalError, match="retained active provider claim is unavailable"):
+        journal.activate_composite(assignment.assignment_id, (command,), {"gpu": replacement})
+    assert journal.read_state(assignment.assignment_id) is AssignmentState.ACTIVE
+    assert journal.read_grant_fence(assignment.assignment_id) == "fence-1"
+
+
 def test_eight_selected_gpus_yield_disjoint_claims_and_the_ninth_waits() -> None:
     planner = GpuResourcePlanner()
     atoms = tuple(
