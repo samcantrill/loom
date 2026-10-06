@@ -47,10 +47,8 @@ def read_agent_declaration_binding(
     repeat this check while holding native ownership. A launcher still awaits
     fresh qualification and the exact native process/session after starting.
     """
-    from .agent_session_transport import (
-        _AGENT_BINDING_FILE,
-        _LOCAL_DAEMON_SCHEMA_VERSION,
-    )
+    from ._agent_session_journal import _AGENT_BINDING_FILE
+    from .local_daemon import _LOCAL_DAEMON_SCHEMA_VERSION
 
     root = Path(root).resolve()
     database = root / "control.sqlite"
@@ -163,7 +161,7 @@ def agent_declaration_guard(
     use their previous fully checked path. Nothing initializes a missing root.
     Retained work is allowed for ordinary startup recovery, not silently released.
     """
-    from .agent_session_transport import _RemoteAgentJournal
+    from ._agent_session_journal import _RemoteAgentJournal
 
     binding = read_agent_declaration_binding(root, declaration_digest)
     if binding is None:
@@ -417,9 +415,9 @@ def _retire_bound_agent(
         retained_supervisor_guard,
     )
     from ._managed_local import ManagedLocalError
+    from ._agent_session_journal import _RemoteAgentJournal
     from .agent_session_transport import (
         AgentTlsClientConfig,
-        _RemoteAgentJournal,
         _exchange_agent_request,
         _has_retained_agent_work,
         _reconcile_retirement_poll,
