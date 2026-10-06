@@ -312,8 +312,10 @@ class HttpsControlTransport(ControlTransport):
         server_ca_path: Path,
         certificate_path: Path,
         private_key_path: Path,
+        *, role: str = "client",
     ) -> None:
         super().__init__()
+        self._role = role
         self._connection: Callable[[float], http.client.HTTPSConnection] = (
             lambda timeout: https_connection(
                 url,
@@ -340,7 +342,7 @@ class HttpsControlTransport(ControlTransport):
             connection.sock.settimeout(remaining(call_deadline))
             connection.request(
                 "POST",
-                f"/v1/client/{exchange.operation}",
+                f"/v1/{self._role}/{exchange.operation}",
                 body=raw,
                 headers={
                     "Content-Type": "application/json",

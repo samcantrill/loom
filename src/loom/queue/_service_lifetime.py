@@ -159,7 +159,7 @@ def record_process(
     import sqlite3
 
     pid = os.getpid()
-    started = Path(f"/proc/{pid}/stat").read_text().split()[21]
+    started = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
     with sqlite3.connect(root / "control.sqlite") as conn:
         conn.execute(
             "INSERT INTO root_metadata(key,value) VALUES ('service_process',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -168,6 +168,7 @@ def record_process(
                     {
                         "pid": pid,
                         "started": started,
+                        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
                         "stopped": stopped,
                         "coordinator_id": coordinator_id,
                         "session_id": session_id,

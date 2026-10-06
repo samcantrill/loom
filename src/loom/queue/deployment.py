@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .operations import OperatorObservation
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
@@ -2509,3 +2511,80 @@ __all__ = [
     "read_agent_spec",
     "run_outbound_agent_service",
 ]
+
+
+def inspect_role_declaration(
+    path: str | Path, *, role: str, env_file: str | Path | None = None
+) -> "OperatorObservation":
+    """Parse protected role declarations without qualification or factory imports.
+
+    The fingerprint identifies declarations, not installed software. Credentials,
+    environment values and private paths are omitted from the public projection.
+    Protected source failures are reported without echoing configuration values.
+    """
+    from .operations import OperatorObservation
+    from loom.timestamps import utc_timestamp
+
+    if role not in {"agent", "coordinator"}:
+        raise QueueConfigError("role must be agent or coordinator")
+    if role == "agent":
+        spec = read_agent_spec(path, env_file=env_file)
+        fingerprint = spec.declaration_digest
+        profiles = cast(Sequence[Mapping[str, object]], spec.declarations["resident_profiles"])
+        identities = [cast(PlainData, profile["descriptor"]) for profile in profiles]
+    else:
+        source, _, payload, _ = _load_protected_config(path, env_file=env_file)
+        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"}, "coordinator service config")
+        _header(payload, "loom.coordinator-service")
+        normalized = dict(_normalize_coordinator_payload(payload))
+        for name in ("deployment_root", "run_store_root"):
+            normalized[name] = str(_path(payload, name, source.parent))
+        _string(payload, "machine_id")
+        _agent_policy(_mapping(payload, "agent_policy"))
+        authority = _mapping(payload, "authority")
+        if authority.get("kind") == "embedded":
+            _required_allowed(authority, {"kind"}, {"state_root"}, "embedded authority")
+            if "state_root" in authority:
+                _path(authority, "state_root", source.parent)
+        elif authority.get("kind") == "https":
+            _exact(authority, {"kind", "url", "service_id", "workspace_id", "tls"}, "HTTPS authority")
+            for key in ("url", "service_id", "workspace_id"):
+                _string(authority, key)
+            tls = _mapping(authority, "tls")
+            _exact(tls, {"ca", "certificate", "private_key"}, "HTTPS authority TLS")
+            for key in tls:
+                _path(tls, key, source.parent)
+        else:
+            raise QueueConfigError("authority kind is unsupported")
+        _slurm_profile_declarations(payload.get("slurm_profiles"))
+        identities = [cast(PlainData, _profile_descriptor(_mapping_value(item, "remote profile")).to_dict()) for item in _sequence(payload, "remote_profiles")]
+        if payload["local_agent"] is not None:
+            reference = _mapping(payload, "local_agent")
+            _exact(reference, {"config", "env_file"}, "local_agent")
+            local_source, _, local, _ = _load_protected_config(_path(reference, "config", source.parent), env_file=None if reference["env_file"] is None else _path(reference, "env_file", source.parent))
+            _required_allowed(local, {"schema_version", "kind", "agent_root", "resident_profiles"}, {"providers", "resources"}, "local agent service config")
+            _header(local, "loom.local-agent-service")
+            _path(local, "agent_root", local_source.parent)
+            _agent_resource_declaration(local.get("resources"))
+            occupancy = _gpu_occupancy_policy(local.get("resources"))
+            if occupancy is not None and local.get("providers") is not None:
+                raise QueueConfigError("NVIDIA occupancy cannot be bypassed by custom providers")
+            profiles = [_resident_profile_declaration(_mapping_value(item, "resident profile"), local_source.parent, "resident profile", preparation=False, preparation_staged=False) for item in _sequence(local, "resident_profiles")]
+            if len(profiles) != 1:
+                raise QueueConfigError("local agent service requires one resident profile")
+            normalized["local_agent"] = {**local, "resident_profiles": profiles}
+            identities.extend(cast(PlainData, profile["descriptor"]) for profile in profiles)
+        # Opaque trusted targets are declarations here. Their actual constructors
+        # own qualification; reading this document must never import them.
+        def targets(value: object) -> None:
+            if isinstance(value, Mapping):
+                if "_target_" in value:
+                    _trusted_target_name(value, "role declaration target")
+                for child in value.values():
+                    targets(child)
+            elif isinstance(value, (tuple, list)):
+                for child in value:
+                    targets(child)
+        targets(normalized)
+        fingerprint = _canonical_fingerprint(normalized)
+    return OperatorObservation("role-declaration", utc_timestamp(), fingerprint, "current", "available", {"role": role, "declaration_fingerprint": fingerprint, "protected_paths": "validated", "profile_identities": identities, "credentials": "redacted", "qualified": False})

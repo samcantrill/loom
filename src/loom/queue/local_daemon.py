@@ -37,6 +37,7 @@ from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
+from .operations import OperatorObservation
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.scheduling import (
     CapacityAtom,
@@ -4186,6 +4187,36 @@ class LocalDaemonOperatorView:
     def status(self) -> DaemonStatus:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.status()
+
+    def observe_status(self) -> "OperatorObservation":
+        """Read accepted coordinator configuration with owner-local freshness."""
+        from .operations import _coordinator_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _coordinator_observation(self._daemon)
+
+    def observe_agent(self, agent_id: str) -> "OperatorObservation":
+        """Read one session, its retained offer and independent drain state."""
+        from .operations import _agent_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _agent_observation(self._daemon, agent_id)
+
+    def observe_assignment(self, assignment_id: str) -> "OperatorObservation":
+        """Read one assignment's coordinator acknowledgement and release proof."""
+        from .operations import _assignment_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _assignment_observation(self._daemon, assignment_id)
+
+    def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Read one authorized exact agent control, including its intent digest."""
+        import hashlib
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        with self._daemon._connection() as conn:
+            row = conn.execute("SELECT request_json, state, result_code, acknowledged FROM agent_controls WHERE operation_id = ?", (operation_id,)).fetchone()
+        if row is None:
+            raise QueueServiceError("managed operation was not found")
+        control = AgentControl.from_value(json.loads(row["request_json"]))
+        self._daemon._authorizer().require_operator(self._principal, control.kind.value, agent_id=control.agent_id, pool=control.pool)
+        return {"operation_id": operation_id, "intent_digest": hashlib.sha256(row["request_json"].encode()).hexdigest(), "state": row["state"], "code": row["result_code"], "acknowledged": bool(row["acknowledged"]), "mutation_outcome": "applied"}
 
     def retire(
         self, operation_id: str, expected_coordinator_id: str

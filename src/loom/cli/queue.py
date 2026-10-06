@@ -52,6 +52,7 @@ def register_subparser(
         help="run an owned GPU test on an initialized, stopped local agent",
     )
     _add_output_options(daemon_check)
+    daemon_check.add_argument("--declaration-only", action="store_true", help="parse protected declarations without execution qualification")
     daemon_check.set_defaults(handler=handle_daemon_check)
     daemon_init = queue_subparsers.add_parser(
         "daemon-init", help="initialize one protected coordinator deployment bundle"
@@ -86,6 +87,7 @@ def register_subparser(
         help="run an owned GPU test on an initialized, stopped agent",
     )
     _add_output_options(agent_check)
+    agent_check.add_argument("--declaration-only", action="store_true", help="parse protected declarations without execution qualification")
     agent_check.set_defaults(handler=handle_agent_check)
     agent_init = queue_subparsers.add_parser(
         "agent-init", help="initialize one protected outbound-agent root"
@@ -134,6 +136,8 @@ def register_subparser(
     ):
         daemon_client = queue_subparsers.add_parser(command, help=help_text)
         _add_client_connection_arguments(daemon_client)
+        if command == "daemon-status":
+            daemon_client.add_argument("--operator", action="store_true")
         if command != "daemon-status":
             daemon_client.add_argument("queue_item_id", metavar="QUEUE_ITEM_ID")
         if command == "daemon-submit":
@@ -196,6 +200,7 @@ def register_subparser(
     )
     _add_client_connection_arguments(agent)
     agent.add_argument("agent_id")
+    agent.add_argument("--operator", action="store_true")
     agent.set_defaults(handler=handle_daemon_agent)
     _add_output_options(agent)
     operation = queue_subparsers.add_parser(
@@ -203,6 +208,7 @@ def register_subparser(
     )
     _add_client_connection_arguments(operation)
     operation.add_argument("operation_id")
+    operation.add_argument("--operator", action="store_true")
     operation.set_defaults(handler=handle_daemon_operation)
     _add_output_options(operation)
     operation_wait = queue_subparsers.add_parser(
@@ -217,7 +223,7 @@ def register_subparser(
         control = queue_subparsers.add_parser(
             f"daemon-agent-{kind}", help=f"{kind} one managed agent"
         )
-        control.add_argument("--endpoint", required=True, type=Path)
+        _add_client_connection_arguments(control)
         control.add_argument("--operation-id", required=True)
         control.add_argument("--agent-id", required=True)
         control.add_argument("--session-id", required=True)
@@ -266,6 +272,21 @@ def register_subparser(
     recovery.add_argument("--request", required=True, type=Path)
     recovery.set_defaults(handler=handle_daemon_recover_unknown)
     _add_output_options(recovery)
+
+    for command, handler in (("daemon-owner", handle_native_owner), ("daemon-upgrade-probe", handle_native_upgrade_probe), ("agent-assignment", handle_local_assignment)):
+        probe = queue_subparsers.add_parser(command, help="read protected native owner evidence without changes")
+        probe.add_argument("--root", required=True, type=Path)
+        if command == "agent-assignment":
+            probe.add_argument("assignment_id")
+        if command == "daemon-owner":
+            probe.add_argument("--expected-root-id")
+        _add_output_options(probe)
+        probe.set_defaults(handler=handler)
+    assignment = queue_subparsers.add_parser("daemon-assignment", help="inspect one assignment and its release proof")
+    _add_client_connection_arguments(assignment)
+    assignment.add_argument("assignment_id")
+    _add_output_options(assignment)
+    assignment.set_defaults(handler=handle_operator_assignment)
 
 
 def handle_daemon_check(namespace: argparse.Namespace) -> int:
@@ -336,6 +357,13 @@ def _handle_role_check(namespace: argparse.Namespace, role: str) -> int:
     from loom.diagnostics.models import PreflightStatus
     from loom.queue.preflight import run_role_preflight
 
+    if getattr(namespace, "declaration_only", False):
+        from loom.queue.deployment import inspect_role_declaration
+        try:
+            result = inspect_role_declaration(namespace.config, role=role, env_file=namespace.env_file)
+        except QueueError as exc:
+            raise _queue_cli_error(exc) from exc
+        return _emit_daemon_payload(namespace, result.to_dict())
     result = run_role_preflight(
         namespace.config,
         role=role,
@@ -597,7 +625,7 @@ def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
 
 def handle_daemon_status(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).status()
+        result = _operator_client(namespace).observe_status() if getattr(namespace, "operator", False) else _daemon_client(namespace).status()
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -633,7 +661,7 @@ def handle_daemon_agents(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_agent(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).agent(namespace.agent_id)
+        result = _operator_client(namespace).observe_agent(namespace.agent_id) if getattr(namespace, "operator", False) else _daemon_client(namespace).agent(namespace.agent_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -641,10 +669,10 @@ def handle_daemon_agent(namespace: argparse.Namespace) -> int:
 
 def handle_daemon_operation(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).operation(namespace.operation_id)
+        result = _operator_client(namespace).observe_control(namespace.operation_id) if getattr(namespace, "operator", False) else _daemon_client(namespace).operation(namespace.operation_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result.to_dict())
+    return _emit_daemon_payload(namespace, result if isinstance(result, Mapping) else result.to_dict())
 
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
@@ -707,7 +735,7 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
             cancel_active=bool(namespace.cancel_active),
             reason=namespace.reason,
         )
-        client = LocalDaemonSocketClient(namespace.endpoint)
+        client = _operator_client(namespace) if namespace.connection is not None or namespace.expected_coordinator_id is not None else LocalDaemonSocketClient(namespace.endpoint)
         result = client.control_agent(control)
         if namespace.agent_control == "reload":
             deadline = time.monotonic() + _AGENT_RELOAD_RECEIPT_WAIT_SECONDS
@@ -1002,3 +1030,33 @@ __all__ = [
     "handle_daemon_prepare",
     "handle_daemon_wait",
 ]
+
+
+def _operator_client(namespace: argparse.Namespace):
+    from loom.coordinator import CoordinatorOperatorClient
+    if namespace.connection is not None:
+        return CoordinatorOperatorClient.from_connection_file(namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id)
+    return CoordinatorOperatorClient.from_unix_socket(namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id)
+
+
+def handle_native_owner(namespace: argparse.Namespace) -> int:
+    from loom.queue.operations import inspect_native_service
+    return _emit_daemon_payload(namespace, inspect_native_service(namespace.root, expected_root_id=namespace.expected_root_id).to_dict())
+
+
+def handle_native_upgrade_probe(namespace: argparse.Namespace) -> int:
+    from loom.queue.operations import probe_upgrade_compatibility
+    return _emit_daemon_payload(namespace, probe_upgrade_compatibility(namespace.root).to_dict())
+
+
+def handle_local_assignment(namespace: argparse.Namespace) -> int:
+    from loom.queue.operations import inspect_local_assignment
+    return _emit_daemon_payload(namespace, inspect_local_assignment(namespace.root, namespace.assignment_id).to_dict())
+
+
+def handle_operator_assignment(namespace: argparse.Namespace) -> int:
+    try:
+        result = _operator_client(namespace).observe_assignment(namespace.assignment_id)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())

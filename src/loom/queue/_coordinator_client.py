@@ -47,6 +47,8 @@ from .run import RunRequest
 class NativeCoordinatorClient:
     """One owner for control request, decode, guard and observation semantics."""
 
+    _handshake_operation = "handshake"
+
     def __init__(
         self,
         transport: ControlTransport,
@@ -192,12 +194,16 @@ class NativeCoordinatorClient:
                 raise QueueServiceError("local daemon request is invalid") from exc
             raise control_error("invalid_request", operation, envelope) from exc
         waiting = waiting or operation in WAIT_OPERATIONS
-        if not self._legacy and operation != "handshake" and negotiate:
+        if not self._legacy and operation not in {"handshake", "operator_handshake"} and negotiate:
             try:
                 # Separate connections renegotiate within this request's budget.
                 description = self._native_call(
-                    "handshake", {}, guard, deadline=bound, waiting=waiting
+                    self._handshake_operation, {}, guard, deadline=bound, waiting=waiting
                 )
+                if operation.startswith("operator_"):
+                    from .operations import OPERATOR_CAPABILITY
+                    if OPERATOR_CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY})
                 requested = envelope.get("request")
                 if operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"} and "artifact-read-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
@@ -220,6 +226,9 @@ class NativeCoordinatorClient:
                     self._expected_coordinator_id = description.coordinator_id
                     envelope["expected_coordinator_id"] = description.coordinator_id
             except CoordinatorClientError as exc:
+                if operation.startswith("operator_") and exc.code == "unsupported":
+                    from .operations import OPERATOR_CAPABILITY
+                    raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY}) from exc
                 raise CoordinatorClientError(
                     exc.code,
                     boundary=exc.boundary,
@@ -233,7 +242,7 @@ class NativeCoordinatorClient:
                 ) from exc
         value = self._exchange(operation, envelope, bound, waiting=waiting)
         try:
-            if operation == "handshake":
+            if operation in {"handshake", "operator_handshake"}:
                 capabilities = value.get("capabilities")
                 version = value.get("protocol_version")
                 if (
@@ -242,7 +251,7 @@ class NativeCoordinatorClient:
                 ) or (isinstance(version, str) and version != "1"):
                     raise control_error("unsupported", operation, envelope)
             decoded = decode_result(operation, value)
-            if operation == "handshake":
+            if operation in {"handshake", "operator_handshake"}:
                 self._last_connection = cast(CoordinatorConnectionDescription, decoded)
             return decoded
         except CoordinatorClientError:
@@ -262,7 +271,7 @@ class NativeCoordinatorClient:
         """Observe protocol, coordinator identity and currently enabled aliases."""
         return cast(
             CoordinatorConnectionDescription,
-            self._native_call("handshake", {}, expected_coordinator_id),
+            self._native_call(self._handshake_operation, {}, expected_coordinator_id),
         )
 
     def status(self, *, expected_coordinator_id: str | None = None) -> DaemonStatus:
