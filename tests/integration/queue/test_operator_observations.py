@@ -17,6 +17,7 @@ from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue.agent_sessions import (
     AgentControl,
     AgentControlKind,
+    AgentControlEffect,
     AgentOffer,
     AgentPolicyConfig,
     LocalOwnerOperatorPolicy,
@@ -42,7 +43,8 @@ DEVICE = GpuDeviceDescriptor("gpu0", "synthetic", 1024)
 
 
 @pytest.fixture
-def owner(tmp_path):
+def owner(tmp_path, request):
+    actions = getattr(request, "param", ("drain",))
     policy = AgentPolicyConfig(
         agents=(replace(_policy().agents[0], gpu_devices=(DEVICE,)),),
         principals=(
@@ -55,7 +57,7 @@ def owner(tmp_path):
                 pools=("default",),
             ),
         ),
-        local_owner=LocalOwnerOperatorPolicy(("drain",), ("agent-a",), ("default",)),
+        local_owner=LocalOwnerOperatorPolicy(actions, ("agent-a",), ("default",)),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -161,6 +163,42 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
     assert status.value["scheduling_fingerprint"].startswith("scheduling-")
     assert dump(daemon.config.control_database) == before
     assert set(daemon.config.coordinator_root.rglob("*")) == files
+
+
+
+@pytest.mark.parametrize("owner", [("drain", "resume")], indirect=True)
+@pytest.mark.parametrize("outcome", ["pending", "applying", "retained_work", "reload_rejected", "applied"])
+def test_resume_preserves_drain_until_agent_confirms_application(owner, outcome):
+    daemon, agent, session, operator = owner
+    offer(agent, session)
+    operator.control_agent(drain(session))
+    assert agent.next_control(session.session_id).operation_id == "drain-1"
+    agent.acknowledge_control(
+        session.session_id,
+        AgentControlEffect("drain-1", "applied", session.config_revision,
+                           session.inventory_revision, "drained-availability"),
+    )
+    assert operator.observe_agent(session.agent_id).value["drained"] is True
+    operator.control_agent(
+        replace(drain(session, operation_id="resume-1"), kind=AgentControlKind.RESUME)
+    )
+    assert operator.observe_agent(session.agent_id).value["drained"] is True
+    if outcome != "pending":
+        assert agent.next_control(session.session_id).operation_id == "resume-1"
+    if outcome not in {"pending", "applying"}:
+        agent.acknowledge_control(
+            session.session_id,
+            AgentControlEffect(
+                "resume-1", outcome, session.config_revision, session.inventory_revision,
+                "resumed-availability" if outcome == "applied" else "drained-availability",
+            ),
+        )
+    before = dump(daemon.config.control_database)
+    observation = operator.observe_agent(session.agent_id)
+    assert observation.value["drained"] is (outcome != "applied")
+    state = {"pending": "pending_delivery", "applying": "applying", "applied": "applied"}.get(outcome, "failed")
+    assert observation.value["control"]["state"] == state
+    assert dump(daemon.config.control_database) == before
 
 
 def test_unavailable_and_offline_probes_create_nothing(tmp_path):
@@ -354,6 +392,31 @@ def test_role_declarations_are_protected_redacted_and_inert(
 
     with pytest.raises(QueueError):
         deployment.inspect_role_declaration(source, role=role)
+
+
+
+def test_coordinator_declaration_rejects_incomplete_agent_server(tmp_path, monkeypatch):
+    import yaml
+    from loom.cli.main import main
+    from loom.queue import deployment
+    from loom.queue.errors import QueueConfigError
+    from tests.unit.loom.queue.test_deployment import _coordinator_config
+
+    source = _coordinator_config(tmp_path)
+    payload = yaml.safe_load(source.read_text())
+    payload["agent_server"] = {"port": 443}
+    source.write_text(yaml.safe_dump(payload))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("declaration inspection qualified execution")
+
+    monkeypatch.setattr(deployment, "_resident_profile", forbidden)
+    monkeypatch.setattr(deployment, "_trusted_target", forbidden)
+    before = set(tmp_path.rglob("*"))
+    with pytest.raises(QueueConfigError, match="agent_server"):
+        deployment.inspect_role_declaration(source, role="coordinator")
+    assert main(["queue", "daemon-check", "--config", str(source), "--declaration-only"]) != 0
+    assert set(tmp_path.rglob("*")) == before
 
 
 def test_operator_cli_and_old_peer_capability_refusal(owner, monkeypatch, capsys):

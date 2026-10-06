@@ -19,6 +19,8 @@ SQL fallback. Existing client methods and their response shapes are unchanged.
   A connected agent can have CPU capacity while GPU capacity is externally occupied.
   Connectivity is the coordinator's current-epoch, unexpired offer evidence; it
   does not prove host process ownership. Drain withdrawal does not imply disconnect.
+  A pending or rejected resume preserves the preceding drain state; it clears
+  only after the agent acknowledges an applied resume.
 - `observe_assignment(assignment_id)` joins exactly one coordinator assignment
   with terminal acknowledgement, containment-control and release evidence. It
   never returns transfer paths, retirement secrets or an unbounded journal.

@@ -128,6 +128,15 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
             "SELECT request_json, state, result_code, acknowledged FROM agent_controls WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
             (agent.session_id,),
         ).fetchone()
+        drain_state = conn.execute(
+            "SELECT json_extract(request_json, '$.kind') AS kind "
+            "FROM agent_controls WHERE session_id = ? AND "
+            "(json_extract(request_json, '$.kind') IN ('drain', 'reload') OR "
+            "(json_extract(request_json, '$.kind') = 'resume' "
+            "AND state = 'applied' AND acknowledged = 1)) "
+            "ORDER BY rowid DESC LIMIT 1",
+            (agent.session_id,),
+        ).fetchone()
     assert session is not None
     offer = (
         None if row is None else AgentOffer.from_value(json.loads(row["offer_json"]))
@@ -140,7 +149,8 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
         and row["expires_at"] >= now
     )
     control_value = None if control is None else json.loads(control["request_json"])
-    drained = control_value is not None and control_value["kind"] in {"drain", "reload"}
+    # Resume intent does not undo an existing drain until the agent confirms it.
+    drained = drain_state is not None and drain_state["kind"] in {"drain", "reload"}
     value: dict[str, PlainData] = {
         **agent.to_dict(),
         "agent_root_id": session["agent_root_id"],

@@ -2537,6 +2537,8 @@ def inspect_role_declaration(
         _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"}, "coordinator service config")
         _header(payload, "loom.coordinator-service")
         normalized = dict(_normalize_coordinator_payload(payload))
+        if payload["agent_server"] is not None:
+            _agent_server(_mapping(payload, "agent_server"), source.parent)
         for name in ("deployment_root", "run_store_root"):
             normalized[name] = str(_path(payload, name, source.parent))
         _string(payload, "machine_id")
