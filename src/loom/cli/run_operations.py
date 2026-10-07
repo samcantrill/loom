@@ -255,3 +255,29 @@ def handle_cancel(namespace: argparse.Namespace) -> int:
         sys.stdout.write(f"resolved target: {payload['resolved_target']}; scope: {payload['scope']}\n")
         sys.stdout.write("acknowledgement does not establish containment; observe the native cancellation operation\n")
     return int(ExitCode.RUN_STATE if failed else ExitCode.SUCCESS)
+
+
+def handle_explain(namespace: argparse.Namespace) -> int:
+    """Read one bounded native explanation without starting a service."""
+    from loom.deployment import load_deployment, connect_deployment
+    from loom.queue.errors import QueueError
+
+    try:
+        _deadline(namespace)
+        selection = load_deployment(namespace.deployment)
+        with connect_deployment(selection) as client:
+            result = client.explain_run(
+                namespace.operation_id, timeout_seconds=namespace.timeout_seconds or 25.0,
+                deployment=namespace.deployment,
+            )
+    except QueueError as exc:
+        raise operation_error(exc, namespace.operation_id, namespace.deployment, action="runs.explain") from exc
+    missing = result.summary == "not_found"
+    if namespace.output_format == "json":
+        sys.stdout.write(format_json_envelope(
+            schema_version="loom.cli.runs.explain.v1", ok=not missing,
+            warnings=[], payload_name="result", payload=result.to_dict(),
+        ))
+    else:
+        sys.stdout.write(result.format_text() + "\n")
+    return int(ExitCode.RUN_STATE if missing else ExitCode.SUCCESS)

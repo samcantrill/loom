@@ -2242,7 +2242,39 @@ class LocalDaemon:
         )
         if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
-        owners = views[0]
+        owners = dict(views[0])
+        # Extend the existing loose owner detail, not the strict inspection wire.
+        assignment = owners.get("assignment")
+        if isinstance(assignment, Mapping):
+            from .operations import _agent_observation
+
+            rows = assignment.get("assignments", ())
+            agent_ids = sorted({
+                cast(str, row["agent_id"]) for row in rows
+                if isinstance(row, Mapping) and isinstance(row.get("agent_id"), str)
+                and row["agent_id"] != self._agent_id
+            }) if isinstance(rows, (list, tuple)) else []
+            sessions: list[PlainData] = []
+            for agent_id in agent_ids[:_MAX_ADMISSION_PAGE_SIZE]:
+                try:
+                    observed = _agent_observation(self, agent_id)
+                except Exception:
+                    sessions.append({
+                        "owner": f"agent-session:{agent_id}", "availability": "unavailable",
+                        "state": "unavailable", "freshness": "unavailable",
+                        "diagnostic": "owner_unavailable",
+                    })
+                else:
+                    drained, connected = observed.value["drained"], observed.value["connected"]
+                    sessions.append({
+                        "owner": f"agent-session:{agent_id}", "availability": observed.availability,
+                        "state": "drained" if drained else "connected" if connected else "disconnected",
+                        "revision": observed.revision, "observed_at": observed.observed_at,
+                        "freshness": observed.freshness,
+                        "diagnostic": "agent_disconnected_or_drained" if drained or not connected else None,
+                    })
+            owners["agent_sessions"] = sessions
+            owners["agent_sessions_truncated"] = len(agent_ids) > len(sessions)
         authority = cast(Mapping[str, PlainData], owners["authority"])
         return LocalDaemonAdmissionDetail(
             admission=admission,

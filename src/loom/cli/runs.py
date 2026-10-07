@@ -52,9 +52,9 @@ def register_subparser(
     actions = parser.add_subparsers(dest="runs_action", metavar="ACTION")
     actions.required = True
 
-    from .run_operations import handle_follow, handle_cancel
+    from .run_operations import handle_follow, handle_cancel, handle_explain
 
-    for name, handler in (("follow", handle_follow), ("cancel", handle_cancel)):
+    for name, handler in (("follow", handle_follow), ("cancel", handle_cancel), ("explain", handle_explain)):
         operation = actions.add_parser(name, help=f"{name} an existing native run operation")
         operation.add_argument("--operation-id", required=True)
         operation.add_argument("--deployment", required=True, metavar="PATH")

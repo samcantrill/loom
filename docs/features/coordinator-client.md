@@ -354,3 +354,40 @@ queue/runtime modules do not import the facade or an MCP SDK. The native facade 
 
 For explicitly authorized configuration, agent, ownership and settlement facts,
 see [native operator observations](operator-observations.md).
+
+### Bounded run explanations
+
+`CoordinatorClient.explain_run(operation_id, timeout_seconds=25)` reads one
+operation and its target inspection without initializing services, waiting for
+completion, cancelling or submitting. `loom runs explain --operation-id ID
+--deployment PATH` uses this operation; `--format json` returns one JSON envelope.
+An unknown operation remains `not_found`, including an unretained maintenance
+refusal. A previously received refusal can be explained with
+`loom.diagnostics.run_explanation.explain_run(None, operation_id=ID,
+error_code="maintenance_in_progress")`; the current gate cannot establish a
+past refusal.
+
+`loom.diagnostics.run_explanation.explain_run(inspection)` is the shared pure
+projection for Python, CLI inspection text and existing MCP inspection text.
+MCP structured inspection retains its native success/failure union. Raw
+inspection v1 encoding is unchanged. `RunObservation.detail` retains the existing
+native admission owner detail for explanation only; its ordinary observation
+serialization stays compatible. The pure projection also accepts that detail
+explicitly as `explain_run(inspection, detail=detail)`. The existing MCP inspection
+binding reads this detail within the same deadline and keeps unavailable or denied
+supplemental evidence visible without discarding the authorized inspection.
+
+Bounded explanations retain native scheduling, assignment and result states in
+the same owner-labelled axis shape. Extra assigned-agent session facts come from
+the existing native session owner; ordinary consumers receive no private SQL or
+operator control authority. Truncation is explicit. Raw journals, private paths
+and profile configuration are not copied into explanation facts.
+
+Reasons distinguish waiting for capacity, incompatible profiles, disconnected or
+drained assigned agents, preparation, unknown process ownership, publication,
+cancellation containment, maintenance refusal and unavailable owners. The
+retained native code remains evidence; a presentation reason is not a lifecycle
+transition. Suggested actions never execute recovery. Missing revision/time and
+unknown or stale freshness stay visible. Independently read owners do not form
+an atomic snapshot, and a successful logical result remains successful while
+cleanup is pending or a later owner cannot be reached. No remote logs are needed.
