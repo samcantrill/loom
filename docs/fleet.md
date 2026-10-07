@@ -1,4 +1,4 @@
-# Fleet configuration and read-only administration
+# Fleet configuration, administration and self-tests
 
 Install `loom[fleet]` in the operator's Python 3.12 environment. Fleet is generic:
 service software, workload profiles and site declarations have separate owners.
@@ -71,8 +71,9 @@ and remote storage remain explicitly unavailable until target-host tooling
 supplies those observations. This phase therefore never reports ready: preflight
 returns **2** for failed local validation and **3** for incomplete evidence even
 when all local checks pass. Parse the versioned JSON facts for details; ordinary
-CLI/configuration errors remain nonzero. Self-test, setup and upgrade are separate
-operations and are not provided by this command set.
+CLI/configuration errors remain nonzero. Deliberate self-tests use the native
+execution path described below. Setup and upgrade automation are separate
+operations and are not yet provided.
 
 ## Immutable service bundles
 
@@ -138,3 +139,72 @@ A `loom.coordinator-client` file remains a connection file, not a deployment
 selection. Old selections are never overwritten: choose a new versioned output
 for a new source/profile binding. Export is an explicit local write; it does not
 prove remote profile installation, qualification or authorization.
+
+## Deliberate infrastructure self-tests
+
+`self-test` runs finite native jobs against an explicitly selected existing agent
+and shared workload profile. It starts no service and performs no installation.
+The profile's workload must contain `loom.fleet.probes.ProbeStage` (and Torch with
+CUDA UUID properties for the optional GPU check), support native preparation,
+and declare shared publication storage. For container execution, the captured
+snapshot root must lie beneath exactly one declared shared root so native
+preparation can mount it. Its source must contain a minimal `fleet-check.yaml`
+with `pipeline` and `runtime` mappings. Fleet replaces those
+mappings with the fixed probe configuration using ordinary captured overrides.
+A project preparation processor, when configured, must accept those generic
+stages. Normal native policy and maintenance admission remain authoritative.
+
+```sh
+loom fleet self-test --fleet lab --agent gpu01 \
+  --deployment /PRIVATE/client-deployment.yaml \
+  --connection /PRIVATE/operator-connection.yaml --checks cpu,storage,gpu
+loom fleet self-test --fleet lab --operation-id check-RETURNED-ID
+```
+
+The deployment and operator connection must pin the same coordinator. They use
+separate client and operator credentials; self-tests grant no new privileges.
+The profile comes from the deployment's explicit native preparation binding.
+Multiple inventory agents require `--agent`. Default manual checks are CPU and
+storage; GPU is explicit and requires declared GPUs. A subset only establishes
+the requested checks, never fleet-wide readiness or scientific qualification.
+
+CPU sums integers 0 through 9999, expecting 49,995,000. Storage publishes exactly
+65 MiB with byte `i` equal to `i % 251`. The operator fetches the complete native
+shared declaration and independently checks all bytes and the complete digest.
+GPU multiplies float32 matrices `[[1,2],[3,4]]` and `[[5,6],[7,8]]` on CUDA device
+zero, synchronizes, and expects `[[19,22],[43,50]]`. Its observed CUDA UUID must
+match the actual native parent-owned launch binding. Torch imports only inside
+the workload function. Missing Torch or UUID observation yields
+`unsupported_check`; environment/model-name assertions cannot qualify a GPU.
+
+Success also requires matching run, stage, agent, session and immutable profile,
+native terminal acknowledgement, exact provider-release proof, and a current
+post-release offer. Native terminal success alone is insufficient. External
+GPU occupancy or retained claims report waiting. GPU observations are limited
+to infrastructure and cannot establish scientific accuracy or throughput.
+
+Protected receipts live beside the inventory in `checks/<operation-id>` outside
+selected source captures. Immutable native requests and dispatch markers are
+fsynced before sending. Reconnection observes the exact IDs; if the native owner
+has no accepted request, it replays only the retained identical request under
+native idempotency. Selected requests are dispatched before result downloads,
+so a storage download deadline cannot prevent another check from reaching the
+native queue. Native admission and capacity still govern when each job runs.
+A confirmed failed result stays failed. An explicit new
+attempt uses `--retry-of check-FAILED-ID` together with the original selection
+arguments and receives new identities linked to that failure. It does not retry
+old work. A changed session/profile cannot qualify an old operation.
+
+`--timeout` bounds observation and detaches without cancellation or replacement.
+Each stage uses the native 120-second execution timeout; timeout does not prove
+process death or release. Keep the printed IDs to observe remaining work.
+Version-one JSON and text report `passed`, `failed`, `waiting`, `unsupported`, or
+`not_requested` for each check, with native failure codes and the next action.
+Exit codes are 0 (requested checks passed), 1 (confirmed failure), 2
+(waiting/unknown), and 3 (unsupported). `ready` remains false because these checks
+alone do not qualify a complete installation.
+
+Older native reports without parent-owned launch UUID evidence remain
+incomplete. Current reports carry this optional evidence through the existing
+native result channel; the operator projection never substitutes requested
+resources or reads worker-authored metadata as native allocation proof.

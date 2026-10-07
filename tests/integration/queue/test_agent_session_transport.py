@@ -8099,6 +8099,12 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
         assignment = operator.observe_assignment(cast(str, actual[0].value["assignment_id"]))
         assert assignment.value["claim_id"] == actual[0].value["claim_id"]
         assert assignment.value["released"] is True
+        if remote:
+            claim = cast(Mapping[str, Any], assignment.value["actual_claims"])
+            assert claim["availability"] == "available"
+            assert tuple(claim["actual_gpu_uuids"]) == (bindings[1],)
+            assert claim["source"] == "native_supervisor_launch"
+            assert claim["gpu_capacity_keys"]
         assert "retirement_secret" not in json.dumps(assignment.to_dict())
         wait_for_reasons(("available", "available"))
         failed = True

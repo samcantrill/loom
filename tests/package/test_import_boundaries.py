@@ -2027,11 +2027,17 @@ def test_fleet_help_and_core_imports_do_not_load_administration_dependencies():
         from loom.cli.main import main
         assert main(['fleet', '--help']) == 0
         assert main(['fleet', 'preflight', '--help']) == 0
+        assert main(['fleet', 'self-test', '--help']) == 0
         for forbidden in ('loom.fleet.administration', 'loom.fleet.configuration',
-                          'loom.fleet.releases', 'yaml', 'dotenv', 'packaging',
+                          'loom.fleet.releases', 'loom.fleet.self_tests', 'loom.fleet.probes', 'yaml', 'dotenv', 'packaging',
                           'weave', 'torch', 'numpy'):
             assert forbidden not in sys.modules, forbidden
         """
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_probe_import_does_not_load_workload_frameworks():
+    result = subprocess.run([sys.executable, "-c", "import sys; import loom.fleet.probes; assert not any(name in sys.modules for name in ('torch', 'numpy', 'yaml', 'weave'))"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
