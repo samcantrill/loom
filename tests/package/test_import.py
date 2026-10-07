@@ -181,3 +181,15 @@ def test_weave_dependency_source_is_revision_pinned_and_locked() -> None:
     assert len(weave_requirements) == 2
     assert all(requirement["git"] == pinned_url for requirement in weave_requirements)
     assert weave_package["source"]["git"] == f"{pinned_url}#{revision}"
+
+
+def test_fleet_extra_is_optional_and_distributed():
+    from importlib.metadata import metadata
+
+    installed = metadata("loom")
+    assert "fleet" in installed.get_all("Provides-Extra", [])
+    assert files("loom").joinpath("fleet", "configuration.py").is_file()
+    assert files("loom").joinpath("cli", "fleet.py").is_file()
+    project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+    assert "fleet" in project["optional-dependencies"]
+    assert not any("torch" in value.lower() or "paramiko" in value.lower() for value in project["dependencies"] + project["optional-dependencies"]["fleet"])
