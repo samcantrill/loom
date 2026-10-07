@@ -2016,3 +2016,22 @@ def test_explicit_mcp_without_extra_has_actionable_stderr() -> None:
     assert result.stdout == ""
     assert "loom[mcp]" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_fleet_help_and_core_imports_do_not_load_administration_dependencies():
+    script = dedent(
+        """
+        import sys
+        import loom
+        import loom.fleet
+        from loom.cli.main import main
+        assert main(['fleet', '--help']) == 0
+        assert main(['fleet', 'preflight', '--help']) == 0
+        for forbidden in ('loom.fleet.administration', 'loom.fleet.configuration',
+                          'loom.fleet.releases', 'yaml', 'dotenv', 'packaging',
+                          'weave', 'torch', 'numpy'):
+            assert forbidden not in sys.modules, forbidden
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

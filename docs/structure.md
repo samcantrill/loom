@@ -1453,3 +1453,12 @@ run/coordinator binding. It preserves identity checks and guarded-recovery
 mutation restrictions while the per-run store remains the lifecycle and output
 commit authority. The original scoped-adapter import remains available for its
 current consumers. The extraction adds no store, process or scheduling policy.
+
+## Fleet administration
+
+`loom.fleet` owns optional inventory, immutable service-bundle verification and
+bounded operator observations. `loom.cli.fleet` registers import-light commands;
+implementation imports occur only on dispatch. Native `loom.queue.deployment`
+continues to own protected roles and `loom.deployment` owns connection-only
+selection export. Fleet consumes native projections and never reads native SQL
+or imports workload factories. See [Fleet administration](fleet.md).

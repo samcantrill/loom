@@ -151,6 +151,35 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
     )
 
 
+def export_connection_deployment(selection: DeploymentSelection, destination: str | Path) -> Path:
+    """Write a new protected connection-only selection using native source encoding.
+
+    The caller selects a versioned destination. Existing bytes are never replaced;
+    connection identity, immutable source/profile and timing policy are retained.
+    No local role, creation binding, service initialization or network call is
+    exported. A protected native connection with a pinned coordinator is required.
+    """
+    if selection.connection is None or load_coordinator_connection_file(selection.connection).expected_coordinator_id is None:
+        raise QueueConfigError("export requires a pinned native coordinator connection")
+    path = Path(destination).absolute()
+    if not path.parent.is_dir() or path.parent.stat().st_uid != os.getuid() or path.parent.stat().st_mode & 0o077:
+        raise QueueConfigError("export directory must exist and be owner-protected")
+    value = {
+        "schema_version": 1, "kind": "loom.deployment",
+        "connection": str(selection.connection.resolve()),
+        "preparation": {"source": selection.source.to_dict(), "profile": selection.preparation_profile},
+        "startup_seconds": selection.startup_seconds, "wait_seconds": selection.wait_seconds,
+    }
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise QueueConflictError("deployment export exists; choose a new versioned path") from exc
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+    return path
+
+
 def connect_deployment(selection: DeploymentSelection) -> CoordinatorClient:
     """Resolve the protected owner without creating roots or starting services.
 
