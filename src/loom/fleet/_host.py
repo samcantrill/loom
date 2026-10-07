@@ -213,6 +213,10 @@ def prepare(request, repeated):
         if certificate.exists():
             credentials.validate_certificate(certificate, None, key=key)
             return {"certificate": certificate.read_text(), "csr": None}
+        if Path(request["root"]).exists():
+            raise QueueConflictError(
+                "bound agent credentials unavailable; no replacement"
+            )
         if repeated and not key.exists():
             raise QueueConflictError(
                 "dispatched credential generation has no retained key"

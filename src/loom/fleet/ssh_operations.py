@@ -336,7 +336,32 @@ class _Operation:
         self.receipts = directory / "steps"
         protected_directory(self.receipts)
 
+    def recheck_composed(self, pending_inputs=None):
+        updates_path = self.directory / "accepted-inputs.json"
+        updates = read(updates_path) if updates_path.exists() else {}
+        accepted = {**updates, **(pending_inputs or {})}
+        for name, row in self.intent["hosts"].items():
+            path = Path(row["config"])
+            expected_hash = accepted.get(str(path), self.intent["inputs"][str(path)])
+            # A changed top file may be a retained native publication awaiting
+            # its receipt. call() reconciles that exact publication before the
+            # ordinary byte check; unchanged top files cannot hide include edits.
+            if _file_hash(path) != expected_hash:
+                continue
+            expected = (
+                read(path)
+                if str(path) in accepted
+                else self.intent["declarations"][name]
+            )
+            current = _load_protected_config(
+                path,
+                env_file=None if row["env_file"] is None else Path(row["env_file"]),
+            )[2]
+            if current != expected:
+                raise QueueConflictError("composed role changed since operation intent")
+
     def recheck(self, pending_inputs=None):
+        self.recheck_composed(pending_inputs)
         updates = (
             read(self.directory / "accepted-inputs.json")
             if (self.directory / "accepted-inputs.json").exists()
@@ -355,6 +380,7 @@ class _Operation:
             raise QueueConflictError("immutable service bundle changed")
 
     def call(self, name, action, **values):
+        self.recheck_composed()
         key = (
             name
             + "-"
@@ -439,6 +465,7 @@ class _Operation:
         return response
 
     def accept_update(self, name, response, directory):
+        self.recheck_composed()
         marker = directory / "local-input.json"
         if marker.exists() or "declaration" not in response:
             return
@@ -520,6 +547,16 @@ def apply(
         )
 
 
+def _normalized_checks(selection):
+    if selection is None:
+        return None
+    result = {key: value for key, value in selection.items() if value is not None}
+    for key in ("deployment", "operator_connection"):
+        if key in result:
+            result[key] = str(Path(result[key]).resolve())
+    return result
+
+
 def _apply_locked(
     inventory,
     directory,
@@ -531,6 +568,7 @@ def _apply_locked(
     resume,
     check_selection,
 ):
+    check_selection = _normalized_checks(check_selection)
     if not (directory / "intent.json").exists():
         if resume:
             raise QueueConfigError("unknown administrative operation; cannot resume")
@@ -587,8 +625,19 @@ def _apply_locked(
                 n: (r["host"], r["config"], r["root"])
                 for n, r in intent["hosts"].items()
             }
-            if not same_hosts or (
-                issuer is not None and str(issuer) != intent["issuer"]
+            same_checks = (
+                check_selection is None
+                or check_selection == _normalized_checks(intent["check_selection"])
+            )
+            same_environment = all(
+                row["env_file"] == intent["hosts"][name]["env_file"]
+                for name, row in rows.items()
+            )
+            if (
+                not same_hosts
+                or not same_checks
+                or not same_environment
+                or (issuer is not None and str(issuer) != intent["issuer"])
             ):
                 raise QueueConflictError(
                     "operation ID already names different selected inputs"

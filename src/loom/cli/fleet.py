@@ -266,6 +266,17 @@ def handle(namespace: argparse.Namespace) -> int:
             )
         for name, facts in result.get("hosts", {}).items():
             print(f"{name}: not qualified")
+            if "host" in facts:
+                print(
+                    f"  alias: {facts['host']}; dependency: {facts.get('dependency', False)}"
+                )
+            for field in ("actions", "conflict", "unavailable"):
+                if field in facts:
+                    value = facts[field]
+                    print(
+                        f"  {field}: "
+                        + ("; ".join(value) if isinstance(value, list) else str(value))
+                    )
             for kind, fact in facts.items():
                 if isinstance(fact, dict):
                     print(

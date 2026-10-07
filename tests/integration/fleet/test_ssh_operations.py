@@ -437,7 +437,7 @@ def site(tmp_path, bundle, endpoint):
         shutil.rmtree(base)
 
 
-def test_fresh_setup_repeat_and_selected_add_host(site):
+def test_fresh_setup_repeat_and_selected_add_host(site, capsys):
     inventory, base, selection = site
     preview = plan(inventory, issuer=base / "issuer")
     assert all("unavailable" not in row for row in preview["hosts"].values()), preview
@@ -487,6 +487,31 @@ def test_fresh_setup_repeat_and_selected_add_host(site):
         == result["checks"]["worker"]["operation_id"]
     )
     assert operation_status(inventory, "fresh")["outcome"] == "complete"
+    from loom.queue.errors import QueueConflictError
+
+    for field, replacement in (
+        ("deployment", str(inventory.path.parent / "other-deployment.json")),
+        ("config", "other.yaml"),
+        ("operator_connection", str(inventory.path.parent / "other-operator.json")),
+        ("client_credential_id", "other-client"),
+        ("operator_credential_id", "other-operator"),
+    ):
+        with pytest.raises(QueueConflictError, match="different selected inputs"):
+            apply(
+                inventory,
+                operation_id="fresh",
+                check_selection={**selection, field: replacement},
+            )
+    different_environment = inventory.path.parent / "different.env"
+    different_environment.write_text("UNUSED_FLEET_VALUE=changed\n")
+    different_environment.chmod(0o600)
+    with pytest.raises(QueueConflictError, match="different selected inputs"):
+        apply(
+            inventory,
+            operation_id="fresh",
+            check_selection=selection,
+            env_file=different_environment,
+        )
     value = json.loads(inventory.path.read_text())
     value["agents"]["worker2"] = {"host": "worker2", "config": "worker2.json"}
     write(inventory.path, value)
@@ -530,6 +555,40 @@ def test_fresh_setup_repeat_and_selected_add_host(site):
     assert added["identities"]["worker2"] != first["worker"]
     from loom.queue.operations import inspect_native_service
 
+    assert inspect_native_service(base / "worker").owner == first["worker"]
+    from loom.cli.main import main
+
+    release_path = inventory.runtime_release
+    original_release = release_path.read_bytes()
+    release_path.write_bytes(original_release + b"\n")
+    try:
+        assert (
+            main(["fleet", "plan", "--fleet", str(inventory.path), "--hosts", "worker"])
+            == 0
+        )
+    finally:
+        release_path.write_bytes(original_release)
+    assert (
+        "conflict: service release change requires explicit upgrade"
+        in capsys.readouterr().out
+    )
+    shutil.rmtree(base / "worker-tls")
+    refused = apply(
+        updated,
+        operation_id="missing-bound-credentials",
+        hosts=["worker"],
+        issuer=base / "issuer",
+        check_selection={
+            "deployment": result["deployment"],
+            "operator_connection": result["operator_connection"],
+            "config": "pipeline.yaml",
+        },
+    )
+    assert (
+        refused["outcome"] == "blocked"
+        and "bound agent credentials" in refused["reason"]
+    )
+    assert not (base / "worker-tls").exists()
     assert inspect_native_service(base / "worker").owner == first["worker"]
 
 
@@ -700,7 +759,7 @@ def test_preflight_reachable_refusals_are_read_only(site):
     assert not list(base.glob(".loom-fleet-*"))
 
 
-def test_unavailable_ssh_and_network_state_roots_create_nothing(site, endpoint):
+def test_unavailable_ssh_and_network_state_roots_create_nothing(site, endpoint, capsys):
     inventory, base, selection = site
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -714,6 +773,13 @@ def test_unavailable_ssh_and_network_state_roots_create_nothing(site, endpoint):
     write(inventory.path, value)
     unavailable = plan(load_inventory(inventory.path), hosts=["worker"])
     assert "unavailable" in unavailable["hosts"]["worker"]
+    from loom.cli.main import main
+
+    assert (
+        main(["fleet", "plan", "--fleet", str(inventory.path), "--hosts", "worker"])
+        == 0
+    )
+    assert "unavailable: SSH returned no native receipt" in capsys.readouterr().out
     assert not list(base.glob(".loom-fleet-*"))
     value["agents"]["worker"]["host"] = "worker"
     write(inventory.path, value)
@@ -790,3 +856,54 @@ def test_native_enrollment_preserves_ceiling_and_declared_gpu_subset(site, monke
             "*/checks/*/intent.json"
         )
     )
+
+
+def test_included_role_edit_after_preparation_refuses_resume(site, monkeypatch, capsys):
+    import loom.fleet.ssh_operations as operations
+    from loom.cli.main import main
+
+    inventory, base, selection = site
+    worker = inventory.hosts[1].config
+    authored = json.loads(worker.read_text())
+    profile = authored["resident_profiles"][0]
+    included = write(worker.parent / "included-agent.yaml", authored)
+    write(worker, {"_include_": included.name})
+    assert (
+        main(["fleet", "plan", "--fleet", str(inventory.path), "--hosts", "worker"])
+        == 0
+    )
+    rendered = capsys.readouterr().out
+    assert "alias: control; dependency: True" in rendered
+    assert "alias: worker; dependency: False" in rendered
+    assert "actions: verify immutable candidate" in rendered
+    transport = operations.ssh
+    prepared = False
+
+    def interrupted(host, request):
+        nonlocal prepared
+        reply = transport(host, request)
+        if (
+            request["action"] == "prepare"
+            and request["name"] == "worker"
+            and not prepared
+        ):
+            prepared = True
+            raise operations.SshUnavailable("lost worker preparation reply")
+        return reply
+
+    monkeypatch.setattr(operations, "ssh", interrupted)
+    result = apply(
+        inventory,
+        operation_id="included",
+        issuer=base / "issuer",
+        check_selection=selection,
+    )
+    assert result["outcome"] == "waiting" and prepared
+    top_bytes = worker.read_bytes()
+    profile["cpu_capacity"] += 1
+    write(included, authored)
+    result = apply(inventory, operation_id="included", resume=True)
+    assert (
+        result["outcome"] == "blocked" and "composed role changed" in result["reason"]
+    )
+    assert worker.read_bytes() == top_bytes and not (base / "worker").exists()
