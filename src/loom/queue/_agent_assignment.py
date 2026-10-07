@@ -1194,4 +1194,3 @@ def _start_once_steps(journal, assignment_id, execution_id, launcher, *, start_f
         journal._set_state(assignment_id, AssignmentState.START_UNKNOWN)
         raise
     return journal._complete_process_start(assignment_id, execution_id, process_id, start_failure)
-
