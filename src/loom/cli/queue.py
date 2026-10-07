@@ -108,6 +108,7 @@ def register_subparser(
         "agent-serve", help="serve one initialized outbound-agent root"
     )
     _add_role_config_arguments(agent_serve)
+    agent_serve.add_argument("--expected-coordinator-id", help="pin the native coordinator during handshake")
     _add_output_options(agent_serve)
     agent_serve.set_defaults(handler=handle_agent_serve)
     retirement = queue_subparsers.add_parser(
@@ -524,6 +525,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         run_outbound_agent_service(
             service,
             stop=stop,
+            expected_coordinator_id=getattr(namespace, "expected_coordinator_id", None),
             trusted_config_loader=lambda: load_outbound_agent_service_config(
                 service.source_path, env_file=service.environment_path
             ),
