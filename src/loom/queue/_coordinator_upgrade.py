@@ -37,7 +37,7 @@ def upgrade_coordinator_root(config: LocalDaemonConfig) -> tuple[str, int]:
         try:
             with sqlite3.connect(database) as conn:
                 version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-                if version not in {12, 15, 16, 17, _COORDINATOR_SCHEMA_VERSION}:
+                if version not in {12, 15, 16, 17, 18, _COORDINATOR_SCHEMA_VERSION}:
                     raise QueueStorageError("coordinator root schema cannot be upgraded")
                 coordinator_id = _open_root(root, role="coordinator", schema_version=version)
                 _validate_deployment_binding(config, coordinator_id=coordinator_id)
@@ -85,6 +85,8 @@ def _apply_upgrade(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE preparation_operations ADD COLUMN accepted_at TEXT")
     if version < 17:
         initialize_action_results(conn)
+    from ._maintenance import initialize
+    initialize(conn)
     conn.execute(f"PRAGMA user_version = {_COORDINATOR_SCHEMA_VERSION}")
 
 

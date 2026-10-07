@@ -819,6 +819,11 @@ def prepare_child_run(
         },
         "runtime": runtime_options.to_dict(),
     }
+    from loom.queue._maintenance import preparation_placement
+    placement = preparation_placement(service.daemon, binding.operation_id)
+    if placement is not None:
+        child = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
+        child["placement"] = dict(placement)
     _require_local_binding(binding.local_scope, service.daemon.resident_worker_launch_profile, agent_id=service.daemon.machine_id)
     _bind_local_snapshot(resolved, binding.local_scope)
     if binding.shared_scope is not None:

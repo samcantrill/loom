@@ -103,7 +103,7 @@ def _submit(
             ):
                 if request.retry_failed_revision is not None:
                     return _retry_failed_admission(self,
-                        existing, request, execution
+                        existing, request, execution, parent_id=run_operation_id
                     )
                 return existing
             raise QueueConflictError("managed run admission intent conflicts")
@@ -121,6 +121,9 @@ def _submit(
         operation_id = f"authority-bind-{uuid4()}"
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            from ._maintenance import classify
+            classify(conn, request.queue_item_id, parent_id=preparation_operation_id or run_operation_id,
+                     intent=intent, preparation_child=preparation_operation_id is not None)
             accepted_at = self._accepted_time(conn)
             conn.execute(
                 """
@@ -165,6 +168,7 @@ def _retry_failed_admission(
     admission: LocalDaemonAdmission,
     request: LocalDaemonAdmissionRequest,
     execution: LocalDaemonExecution,
+    *, parent_id: str | None = None,
 ) -> LocalDaemonAdmission:
     # The coordinator journal bridges its local admission update and the
     # authority's atomic, replayable lifecycle continuation across restart.
@@ -190,6 +194,9 @@ def _retry_failed_admission(
             "state": "pending",
         }
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            from ._maintenance import classify
+            classify(conn, request.queue_item_id, parent_id=parent_id)
             conn.execute(
                 "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
                 (key, json.dumps(record)),

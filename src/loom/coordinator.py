@@ -480,3 +480,21 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
     def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
         """Resolve the original operation after a lost mutation response."""
         return self._native_call("operator_operation", {"operation_id": operation_id})
+
+    def observe_maintenance(self) -> Mapping[str, PlainData]:
+        """Read current native gate ownership, revision and check permissions."""
+        return self._native_call("operator_maintenance", {})
+
+    def maintenance(self, control: Mapping[str, PlainData], *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Apply an exact gate control; retain its intent for lost-reply recovery.
+
+        Controls carry operation/maintenance IDs, maintenance intent digest,
+        action (close/open/authorize/revoke), expected revision and check binding.
+        See the queue maintenance contract for check fields and resource units.
+        """
+        from loom.queue.operations import control_intent_digest
+        return self._native_call("operator_maintenance_control", {"control": dict(control), "intent_digest": control_intent_digest(control)}, expected_coordinator_id)
+
+    def maintenance_operation(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Observe the original mutation; an unknown ID never submits work."""
+        return self._native_call("operator_maintenance_operation", {"operation_id": operation_id})

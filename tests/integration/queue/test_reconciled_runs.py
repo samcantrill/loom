@@ -465,7 +465,7 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
             cancellations,
         )
         conn.execute("PRAGMA user_version = 15")
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 18
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 19
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert (
             conn.execute("SELECT * FROM preparation_operations").fetchall()

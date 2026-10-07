@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 18
+_COORDINATOR_SCHEMA_VERSION = 19
 _AGENT_SCHEMA_VERSION = 12
 # Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
@@ -3993,6 +3993,23 @@ class LocalDaemonOperatorView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return _assignment_observation(self._daemon, assignment_id)
 
+    def observe_maintenance(self) -> Mapping[str, PlainData]:
+        """Read the durable gate, owner/revision and finite authorized checks."""
+        from ._maintenance import observe
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return observe(self._daemon)
+
+    def maintenance(self, control: Mapping[str, object], *, expected_coordinator_id: str) -> Mapping[str, PlainData]:
+        """Apply/replay an exact revision-guarded maintenance owner control."""
+        from ._maintenance import mutate
+        return mutate(self._daemon, self._principal, control, expected_coordinator_id)
+
+    def maintenance_operation(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Resolve one exact control after a lost reply, without another mutation."""
+        from ._maintenance import operation
+        self._daemon._authorizer().require_operator(self._principal, "maintenance")
+        return operation(self._daemon, operation_id)
+
     def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
         """Read one authorized exact agent control, including its intent digest."""
         import hashlib
@@ -4355,6 +4372,8 @@ def _initialize_coordinator_schema(
         "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
         "result_json TEXT NOT NULL)"
     )
+    from ._maintenance import initialize as initialize_maintenance
+    initialize_maintenance(conn)
     if preparation:
         _initialize_preparation_schema(conn)
     if action_results:
@@ -4473,7 +4492,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
             )
         )
         if version != expected_version:
-            if role == "coordinator" and version in (12, 15, 16, 17):
+            if role == "coordinator" and version in (12, 15, 16, 17, 18):
                 raise QueueStorageError(
                     f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
                 )
@@ -4484,7 +4503,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
         if role == "coordinator":
             _validate_coordinator_schema(
                 conn,
-                preparation=version in (15, 16, 17, _COORDINATOR_SCHEMA_VERSION),
+                preparation=version in (15, 16, 17, 18, _COORDINATOR_SCHEMA_VERSION),
                 legacy_preparation=version == 15,
                 action_results=version >= 17,
                 context=version >= 18,

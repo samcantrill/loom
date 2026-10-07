@@ -88,6 +88,7 @@ class OperatorObservation:
 
 
 def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
+    from ._maintenance import MAINTENANCE_CAPABILITY
     status = daemon.status()
     with daemon._connection() as conn:
         metadata = dict(
@@ -106,7 +107,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
-            "capabilities": [OPERATOR_CAPABILITY],
+            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY],
         },
     )
 
@@ -292,6 +293,7 @@ def probe_upgrade_compatibility(
     separate owner and is never inferred from compatible service storage.
     """
     from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _AGENT_SCHEMA_VERSION
+    from ._maintenance import MAINTENANCE_CAPABILITY
     from .errors import QueueError
 
     owner = None
@@ -309,10 +311,10 @@ def probe_upgrade_compatibility(
             else _AGENT_SCHEMA_VERSION
         )
         supported = current == target or (
-            role == "coordinator" and current in {12, 15, 16, 17}
+            role == "coordinator" and current in {12, 15, 16, 17, 18}
         )
         missing = sorted(
-            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1"}
+            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY}
         )
         reason = (
             "unsupported_capability"
@@ -338,7 +340,7 @@ def probe_upgrade_compatibility(
                 "offline_required": current != target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
-                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY],
+                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY],
                 "missing_capabilities": cast(list[PlainData], missing),
                 "profile_constraints": "unchanged_bindings_require_separate_qualification",
             },
