@@ -303,6 +303,79 @@ def finish(inventory, operation):
     pytest.fail(json.dumps(result, default=str))
 
 
+def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    import loom.fleet.self_tests as checks_module
+    from loom.coordinator import RunRequest
+    from loom.queue.preparation import PreparationSource, PrepareRunRequest
+
+    operation = "check-busy-gpu"
+    inventory = Inventory(tmp_path / "fleet.yaml", "test", tmp_path, "tmux", ())
+    directory = tmp_path / "checks" / operation
+    directory.mkdir(parents=True, mode=0o700)
+    requests = {}
+    for check in ("cpu", "storage", "gpu"):
+        identity = operation + "-" + check
+        requests[check] = RunRequest(
+            PrepareRunRequest(
+                identity,
+                identity,
+                PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
+                "pipeline.yaml",
+                "existing-project",
+            ),
+            identity,
+        ).to_dict()
+    intent = {
+        "schema_version": 1,
+        "operation_id": operation,
+        "retry_of": None,
+        "coordinator_id": "coordinator-test",
+        "connection": str(tmp_path / "connection.json"),
+        "operator_connection": str(tmp_path / "operator.json"),
+        "agent_id": "worker",
+        "session_id": "session-test",
+        "agent_root_id": "root-test",
+        "profile": {},
+        "requests": requests,
+    }
+    checks_module._publish(directory / "intent.json", intent)
+    retained = (directory / "intent.json").read_bytes()
+    assert list(json.loads(retained)["requests"]) == ["cpu", "gpu", "storage"]
+    for client in (
+        checks_module.CoordinatorClient,
+        checks_module.CoordinatorOperatorClient,
+    ):
+        monkeypatch.setattr(client, "from_connection_file", lambda *a, **kw: nullcontext())
+
+    clock = [100.0]
+    observed = []
+    monkeypatch.setattr(checks_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def observe(client, operator, path, retained_intent, check, deadline):
+        assert deadline == 110.0
+        assert retained_intent["requests"] == requests
+        observed.append(check)
+        if check == "gpu":
+            # Native capacity waiting consumes the remaining shared deadline.
+            clock[0] = deadline
+            return {"outcome": "waiting", "code": "waiting_for_capacity"}
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(checks_module, "_observe_check", observe)
+    result = self_test(inventory, operation_id=operation, timeout_seconds=10)
+    assert result["checks"]["storage"]["outcome"] == "passed"
+    assert result["checks"]["cpu"]["outcome"] == "passed"
+    assert observed == ["cpu", "storage", "gpu"]
+    assert result["outcome"] == "waiting"
+    assert result["checks"]["gpu"]["code"] == "waiting_for_capacity"
+    assert {check: row["operation_id"] for check, row in result["checks"].items()} == {
+        check: operation + "-" + check for check in requests
+    }
+    assert (directory / "intent.json").read_bytes() == retained
+
+
 def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monkeypatch):
     inventory, deployment, daemon, _ = fleet
     import loom.queue.agent_session_transport as transport

@@ -415,7 +415,12 @@ def self_test(
                 expected_coordinator_id=intent["coordinator_id"],
             ) as operator,
         ):
-            for check, request in intent["requests"].items():
+            # Observe CPU/storage before GPU capacity waiting can exhaust the deadline.
+            # Serialized intent key order is not execution order.
+            for check in ("cpu", "storage", "gpu"):
+                if check not in intent["requests"]:
+                    continue
+                request = intent["requests"][check]
                 if previous_results.get(check, {}).get("outcome") == "failed":
                     results[check] = previous_results[check]
                     continue
