@@ -188,6 +188,7 @@ class CoordinatorClient(NativeCoordinatorClient):
         operation = None
         admission = None
         inspection = None
+        detail = None
         try:
             while deadline is None or time.monotonic() < deadline:
                 for snapshot in self._run_observation_steps(
@@ -196,6 +197,7 @@ class CoordinatorClient(NativeCoordinatorClient):
                     operation = snapshot.operation
                     admission = snapshot.admission or admission
                     inspection = snapshot.inspection or inspection
+                    detail = snapshot.detail or detail
                 assert operation is not None
                 if not wait or operation.state in {"failed", "cancelled", "conflict"}:
                     break
@@ -248,7 +250,7 @@ class CoordinatorClient(NativeCoordinatorClient):
             ):
                 raise
         return RunObservation(
-            operation_id, operation, admission, inspection, connection
+            operation_id, operation, admission, inspection, connection, detail
         )
 
     def _run_observation_steps(

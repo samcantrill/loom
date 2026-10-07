@@ -458,3 +458,49 @@ def test_direct_and_transports_explain_same_native_detail(
         assert "stale" in transported.format_text()
     finally:
         socket.stop()
+
+
+@pytest.mark.optional_dependency
+def test_public_observation_retains_detail_after_inspection_interrupt(
+    tmp_path, monkeypatch
+):
+    from loom.deployment import connect_deployment, load_deployment
+    from tests.integration.config.test_cli_run_observation import _owner, _run, _counts
+
+    with _owner(tmp_path) as (path, daemon):
+        assert _run(path, identity="retain-detail")[0] == 0
+        with connect_deployment(load_deployment(path)) as client:
+            completed = client.observe_run("retain-detail", timeout_seconds=30)
+            assert completed.detail is not None
+            assert completed.detail.admission == completed.admission
+            assert completed.inspection is not None
+            before = _counts(daemon)
+            retained = []
+            read = client._native_call
+
+            def capture(operation, *args, **kwargs):
+                value = read(operation, *args, **kwargs)
+                if operation == "admission":
+                    retained.append(value)
+                return value
+
+            def interrupt(*args, **kwargs):
+                raise KeyboardInterrupt()
+
+            monkeypatch.setattr(client, "_native_call", capture)
+            monkeypatch.setattr(client, "_inspect_run", interrupt)
+            observation = client.observe_run("retain-detail", wait=False)
+            assert len(retained) == 1
+            assert observation.detail == retained[0]
+            assert observation.admission == retained[0].admission
+            assert observation.inspection is None
+            assert "detail" not in observation.to_dict()
+            explanation = explain_run(observation.inspection, observation=observation)
+            assert explanation.summary == "SUCCEEDED"
+            scheduling = next(
+                fact for fact in explanation.facts if fact.name is Axis.SCHEDULING
+            )
+            assert scheduling.owner == retained[0].owners["scheduling"]["owner"]
+            assert scheduling.revision == retained[0].owners["scheduling"]["revision"]
+            assert scheduling.availability == "available"
+        assert _counts(daemon) == before
