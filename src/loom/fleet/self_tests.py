@@ -136,7 +136,11 @@ def verify_check(
         return _waiting("fresh_offer_unavailable")
     if check == "gpu":
         keys = set(assignment["actual_claims"].get("gpu_capacity_keys", ()))
-        available = {atom["local_capacity_key"] for atom in offer.get("gpu_atoms", ())}
+        # Native scheduling qualifies agent-local offer keys before reserving them.
+        available = {
+            f"{agent_id}:{atom['local_capacity_key']}"
+            for atom in offer.get("gpu_atoms", ())
+        }
         if not keys or not keys.issubset(available):
             return _waiting("waiting_for_capacity")
     return {"outcome": "passed", "code": "check_complete"}

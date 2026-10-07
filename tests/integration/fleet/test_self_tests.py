@@ -616,7 +616,7 @@ def evidence():
             "source": "native_supervisor_launch",
             "assignment_id": "a",
             "actual_gpu_uuids": [uuid],
-            "gpu_capacity_keys": ["gpu0"],
+            "gpu_capacity_keys": ["worker:gpu0"],
         },
         "release_proof": {"assignment_id": "a", "claim_id": "c", "session_id": "s"},
     }
