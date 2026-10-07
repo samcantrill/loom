@@ -3215,7 +3215,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 raise QueueServiceError("shared snapshot root is not mapped")
 
             monkeypatch.setattr(
-                "loom.queue.agent_session_transport.ResidentWorkerLaunch",
+                "loom.queue._agent_assignment.ResidentWorkerLaunch",
                 unavailable_snapshot,
             )
         if restart_barrier in {

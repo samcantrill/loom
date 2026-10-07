@@ -942,6 +942,7 @@ def test_recovery_rejects_newer_unknown_observation_during_other_owner_query(
     monkeypatch,
 ):
     from dataclasses import replace
+    from loom.queue import _agent_assignment
     from loom.queue._agent_progress import _cooperative, _steps, _delay
 
     armed, driver_waiting, querying_second, applied_unknown, assessed, allow_fresh = (
@@ -1030,6 +1031,7 @@ def test_recovery_rejects_newer_unknown_observation_during_other_owner_query(
                 LocalDaemonAgentHttpClient, "_observe_supervisor_ownership", observation
             )
             monkeypatch.setattr(transport, "_external", interleave)
+            monkeypatch.setattr(_agent_assignment, "_external", interleave)
             monkeypatch.setattr(transport, "_exchange_agent_request", tracked)
             armed.set()
             case.stop.clear()
@@ -1694,8 +1696,12 @@ def test_qualification_rejection_settles_saved_launch_without_starting_on_restar
         (assignment_id,) = _rows(case.agent_root / "supervisor/supervisor.sqlite",
                                 "SELECT assignment_id FROM rejected_assignments")[0]
         workspace = _ResidentAssignmentWorkspace(case.agent_root, assignment_id)
-        launch = supervisor_module._launch_from_value(json.loads(workspace.supervisor_launch_json()))
-        assert workspace.worker_result().status.value == "FAILED"
+        launch_json = workspace.supervisor_launch_json()
+        result = workspace.worker_result()
+        assert launch_json is not None
+        assert result is not None
+        launch = supervisor_module._launch_from_value(json.loads(launch_json))
+        assert result.status.value == "FAILED"
         assert workspace.retain_outputs().process_created is False
         with pytest.raises(supervisor_module._SupervisorNoStartError, match="durably rejected"):
             case.supervisor_owner.launch(launch)
@@ -3107,7 +3113,9 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
                 raise KeyboardInterrupt("interrupted composite preparation")
             if boundary == "closure":
                 case.stop.set()
-                raise transport._ManagedApplicationSuspended()
+                from loom.queue._managed_local import _ManagedApplicationSuspended
+
+                raise _ManagedApplicationSuspended()
             raise RuntimeError("interrupted retained population")
 
     if hasattr(original, "_progress"):
@@ -3166,14 +3174,16 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
 
             monkeypatch.setattr(AtomResourceProvider, "activate", uncertain)
         if boundary == "no_start":
-            environment = transport._worker_environment
+            from loom.queue import _agent_assignment
+
+            environment = _agent_assignment._worker_environment
 
             def unavailable(*args, **kwargs):
                 if not crashed.is_set():
                     raise OSError("worker environment unavailable before launch")
                 return environment(*args, **kwargs)
 
-            monkeypatch.setattr(transport, "_worker_environment", unavailable)
+            monkeypatch.setattr(_agent_assignment, "_worker_environment", unavailable)
         _submit(case, "retained")
         assert crashed.wait(20), case.failures
         case.thread.join(20)
