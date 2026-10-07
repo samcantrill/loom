@@ -1423,5 +1423,12 @@ current responsibilities without adding processes or durable formats:
 The protocol and journal refer to client/configuration types only during type
 checking. Runtime dependencies flow from the public adapter to these private
 owners, and from protocol decisions through the journal to the existing native
-session models. Assignment execution and settlement retain their current owner.
+session models. `_agent_assignment.py` owns delivered/retained assignment
+progression and their shared result settlement on that same cooperative client.
+It composes the existing execution journal, providers, native supervisor and
+publication workspace. Containment and authority acknowledgement precede claim
+release and fresh capacity; unknown ownership retains claims. The client keeps
+service entry points and the existing cancellation/release interception seams,
+while private settlement helpers call each other within the assignment owner.
+Supervisor physical ownership, progress lanes and journal formats are unchanged.
 See [Queue](features/queue.md) for replay and concurrency behavior.
