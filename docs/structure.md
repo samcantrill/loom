@@ -1077,6 +1077,13 @@ as validate, plan, run, stage, sweep, status, logs, and artifacts.
 
 The CLI must not duplicate config, pipeline, store, or resume logic.
 
+`cli.run_operations` owns early submission-reference presentation and connect-only
+follow/cancel actions registered by `cli.runs`. It consumes the coordinator's
+incremental native snapshot reads and bounded waits, keeping CLI interruption
+outside Python observation's detachment handling. `cli.run` and `_run` share
+the existing local argument/source-closure validation owners. Catalog actions,
+native acceptance and cancellation authority remain with their existing owners.
+
 ---
 
 ### 6.14 Coordinator Client

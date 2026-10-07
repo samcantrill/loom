@@ -7,7 +7,7 @@ adds connection selection and the diagnostic result union above that boundary.
 from __future__ import annotations
 
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Mapping, Iterator
 from dataclasses import dataclass
 import math
 import time
@@ -184,35 +184,13 @@ class CoordinatorClient(NativeCoordinatorClient):
         inspection = None
         try:
             while deadline is None or time.monotonic() < deadline:
-                if operation is None:
-                    operation = cast(
-                        LocalDaemonOperation,
-                        self._native_call(
-                            "operation",
-                            {"operation_id": operation_id},
-                            owner,
-                            deadline=deadline,
-                        ),
-                    )
-                    if operation.kind != "run":
-                        raise control_error(
-                            "invalid_request",
-                            "observe_run",
-                            {"operation_id": operation_id},
-                        )
-                result = cast(Mapping[str, PlainData], operation.result)
-                retained = result.get("admission")
-                if isinstance(retained, Mapping):
-                    admission = cast(
-                        LocalDaemonAdmissionDetail,
-                        self._native_call(
-                            "admission",
-                            {"admission_id": retained["admission_id"]},
-                            owner,
-                            deadline=deadline,
-                        ),
-                    ).admission
-                    inspection = self._inspect_run(admission.run_uri, owner, deadline)
+                for snapshot in self._run_observation_steps(
+                    operation_id, connection, deadline=deadline, operation=operation,
+                ):
+                    operation = snapshot.operation
+                    admission = snapshot.admission or admission
+                    inspection = snapshot.inspection or inspection
+                assert operation is not None
                 if not wait or operation.state in {"failed", "cancelled", "conflict"}:
                     break
                 duration = (
@@ -266,6 +244,31 @@ class CoordinatorClient(NativeCoordinatorClient):
         return RunObservation(
             operation_id, operation, admission, inspection, connection
         )
+
+    def _run_observation_steps(
+        self, operation_id: str, connection: CoordinatorConnectionDescription, *,
+        deadline: float | None, operation: LocalDaemonOperation | None = None,
+    ) -> Iterator[RunObservation]:
+        """Retain each completed read without consuming the caller's interruption."""
+        owner = connection.coordinator_id
+        if operation is None:
+            operation = cast(LocalDaemonOperation, self._native_call(
+                "operation", {"operation_id": operation_id}, owner, deadline=deadline,
+            ))
+            if operation.kind != "run":
+                raise control_error("invalid_request", "observe_run", {"operation_id": operation_id})
+        result = cast(Mapping[str, PlainData], operation.result)
+        retained = result.get("admission")
+        admission = None
+        inspection = None
+        yield RunObservation(operation_id, operation, None, None, connection)
+        if isinstance(retained, Mapping):
+            admission = cast(LocalDaemonAdmissionDetail, self._native_call(
+                "admission", {"admission_id": retained["admission_id"]}, owner, deadline=deadline,
+            )).admission
+            yield RunObservation(operation_id, operation, admission, None, connection)
+            inspection = self._inspect_run(admission.run_uri, owner, deadline)
+            yield RunObservation(operation_id, operation, admission, inspection, connection)
 
     def get_run_context(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunContext:
         """Read original intent, current annotations and native evidence without execution."""
