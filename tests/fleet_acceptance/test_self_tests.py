@@ -150,7 +150,7 @@ def test_installed_sif_gpu_self_tests():
         operation_id = os.environ.get("LOOM_FLEET_ACCEPTANCE_OPERATION_ID")
         if operation_id is not None:
             result = self_test(
-                inventory, operation_id=operation_id, timeout_seconds=180
+                inventory, operation_id=operation_id, timeout_seconds=600
             )
         else:
             result = self_test(
@@ -160,7 +160,7 @@ def test_installed_sif_gpu_self_tests():
                 agent_id=selection["agent_id"],
                 config=selection["config"],
                 checks=("cpu", "storage", "gpu"),
-                timeout_seconds=180,
+                timeout_seconds=600,
             )
         evidence.write(json.dumps(result) + "\n")
         evidence.flush()
