@@ -1,4 +1,4 @@
-# Fleet configuration and read-only administration
+# Fleet configuration, administration and self-tests
 
 Install `loom[fleet]` in the operator's Python 3.12 environment. Fleet is generic:
 service software, workload profiles and site declarations have separate owners.
@@ -71,8 +71,9 @@ and remote storage remain explicitly unavailable until target-host tooling
 supplies those observations. This phase therefore never reports ready: preflight
 returns **2** for failed local validation and **3** for incomplete evidence even
 when all local checks pass. Parse the versioned JSON facts for details; ordinary
-CLI/configuration errors remain nonzero. Self-test, setup and upgrade are separate
-operations and are not provided by this command set.
+CLI/configuration errors remain nonzero. Deliberate self-tests use the native
+execution path described below. Setup and upgrade automation are separate
+operations and are not yet provided.
 
 ## Immutable service bundles
 
@@ -145,8 +146,10 @@ prove remote profile installation, qualification or authorization.
 and shared workload profile. It starts no service and performs no installation.
 The profile's workload must contain `loom.fleet.probes.ProbeStage` (and Torch with
 CUDA UUID properties for the optional GPU check), support native preparation,
-and declare shared publication storage. Its source must contain a minimal
-`fleet-check.yaml` with `pipeline` and `runtime` mappings. Fleet replaces those
+and declare shared publication storage. For container execution, the captured
+snapshot root must lie beneath exactly one declared shared root so native
+preparation can mount it. Its source must contain a minimal `fleet-check.yaml`
+with `pipeline` and `runtime` mappings. Fleet replaces those
 mappings with the fixed probe configuration using ordinary captured overrides.
 A project preparation processor, when configured, must accept those generic
 stages. Normal native policy and maintenance admission remain authoritative.

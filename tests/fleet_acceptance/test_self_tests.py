@@ -147,15 +147,21 @@ def test_installed_sif_gpu_self_tests():
             + "\n"
         )
         evidence.flush()
-        result = self_test(
-            inventory,
-            deployment=selection["deployment"],
-            operator_connection=selection["operator_connection"],
-            agent_id=selection["agent_id"],
-            config=selection["config"],
-            checks=("cpu", "storage", "gpu"),
-            timeout_seconds=180,
-        )
+        operation_id = os.environ.get("LOOM_FLEET_ACCEPTANCE_OPERATION_ID")
+        if operation_id is not None:
+            result = self_test(
+                inventory, operation_id=operation_id, timeout_seconds=180
+            )
+        else:
+            result = self_test(
+                inventory,
+                deployment=selection["deployment"],
+                operator_connection=selection["operator_connection"],
+                agent_id=selection["agent_id"],
+                config=selection["config"],
+                checks=("cpu", "storage", "gpu"),
+                timeout_seconds=180,
+            )
         evidence.write(json.dumps(result) + "\n")
         evidence.flush()
         deadline = time.monotonic() + 180

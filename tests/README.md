@@ -177,6 +177,15 @@ uv run --python 3.12 --isolated --locked --group dev --extra config --extra flee
   pytest tests/fleet_acceptance/test_self_tests.py
 ```
 
+For an existing waiting self-test, also set
+`LOOM_FLEET_ACCEPTANCE_OPERATION_ID` to its exact printed check ID and select a
+new protected evidence `report` path. This continues the retained intent through
+the same native API and verifies the installed identity, bytes, UUID and release
+oracles again; it creates no replacement request. Both disposable-selection
+opt-ins remain required. An unknown ID refuses; a retained failed check stays
+failed. Use the explicit Fleet `--retry-of` command only after correcting the
+observed failure, then validate that chosen successor ID through this hook.
+
 The owner-protected JSON selection must contain `schema_version: 1`,
 `disposable: true`, paths `fleet`, `deployment`, `operator_connection`, `image`,
 and a new `report`; explicit `agent_id`, source-relative `config`,
