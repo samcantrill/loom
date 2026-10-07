@@ -62,6 +62,17 @@ def register_subparser(
         _add_output_options(operation)
         operation.set_defaults(handler=handler)
 
+    from .run_operations import handle_logs
+
+    logs = actions.add_parser("logs", help="read bounded authorized native stage logs")
+    logs.add_argument("--operation-id", required=True)
+    logs.add_argument("--deployment", required=True, metavar="PATH")
+    logs.add_argument("--stage", required=True)
+    logs.add_argument("--stream", choices=("stdout", "stderr", "both"), default="both")
+    logs.add_argument("--tail", type=_positive_int, default=100)
+    _add_output_options(logs)
+    logs.set_defaults(handler=handle_logs)
+
     from .queue import _add_client_connection_arguments
 
     lineage = actions.add_parser("lineage", help="trace retained native dependency evidence")

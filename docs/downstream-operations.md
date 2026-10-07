@@ -84,6 +84,38 @@ SLURM scheduler-wrapper logs.
 | SLURM | The scheduler manifest can name wrapper stdout/stderr separately from Loom stage streams. | The SLURM manifest/status for wrapper paths; do not assume `loom logs` reads them. |
 | Managed queue | Queue management owns per-attempt logs separately from a run's ordinary stage log path. | Queue attempt inspection for attempt logs; `loom logs` only for ordinary stage streams when available. |
 
+Remote readers can use a connection-only deployment selection:
+
+```sh
+loom runs logs --operation-id fit-42 --deployment clients/vision.yaml \
+  --stage train --stream stderr --tail 100
+```
+
+`CoordinatorClient.read_run_logs` and this command resolve the retained run
+operation, managed admission, current authority stage/attempt and that attempt's
+worker-result log references. They never accept a filesystem path. The native
+`bounded-run-logs-v1` capability is required; older peers explicitly return
+`unsupported_capability`. Existing local `loom logs` behavior is unchanged.
+
+The default stream is `both` (`stdout` and `stderr` are also accepted), and the
+positive line tail defaults to 100. Each stream is read as a suffix of at most
+64 KiB before decoding; returned UTF-8 text also stays within that limit.
+Truncation and replacement decoding are explicit, including a huge single line.
+The response identifies the operation, admission, stage, attempt, retained source,
+opaque log identity, observation owner/time, retained freshness, selected authority
+revision and each stream's availability.
+Private source paths are not returned. Log identity identifies the retained
+reference, not a content checksum or an atomic snapshot of a growing file.
+
+An unpublished active attempt is `pending`, absent terminal references/files
+are `missing`, and an unreachable authority or unreadable retained source is
+`unavailable`; none means successful empty output. A genuinely empty readable
+file is `available` with empty text. An absent operation/stage is `not_found`.
+Only references readable by the coordinator are served; this does not open a
+new agent file service or fetch unpublished remote files. Logs can lag execution
+and do not alter scientific status. Authorized workload output is not
+conditionally redacted: a job may itself print sensitive content.
+
 A project `logging.FileHandler` writes to the path selected by project code. It
 does not become an artifact and is not automatically a `loom logs` stream.
 Handlers configured before an in-process local capture can retain their original
