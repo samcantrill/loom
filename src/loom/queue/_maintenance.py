@@ -68,10 +68,22 @@ def _read(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def observe(daemon: LocalDaemon) -> dict[str, PlainData]:
-    with daemon._connection() as conn:
+    from ._service_lifetime import _retained_coordinator_operations
+    with daemon._cycle_lock, daemon._connection() as conn:
         state = _read(conn)
+        waits = []
+        if _retained_coordinator_operations(conn):
+            waits.append("accepted_work_or_preparation")
+        if conn.execute("SELECT 1 FROM agent_coordinator_references WHERE resolved = 0 LIMIT 1").fetchone():
+            waits.append("assignment_publication_or_claim_release")
+        if conn.execute("SELECT 1 FROM agent_controls WHERE state IN ('pending_delivery','applying') OR acknowledged = 0 LIMIT 1").fetchone():
+            waits.append("agent_control_settlement")
+        if daemon._service_error is not None:
+            waits.append("coordinator_reconciliation_unavailable")
     return {
         **state,
+        "settled": not waits,
+        "wait_reasons": waits,
         "coordinator_id": daemon._require_started(),
         "owner": daemon._require_started(),
         "observed_at": daemon._clock(),

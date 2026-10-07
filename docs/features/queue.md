@@ -1127,3 +1127,20 @@ new attempt. Schema 19 introduces this durable owner; the offline migration
 supports the schema-18 bridge while preserving existing older native readers and
 forward migration paths. Fleet's narrower automated population is a separate
 compatibility policy.
+
+
+### Conditional operator policy changes
+
+The `conditional-agent-control-v1` capability adds current `control.operation_id`
+to agent observations. `CoordinatorOperatorClient.control_agent` accepts
+`condition={"expected_control_id": id}` (use `None` for no prior control).
+The coordinator compares this predecessor in the same transaction that accepts
+the request; intervening applied controls conflict even when their values match.
+Omitting the condition retains ordinary operator behavior. The condition is part
+of immutable intent: replay returns the original effect without changing a later
+policy, and changing it under the same operation ID conflicts. Clients negotiate
+the capability before conditional dispatch. Agent delivery codecs are unchanged.
+The native maintenance observation also reports `settled` and bounded
+`wait_reasons` for preparation/admissions, assignment references and controls.
+Fleet waits for these native facts before drain and replacement; terminal compute
+alone is insufficient.

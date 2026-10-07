@@ -346,7 +346,7 @@ def test_operator_control_guard_denial_lost_reply_and_exact_replay(
             assert caught.value.mutation_outcome == "not_applied"
             assert dump(daemon.config.control_database) == before
         with pytest.raises(CoordinatorClientError) as caught:
-            client.control_agent(drain(session))
+            client.control_agent(drain(session), condition={"expected_control_id": None})
         assert dropped
         assert caught.value.mutation_outcome == "unknown"
         receipt = client.observe_control("drain-1")
@@ -354,9 +354,9 @@ def test_operator_control_guard_denial_lost_reply_and_exact_replay(
         assert isinstance(receipt["intent_digest"], str)
         assert len(receipt["intent_digest"]) == 64
         after = dump(daemon.config.control_database)
-        assert client.control_agent(drain(session))["mutation_outcome"] == "applied"
+        assert client.control_agent(drain(session), condition={"expected_control_id": None})["mutation_outcome"] == "applied"
         with pytest.raises(CoordinatorClientError) as caught:
-            client.control_agent(replace(drain(session), reason="changed intent"))
+            client.control_agent(replace(drain(session), reason="changed intent"), condition={"expected_control_id": None})
         assert caught.value.code == "conflict"
         assert caught.value.mutation_outcome == "not_applied"
         assert dump(daemon.config.control_database) == after
@@ -493,3 +493,48 @@ def test_unreachable_status_preserves_last_observed_owner_fact(owner):
     assert retained.reason == "unavailable"
     assert retained.value["retained_observed_at"] == first.observed_at
     assert retained.value["configuration_revision"] == first.value["configuration_revision"]
+
+
+@pytest.mark.parametrize("owner", [("drain", "resume")], indirect=True)
+def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner):
+    daemon, agent, session, direct = owner
+    server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    server.start()
+    def acknowledge(identity):
+        assert agent.next_control(session.session_id).operation_id == identity
+        agent.acknowledge_control(session.session_id, AgentControlEffect(
+            identity, "applied", session.config_revision, session.inventory_revision,
+            "availability-" + identity))
+    try:
+        with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint, expected_coordinator_id=daemon.status().coordinator_id) as client:
+            first = drain(session, operation_id="owned-drain")
+            absent = {"expected_control_id": None}
+            client.control_agent(first, condition=absent)
+            acknowledge(first.operation_id)
+            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == first.operation_id
+            independent = drain(session, operation_id="independent-drain")
+            direct.control_agent(independent)
+            acknowledge(independent.operation_id)
+            restore = replace(drain(session, operation_id="restore"), kind=AgentControlKind.RESUME)
+            stale = {"expected_control_id": first.operation_id}
+            with pytest.raises(CoordinatorClientError) as refused:
+                client.control_agent(restore, condition=stale)
+            assert refused.value.code == "conflict"
+            assert refused.value.mutation_outcome == "not_applied"
+            assert client.observe_agent(session.agent_id).value["drained"] is True
+            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == independent.operation_id
+            matching = {"expected_control_id": independent.operation_id}
+            client.control_agent(restore, condition=matching)
+            acknowledge(restore.operation_id)
+            later = drain(session, operation_id="later-drain")
+            direct.control_agent(later)
+            acknowledge(later.operation_id)
+            # Lost-reply recovery resolves original acceptance, never reapplies it.
+            assert client.control_agent(restore, condition=matching)["state"] == "applied"
+            assert client.observe_agent(session.agent_id).value["drained"] is True
+            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == later.operation_id
+            with pytest.raises(CoordinatorClientError) as changed:
+                client.control_agent(restore, condition={"expected_control_id": later.operation_id})
+            assert changed.value.code == "conflict"
+    finally:
+        server.stop()
