@@ -271,6 +271,41 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         "immutable workload target qualification changed"
                     )
 
+    def recover_host(self, name):
+        """Authorize a communication stop only while our promotion is current."""
+        from loom.coordinator import CoordinatorClientError
+
+        identity = self.intent["operation_id"] + "-" + name + "-promotion"
+        allow_stop = False
+        try:
+            control = self.operator.observe_control(identity)
+        except CoordinatorClientError as exc:
+            if exc.code != "not_found":
+                raise
+        else:
+            if control["state"] == "applied" and control["acknowledged"]:
+                current = cast(
+                    dict[str, Any],
+                    thaw_plain_data(self.operator.observe_agent(name).value),
+                )
+                if (
+                    current["drained"]
+                    and (current.get("control") or {}).get("operation_id") == identity
+                ):
+                    self.gate()
+                    allow_stop = True
+        row = self.intent["hosts"][name]
+        return sshops.ssh(
+            row["host"],
+            {
+                **row,
+                "action": "workload-recover",
+                "promotion_id": identity,
+                "release": self.intent["release"],
+                "allow_communication_stop": allow_stop,
+            },
+        )
+
     def promote(self, name, candidate_source):
         key = name + "-promotion"
         path = self.receipts / key / "intent.json"
@@ -339,16 +374,7 @@ def continue_upgrade(operation):
         return read(directory / "complete.json")
     for name in intent["agents"]:
         if (operation.receipts / (name + "-promotion") / "intent.json").exists():
-            row = intent["hosts"][name]
-            response = sshops.ssh(
-                row["host"],
-                {
-                    **row,
-                    "action": "workload-recover",
-                    "promotion_id": intent["operation_id"] + "-" + name + "-promotion",
-                    "release": intent["release"],
-                },
-            )
+            response = operation.recover_host(name)
             if response["declaration"] not in (
                 intent["declarations"][name],
                 intent["target_declarations"][name],
@@ -399,16 +425,7 @@ def continue_upgrade(operation):
             target=intent["candidates"][name]["target"],
         )
         operation.promote(name, staged["candidate_source"])
-        row = intent["hosts"][name]
-        response = sshops.ssh(
-            row["host"],
-            {
-                **row,
-                "action": "workload-recover",
-                "promotion_id": intent["operation_id"] + "-" + name + "-promotion",
-                "release": intent["release"],
-            },
-        )
+        response = operation.recover_host(name)
         receipt = operation.receipts / (name + "-native-publication")
         sshops.protected_directory(receipt)
         operation.accept_update(name, response, receipt)

@@ -134,7 +134,7 @@ def test_stopped_host_recovers_native_intent_then_starts_exact_retained_service(
     assert len([call for call in calls if call[0] == "start"]) == 1
 
 
-def test_live_host_starts_supervisor_only_after_native_promotion_effect(
+def test_live_host_without_operator_authorization_never_mutates_services(
     tmp_path, monkeypatch
 ):
     from loom.fleet import _services
@@ -156,14 +156,130 @@ def test_live_host_starts_supervisor_only_after_native_promotion_effect(
     finished = [False]
     monkeypatch.setattr(_profile_promotion, "completed", lambda *a: finished[0])
     calls = []
-    monkeypatch.setattr(_services, "systemctl", lambda *a: calls.append(a))
+    monkeypatch.setattr(_services, "systemctl", lambda *a: calls.append(a) or "0")
     host.recover_service(request)
     assert not calls
     finished[0] = True
     host.recover_service(request)
-    assert calls == [("start", _services.unit_name(request, "supervisor"))]
+    assert calls == [
+        (
+            "show",
+            _services.unit_name(request, "supervisor"),
+            "--property=MainPID",
+            "--value",
+        )
+    ]
 
 
 def test_fixed_host_cannot_publish_agent_source_ahead_of_native_intent(tmp_path):
     with pytest.raises(QueueConflictError, match="native promotion owns agent source"):
         host.publish({"name": "worker"}, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "case", ["owned", "undelivered", "unacknowledged", "later_control", "wrong_gate"]
+)
+def test_controller_authorizes_live_stop_only_for_current_acknowledged_promotion(
+    monkeypatch, tmp_path, case
+):
+    from types import SimpleNamespace
+    from loom.fleet import workload_upgrades
+
+    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation.intent = {
+        "operation_id": "upgrade",
+        "release": {"same": "release"},
+        "hosts": {"worker": {"host": "selected", "root": str(tmp_path)}},
+    }
+    promotion = "upgrade-worker-promotion"
+    from typing import Any, cast
+
+    operation = cast(Any, operation)
+
+    def observe_control(_):
+        if case == "undelivered":
+            from loom.coordinator import CoordinatorClientError
+
+            raise CoordinatorClientError(
+                "not_found", boundary="coordinator", operation="observe_control"
+            )
+        return {"state": "applied", "acknowledged": case != "unacknowledged"}
+
+    operation.operator = SimpleNamespace(
+        observe_control=observe_control,
+        observe_agent=lambda _: SimpleNamespace(
+            value={
+                "drained": True,
+                "control": {
+                    "operation_id": "independent-drain"
+                    if case == "later_control"
+                    else promotion
+                },
+            }
+        ),
+    )
+    gates = []
+
+    def gate():
+        gates.append(True)
+        if case == "wrong_gate":
+            raise QueueConflictError("maintenance gate owner/intent changed")
+
+    operation.gate = gate
+    sent = []
+    monkeypatch.setattr(
+        workload_upgrades.sshops,
+        "ssh",
+        lambda host, request: sent.append(request) or {},
+    )
+    if case == "wrong_gate":
+        with pytest.raises(QueueConflictError, match="gate owner"):
+            operation.recover_host("worker")
+        assert not sent
+    else:
+        operation.recover_host("worker")
+        assert sent[0]["allow_communication_stop"] is (case == "owned")
+        assert bool(gates) is (case == "owned")
+
+
+@pytest.mark.parametrize("case", ["unsettled", "different_process"])
+def test_live_stop_refuses_unsettled_or_changed_native_service(
+    tmp_path, monkeypatch, case
+):
+    from types import SimpleNamespace
+    from loom.fleet import _services
+    from loom.queue import _profile_promotion, service_upgrade
+
+    selection = {
+        "root": str(tmp_path),
+        "admin": str(tmp_path),
+        "service_manager": "systemd-user",
+        "expected_root_id": "root",
+        "promotion_id": "promotion",
+        "allow_communication_stop": True,
+    }
+    monkeypatch.setattr(host, "read", lambda _: selection)
+    fact = {
+        "owner": "root",
+        "revision": "start",
+        "value": {"ownership": "live", "expected_process": 123},
+    }
+    monkeypatch.setattr(host, "owner", lambda _: fact)
+    monkeypatch.setattr(_profile_promotion, "completed", lambda *a: True)
+    monkeypatch.setattr(
+        service_upgrade,
+        "inspect_service_settlement",
+        lambda *a, **k: SimpleNamespace(
+            availability="available", value={"settled": case != "unsettled"}
+        ),
+    )
+    calls = []
+
+    def systemctl(*args):
+        calls.append(args)
+        assert args[0] == "show", "must not mutate service after a failed prerequisite"
+        return "0" if args[1] == _services.unit_name(selection, "supervisor") else "456"
+
+    monkeypatch.setattr(_services, "systemctl", systemctl)
+    with pytest.raises(QueueConflictError, match="settlement|ownership changed"):
+        host.recover_service(selection)

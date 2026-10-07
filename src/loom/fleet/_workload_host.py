@@ -141,22 +141,54 @@ def recover_service(request):
         raise QueueConflictError("workload native root identity changed")
     retained = read(Path(request["admin"]) / "service.json")
     if any(
-        retained.get(key) != request.get(key)
-        for key in ("root", "config", "release")
+        retained.get(key) != request.get(key) for key in ("root", "config", "release")
     ):
         raise QueueConflictError("workload retained service binding differs")
+    if (
+        fact["value"]["ownership"] == "live"
+        and request.get("service_manager") == "systemd-user"
+        and completed(Path(request["root"]), request["promotion_id"])
+    ):
+        from loom.fleet._services import systemctl, unit_name
+        from loom.queue.service_upgrade import inspect_service_settlement
+
+        supervisor_pid = systemctl(
+            "show", unit_name(request, "supervisor"), "--property=MainPID", "--value"
+        )
+        if supervisor_pid == "0" and request.get("allow_communication_stop") is True:
+            proof = inspect_service_settlement(
+                Path(request["root"]), expected_root_id=request["expected_root_id"]
+            )
+            if proof.availability != "available" or not proof.value.get("settled"):
+                raise QueueConflictError("native workload service settlement required")
+            agent_unit = unit_name(request, "agent")
+            pid = systemctl("show", agent_unit, "--property=MainPID", "--value")
+            current = owner(request)
+            if (
+                pid != str(fact["value"]["expected_process"])
+                or current["owner"] != fact["owner"]
+                or current["revision"] != fact["revision"]
+                or current["value"]["ownership"] != "live"
+            ):
+                raise QueueConflictError(
+                    "workload communication service ownership changed"
+                )
+            # The managed supervisor takes owner.lock during startup. Stop only
+            # the settled communication unit, then reuse the retained ordered
+            # lifecycle; never relax that native lock or stop a healthy supervisor.
+            systemctl("stop", agent_unit)
+            fact = owner(request)
+            if (
+                fact["value"]["ownership"] == "live"
+                or fact.get("reason") != "service_stopped"
+            ):
+                raise QueueConflictError("native communication stop remains unproven")
     if fact["value"]["ownership"] != "live":
         service = load_outbound_agent_service_config(
             config(request), env_file=environment(request)
         )
         recover(service.client)
         start(retained)
-    elif request.get("service_manager") == "systemd-user" and completed(
-        Path(request["root"]), request["promotion_id"]
-    ):
-        from loom.fleet._services import systemctl, unit_name
-
-        systemctl("start", unit_name(request, "supervisor"))
     return {
         "outcome": "applied",
         "declaration": payload(request),
