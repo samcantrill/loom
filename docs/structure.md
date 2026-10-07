@@ -1432,3 +1432,24 @@ service entry points and the existing cancellation/release interception seams,
 while private settlement helpers call each other within the assignment owner.
 Supervisor physical ownership, progress lanes and journal formats are unchanged.
 See [Queue](features/queue.md) for replay and concurrency behavior.
+
+## Coordinator Admission And Progression
+
+`local_daemon.py` retains the protected daemon, control store and service entry
+points. `_coordinator_admission.py` owns the existing fresh acceptance, exact
+replay and failed-admission retry transactions on that same daemon. Native
+operator, preparation and run-operation callers all use the daemon entry point;
+its cycle lock, lifetime check and acceptance order remain authoritative.
+
+`_coordinator_run_progress.py` owns reconciliation of already accepted runs and
+invocation of the current placement policy. It uses the composition's existing
+cycle contexts, scheduling epoch, launch lock, graph and cancellation owners.
+`LocalDaemonExecution` keeps its entry points and composes the native execution
+owners; its immutable outcome import remains available at the existing path.
+Progression can continue independently of future fresh-admission policy.
+
+`_coordinator_run_authority.py` owns the existing scoped adapter for one accepted
+run/coordinator binding. It preserves identity checks and guarded-recovery
+mutation restrictions while the per-run store remains the lifecycle and output
+commit authority. The original scoped-adapter import remains available for its
+current consumers. The extraction adds no store, process or scheduling policy.
