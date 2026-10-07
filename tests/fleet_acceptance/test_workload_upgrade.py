@@ -181,7 +181,7 @@ def test_installed_workload_upgrade():
         assert historical.admission == previous.admission
         assert (
             historical.operation is not None
-            and historical.operation.to_dict() == original_operation
+            and thaw_plain_data(historical.operation.to_dict()) == original_operation
         )
         for item in selected["history"].values():
             assert _file_hash(Path(item["path"])) == item["sha256"]
