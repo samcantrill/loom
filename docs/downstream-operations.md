@@ -260,7 +260,12 @@ provide a migration for other historical root versions.
 For an embedded or outbound agent, the worker supervisor is a separate local
 service and remains the process owner
 when the daemon application stops. Restart the daemon with the same protected
-config and exact profile. Startup stays unavailable while it joins any retained
+config and exact profile. If recovery occurs after resource activation but
+before process launch, Loom reconciles the restored claims and reactivates only
+positively prepared reservations under the existing grant. An unavailable claim
+blocks launch; the saved ACTIVE record alone cannot supply a GPU binding.
+This also applies when an outbound service reconstructs its client after a
+protocol error without restarting the service process. Startup stays unavailable while it joins any retained
 worker, imports its result, releases its claims, and publishes a fresh capacity
 observation. Loom will not launch a replacement process or reuse uncertain
 capacity. If the supervisor continuity or retained bundle cannot be proved,

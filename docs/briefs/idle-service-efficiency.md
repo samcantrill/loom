@@ -5,6 +5,31 @@ behavior belongs to Loom; no project, training-progress or job-duration policy i
 introduced. Worktree: `../loom-worktrees/idle-service-efficiency`, branch
 `codex/idle-service-efficiency`, base `51f327c9`.
 
+## Current rollout target
+
+The user approved integration and qualification on `rphys-pure-current` on
+2026-10-08. The original `rphys` services are stopped; the active fleet selects
+rphys `636b1059c` and Loom `c79c8d93`. The latter restores ACTIVE provider
+bindings before recovered worker launch. Merge that exact fix into this branch
+without removing the idle-efficiency changes; never deploy the older prepared
+`693dcebda` image over the recovery fix. A separate managed qualification fleet
+is running on both hosts and is outside this task's mutation scope.
+
+The original image `67c71cea6655d1e4dce0b42825b051aeeb4681b502ae566004018ede34034071`
+was built and verified on shared storage but not deployed by this task. The
+combined revision needs a new consumer pin, lock and image. Both hosts currently
+require interactive sudo for the maintained image builder.
+
+Integration coverage: GPU-provider and managed-local journal units, retry and
+control-wait units, plus the complete concurrent outbound-agent integration
+file. This covers restored claims under the same grant, uncertain restoration,
+one launch, control responsiveness, lost replies, independent recovery and
+mixed-resource concurrency. Reuse the previous unaffected owner-store and
+coordinator evidence. Expand only on an integration failure or changed contract.
+Consumer checks cover the pinned native/extension identity and fleet upgrade
+boundaries. Physical CPU/latency and four-way CPU/GPU/cancellation qualification
+remain required; local fixtures do not discharge them.
+
 ## Scope and delivery checks
 
 1. Reproducible quiet, running-without-output, retained-history and recoverable
@@ -219,7 +244,7 @@ there is no measured justification for adding connection ownership machinery.
 
 ## Remaining delivery work
 
-- Build and deploy the pinned consumer image, then collect physical after-change
+- Build and deploy the combined consumer image on `rphys-pure-current`, then collect physical after-change
   service CPU and control/submit latency evidence and concurrent CPU/GPU checks.
   Local synthetic tests do not discharge this gate. No new fleet software is
   deployed yet. Existing explicit coordinator timing must be changed deliberately
@@ -362,8 +387,9 @@ Both executions passed the three selected reference distribution builds.
 Changed Python files pass Ruff lint/format checks; diff checks pass. This remains
 targeted evidence, not full repository or physical SIF qualification.
 
-No new image is built yet. Both hosts require an interactive sudo password;
-sleipnir has only 8.5 GB free, versus 567 GB on shazza. A guarded operator build
+The original image was built after this handoff; the combined recovery/efficiency
+revision now needs a replacement image. Both hosts require an interactive sudo password.
+A guarded operator build
 launcher is prepared under the consumer's ignored
 `build/idle-efficiency/build-image-on-shazza.sh`. It requires the clean exact
 consumer commit and physical shazza host and writes only the fresh owned local
