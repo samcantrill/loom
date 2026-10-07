@@ -223,6 +223,8 @@ class AgentTlsClientConfig:
     ``max_concurrent_assignments`` accepts integers 1..1024 (excluding bool),
     defaults to one, and bounds all unreleased resident assignments. It changes
     active configuration, requiring settlement and trusted reload to resize.
+    ``external_supervisor`` binds service lifetime to a separately managed native
+    supervisor: absent endpoints refuse and application exit never stops it.
     Nonempty ``slurm_profiles`` requires one. Execution is currently serial
     even with a larger targeting ceiling.
     """
@@ -245,8 +247,11 @@ class AgentTlsClientConfig:
     slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
     max_concurrent_assignments: int = 1
     declaration_digest: str | None = None
+    external_supervisor: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.external_supervisor) is not bool:
+            raise QueueServiceError("external_supervisor must be a boolean")
         if (
             isinstance(self.max_concurrent_assignments, bool)
             or not isinstance(self.max_concurrent_assignments, int)
@@ -1101,7 +1106,8 @@ class LocalDaemonAgentHttpClient:
                 ),
             ), False
         except AgentProcessSupervisorError as exc:
-            if str(exc) == "managed supervisor endpoint is unavailable":
+            if (not config.external_supervisor
+                and str(exc) == "managed supervisor endpoint is unavailable"):
                 try:
                     return AgentProcessSupervisorService.start_empty_initialized(
                         config.agent_root,

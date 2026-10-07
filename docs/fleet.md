@@ -212,15 +212,18 @@ resources or reads worker-authored metadata as native allocation proof.
 
 ## SSH setup and continuation
 
-For setup select `service_manager: tmux` explicitly. Fleet uses only configured
+For setup select `service_manager: tmux` or `systemd-user` explicitly. Fleet uses only configured
 SSH aliases and their existing authentication/host-key policy; aliases cannot
 contain SSH options or shell syntax. Each host must already provide Python 3.12,
-uv, tmux, OpenSSL and findmnt. Native state and IPC must be on a supported local
+uv, OpenSSL, findmnt and the selected service manager. Native state and IPC must be on a supported local
 filesystem; a directory beneath an NFS home is insufficient. Workload software,
 shared mounts and the selected resident Python or SIF profile must already exist.
 Tmux keeps services detached from the operator connection and promises **no boot
-startup**. Systemd setup and runtime/profile changes require their explicit
-lifecycle paths.
+startup**. Systemd setup uses the managed lifetimes below; runtime/profile changes
+require their explicit lifecycle paths. The completed setup result reports
+`boot_start: true` for retained systemd-user selections and `false` for tmux.
+This describes configured boot-start wiring; it is not evidence of physical
+boot or reboot qualification.
 
 Setup requires an immutable offline service bundle and an explicit native
 `loom.deployment` selection for the synthetic probe source/profile. For a fresh
@@ -284,3 +287,66 @@ requires explicit recovery. Completed receipts remain inspectable. Setup is
 complete only after fresh native resources and the relevant existing CPU,
 storage and GPU self-tests pass. This is infrastructure evidence, not scientific
 qualification. One operator and one active writer per operation are supported.
+
+
+## Managed native service lifetimes
+
+`systemd-user` requires a running current-user manager and approved lingering.
+Fleet checks these prerequisites and discovers the owner-protected
+`/run/user/<uid>` bus for SSH sessions without `XDG_RUNTIME_DIR`. Missing policy,
+manager, local state or required shared resources refuses without selecting
+another backend. Fleet never enables linger, invokes sudo or provisions mounts.
+An administrator must supply missing manager/linger and mount prerequisites.
+
+A pure coordinator gets one unit. An agent gets distinct agent and native
+supervisor units, with distinct control groups. The agent waits for the native
+supervisor's readiness notification and uses `queue agent-serve
+--external-supervisor`. It cannot spawn a replacement supervisor or stop the
+supervisor on application exit. Agent failures may restart automatically; the
+supervisor has no automatic same-boot restart. Its existing authenticated
+protocol, launch identities, containment and shutdown rules remain authoritative.
+Units use normal control-group killing; they never use `KillMode=none`.
+
+`queue agent-supervisor-serve ROLE [--env-file ENV]` is the foreground native
+supervisor entry point for an already initialized resident agent. Startup holds
+native ownership locks, checks existing state, and refuses missing databases.
+Positive changed Linux boot/root evidence permits native reboot containment;
+same-boot owner loss cannot adopt a PID or declare clean continuity. Interrupted
+work does not become success. The agent reconciles retained sessions, results
+and claims before advertising new capacity. Supervisor/service replacement
+requires native settlement and a clean stop. Service-manager forced termination
+can leave uncertain ownership and must be recovered through native operations.
+
+Fleet retains one protected `service.json` under the host administrative root
+and immutable unit files under its `units/` directory. These bind backend,
+role/configuration paths and expected root/coordinator IDs; native databases
+continue to own assignments and execution. Enabled user-unit links target these
+files. Removing inventory entries does not remove units or their retained state.
+The boot readiness command checks bound roots and declared resource paths before
+native startup; it never initializes an empty replacement. A missing resource
+leaves readiness failed, requiring the resource to be restored and startup
+retried explicitly.
+
+A retained tmux deployment migrates only after native admission/work is drained,
+pending polls settled, and the communication services and tmux sessions stopped.
+Choose `systemd-user` in the inventory, then run:
+
+```sh
+loom fleet migrate-services --fleet lab --operation-id service-migration-001
+loom fleet operation status service-migration-001 --fleet lab
+loom fleet operation resume service-migration-001 --fleet lab
+```
+
+The migration retains expected native IDs and per-host request receipts. Live,
+retained or uncertain ownership refuses; a timeout never escalates to killing a
+service. It does not retire sessions, reset roots or change runtime/profile
+bindings. A repeated intent resumes the same selection; changing inventory or
+role inputs conflicts. Ordinary apply never performs an implicit migration.
+
+Physical support requires `tests/fleet_acceptance/test_managed_services.py` on
+explicitly selected disposable hosts. Controlled software tests do not qualify
+installed systemd/cgroup, logout or reboot behavior. No installed versions or
+physical lifecycle cases are qualified by the implementation itself. The
+installed owner records versions, exact identities, cgroup separation and
+owned-process cleanup. Operator SSH logout and disappearance of a last logind
+session are recorded distinctly when host PAM policy does not create sessions.

@@ -82,13 +82,32 @@ def main():
     )
     local(root)
     local(admin)
+    manager = request.get("service_manager", "tmux")
+    if manager not in {"tmux", "systemd-user"}:
+        raise ValueError("unsupported explicit service backend")
     missing = [
         name
-        for name in ("uv", "tmux", "openssl", "findmnt")
+        for name in ("uv", "openssl", "findmnt", *( ["tmux"] if manager == "tmux" else ["systemctl", "loginctl"]))
         if shutil.which(name) is None
     ]
     if missing or sys.version_info[:2] != (3, 12):
-        raise ValueError("host requires Python 3.12, uv, tmux, openssl and findmnt")
+        raise ValueError("host requires Python 3.12, uv, openssl, findmnt and the selected service manager")
+    if manager == "systemd-user":
+        runtime = Path("/run/user") / str(os.getuid())
+        try:
+            info = runtime.stat()
+        except OSError as exc:
+            raise ValueError(
+                f"current-user runtime unavailable; ask administrator to start user@{os.getuid()}.service with approved linger"
+            ) from exc
+        if info.st_uid != os.getuid() or info.st_mode & 0o077 or not (runtime / "bus").is_socket():
+            raise ValueError("protected current-user systemd runtime unavailable")
+        os.environ["XDG_RUNTIME_DIR"] = str(runtime)
+        os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(runtime / "bus")
+        linger = subprocess.run(["loginctl", "--no-ask-password", "show-user", str(os.getuid()), "--property=Linger", "--value"], capture_output=True, text=True)
+        manager_probe = subprocess.run(["systemctl", "--user", "--no-ask-password", "show-environment"], capture_output=True)
+        if linger.returncode or linger.stdout.strip() != "yes" or manager_probe.returncode:
+            raise ValueError("approved linger and current-user manager required; ask administrator; no backend fallback")
     release = request["release"]
     destination = admin / "releases" / release["descriptor_sha256"]
     python = destination / "environment/bin/python"
@@ -131,9 +150,14 @@ def main():
             "bound_root": bound_root,
             "admin": str(admin),
             "installed": installed,
+            "service_manager": (
+                json.loads((admin / "service.json").read_text()).get("service_manager", "tmux")
+                if (admin / "service.json").exists()
+                else "tmux" if installed is not None and root.exists() else None
+            ),
             "native_owner": native_owner,
             "local_storage": True,
-            "boot_start": False,
+            "boot_start": manager == "systemd-user",
             "credentials_complete": all(
                 Path(path).is_file() for path in request.get("credential_paths", [])
             ),

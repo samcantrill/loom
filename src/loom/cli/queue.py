@@ -104,10 +104,17 @@ def register_subparser(
     reboot.add_argument("--operation-id", required=True)
     _add_output_options(reboot)
     reboot.set_defaults(handler=handle_agent_recover_reboot)
+    supervisor = queue_subparsers.add_parser(
+        "agent-supervisor-serve", help="serve the initialized native supervisor independently"
+    )
+    _add_role_config_arguments(supervisor)
+    _add_output_options(supervisor)
+    supervisor.set_defaults(handler=handle_agent_supervisor_serve)
     agent_serve = queue_subparsers.add_parser(
         "agent-serve", help="serve one initialized outbound-agent root"
     )
     _add_role_config_arguments(agent_serve)
+    agent_serve.add_argument("--external-supervisor", action="store_true", help="require a separately owned native supervisor")
     agent_serve.add_argument("--expected-coordinator-id", help="pin the native coordinator during handshake")
     _add_output_options(agent_serve)
     agent_serve.set_defaults(handler=handle_agent_serve)
@@ -490,6 +497,32 @@ def handle_daemon_retire(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
+    """Serve a preinitialized supervisor without creating or replacing identity."""
+    from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue._agent_process_supervisor import (
+        AgentProcessSupervisorService, AgentProcessSupervisorError, SupervisorLaunchConfiguration,
+    )
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
+        if service.client.agent_root is None or not service.client.resident_profiles:
+            raise CliError("native supervisor requires a resident agent root")
+        from loom.queue.agent_session_transport import _read_remote_agent_root_id
+        AgentProcessSupervisorService.serve_initialized(
+            service.client.agent_root,
+            configuration=SupervisorLaunchConfiguration(
+                _read_remote_agent_root_id(service.client.agent_root),
+                tuple(profile.launch_profile for profile in service.client.resident_profiles),
+            ),
+            immutable_fingerprint=service.immutable_fingerprint,
+            active_fingerprint=service.active_fingerprint,
+        )
+    except (QueueError, AgentProcessSupervisorError) as exc:
+        raise CliError(str(exc)) from exc
+    return int(ExitCode.SUCCESS)
+
+
 def handle_agent_serve(namespace: argparse.Namespace) -> int:
     """Run one foreground outbound agent with bounded reconnect."""
     from threading import Event
@@ -497,6 +530,14 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         load_outbound_agent_service_config,
         run_outbound_agent_service,
     )
+
+    from dataclasses import replace
+
+    def load_service():
+        service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
+        return replace(service, client=replace(
+            service.client, external_supervisor=getattr(namespace, "external_supervisor", False)
+        ))
 
     stop = Event()
     handled_signals = (signal.SIGINT, signal.SIGTERM)
@@ -511,9 +552,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
     try:
         for handled_signal in handled_signals:
             signal.signal(handled_signal, request_stop)
-        service = load_outbound_agent_service_config(
-            namespace.config, env_file=namespace.env_file
-        )
+        service = load_service()
         _emit_daemon_payload(
             namespace,
             {
@@ -526,9 +565,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
             service,
             stop=stop,
             expected_coordinator_id=getattr(namespace, "expected_coordinator_id", None),
-            trusted_config_loader=lambda: load_outbound_agent_service_config(
-                service.source_path, env_file=service.environment_path
-            ),
+            trusted_config_loader=load_service,
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc

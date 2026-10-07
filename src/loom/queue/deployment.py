@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import sqlite3
+
 from .operations import OperatorObservation
 
 from collections.abc import Callable, Mapping, Sequence
@@ -1166,7 +1169,7 @@ def _outbound_service_steps(
                 closing = client
                 client = None
                 try:
-                    if lifetime != "run" or stop.is_set():
+                    if not active.client.external_supervisor and (lifetime != "run" or stop.is_set()):
                         closing.shutdown_clean()
                 except (QueueConflictError, QueueServiceError):
                     # Retained or uncertain work deliberately keeps its process
@@ -1195,7 +1198,7 @@ def _open_outbound_agent(
             prepare_role_reload=prepare_role_reload,
         )
     except QueueServiceError as exc:
-        if str(exc) != "managed supervisor endpoint is unavailable":
+        if config.external_supervisor or str(exc) != "managed supervisor endpoint is unavailable":
             raise
     if config.agent_root is None:
         raise QueueServiceError("outbound agent root is unavailable")
@@ -2590,3 +2593,54 @@ def inspect_role_declaration(
         targets(normalized)
         fingerprint = _canonical_fingerprint(normalized)
     return OperatorObservation("role-declaration", utc_timestamp(), fingerprint, "current", "available", {"role": role, "declaration_fingerprint": fingerprint, "protected_paths": "validated", "profile_identities": identities, "credentials": "redacted", "qualified": False})
+
+
+@contextmanager
+def service_backend_migration_guard(service, expected_root_id: str):
+    """Hold a stopped, settled native role during an explicit backend migration.
+
+    The caller has already drained admission/work and stopped the communication
+    service. Pending poll outcomes and missing native evidence refuse; no work is
+    cancelled, no root initialized and no identity replaced by this guard.
+    """
+    from .errors import QueueConflictError
+    from ._agent_session_journal import _RemoteAgentJournal
+    from .agent_session_transport import _has_retained_agent_work
+    from .retirement import _retained_agent_owners, require_unretired
+    from ._agent_process_supervisor import retained_supervisor_guard
+    from .local_daemon import _acquire_lock, _open_root
+    from ._service_lifetime import _retained_coordinator_operations
+    from .local_daemon_execution import local_daemon_owner_work_is_retained
+
+    if isinstance(service, OutboundAgentServiceConfig):
+        spec = read_agent_spec(service.source_path, env_file=service.environment_path)
+        journal = _RemoteAgentJournal(spec.agent_root,
+            expected_configuration_fingerprint=service.immutable_fingerprint,
+            expected_active_configuration_fingerprint=service.active_fingerprint)
+        try:
+            require_unretired(spec.agent_root)
+            if journal.root_id != expected_root_id:
+                raise QueueConflictError("migration native root identity changed")
+            execution, slurm = _retained_agent_owners(spec)
+            if (_has_retained_agent_work(journal, execution, slurm)
+                    or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
+                raise QueueConflictError("migration requires settled agent work and poll outcomes")
+            with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+                yield
+        finally:
+            journal.close()
+    else:
+        config = service.daemon
+        if config.agent_root is not None:
+            raise QueueConflictError("migration requires a pure coordinator")
+        # Native store opening is noninitializing and the lock fences scheduling.
+        with _acquire_lock(config.coordinator_root):
+            require_unretired(config.coordinator_root)
+            actual = _open_root(config.coordinator_root, role="coordinator")
+            if actual != expected_root_id:
+                raise QueueConflictError("migration native root identity changed")
+            local_daemon_owner_work_is_retained(config, coordinator_id=actual, agent_id=None)
+            with sqlite3.connect(config.control_database) as conn:
+                if _retained_coordinator_operations(conn):
+                    raise QueueConflictError("migration requires settled coordinator work")
+            yield

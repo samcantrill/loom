@@ -205,3 +205,39 @@ mock CUDA checks do not substitute for this installed gate.
 
 The bounded GPU job claims one native device from that declared set. Its exact
 observed/claimed UUID is recorded; it does not qualify every GPU in the set.
+
+
+### Installed managed-service lifetimes
+
+Use `tests/fleet_acceptance/test_managed_services.py` without marker exclusions,
+with `LOOM_RUN_FLEET_ACCEPTANCE=1` and a protected
+`LOOM_FLEET_ACCEPTANCE_CONFIG`. The selection is JSON with `schema_version: 1`,
+`disposable: true`, `kind: managed-services`, and a `cases` mapping. Case keys are
+`ssh_disconnect`, `logout`, `resident_agent_restart`, `sif_agent_restart`,
+`idle_reboot`, and `in_job_reboot`. An absent selection is unavailable evidence,
+not a pass of that case or the full matrix.
+
+Each selected case supplies `fleet`, `agent_id`, `agent_root_id`,
+`coordinator_id`, `session_id`, absolute installed `agent_python` and
+`coordinator_python`, protected `operator_connection`, a new protected `report`,
+and `timeout_seconds` (1..900). Optional `agent_env_file` and
+`coordinator_env_file` name the protected role environments. Paths `fleet`,
+`operator_connection`, and `report` resolve relative to the selection. The fleet
+must explicitly use systemd-user and separate agent/coordinator SSH hosts.
+Except for idle reboot, supply `assignment_id` for an already submitted bounded
+synthetic native job. Submit it through ordinary native APIs, with enough time
+remaining for the selected event and cleanup. Use separate assignments/case
+runs, and a disposable supervisor with no unrelated workers. SIF restart also
+requires the exact absolute `image` and its `image_sha256`; the actual launch
+must use that image. The harness borrows services and waits for bounded work to
+settle, proving worker process exit via owned pidfds and an empty worker cgroup.
+On failure it retains evidence and native owners for inspection; it terminates
+only its own SSH observer.
+
+Actual reboot additionally requires `LOOM_ALLOW_FLEET_REBOOT=1` and the exact
+agent SSH alias in top-level `reboot_authorized_hosts`. Never supply these opt-ins
+without permission to reboot that host. Tests retain pre/post Linux boot identity,
+native root/session identity, interrupted assignment containment and provider
+release. Idle and in-job reboot remain separately unavailable without this
+permission. SSH logout records whether the site's PAM integration created a
+logind session; it cannot claim last-logind-session evidence when none existed.
