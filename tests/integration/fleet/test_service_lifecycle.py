@@ -503,3 +503,73 @@ def test_absent_runtime_reports_prerequisite_without_fallback(monkeypatch):
     monkeypatch.setattr(Path, 'stat', absent)
     with pytest.raises(QueueConflictError, match='ask administrator to start user@'):
         _services.manager_environment()
+
+
+@pytest.mark.parametrize("backend, expected", [("systemd-user", True), ("tmux", False)])
+def test_completed_setup_reports_retained_boot_capability(
+    tmp_path, monkeypatch, backend, expected
+):
+    from types import SimpleNamespace
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.fleet import self_tests, ssh_operations
+    from loom.fleet.configuration import Inventory, write_new
+
+    inventory = Inventory(
+        tmp_path / "fleet.json", "fixture", tmp_path / "bundle", backend, ()
+    )
+    intent = {
+        "hosts": {
+            name: {"service_manager": backend} for name in ("coordinator", "worker")
+        },
+        "declarations": {
+            "coordinator": {},
+            "worker": {"url": "https://worker", "registration": {}},
+        },
+        "issuer": str(tmp_path / "issuer"),
+        "fresh_coordinator": False,
+        "check_selection": {"config": "probe"},
+    }
+    operation = ssh_operations._Operation(inventory, tmp_path / "operation", intent)
+    receipt = operation.receipts / "worker-initialize"
+    receipt.mkdir(mode=0o700)
+    write_new(receipt / "receipt.json", {"gpu_devices": []})
+
+    def call(name, action, **values):
+        if action == "prepare":
+            return {"ca": "ca", "csr": None, "certificate": "certificate"}
+        if action == "initialize":
+            return {"owner": name + "-root", "gpu_devices": [], "profile": {}}
+        return {}
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def observe_agent(self, name):
+            return SimpleNamespace(value={"offer": {"ready": True}})
+
+    monkeypatch.setattr(operation, "call", call)
+    monkeypatch.setattr(operation, "recheck", lambda: None)
+    monkeypatch.setattr(operation, "observe", lambda name: {"owner": name + "-root"})
+    monkeypatch.setattr(ssh_operations, "_bundle", lambda inventory: {})
+    monkeypatch.setattr(ssh_operations, "_fingerprint", lambda certificate: "fingerprint")
+    monkeypatch.setattr(
+        ssh_operations, "_connections",
+        lambda *args: (tmp_path / "deployment", tmp_path / "operator"),
+    )
+    monkeypatch.setattr(
+        CoordinatorOperatorClient, "from_connection_file", lambda path: Client()
+    )
+    monkeypatch.setattr(
+        self_tests, "self_test", lambda *args, **kwargs: {"outcome": "passed"}
+    )
+
+    result = ssh_operations._continue(operation)
+    assert result["state"] == "complete"
+    assert result["boot_start"] is expected
+    assert result["identities"] == {
+        "coordinator": "coordinator-root", "worker": "worker-root"
+    }

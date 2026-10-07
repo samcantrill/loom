@@ -220,7 +220,10 @@ filesystem; a directory beneath an NFS home is insufficient. Workload software,
 shared mounts and the selected resident Python or SIF profile must already exist.
 Tmux keeps services detached from the operator connection and promises **no boot
 startup**. Systemd setup uses the managed lifetimes below; runtime/profile changes
-require their explicit lifecycle paths.
+require their explicit lifecycle paths. The completed setup result reports
+`boot_start: true` for retained systemd-user selections and `false` for tmux.
+This describes configured boot-start wiring; it is not evidence of physical
+boot or reboot qualification.
 
 Setup requires an immutable offline service bundle and an explicit native
 `loom.deployment` selection for the synthetic probe source/profile. For a fresh

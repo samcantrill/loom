@@ -989,7 +989,10 @@ def _continue(operation):
         "checks": results,
         "deployment": str(deployment),
         "operator_connection": str(operator),
-        "boot_start": False,
+        "boot_start": all(
+            row.get("service_manager", "tmux") == "systemd-user"
+            for row in intent["hosts"].values()
+        ),
     }
 
 
