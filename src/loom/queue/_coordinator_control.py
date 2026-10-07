@@ -45,7 +45,7 @@ from ._service_lifetime import ServiceRetiring
 from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
 
-from .operations import OPERATOR_CAPABILITY, OperatorObservation
+from .operations import OPERATOR_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, OperatorObservation
 from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
 
 OPERATOR_OPERATIONS = frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
@@ -535,7 +535,15 @@ def validate_request(
             raise ValueError("operator mutation requires coordinator and control identity")
         control = AgentControl.from_value(cast(Mapping[str, object], value["control"]))
         from .operations import control_intent_digest
-        if value.get("intent_digest") != control_intent_digest(control.value()):
+        expected_intent = control.value()
+        if "condition" in value:
+            condition = value["condition"]
+            if not isinstance(condition, Mapping) or set(condition) != {"expected_control_id"}:
+                raise ValueError("invalid conditional control")
+            optional_id(condition["expected_control_id"])
+            fields[operation] = fields[operation] | {"condition"}
+            expected_intent = {"control": control.value(), "condition": dict(condition)}
+        if value.get("intent_digest") != control_intent_digest(expected_intent):
             raise ValueError("operator control intent digest differs")
     if operation == "service_lifetime":
         value.setdefault("agent_root_id", None)
@@ -892,7 +900,7 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
     except QueueServiceError as exc:
         raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
     try:
-        result = view.control_agent(control)
+        result = view.control_agent(control, condition=cast(Mapping[str, PlainData] | None, value.get("condition")))
     except QueueConflictError as exc:
         raise control_error("conflict", operation, payload, boundary="coordinator") from exc
     return {**result, "mutation_outcome": "applied"}
@@ -914,6 +922,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
         (
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
+            CONDITIONAL_CONTROL_CAPABILITY,
             MAINTENANCE_CAPABILITY,
             "run-context-v1",
             "run-query-v1",

@@ -2708,11 +2708,20 @@ class LocalDaemon:
         return admission
 
     def _control_agent(
-        self, principal: LocalDaemonPrincipal, control: AgentControl
+        self, principal: LocalDaemonPrincipal, control: AgentControl,
+        *, condition: Mapping[str, PlainData] | None = None,
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
         _public_operation_id(control.operation_id)
+        if condition is not None:
+            if set(condition) != {"expected_control_id"}:
+                raise QueueServiceError("invalid conditional control")
+            expected = condition["expected_control_id"]
+            if expected is not None:
+                if not isinstance(expected, str):
+                    raise QueueServiceError("invalid conditional predecessor")
+                _public_operation_id(expected)
         authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
@@ -2735,7 +2744,13 @@ class LocalDaemon:
                 "WHERE operation_id = ?",
                 (control.operation_id,),
             ).fetchone()
+            condition_key = "agent-control-condition:" + control.operation_id
+            retained_condition = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (condition_key,)
+            ).fetchone()
             if prior is not None:
+                if (None if retained_condition is None else json.loads(retained_condition[0])) != condition:
+                    raise QueueConflictError("agent control predecessor intent conflicts")
                 if (
                     str(prior["principal_id"]) != principal.subject
                     or str(prior["request_json"]) != encoded
@@ -2769,6 +2784,15 @@ class LocalDaemon:
                 raise QueueServiceError(
                     "pool-scoped control requires an independently controllable agent"
                 )
+            if condition is not None:
+                current = conn.execute(
+                    "SELECT operation_id FROM agent_controls WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+                    (control.expected_session_id,),
+                ).fetchone()
+                if (None if current is None else current[0]) != condition["expected_control_id"]:
+                    raise QueueConflictError("agent control predecessor conflicts")
+                conn.execute("INSERT INTO daemon_metadata(key,value) VALUES (?,?)",
+                             (condition_key, json.dumps(dict(condition), sort_keys=True)))
             active = conn.execute(
                 "SELECT operation_id FROM agent_controls WHERE session_id = ? "
                 "AND state IN ('pending_delivery', 'applying') LIMIT 1",
@@ -4052,7 +4076,12 @@ class LocalDaemonOperatorView:
             raise QueueServiceError("managed operation was not found")
         control = AgentControl.from_value(json.loads(row["request_json"]))
         self._daemon._authorizer().require_operator(self._principal, control.kind.value, agent_id=control.agent_id, pool=control.pool)
-        return {"operation_id": operation_id, "intent_digest": hashlib.sha256(row["request_json"].encode()).hexdigest(), "state": row["state"], "code": row["result_code"], "acknowledged": bool(row["acknowledged"]), "mutation_outcome": "applied"}
+        from .operations import control_intent_digest
+        with self._daemon._connection() as conn:
+            retained = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("agent-control-condition:" + operation_id,)).fetchone()
+        condition = None if retained is None else json.loads(retained[0])
+        intent_digest = hashlib.sha256(row["request_json"].encode()).hexdigest() if condition is None else control_intent_digest({"control": control.value(), "condition": condition})
+        return {"operation_id": operation_id, "intent_digest": intent_digest, "condition": condition, "state": row["state"], "code": row["result_code"], "acknowledged": bool(row["acknowledged"]), "mutation_outcome": "applied"}
 
     def retire(
         self, operation_id: str, expected_coordinator_id: str
@@ -4084,9 +4113,15 @@ class LocalDaemonOperatorView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
 
-    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+    def control_agent(self, control: AgentControl, *, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
+        """Accept a control, optionally only after the exact expected predecessor.
+
+        ``condition={"expected_control_id": None}`` expects no prior control;
+        omission preserves unconditional operator behavior. Exact replay retains
+        its original condition and never reapplies policy over a later control.
+        """
         with self._daemon._cycle_lock:
-            return self._daemon._control_agent(self._principal, control)
+            return self._daemon._control_agent(self._principal, control, condition=condition)
 
     def reload_scheduling(
         self, request: CoordinatorSchedulingReload

@@ -294,6 +294,8 @@ def self_test(
     retry_of: str | None = None,
     timeout_seconds: float = 120,
     env_file: Path | None = None,
+    _prepare_id: str | None = None,
+    _maintenance_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run selected checks or reconnect to one protected immutable check intent.
 
@@ -313,7 +315,9 @@ def self_test(
         raise QueueConfigError("checks must select cpu, storage and/or gpu")
     intent: dict[str, Any] = {}
     continuing = operation_id is not None
-    operation_id = operation_id or "check-" + uuid4().hex
+    operation_id = operation_id or _prepare_id or "check-" + uuid4().hex
+    if _prepare_id is not None and (continuing or len(checks) != 1):
+        raise QueueConfigError("maintenance preparation requires one new check slot")
     validate_queue_id(operation_id, "self-test operation ID")
     if Path(operation_id).name != operation_id or operation_id in {".", ".."}:
         raise QueueConfigError("operation ID must be a filename")
@@ -379,7 +383,7 @@ def self_test(
             raise QueueConfigError("GPU check requires a declared GPU profile")
         requests = {}
         for check in checks:
-            identity = operation_id + "-" + check
+            identity = operation_id if _prepare_id is not None else operation_id + "-" + check
             composition = probe_configuration(check, str(agent_id))
             requests[check] = RunRequest(
                 PrepareRunRequest(
@@ -399,6 +403,7 @@ def self_test(
             "schema_version": 1,
             "operation_id": operation_id,
             "retry_of": retry_of,
+            "maintenance_binding": None if _maintenance_binding is None else dict(_maintenance_binding),
             "coordinator_id": connection.expected_coordinator_id,
             "connection": str(selection.connection),
             "operator_connection": str(operator_connection.resolve()),
@@ -423,6 +428,8 @@ def self_test(
         if not continuing:
             _publish(directory / "intent.json", intent)
         intent = _read(directory / "intent.json")
+        if _prepare_id is not None:
+            return intent
         previous_results = (
             _read(directory / "result.json").get("checks", {})
             if (directory / "result.json").exists()

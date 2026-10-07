@@ -204,6 +204,10 @@ class NativeCoordinatorClient:
                     from .operations import OPERATOR_CAPABILITY
                     if OPERATOR_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY})
+                if operation == "operator_control" and "condition" in payload:
+                    from .operations import CONDITIONAL_CONTROL_CAPABILITY
+                    if CONDITIONAL_CONTROL_CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CONDITIONAL_CONTROL_CAPABILITY})
                 if operation.startswith("operator_maintenance"):
                     from ._maintenance import MAINTENANCE_CAPABILITY
                     if MAINTENANCE_CAPABILITY not in description.capabilities:

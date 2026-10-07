@@ -350,3 +350,116 @@ physical lifecycle cases are qualified by the implementation itself. The
 installed owner records versions, exact identities, cgroup separation and
 owned-process cleanup. Operator SSH logout and disappearance of a last logind
 session are recorded distinctly when host PAM policy does not create sessions.
+
+## Whole-fleet service runtime upgrades
+
+`loom fleet upgrade --fleet lab --runtime-release releases/next.yaml --plan`
+previews the whole declared fleet. Omission of `--apply` is read-only. Explicit
+`--apply --operation-id upgrade-018` prepares isolated immutable candidates on
+every host, closes native admission, waits for admitted pipelines and settlement,
+conditionally drains agents, replaces services offline, and runs native checks
+before restoring the previous drain policy and reopening. Accepted later DAG
+stages continue before drain. Timeout detaches; it never cancels or force-kills.
+Partial/rolling upgrades and post-migration rollback are unsupported.
+
+Supply `--deployment` (connection-only shared-source selection), `--connection`
+(protected operator connection), and source-relative `--config` for checks.
+Retained completed setup bindings can supply the first two. Every agent uses its
+single declared profile. CPU/storage checks are mandatory; profiles declaring
+GPUs additionally run GPU checks. The source must support
+`maintenance-admission-v1`, `operator-observations-v1` and
+`conditional-agent-control-v1`. Candidate capability is separately checked after
+offline installation and before gate closure. Preview reports that installation
+as outstanding; it never qualifies uninstalled bytes. Candidate storage/profile
+and image checks are repeated at mutable boundaries. Fleet never updates a live
+environment in place or overwrites old installation/migration evidence.
+
+Use `loom fleet operation status upgrade-018 --fleet lab` to inspect retained
+intent, or `resume` to continue it. Resume accepts no retargeting options. An
+interrupted request keeps its ID and native mutation outcome; observation or
+exact replay resolves it. A failed check remains failed on ordinary resume.
+After correcting its cause without changing the target, explicitly select a
+successor with:
+
+```sh
+loom fleet operation retry-check upgrade-018 --fleet lab \
+  --failed-check check-017 --operation-id check-019
+loom fleet operation resume upgrade-018 --fleet lab
+```
+
+The predecessor must be a confirmed native terminal failure with no outstanding
+native effects. The successor is appended to the same maintenance history and
+receives exact operator authorization before dispatch. Prior failure evidence
+remains. Another active successor, different target/owner or unsettled prior
+attempt refuses. Only the latest explicitly selected settled pass satisfies a
+slot, and all slots must pass before the gate reopens.
+
+`operation abort` restores only controls still owned by that operation, using
+native atomic expected-predecessor guards. An independent applied control
+conflicts even if its drain value matches. Before closure abort has no native
+effect. During settlement/drain it unwinds reversible owned changes and opens
+the gate; after the first retained stop/replacement intent it refuses automatic
+rollback. A lost restoration reply replays the original acceptance without
+reapplying policy over later controls. Completed operations report completion.
+
+### Explicit bridge from an incapable source
+
+Published older sources may supply the gate but lack conditional agent controls.
+Automatic preview/apply refuses them before mutation. Do not patch an immutable
+installation or assume a capable candidate protects source-side abort.
+
+An operator must exclude new submissions **and independent policy edits** for
+this entire one-time quiesced transition. Close the source's native gate if
+available, finish admitted preparation and pipelines, and prove native
+publication, containment, acknowledgement, claims and controls settled before
+draining/stopping. Use existing native controls and retained service roots/keys.
+Prepare the immutable capable candidate separately; use native offline
+`daemon-upgrade` (schema 18 or the current schema), retain its database backups,
+and replace only the positively owned stopped service bindings. Preserve agent
+supervisor clean-stop semantics and all run/history/profile identity. Native
+older direct migration readers remain available, but Fleet does not broaden its
+migration population: use the documented intermediate native upgrade first.
+
+Retain operator exclusion through fresh source capability/identity observation,
+exact authorized CPU/storage/GPU checks and release, conditional restoration of
+original policy and gate reopening. Unknown ownership or failed/unreleased
+checks remain incomplete. Keep the old environment and receipts; no reset,
+forced kill, rollback, reboot or automatic concurrent-source guarantee is part
+of this bridge. The manager must retain exact bridge evidence before claiming
+an automatic upgrade from the newly capable source. Bridge success alone is not
+installed automatic-upgrade qualification.
+
+For this deliberately manual bridge, the existing native entry points are
+`queue daemon-maintenance --connection OPERATOR --operation-id BRIDGE --close`,
+`CoordinatorOperatorClient.observe_status/observe_agent/observe_control`, and
+`control_agent(AgentControl(...))` **without** `condition` on an incapable source.
+`queue daemon-maintenance ... --open` reuses that bridge owner after successful
+checks. Keep the exact gate/control IDs and digest, and replay those IDs if a
+reply is lost. Ordinary source controls are safe here only because independent
+operators are explicitly excluded.
+
+A separately installed capable interpreter can call
+`loom.queue.service_upgrade.inspect_service_settlement(root,
+expected_root_id=...)` before any stop; it reads retained native evidence and
+does not initialize a role. Stop the positively identified communication
+process gracefully, then use the candidate's
+`queue daemon-upgrade ROLE` for the stopped pure coordinator and verify its
+returned coordinator ID against the retained identity. Load the existing protected role with
+`load_coordinator_service_config` or `load_outbound_agent_service_config` and
+hold `service_backend_migration_guard(service, expected_root_id)` while replacing
+its retained service binding. That guard owns the supervisor's clean stop and
+refuses retained/unknown work. Preserve the previous unit and binding bytes;
+render the same selected backend against the new interpreter, reload its units,
+and start only the retained selected roles. No new root or session is enrolled.
+
+After reconnection, use the capable native operator to observe both capabilities
+and original root/session identities, authorize each exact maintenance check
+through `CoordinatorOperatorClient.maintenance` with an exact `action: authorize`
+request, and submit the matching native
+request. The existing Fleet self-test producer and its native assignment/result
+observations supply CPU/storage/GPU checks; retain exact request digests and
+placement/resource authorization. Wait for result, terminal acknowledgement,
+claim release and host containment, revoke each check authorization, restore
+previous policy with the observed expected predecessor, and finally open the
+same bridge gate. This procedure has no automatic bridge command: the operator
+retains exclusion and the native receipts throughout.

@@ -61,14 +61,31 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     migration.add_argument("--env-file", type=Path)
     migration.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
     migration.set_defaults(handler=handle)
+    upgrade = commands.add_parser("upgrade", help="preview or apply whole-fleet service maintenance")
+    upgrade.add_argument("--fleet", required=True)
+    upgrade.add_argument("--runtime-release", type=Path, required=True)
+    mode = upgrade.add_mutually_exclusive_group()
+    mode.add_argument("--plan", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    upgrade.add_argument("--operation-id")
+    upgrade.add_argument("--deployment", type=Path)
+    upgrade.add_argument("--connection", type=Path)
+    upgrade.add_argument("--config", default="fleet-check.yaml")
+    upgrade.add_argument("--env-file", type=Path)
+    upgrade.add_argument("--timeout", type=float, default=120)
+    upgrade.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    upgrade.set_defaults(handler=handle)
     operation = commands.add_parser(
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume"):
+    for action in ("status", "resume", "abort", "retry-check"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
+        if action == "retry-check":
+            item.add_argument("--failed-check", required=True)
+            item.add_argument("--operation-id", dest="new_check", required=True)
         item.add_argument(
             "--format", dest="output_format", choices=("text", "json"), default="text"
         )
@@ -171,7 +188,14 @@ def handle(namespace: argparse.Namespace) -> int:
             if getattr(namespace, "hosts", None) is None
             else namespace.hosts.split(",")
         )
-        if command == "migrate-services":
+        if command == "upgrade":
+            from loom.fleet.upgrades import upgrade
+            if not namespace.apply:
+                from loom.fleet.upgrades import preview
+                result = preview(inventory, runtime_release=namespace.runtime_release, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
+            else:
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
+        elif command == "migrate-services":
             from loom.fleet.ssh_operations import migrate_services
             result = migrate_services(inventory, operation_id=namespace.operation_id,
                                       hosts=hosts, env_file=namespace.env_file)
@@ -179,13 +203,18 @@ def handle(namespace: argparse.Namespace) -> int:
             from loom.fleet.ssh_operations import apply, operation_status
 
             if command == "operation":
-                result = (
-                    operation_status(inventory, namespace.operation_id)
-                    if namespace.operation_command == "status"
-                    else apply(
-                        inventory, operation_id=namespace.operation_id, resume=True
-                    )
-                )
+                from loom.fleet._host import read
+                from loom.fleet.ssh_operations import _directory
+                intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
+                if namespace.operation_command == "status":
+                    result = operation_status(inventory, namespace.operation_id)
+                elif intent.get("kind") == "runtime-upgrade":
+                    from loom.fleet.upgrades import upgrade
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None))
+                elif namespace.operation_command == "resume":
+                    result = apply(inventory, operation_id=namespace.operation_id, resume=True)
+                else:
+                    raise ValueError("abort/retry-check requires a maintenance upgrade")
             else:
                 result = apply(
                     inventory,
@@ -298,6 +327,8 @@ def handle(namespace: argparse.Namespace) -> int:
                     if fact.get("value"):
                         print("    " + json.dumps(fact["value"], sort_keys=True))
         for name, fact in result.get("checks", {}).items():
+            if not isinstance(fact, dict) or "outcome" not in fact:
+                continue
             print(
                 f"  {name}: {fact['outcome']} ({fact.get('code', '')}); operation={fact.get('operation_id', '')}"
             )
@@ -320,10 +351,10 @@ def handle(namespace: argparse.Namespace) -> int:
         if "preview" in result:
             print("preview: " + json.dumps(result["preview"], sort_keys=True))
         print(result.get("next", ""))
-    if command in {"apply", "operation"}:
+    if command in {"apply", "operation", "upgrade"}:
         return (
             0
-            if result["outcome"] == "complete"
+            if result["outcome"] in {"complete", "aborted", "preview"}
             else 2
             if result["outcome"] in {"pending", "running", "waiting"}
             else 1

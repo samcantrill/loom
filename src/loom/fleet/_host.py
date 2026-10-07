@@ -669,6 +669,9 @@ def bind_principal(request, directory):
 
 def execute(request, repeated, directory):
     action = request["action"]
+    if action.startswith("upgrade-"):
+        from loom.fleet._upgrade_host import execute as upgrade_step
+        return upgrade_step(request)
     if action == "prepare":
         return prepare(request, repeated)
     if action == "issue":
@@ -716,7 +719,7 @@ def main():
                 if publication.exists()
                 else None
             )
-        if request["action"] in {"observe", "resources"}:
+        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement"}:
             if (
                 request.get("expected_declaration") is not None
                 and digest(payload(request)) != request["expected_declaration"]

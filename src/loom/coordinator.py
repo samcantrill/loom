@@ -514,10 +514,21 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
         """Observe one assignment; local claims remain independently sourced."""
         return self._native_call("operator_assignment", {"assignment_id": assignment_id})
 
-    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
-        """Commit or replay one exact native control; never retry automatically."""
+    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
+        """Commit/replay a native control with optional predecessor ownership.
+
+        ``condition={"expected_control_id": id}`` requires that exact latest
+        control; an explicit null ID requires no prior control. Omission retains
+        unconditional operator behavior. The condition is immutable intent and
+        is compared atomically only for fresh acceptance, never during replay.
+        """
         from loom.queue.operations import control_intent_digest
-        return self._native_call("operator_control", {"control": control.value(), "intent_digest": control_intent_digest(control.value())}, expected_coordinator_id)
+        value = control.value()
+        payload: dict[str, PlainData] = {"control": value}
+        if condition is not None:
+            payload["condition"] = dict(condition)
+        payload["intent_digest"] = control_intent_digest(value if condition is None else {"control": value, "condition": dict(condition)})
+        return self._native_call("operator_control", payload, expected_coordinator_id)
 
     def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
         """Resolve the original operation after a lost mutation response."""

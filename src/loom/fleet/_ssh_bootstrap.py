@@ -163,17 +163,18 @@ def main():
             ),
         }
     private(admin)
-    if active.exists() and json.loads(active.read_text()) != release:
+    upgrading = request["action"] in {"install-candidate", "receipt"} or request["action"].startswith("upgrade-")
+    if active.exists() and json.loads(active.read_text()) != release and not upgrading:
         raise ValueError("service release change requires explicit upgrade")
     import fcntl
 
     with (admin / "installation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if request["action"] == "install":
+        if request["action"] in {"install", "install-candidate"}:
             if marker.exists():
                 if json.loads(marker.read_text()) != release:
                     raise ValueError("installed immutable release differs")
-                if not active.exists():
+                if not active.exists() and request["action"] == "install":
                     publish(active, json.dumps(release, sort_keys=True).encode())
                 return {"installed": release, "outcome": "unchanged"}
             private(destination)
@@ -232,7 +233,7 @@ def main():
                     check=True,
                 )
             publish(marker, json.dumps(release, sort_keys=True).encode())
-            if not active.exists():
+            if not active.exists() and request["action"] == "install":
                 publish(active, json.dumps(release, sort_keys=True).encode())
             return {"installed": release, "outcome": "applied"}
     if not marker.exists() or json.loads(marker.read_text()) != release:
