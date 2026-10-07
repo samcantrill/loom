@@ -351,3 +351,40 @@ def test_interrupt_during_target_read_retains_completed_operation(native, monkey
         assert result["observation"]["operation"]["state"] == "applied"
         assert result["observation"]["admission"] is None
     assert _counts(daemon) == before
+
+
+def test_follow_transport_deadline_is_an_error_without_expired_user_timeout(native, monkeypatch):
+    from loom.coordinator import CoordinatorClientError
+
+    path, daemon = native
+    assert _run(path, identity="transport-deadline")[0] == 0
+    before = _counts(daemon)[1:]
+    read = CoordinatorClient._native_call
+    def unavailable_read(client, operation, *args, **kwargs):
+        if operation == "operation":
+            raise CoordinatorClientError("deadline_exceeded", boundary="transport", operation=operation, ids={"operation_id": "transport-deadline"})
+        return read(client, operation, *args, **kwargs)
+    monkeypatch.setattr(CoordinatorClient, "_native_call", unavailable_read)
+    output = io.StringIO()
+    assert main(["runs", "follow", "--operation-id", "transport-deadline", "--deployment", str(path), "--format", "json"], stdout=output, stderr=io.StringIO()) == 6
+    error = json.loads(output.getvalue())["error"]
+    assert error["context"]["operation_id"] == "transport-deadline"
+    assert error["details"]["coordinator"]["code"] == "deadline_exceeded"
+    assert _counts(daemon)[1:] == before
+
+
+def test_cancel_can_use_retained_target_when_diagnostic_inspection_is_unavailable(native, monkeypatch):
+    from loom.coordinator import CoordinatorClientError
+
+    path, daemon = native
+    assert _run(path, identity="cancel-without-inspection")[0] == 0
+    assert daemon.wait_operation("cancel-without-inspection", timeout=30).operation.state == "applied"
+    def unavailable_inspection(*args, **kwargs):
+        raise CoordinatorClientError("deadline_exceeded", boundary="transport", operation="inspect_run")
+    monkeypatch.setattr(CoordinatorClient, "_inspect_run", unavailable_inspection)
+    output = io.StringIO()
+    assert main(["runs", "cancel", "--operation-id", "cancel-without-inspection", "--deployment", str(path), "--format", "json"], stdout=output, stderr=io.StringIO()) == 0
+    result = json.loads(output.getvalue())["result"]
+    assert result["resolved_target"] is not None
+    assert result["cancellation_operation_id"] == daemon.operation("cancel-without-inspection").result["cancellation_operation_id"]
+    assert _counts(daemon)[2] == 1

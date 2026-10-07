@@ -175,7 +175,10 @@ def handle_follow(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         from loom.coordinator import CoordinatorClientError
 
-        if isinstance(exc, CoordinatorClientError) and exc.code == "deadline_exceeded":
+        if (
+            isinstance(exc, CoordinatorClientError) and exc.code == "deadline_exceeded"
+            and deadline is not None and time.monotonic() >= deadline
+        ):
             detached = "timeout"
         else:
             raise operation_error(exc, operation_id, namespace.deployment, action="runs.follow") from exc
@@ -215,17 +218,11 @@ def handle_cancel(namespace: argparse.Namespace) -> int:
         selection = load_deployment(namespace.deployment)
         with connect_deployment(selection) as client:
             connection = client._native_call("handshake", {}, deadline=deadline)
-            observation = None
-            for snapshot in client._run_observation_steps(
+            observation = next(client._run_observation_steps(
                 operation_id, connection,
                 deadline=time.monotonic() + _duration(deadline),
-            ):
-                observation = snapshot
-            assert observation is not None
-            if observation.operation is None:
-                from loom.queue._coordinator_control import control_error
-
-                raise control_error("deadline_exceeded", "cancel_run_operation", {"operation_id": operation_id})
+            ))
+            assert observation.operation is not None
             preview = {
                 "operation_id": operation_id,
                 "resolved_target": _target(observation.operation.result),
