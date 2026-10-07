@@ -109,7 +109,7 @@ def test_init_world_readable_inventory_and_foreign_destination_refuse(
     assert cli("init", "lab")[0] != 0
 
 
-@pytest.mark.parametrize("command", ["status", "plan", "preflight"])
+@pytest.mark.parametrize("command", ["status", "preflight"])
 def test_commands_are_inert_and_missing_evidence_is_not_readiness(
     tmp_path, monkeypatch, command
 ):
@@ -130,8 +130,6 @@ def test_commands_are_inert_and_missing_evidence_is_not_readiness(
         == "agent_certificate_unavailable"
     )
     assert result["hosts"]["gpu01"]["native_owner"]["availability"] == "unavailable"
-    if command == "plan":
-        assert result["preview"]["reservation"] is False
     assert snapshot(tmp_path) == before
 
 
@@ -409,3 +407,12 @@ def test_exported_selection_refuses_native_role_startup(tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["loom.service_runtime", str(output), role])
         with pytest.raises(QueueServiceError, match="not configured for local startup"):
             service_runtime.main()
+
+
+def test_setup_plan_requires_complete_selection_before_ssh(tmp_path, monkeypatch):
+    path = inventory(tmp_path)
+    monkeypatch.setattr(subprocess, "Popen", forbid)
+    before = snapshot(tmp_path)
+    code, _ = cli("plan", "--fleet", path)
+    assert code != 0
+    assert snapshot(tmp_path) == before

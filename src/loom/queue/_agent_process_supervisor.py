@@ -1774,6 +1774,21 @@ class AgentProcessSupervisorService:
         supervisor.rotate_clean_continuity()
         return cls._start(agent_root, configuration)
 
+    @classmethod
+    def serve_initialized(
+        cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration | None = None,
+        immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
+    ) -> None:
+        """Serve an existing native root in the foreground for a service manager.
+
+        Startup holds the native agent and supervisor locks. Only positive Linux
+        boot evidence may contain a previous boot's work; same-boot owner loss
+        preserves uncertainty. This never initializes missing state or adopts PIDs.
+        """
+        _serve(Path(agent_root).resolve() / "supervisor", managed_start=True,
+               expected_configuration=configuration, immutable_fingerprint=immutable_fingerprint,
+               active_fingerprint=active_fingerprint)
+
     @staticmethod
     def _start(
         agent_root: Path, configuration: SupervisorLaunchConfiguration
@@ -2111,7 +2126,11 @@ class _SupervisorDispatch:
             self.closing = True
 
 
-def _serve(root: Path) -> None:
+def _serve(
+    root: Path, *, managed_start: bool = False,
+    expected_configuration: SupervisorLaunchConfiguration | None = None,
+    immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
+) -> None:
     root = Path(root).resolve()
     lock_path = root / "service.lock"
     lock = lock_path.open("a+", encoding="utf-8")
@@ -2123,9 +2142,35 @@ def _serve(root: Path) -> None:
             "managed supervisor service is already running"
         ) from exc
     configuration = _service_configuration(root)
+    if expected_configuration is not None and configuration != expected_configuration:
+        raise AgentProcessSupervisorError("managed supervisor configuration changed")
     supervisor = AgentProcessSupervisor(
         root, agent_id=configuration.agent_id, profiles=configuration.profiles
     )
+    if managed_start:
+        from ._agent_session_journal import _RemoteAgentJournal
+
+        journal = _RemoteAgentJournal(root.parent,
+            expected_configuration_fingerprint=immutable_fingerprint,
+            expected_active_configuration_fingerprint=active_fingerprint)
+        try:
+            from .retirement import require_unretired
+            from ._managed_local import SQLiteAgentJournal
+            require_unretired(root.parent)
+            SQLiteAgentJournal(root.parent / "journal.sqlite", _allow_initialize=False)._open_existing()
+            if journal.root_id != configuration.agent_id:
+                raise AgentProcessSupervisorError("supervisor agent identity changed")
+            with supervisor._connect() as conn:
+                values = dict(conn.execute("SELECT key, value FROM metadata"))
+            prior = json.loads(values.get("boot_evidence", "null"))
+            observed = _host_boot_evidence()
+            if isinstance(prior, dict) and prior.get("boot") != observed["boot"]:
+                receipt = supervisor.recover_reboot("service-boot-" + observed["boot"])
+                if receipt["state"] != "contained":
+                    raise AgentProcessSupervisorError(str(receipt["reason"]))
+            supervisor.rotate_clean_continuity()
+        finally:
+            journal.close()
     secret = (root / "service.secret").read_bytes()
     endpoint = _endpoint_for_root(root)
     if endpoint.exists():
@@ -2135,6 +2180,13 @@ def _serve(root: Path) -> None:
     listener.listen(4)
     listener.settimeout(0.1)
     endpoint.chmod(0o600)
+    if managed_start and os.environ.get("NOTIFY_SOCKET"):
+        address = os.environ["NOTIFY_SOCKET"]
+        if address.startswith("@"):
+            address = "\0" + address[1:]
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
+            notification.connect(address)
+            notification.sendall(b"READY=1")
     dispatch = _SupervisorDispatch(supervisor)
     stopped = Event()
     slots = BoundedSemaphore(4)

@@ -344,11 +344,22 @@ def initialize(request, repeated):
 
 
 def start(request):
+    manager = request.get("service_manager", "tmux")
+    binding = Path(request["admin"]) / "service.json"
+    if binding.exists() and read(binding).get("service_manager", "tmux") != manager:
+        raise QueueConflictError("service backend change requires explicit quiesced migration")
+    if manager == "systemd-user":
+        from loom.fleet._services import start as start_systemd
+        return start_systemd(request)
+    if manager != "tmux":
+        raise QueueConflictError("unsupported service backend")
     fact = owner(request)
     expected = request["expected_root_id"]
     if fact["owner"] != expected:
         raise QueueConflictError("native root identity changed")
     admin = Path(request["admin"])
+    if not binding.exists():
+        atomic(binding, request)
     socket = admin / "tmux.sock"
     if len(os.fsencode(socket)) > 90:
         raise QueueConflictError("native host-local path is too long for tmux IPC")
@@ -668,6 +679,9 @@ def execute(request, repeated, directory):
         return initialize(request, repeated)
     if action == "start":
         return start(request)
+    if action == "migrate-services":
+        from loom.fleet._services import migrate
+        return migrate(request)
     if action == "enroll":
         return enroll(request, directory)
     if action == "bind":

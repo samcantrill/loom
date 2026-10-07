@@ -54,6 +54,13 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--format", dest="output_format", choices=("text", "json"), default="text"
     )
     apply_command.set_defaults(handler=handle)
+    migration = commands.add_parser("migrate-services", help="migrate stopped, settled tmux roles to systemd-user")
+    migration.add_argument("--fleet", required=True)
+    migration.add_argument("--operation-id", required=True)
+    migration.add_argument("--hosts")
+    migration.add_argument("--env-file", type=Path)
+    migration.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    migration.set_defaults(handler=handle)
     operation = commands.add_parser(
         "operation", help="inspect or continue retained setup"
     )
@@ -164,7 +171,11 @@ def handle(namespace: argparse.Namespace) -> int:
             if getattr(namespace, "hosts", None) is None
             else namespace.hosts.split(",")
         )
-        if command in {"apply", "operation"}:
+        if command == "migrate-services":
+            from loom.fleet.ssh_operations import migrate_services
+            result = migrate_services(inventory, operation_id=namespace.operation_id,
+                                      hosts=hosts, env_file=namespace.env_file)
+        elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
             if command == "operation":
@@ -192,7 +203,7 @@ def handle(namespace: argparse.Namespace) -> int:
                         "operator_credential_id": namespace.operator_credential_id,
                     },
                 )
-        elif command == "plan" and inventory.service_manager == "tmux":
+        elif command == "plan":
             from loom.fleet.ssh_operations import plan
 
             result = plan(
