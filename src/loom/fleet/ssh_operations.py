@@ -629,7 +629,7 @@ def _apply_locked(
                 check_selection is None
                 or check_selection == _normalized_checks(intent["check_selection"])
             )
-            same_environment = all(
+            same_environment = same_hosts and all(
                 row["env_file"] == intent["hosts"][name]["env_file"]
                 for name, row in rows.items()
             )

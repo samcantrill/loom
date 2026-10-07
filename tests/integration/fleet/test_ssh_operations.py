@@ -519,6 +519,9 @@ def test_fresh_setup_repeat_and_selected_add_host(site, capsys):
     preview = plan(updated, hosts=["worker2"], issuer=base / "issuer")
     assert set(preview["hosts"]) == {"coordinator", "worker2"}
     assert preview["hosts"]["coordinator"]["dependency"] is True
+    with pytest.raises(QueueConflictError, match="different selected inputs"):
+        apply(updated, operation_id="fresh", hosts=["worker2"], check_selection=selection)
+    assert not (base / "worker2").exists()
     from loom.fleet._credentials import ensure_ca
 
     wrong_issuer = base / "wrong-issuer"
