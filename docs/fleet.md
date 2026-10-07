@@ -187,7 +187,10 @@ Protected receipts live beside the inventory in `checks/<operation-id>` outside
 selected source captures. Immutable native requests and dispatch markers are
 fsynced before sending. Reconnection observes the exact IDs; if the native owner
 has no accepted request, it replays only the retained identical request under
-native idempotency. A confirmed failed result stays failed. An explicit new
+native idempotency. Selected requests are dispatched before result downloads,
+so a storage download deadline cannot prevent another check from reaching the
+native queue. Native admission and capacity still govern when each job runs.
+A confirmed failed result stays failed. An explicit new
 attempt uses `--retry-of check-FAILED-ID` together with the original selection
 arguments and receives new identities linked to that failure. It does not retry
 old work. A changed session/profile cannot qualify an old operation.

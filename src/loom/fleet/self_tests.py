@@ -142,14 +142,12 @@ def verify_check(
     return {"outcome": "passed", "code": "check_complete"}
 
 
-def _observe_check(
+def _dispatch_check(
     client: CoordinatorClient,
-    operator: CoordinatorOperatorClient,
     directory: Path,
     intent: Mapping[str, Any],
     check: str,
-    deadline: float,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     request = RunRequest.from_dict(intent["requests"][check])
     identity = request.preparation.operation_id
     marker = directory / (check + ".dispatch.json")
@@ -172,6 +170,19 @@ def _observe_check(
     if rejected.exists():
         error = _read(rejected)
         return {"outcome": "failed", "code": error["code"], "native_error": error}
+    return None
+
+
+def _observe_check(
+    client: CoordinatorClient,
+    operator: CoordinatorOperatorClient,
+    directory: Path,
+    intent: Mapping[str, Any],
+    check: str,
+    deadline: float,
+) -> dict[str, Any]:
+    request = RunRequest.from_dict(intent["requests"][check])
+    identity = request.preparation.operation_id
     try:
         observed = client.observe_run(
             identity, timeout_seconds=max(0.001, deadline - time.monotonic())
@@ -274,7 +285,8 @@ def self_test(
 
     A supplied operation ID only continues an existing receipt. New attempts use
     new IDs; retry_of links an observed failure. Deadlines detach without cancel
-    or replacement. The connection-only deployment pins native source/profile;
+    or replacement. Selected requests dispatch before result observation within
+    that deadline. The connection-only deployment pins native source/profile;
     the selected source must contain the base config and allow generic probes.
     """
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -415,6 +427,18 @@ def self_test(
                 expected_coordinator_id=intent["coordinator_id"],
             ) as operator,
         ):
+            # Result downloads must not prevent other selected requests from dispatching.
+            dispatch_results: dict[str, dict[str, Any]] = {}
+            for check in ("cpu", "storage", "gpu"):
+                if check not in intent["requests"]:
+                    continue
+                if previous_results.get(check, {}).get("outcome") == "failed":
+                    continue
+                if time.monotonic() >= deadline:
+                    break
+                dispatched = _dispatch_check(client, directory, intent, check)
+                if dispatched is not None:
+                    dispatch_results[check] = dispatched
             # Observe CPU/storage before GPU capacity waiting can exhaust the deadline.
             # Serialized intent key order is not execution order.
             for check in ("cpu", "storage", "gpu"):
@@ -425,7 +449,7 @@ def self_test(
                     results[check] = previous_results[check]
                     continue
                 try:
-                    result = (
+                    result = dispatch_results.get(check) or (
                         _waiting("deadline_exceeded")
                         if time.monotonic() >= deadline
                         else _observe_check(

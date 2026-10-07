@@ -303,14 +303,11 @@ def finish(inventory, operation):
     pytest.fail(json.dumps(result, default=str))
 
 
-def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch):
-    from contextlib import nullcontext
-
+def retained_checks(tmp_path, operation):
     import loom.fleet.self_tests as checks_module
     from loom.coordinator import RunRequest
     from loom.queue.preparation import PreparationSource, PrepareRunRequest
 
-    operation = "check-busy-gpu"
     inventory = Inventory(tmp_path / "fleet.yaml", "test", tmp_path, "tmux", ())
     directory = tmp_path / "checks" / operation
     directory.mkdir(parents=True, mode=0o700)
@@ -341,6 +338,21 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
         "requests": requests,
     }
     checks_module._publish(directory / "intent.json", intent)
+    return inventory, directory, intent, requests
+
+
+def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    import loom.fleet.self_tests as checks_module
+
+    operation = "check-busy-gpu"
+    inventory, directory, intent, requests = retained_checks(tmp_path, operation)
+    for check, request in requests.items():
+        checks_module._publish(
+            directory / (check + ".dispatch.json"),
+            {"operation_id": request["preparation"]["operation_id"]},
+        )
     retained = (directory / "intent.json").read_bytes()
     assert list(json.loads(retained)["requests"]) == ["cpu", "gpu", "storage"]
     for client in (
@@ -372,6 +384,85 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
     assert result["checks"]["gpu"]["code"] == "waiting_for_capacity"
     assert {check: row["operation_id"] for check, row in result["checks"].items()} == {
         check: operation + "-" + check for check in requests
+    }
+    assert (directory / "intent.json").read_bytes() == retained
+
+
+def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    import loom.fleet.self_tests as checks_module
+
+    operation = "check-storage-deadline"
+    inventory, directory, intent, requests = retained_checks(tmp_path, operation)
+    retained = (directory / "intent.json").read_bytes()
+    accepted = []
+    for factory in (
+        checks_module.CoordinatorClient,
+        checks_module.CoordinatorOperatorClient,
+    ):
+        monkeypatch.setattr(
+            factory, "from_connection_file", lambda *args, **kw: nullcontext(client)
+        )
+    clock = [100.0]
+    slow_storage = [True]
+    monkeypatch.setattr(checks_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    current = ["cpu"]
+
+    def observe_run(identity, **kwargs):
+        current[0] = identity.rsplit("-", 1)[-1]
+        return SimpleNamespace(
+            operation=None,
+            admission=SimpleNamespace(
+                state=SimpleNamespace(value="SUCCEEDED"),
+                admission_id="admission-" + current[0],
+                run_uri="file:///run/" + current[0],
+            ),
+            to_dict=lambda: {},
+        )
+
+    def fetch_artifacts(items, destination, *, deadline):
+        if current[0] == "storage" and slow_storage[0]:
+            clock[0] = deadline
+            return {"items": [{"outcome": "failed"}]}
+        path = Path(destination) / "report.json"
+        path.write_text(json.dumps({"check": current[0]}))
+        return {"items": [{"outcome": "available", "primary_path": str(path)}]}
+
+    assignment = {"stage_name": "probe", "terminal_acknowledged": True}
+    client = SimpleNamespace(
+        start_run=lambda request: accepted.append(request.preparation.operation_id),
+        observe_run=observe_run,
+        admission=lambda identity: SimpleNamespace(
+            owners={"assignment": {"assignments": [{"assignment_id": identity}]}}
+        ),
+        observe_assignment=lambda identity: SimpleNamespace(
+            availability="available", value=assignment, to_dict=lambda: {"value": assignment}
+        ),
+        observe_agent=lambda identity: SimpleNamespace(value={}, to_dict=lambda: {}),
+        select_outputs=lambda selection: SimpleNamespace(
+            items=[{"artifact": {"metadata": {"loom.shared_publication": {}}}}],
+            next_cursor=None,
+        ),
+        fetch_artifacts=fetch_artifacts,
+    )
+    monkeypatch.setattr(checks_module, "verify_check", lambda *a, **kw: {"outcome": "passed"})
+    monkeypatch.setattr(checks_module, "verify_storage", lambda path: {})
+    first = self_test(inventory, operation_id=operation, timeout_seconds=10)
+    assert first["outcome"] == "waiting"
+    assert first["checks"]["gpu"]["code"] == "deadline_exceeded"
+    assert accepted == [operation + "-" + name for name in ("cpu", "storage", "gpu")]
+    for check, request in requests.items():
+        assert json.loads((directory / (check + ".dispatch.json")).read_text()) == {
+            "operation_id": request["preparation"]["operation_id"]
+        }
+    slow_storage[0] = False
+    continued = self_test(inventory, operation_id=operation, timeout_seconds=10)
+    assert continued["outcome"] == "passed"
+    assert accepted == [operation + "-" + name for name in ("cpu", "storage", "gpu")]
+    assert {k: v["operation_id"] for k, v in continued["checks"].items()} == {
+        k: v["operation_id"] for k, v in first["checks"].items()
     }
     assert (directory / "intent.json").read_bytes() == retained
 
