@@ -61,9 +61,12 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     migration.add_argument("--env-file", type=Path)
     migration.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
     migration.set_defaults(handler=handle)
-    upgrade = commands.add_parser("upgrade", help="preview or apply whole-fleet service maintenance")
+    upgrade = commands.add_parser("upgrade", help="preview or apply service or selected workload maintenance")
     upgrade.add_argument("--fleet", required=True)
-    upgrade.add_argument("--runtime-release", type=Path, required=True)
+    target = upgrade.add_mutually_exclusive_group(required=True)
+    target.add_argument("--runtime-release", type=Path)
+    target.add_argument("--workload-profile")
+    upgrade.add_argument("--image", type=Path)
     mode = upgrade.add_mutually_exclusive_group()
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -192,9 +195,9 @@ def handle(namespace: argparse.Namespace) -> int:
             from loom.fleet.upgrades import upgrade
             if not namespace.apply:
                 from loom.fleet.upgrades import preview
-                result = preview(inventory, runtime_release=namespace.runtime_release, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
+                result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
         elif command == "migrate-services":
             from loom.fleet.ssh_operations import migrate_services
             result = migrate_services(inventory, operation_id=namespace.operation_id,
@@ -208,7 +211,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
-                elif intent.get("kind") == "runtime-upgrade":
+                elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
                     result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None))
                 elif namespace.operation_command == "resume":

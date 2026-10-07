@@ -923,7 +923,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
-            "quiescent-profile-promotion-v1",
+            "quiescent-profile-promotion-v2",
             MAINTENANCE_CAPABILITY,
             "run-context-v1",
             "run-query-v1",

@@ -1168,10 +1168,17 @@ control replay, including after a later promotion, never installs old bindings.
 One selected resident profile is supported; resource and shared-storage policy,
 transport, credentials and root identity cannot change in this operation.
 
-`quiescent-profile-promotion-v1` is reported by the running coordinator and in
+`quiescent-profile-promotion-v2` is reported by the running coordinator and in
 the running native service's process-bound observation. A separate service
 upgrade installs this capability before workload maintenance. Root schema 19
 and supervisor schema 3 are unchanged: the existing metadata and control stores
 own the transition. Older software refuses the pending active fingerprint and
 cannot decode the new control. No database reset or old-history migration is
 required for the preceding service upgrade.
+
+A promotion may carry a protected `candidate_source` in the canonical source's
+path frame. The trusted native service loader qualifies that source while the
+canonical predecessor stays startable. After accepting its local recovery intent,
+native promotion publishes the canonical source and completes the protected
+bindings under native locks. Startup resolves partial publication before joining
+the supervisor. An exact completed replay never republishes an earlier source.

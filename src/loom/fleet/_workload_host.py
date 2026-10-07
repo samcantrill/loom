@@ -82,6 +82,8 @@ def probe(request):
 
 def publish(request, directory):
     """Retain before/after source and reload only through native control owners."""
+    if role(request) != "coordinator":
+        raise QueueConflictError("native promotion owns agent source publication")
     current = payload(request)
     target = request["declaration"]
     retained = directory / "reload.json"
@@ -90,10 +92,6 @@ def publish(request, directory):
         if intent["after"] != target:
             raise QueueConflictError("workload publication target changed")
     else:
-        if role(request) == "agent":
-            _image(request["image"], request["image_sha256"])
-            if qualify(request, target) != request["target"]:
-                raise QueueConflictError("workload target qualification changed")
         intent = {"before": current, "after": target}
         if role(request) == "coordinator":
             from loom.fleet._host import coordinator_client
@@ -129,15 +127,65 @@ def publish(request, directory):
     return result
 
 
+def recover_service(request):
+    """Reconcile an accepted native transition and retained service ownership.
+
+    This action is reobserved on each continuation: a previous start receipt
+    cannot prove the current process survived. It never creates a service binding.
+    """
+    from loom.fleet._host import start
+    from loom.queue._profile_promotion import recover, completed, publication_state
+
+    fact = owner(request)
+    if fact["owner"] != request["expected_root_id"]:
+        raise QueueConflictError("workload native root identity changed")
+    retained = read(Path(request["admin"]) / "service.json")
+    if any(
+        retained.get(key) != request.get(key)
+        for key in ("root", "config", "release")
+    ):
+        raise QueueConflictError("workload retained service binding differs")
+    if fact["value"]["ownership"] != "live":
+        service = load_outbound_agent_service_config(
+            config(request), env_file=environment(request)
+        )
+        recover(service.client)
+        start(retained)
+    elif request.get("service_manager") == "systemd-user" and completed(
+        Path(request["root"]), request["promotion_id"]
+    ):
+        from loom.fleet._services import systemctl, unit_name
+
+        systemctl("start", unit_name(request, "supervisor"))
+    return {
+        "outcome": "applied",
+        "declaration": payload(request),
+        "publication_state": publication_state(
+            Path(request["root"]), request["promotion_id"]
+        ),
+    }
+
+
+def stage(request):
+    _image(request["image"], request["image_sha256"])
+    if qualify(request, request["declaration"]) != request["target"]:
+        raise QueueConflictError("workload target qualification changed")
+    from loom.fleet._host import keep
+
+    candidate = config(request).with_name(
+        ".workload-" + request["request_id"] + ".json"
+    )
+    keep(candidate, json.dumps(request["declaration"], sort_keys=True).encode())
+    return {"outcome": "applied", "candidate_source": str(candidate)}
+
+
 def execute(request, directory):
     if request["action"] == "workload-probe":
         return probe(request)
-    if request["action"] == "workload-supervisor":
-        if request.get("service_manager") == "systemd-user":
-            from loom.fleet._services import systemctl, unit_name
-
-            systemctl("start", unit_name(request, "supervisor"))
-        return {"outcome": "applied"}
+    if request["action"] == "workload-recover":
+        return recover_service(request)
+    if request["action"] == "workload-stage":
+        return stage(request)
     if request["action"] == "workload-publish":
         return publish(request, directory)
     raise QueueConflictError("unsupported fixed workload host action")

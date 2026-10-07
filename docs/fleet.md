@@ -463,3 +463,46 @@ claim release and host containment, revoke each check authorization, restore
 previous policy with the observed expected predecessor, and finally open the
 same bridge gate. This procedure has no automatic bridge command: the operator
 retains exclusion and the native receipts throughout.
+
+### Selected workload image upgrades
+
+`loom fleet upgrade --fleet lab --workload-profile analysis --image /shared/images/analysis-v2.sif --plan`
+qualifies the exact immutable image bytes and native profile on every consuming
+agent. Supply the absolute existing SIF path; Fleet never builds or deletes it.
+The current coordinator and consuming agent processes must advertise
+`quiescent-profile-promotion-v2` as well as maintenance and conditional-control
+support. If they do not, first complete a separate explicit `--runtime-release`
+upgrade. Workload promotion preserves that exact service descriptor.
+
+Add `--apply --operation-id image-upgrade-1` with the existing `--deployment`,
+`--connection`, and `--config` selection. Fleet closes ordinary admission, waits
+for admitted work and native settlement, conditionally drains consumers, stages
+qualified candidate sources, and asks native promotion to change the selected
+binding. Native intent owns canonical source publication and interrupted binding
+recovery. Original roots, credentials, retained runs and launch history remain.
+The coordinator publishes a new preparation generation, and native CPU/storage
+checks (plus declared GPU checks) use a new connection-only deployment exported
+inside the operation directory. The result's `deployment` is the new selection.
+The old selection remains readable and refuses new submissions after promotion.
+
+Use `loom fleet operation resume image-upgrade-1 --fleet lab` to continue the
+same immutable operation after a lost reply or stopped service. An abort is
+available before the first selected source/promotion intent. Later interruptions
+require continuation; no automatic image rollback occurs. Failed terminal checks
+use the same explicit `operation retry-check` successor interface as service
+upgrades. Repeating a completed operation returns its retained result.
+
+Installed acceptance is opt-in:
+`LOOM_RUN_FLEET_ACCEPTANCE=1 LOOM_FLEET_ACCEPTANCE_CONFIG=/protected/workload.json`
+with `tests/fleet_acceptance/test_workload_upgrade.py`. Its protected JSON selection
+has `schema_version: 1`, `disposable: true`, `kind: "workload-upgrade"`, and fields
+`fleet`, `workload_profile`, `image`, `image_sha256`, `deployment`,
+`operator_connection`, `config`, `operation_id`, `roots` (role-to-native-ID map),
+`service_descriptor` (the already installed capable release digest), `old_run`,
+`old_run_uri`, `old_profile` (full native descriptor), `history`, `report`, and
+`timeout_seconds` (1–1800); `env_file` is optional. `history` pins exactly `source`,
+`profile`, and `result`, each with an existing native evidence `path` and exact
+`sha256`. The profile evidence must contain the old profile revision. Paths are
+relative to the selection file; the report must be new. The owner records native
+old-run observation, unchanged historical evidence, checks and settlement,
+service identities throughout promotion, old-client refusal, and exact replay.

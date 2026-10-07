@@ -838,6 +838,12 @@ def run_outbound_agent_service(
     """
     from ._agent_progress import _run_manager
 
+    from ._profile_promotion import recover
+    recovered = recover(config.client)
+    if recovered is not config.client:
+        config = load_outbound_agent_service_config(config.source_path, env_file=config.environment_path)
+        config = replace(config, client=replace(config.client, external_supervisor=recovered.external_supervisor))
+
     observing: list[LocalDaemonAgentHttpClient | None] = [None]
 
     def controls():
@@ -896,6 +902,23 @@ def _outbound_service_steps(
         pending = trusted_config_loader()
         return pending.client
 
+    def load_promotion(candidate: str) -> tuple[AgentTlsClientConfig, dict[str, Any]]:
+        nonlocal pending
+        path = Path(candidate)
+        if not path.is_absolute() or path.parent != active.source_path.parent:
+            raise QueueServiceError("promotion candidate must share the trusted source path frame")
+        pending = load_outbound_agent_service_config(path, env_file=active.environment_path)
+        pending = replace(pending, source_path=active.source_path, client=replace(
+            pending.client, external_supervisor=active.client.external_supervisor))
+        # The native owner retains the exact authored publication before cutover.
+        _, _, authored, _ = _load_protected_config(path, env_file=active.environment_path)
+        return pending.client, {
+            "path": str(active.source_path), "candidate": str(path),
+            "environment": None if active.environment_path is None else str(active.environment_path),
+            "before": active.source_path.read_text(),
+            "after": json.dumps(authored, sort_keys=True),
+        }
+
     def prepare_install(
         replacement: AgentTlsClientConfig,
     ) -> Callable[[], None]:
@@ -914,6 +937,7 @@ def _outbound_service_steps(
     client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(
         active.client,
         trusted_config_loader=None if trusted_config_loader is None else load_client,
+        trusted_promotion_loader=load_promotion,
         prepare_role_reload=prepare_install,
     )
     client._service_progress = True
@@ -993,6 +1017,7 @@ def _outbound_service_steps(
                     trusted_config_loader=(
                         None if trusted_config_loader is None else load_client
                     ),
+                    trusted_promotion_loader=load_promotion,
                     prepare_role_reload=prepare_install,
                 )
             client._service_progress = True
@@ -1187,6 +1212,7 @@ def _open_outbound_agent(
     config: AgentTlsClientConfig,
     *,
     trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+    trusted_promotion_loader: Callable[[str], tuple[AgentTlsClientConfig, dict[str, Any]]] | None = None,
     prepare_role_reload: (
         Callable[[AgentTlsClientConfig], Callable[[], None]] | None
     ) = None,
@@ -1195,6 +1221,7 @@ def _open_outbound_agent(
         return LocalDaemonAgentHttpClient(
             config,
             trusted_config_loader=trusted_config_loader,
+            trusted_promotion_loader=trusted_promotion_loader,
             prepare_role_reload=prepare_role_reload,
         )
     except QueueServiceError as exc:
@@ -1215,6 +1242,7 @@ def _open_outbound_agent(
     return LocalDaemonAgentHttpClient(
         config,
         trusted_config_loader=trusted_config_loader,
+        trusted_promotion_loader=trusted_promotion_loader,
         prepare_role_reload=prepare_role_reload,
     )
 

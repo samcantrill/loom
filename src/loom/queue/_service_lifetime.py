@@ -160,7 +160,7 @@ def record_process(
                 json.dumps(
                     {
                         "pid": pid,
-                        "capabilities": ["quiescent-profile-promotion-v1"],
+                        "capabilities": ["quiescent-profile-promotion-v2"],
                         "started": started,
                         "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
                         "stopped": stopped,

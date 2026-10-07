@@ -292,7 +292,10 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
     server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
     server.start()
     try:
-        with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint, expected_coordinator_id=daemon.status().coordinator_id) as wire:
+        with CoordinatorOperatorClient.from_unix_socket(
+            daemon.config.endpoint,
+            expected_coordinator_id=daemon.status().coordinator_id,
+        ) as wire:
             with pytest.raises(CoordinatorClientError):
                 wire.control_agent(control)
     finally:
@@ -329,7 +332,10 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
     server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
     server.start()
     try:
-        with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint, expected_coordinator_id=daemon.status().coordinator_id) as wire:
+        with CoordinatorOperatorClient.from_unix_socket(
+            daemon.config.endpoint,
+            expected_coordinator_id=daemon.status().coordinator_id,
+        ) as wire:
             accepted = wire.control_agent(control)
             assert wire.control_agent(control) == accepted
             assert (
@@ -382,3 +388,66 @@ def test_external_supervisor_rejoins_only_after_native_promotion(tmp_path):
         if external is not None:
             external.shutdown_for_test()
         c.close()
+
+
+@pytest.mark.parametrize("boundary", ["before_delivery", "source_publication"])
+def test_staged_source_keeps_predecessor_startable_and_recovers_native_publication(
+    tmp_path, monkeypatch, boundary
+):
+    from types import SimpleNamespace
+    from loom.queue import deployment
+
+    c, old, new = client(tmp_path)
+    canonical = tmp_path / "service-source.json"
+    canonical.write_text("old-source")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text("target-source")
+    control = request(old, new, c.agent_root_id)
+    control = replace(
+        control,
+        promotion={**dict(control.promotion or {}), "candidate_source": str(candidate)},
+    )
+    source = {
+        "path": str(canonical),
+        "candidate": str(candidate),
+        "environment": None,
+        "before": "old-source",
+        "after": "target-source",
+    }
+    c._trusted_promotion_loader = lambda _: (new, source)
+    if boundary == "before_delivery":
+        c.close()
+        c = LocalDaemonAgentHttpClient(
+            old,
+            trusted_config_loader=lambda: new,
+            trusted_promotion_loader=lambda _: (new, source),
+        )
+        assert canonical.read_text() == "old-source"
+        assert apply(c, control).code == "applied"
+    else:
+        original = promotion.atomic_write_bytes
+
+        def lost_reply(path, value):
+            original(path, value)
+            if path == canonical:
+                raise RuntimeError("source-published")
+
+        monkeypatch.setattr(promotion, "atomic_write_bytes", lost_reply)
+        with pytest.raises(RuntimeError, match="source-published"):
+            apply(c, control)
+        c.close()
+        monkeypatch.setattr(promotion, "atomic_write_bytes", original)
+        monkeypatch.setattr(
+            deployment,
+            "load_outbound_agent_service_config",
+            lambda *a, **k: SimpleNamespace(client=new),
+        )
+        c = LocalDaemonAgentHttpClient(old)
+    try:
+        assert canonical.read_text() == "target-source"
+        assert c._config == new and c._drained
+        assert new.agent_root is not None
+        assert promotion.completed(new.agent_root, control.operation_id)
+        assert promotion.apply(c, control).code == "applied"
+    finally:
+        close(c)

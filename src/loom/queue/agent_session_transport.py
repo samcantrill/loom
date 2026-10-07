@@ -818,6 +818,7 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
         *,
         trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+        trusted_promotion_loader: Callable[[str], tuple[AgentTlsClientConfig, dict[str, Any]]] | None = None,
         prepare_role_reload: (
             Callable[[AgentTlsClientConfig], Callable[[], None]] | None
         ) = None,
@@ -826,6 +827,7 @@ class LocalDaemonAgentHttpClient:
         self._slurm_cursor: str | None = None
         self._resource_maintenance_enabled = False
         self._next_resource_maintenance = 0.0
+        self._trusted_promotion_loader = trusted_promotion_loader
         self._trusted_config_loader = trusted_config_loader
         self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
@@ -844,7 +846,8 @@ class LocalDaemonAgentHttpClient:
         # The journal validates the durable deployment binding and obtains the
         # exclusive application lock before an empty supervisor can be started.
         from ._profile_promotion import recover
-        recover(config)
+        config = recover(config)
+        self._config = config
         self._journal = (
             _RemoteAgentJournal(
                 config.agent_root,

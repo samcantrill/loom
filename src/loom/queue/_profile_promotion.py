@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import fields
+from dataclasses import fields, replace
 import fcntl
 import json
 import os
@@ -21,7 +21,7 @@ from typing import Any
 from loom.serialization import thaw_plain_data
 from .errors import QueueConflictError, QueueServiceError
 
-CAPABILITY = "quiescent-profile-promotion-v1"
+CAPABILITY = "quiescent-profile-promotion-v2"
 _PENDING = "profile_promotion_pending"
 
 
@@ -38,8 +38,16 @@ def validate_promotion(value: object) -> None:
         "profile_id",
         "target_profile",
     }
-    if not isinstance(value, Mapping) or set(value) != keys:
+    if not isinstance(value, Mapping) or set(value) not in (
+        keys,
+        keys | {"candidate_source"},
+    ):
         raise QueueServiceError("profile promotion binding fields are invalid")
+    if "candidate_source" in value and (
+        not isinstance(value["candidate_source"], str)
+        or not Path(value["candidate_source"]).is_absolute()
+    ):
+        raise QueueServiceError("profile promotion candidate source is invalid")
     for key in keys - {"expected_gate_revision", "target_profile"}:
         if not isinstance(value[key], str) or not value[key] or len(value[key]) > 512:
             raise QueueServiceError("profile promotion binding is invalid")
@@ -180,6 +188,12 @@ def _finish(journal: Any, config: Any, pending: dict[str, Any]) -> Any:
     control = AgentControl.from_value(pending["control"])
     _validate_target(config, control)
     root = Path(config.agent_root)
+    publication = pending.get("source")
+    if publication is not None:
+        source = Path(publication["path"])
+        if source.read_text() not in (publication["before"], publication["after"]):
+            raise QueueConflictError("profile promotion source publication conflicts")
+        atomic_write_bytes(source, publication["after"].encode())
     target = _supervisor_value(journal.root_id, config)
     path = root / "supervisor" / AgentProcessSupervisorService._CONFIG_NAME
     old = pending["supervisor"]
@@ -251,7 +265,15 @@ def apply(client: Any, control: Any) -> Any:
         return replay
     if client._trusted_config_loader is None:
         raise QueueServiceError("profile promotion requires protected configuration")
-    replacement = client._trusted_config_loader()
+    source = None
+    if control.promotion.get("candidate_source") is not None:
+        if client._trusted_promotion_loader is None:
+            raise QueueServiceError("native service promotion loader unavailable")
+        replacement, source = client._trusted_promotion_loader(
+            control.promotion["candidate_source"]
+        )
+    else:
+        replacement = client._trusted_config_loader()
     _validate_target(replacement, control)
     p = control.promotion
     if (
@@ -321,6 +343,7 @@ def apply(client: Any, control: Any) -> Any:
     with retained_supervisor_guard(root, agent_id=journal.root_id):
         pending = {
             "control": control.value(),
+            "source": source,
             "binding": json.loads((root / _AGENT_BINDING_FILE).read_bytes()),
             "supervisor": json.loads(
                 (
@@ -386,20 +409,20 @@ def _install(client: Any, replacement: Any, install: Any) -> None:
     client._reset_runtime_providers()
 
 
-def recover(config: Any) -> None:
+def recover(config: Any) -> Any:
     """Resolve accepted partial bindings before any service/supervisor can start."""
     if config.agent_root is None:
-        return
+        return config
     root = Path(config.agent_root)
     database = root / "control.sqlite"
     if not database.is_file():
-        return
+        return config
     with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as conn:
         row = conn.execute(
             "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
         ).fetchone()
     if row is None:
-        return
+        return config
     from ._agent_session_journal import _RemoteAgentJournal
     from .local_daemon import _acquire_lock, _open_root
 
@@ -410,11 +433,53 @@ def recover(config: Any) -> None:
                 "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
             ).fetchone()
         if row is None:
-            return
+            return config
         # Reuse the existing journal completion transaction while its native
         # lock is already held; no constructor may bypass pending validation.
         journal = object.__new__(_RemoteAgentJournal)
         journal._root = root
         journal._path = database
         journal.root_id = root_id
-        _finish(journal, config, json.loads(row[0]))
+        pending = json.loads(row[0])
+        if pending.get("source") is not None:
+            from .deployment import load_outbound_agent_service_config
+
+            source = pending["source"]
+            target = load_outbound_agent_service_config(
+                source["candidate"], env_file=source["environment"]
+            )
+            config = replace(
+                target.client, external_supervisor=config.external_supervisor
+            )
+        _finish(journal, config, pending)
+        return config
+
+
+def publication_state(root: Path, operation_id: str) -> str | None:
+    """Inspect native authorization of one canonical source publication."""
+    database = root / "control.sqlite"
+    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        pending = conn.execute(
+            "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
+        ).fetchone()
+        if (
+            pending is not None
+            and json.loads(pending[0])["control"]["operation_id"] == operation_id
+        ):
+            return "pending"
+        row = conn.execute(
+            "SELECT effect_json FROM agent_controls_local WHERE operation_id=?",
+            (operation_id,),
+        ).fetchone()
+    if (
+        row is not None
+        and row[0] is not None
+        and json.loads(row[0])["code"] == "applied"
+    ):
+        return "applied"
+    return None
+
+
+def completed(root: Path, operation_id: str) -> bool:
+    """Read the native local effect before restarting its changed supervisor."""
+    return publication_state(root, operation_id) == "applied"
