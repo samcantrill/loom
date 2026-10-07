@@ -2279,10 +2279,21 @@ class _ResidentAssignmentWorkspace:
                 False if result.status in {StageStatus.FAILED, StageStatus.CANCELLED} else None
             )
         route_metadata = dict(result.executor_metadata)
+        # Only the native parent can attest the actual retained launch binding.
+        route_metadata.pop("native_claim_observation", None)
         if process_row["supervisor_launch_json"] is not None:
             launch = _launch_from_value(
                 json.loads(str(process_row["supervisor_launch_json"]))
             )
+            if process_created is True:
+                binding_value = launch.environment.get("CUDA_VISIBLE_DEVICES")
+                uuids = [] if not binding_value else binding_value.split(",")
+                route_metadata["native_claim_observation"] = cast(PlainData, {
+                    "actual_gpu_uuids": uuids if all(value.startswith("GPU-") for value in uuids) else None,
+                    "assignment_id": request.assignment_id,
+                    "source": "native_supervisor_launch",
+                    "gpu_capacity_keys": [atom.local_capacity_key for claim in request.claims if claim.resource_kind == "gpu" for atom in claim.atoms],
+                })
             command_argv = launch.command_argv if launch.profile.container is None else ()
             if launch.profile.container is not None:
                 command = launch.container_command

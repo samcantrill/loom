@@ -170,7 +170,7 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
         else {
             "offer_id": row["offer_id"],
             "owner": session["agent_root_id"],
-            "freshness": "current" if connected else "retained",
+            "freshness": "current" if connected and row["current"] and offer.availability_revision == agent.availability_revision else "retained",
             "availability": "available",
             "observed_at": row["accepted_at"],
             "expires_at": row["expires_at"],
@@ -181,6 +181,7 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
                 profile.to_dict() for profile in offer.resident_profiles
             ],
             "gpu_devices": [device.to_dict() for device in offer.gpu_devices],
+            "gpu_atoms": [atom.to_dict() for atom in offer.gpu_atoms],
             "reflected_claim_ids": list(offer.reflected_claim_ids),
         },
     }
@@ -376,7 +377,7 @@ def _assignment_observation(
         raise QueueServiceError("managed assignment was not found")
     with daemon._connection() as conn:
         remote = conn.execute(
-            "SELECT state, start_permitted, report_digest, provider_release_proof_json FROM remote_assignments WHERE assignment_id = ?",
+            "SELECT state, start_permitted, report_digest, report_json, run_uri, stage_name, attempt, profile_json, provider_release_proof_json FROM remote_assignments WHERE assignment_id = ?",
             (assignment_id,),
         ).fetchone()
         control = conn.execute(
@@ -390,6 +391,8 @@ def _assignment_observation(
     )
     if proof is not None:
         proof.pop("retirement_secret", None)
+    report = None if remote is None or remote["report_json"] is None else json.loads(remote["report_json"])
+    claim = None if report is None else (report.get("executor_metadata") or {}).get("native_claim_observation")
     return OperatorObservation(
         daemon._require_started(),
         daemon._clock(),
@@ -414,10 +417,13 @@ def _assignment_observation(
                 "code": control["result_code"],
                 "acknowledged": bool(control["acknowledged"]),
             },
-            "actual_claims": {
-                "availability": "unavailable",
-                "reason": "agent_local_evidence_required",
-            },
+            "run_uri": None if remote is None else remote["run_uri"],
+            "stage_name": None if remote is None else remote["stage_name"],
+            "attempt": None if remote is None else remote["attempt"],
+            "profile": None if remote is None else json.loads(remote["profile_json"]),
+            "actual_claims": ({"availability": "available", **claim} if claim is not None else {
+                "availability": "unavailable", "reason": "agent_local_evidence_required",
+            }),
         },
     )
 

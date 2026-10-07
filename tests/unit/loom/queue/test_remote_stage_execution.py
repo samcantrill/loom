@@ -436,7 +436,7 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
         bundle_digest="a" * 64,
         workspace_root=workspace.root,
         profile=profile.launch_profile,
-        environment={},
+        environment={"CUDA_VISIBLE_DEVICES": "GPU-12345678-1234-1234-1234-123456789abc"},
         schema_version=None if legacy else 2,
         resource_controls=None if legacy else controls,
     )
@@ -471,13 +471,17 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
         outputs={"result": ArtifactRef("result", output.as_uri(), "bytes")}
         if status is StageStatus.SUCCEEDED
         else {},
-        executor_metadata={"process_created": False, "application_detail": "retained"},
+        executor_metadata={"process_created": False, "application_detail": "retained", "native_claim_observation": {"actual_gpu_uuids": ["GPU-forged"]}},
     )
     result_path = workspace.root / "worker-result.json"
     result_path.write_text(json.dumps(result.to_dict()))
     original_bytes = result_path.read_bytes()
     workspace.persist_worker_result(result)
     report = workspace.retain_outputs()
+    assert report.executor_metadata is not None
+    claim = cast(Mapping[str, Any], report.executor_metadata["native_claim_observation"])
+    assert tuple(claim["actual_gpu_uuids"]) == ("GPU-12345678-1234-1234-1234-123456789abc",)
+    assert claim["source"] == "native_supervisor_launch"
     assert report.process_created is True
     if legacy:
         assert report.resource_controls is None

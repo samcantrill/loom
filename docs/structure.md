@@ -1469,3 +1469,12 @@ implementation imports occur only on dispatch. Native `loom.queue.deployment`
 continues to own protected roles and `loom.deployment` owns connection-only
 selection export. Fleet consumes native projections and never reads native SQL
 or imports workload factories. See [Fleet administration](fleet.md).
+
+`fleet/probes.py` supplies ordinary workload stage targets for finite CPU,
+shared-storage and optional CUDA checks. `fleet/self_tests.py` joins retained
+native run intent, committed artifact reads and operator assignment/offer
+observations. It stores only its protected immutable client intent and reports;
+there is no Fleet scheduler or native SQL reader. The native remote workspace
+stamps actual launch UUIDs into existing execution metadata, replacing any
+worker assertion, and `queue/operations.py` exposes that evidence and native
+release proof through the existing targeted operator query.

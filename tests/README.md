@@ -163,3 +163,36 @@ leased branch retirement, metadata publication and two phases in one stage
 worktree. Run it with `uv run --locked pytest tests/integration/tools/test_phase_workflow.py`.
 The existing integration and full validation lanes collect it. It never operates
 on real GitHub branches or starts Loom services.
+
+## Installed Fleet checks
+
+`tests/fleet_acceptance/test_self_tests.py` is the explicit installed SIF/GPU
+owner. It does not discover hosts, install images, start services or cancel work.
+Run without marker exclusions in the locked config/Fleet environment:
+
+```sh
+LOOM_RUN_FLEET_ACCEPTANCE=1 \
+LOOM_FLEET_ACCEPTANCE_CONFIG=/PRIVATE/disposable-acceptance.json \
+uv run --python 3.12 --isolated --locked --group dev --extra config --extra fleet \
+  pytest tests/fleet_acceptance/test_self_tests.py
+```
+
+The owner-protected JSON selection must contain `schema_version: 1`,
+`disposable: true`, paths `fleet`, `deployment`, `operator_connection`, `image`,
+and a new `report`; explicit `agent_id`, source-relative `config`,
+`coordinator_id`, `agent_root_id`, `gpu_uuids` (the explicit nonempty UUID list
+matching the selected profile), complete expected native `profile`
+descriptor, and `image_sha256`. Paths resolve relative to the selection file.
+The selected agent role must declare that Apptainer image. The operator supplies
+an existing disposable fleet, immutable SIF containing Loom probes and Torch,
+and a real declared GPU. The test compares image bytes and selected identities
+before requests, then records native operation/source/profile identity, complete
+results, Torch/Python versions and provider-release/owned-work cleanup evidence.
+Failure or waiting retains operation IDs; services stay borrowed.
+
+Absent opt-ins are unavailable installed evidence, not qualification. The ordinary
+integration owner tests safe refusal and native temporary CPU/storage execution;
+mock CUDA checks do not substitute for this installed gate.
+
+The bounded GPU job claims one native device from that declared set. Its exact
+observed/claimed UUID is recorded; it does not qualify every GPU in the set.
