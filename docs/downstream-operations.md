@@ -93,7 +93,11 @@ loom runs logs --operation-id fit-42 --deployment clients/vision.yaml \
 
 `CoordinatorClient.read_run_logs` and this command resolve the retained run
 operation, managed admission, current authority stage/attempt and that attempt's
-worker-result log references. They never accept a filesystem path. The native
+worker-result log references. A result reference must also match the native
+request or the local agent journal and retained assignment workspace for that
+exact authority attempt. Executor-selected unrelated paths and sources whose
+ownership cannot be established are `unavailable`, even if the file is readable.
+They never accept a filesystem path. The native
 `bounded-run-logs-v1` capability is required; older peers explicitly return
 `unsupported_capability`. Existing local `loom logs` behavior is unchanged.
 

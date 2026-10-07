@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
+import json
+import sqlite3
 import os
 from pathlib import Path
 from typing import Any
@@ -68,11 +70,68 @@ def _tail(path: Path, lines: int) -> dict[str, Any]:
     }
 
 
+def _qualified_path(
+    daemon: Any, store: LocalRunStore, attempt: Any, stream: str, ref: str
+) -> Path:
+    """A worker result is evidence, not authority to read its chosen host path."""
+    from ._managed_local import _assignment_from_dict
+    from ._remote_stage_execution import _ResidentAssignmentWorkspace
+
+    path = Path(ref)
+    native = store.local_stage_log_path(attempt.run_uri, attempt.stage_name, stream)
+    if path == native:
+        request = store.read_stage_worker_request(
+            attempt.run_uri, attempt.stage_name, attempt=attempt.attempt
+        )
+        if request is not None and request.get(f"{stream}_path") == ref:
+            return path
+        raise AccessFailure("unavailable")
+    root = daemon.config.agent_root
+    if root is None:
+        raise AccessFailure("unavailable")
+    # The native resident worker materializes logs under its retained assignment
+    # workspace. Match that exact layout and independently bind the assignment
+    # through the local agent journal, including released historical assignments.
+    parts = path.relative_to(root.resolve() / "assignments").parts
+    if len(parts) != 3 or parts[1:] != ("logs", f"{stream}.log"):
+        raise AccessFailure("unavailable")
+    assignment_id = parts[0]
+    with sqlite3.connect(
+        daemon.config.agent_journal.as_uri() + "?mode=ro", uri=True
+    ) as conn:
+        row = conn.execute(
+            "SELECT identity_json FROM assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+    if row is None:
+        raise AccessFailure("unavailable")
+    assignment = _assignment_from_dict(json.loads(row[0]))
+    if (
+        assignment.run_uri,
+        assignment.stage_name,
+        assignment.attempt,
+        assignment.attempt_id,
+    ) != (attempt.run_uri, attempt.stage_name, attempt.attempt, attempt.attempt_id):
+        raise AccessFailure("unavailable")
+    request = _ResidentAssignmentWorkspace.read_request(
+        root.resolve() / "assignments" / assignment_id
+    )
+    if (
+        request.assignment_id,
+        request.stage_name,
+        request.attempt,
+        request.attempt_id,
+    ) != (assignment_id, attempt.stage_name, attempt.attempt, attempt.attempt_id):
+        raise AccessFailure("unavailable")
+    return path
+
+
 def read_logs(daemon: Any, value: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve a run operation through managed admission and current authority.
 
     Paths never come from the request or appear in the reply. A retained worker
-    result qualifies the reference by run, stage and latest authority attempt.
+    result selects the reference; native request/assignment ownership must also
+    qualify its path for the latest authority attempt.
     An unreachable retained file is not an empty successful stream.
     """
     from ._coordinator_control import control_error
@@ -100,6 +159,8 @@ def read_logs(daemon: Any, value: Mapping[str, Any]) -> dict[str, Any]:
         else "missing"
     )
     worker = None
+    attempt = None
+    store = LocalRunStore(daemon.config.run_store_root)
     if isinstance(retained, Mapping):
         admission = daemon.admission(retained["admission_id"]).admission
         # Match inspect_run's managed-run authorization before any file access.
@@ -113,7 +174,8 @@ def read_logs(daemon: Any, value: Mapping[str, Any]) -> dict[str, Any]:
             )
             if stage is None:
                 raise control_error("not_found", "read_run_logs", value)
-            result["attempt"] = stage.attempts[-1].attempt if stage.attempts else None
+            attempt = stage.attempts[-1] if stage.attempts else None
+            result["attempt"] = attempt.attempt if attempt is not None else None
             availability = (
                 "missing"
                 if stage.status.value
@@ -121,9 +183,7 @@ def read_logs(daemon: Any, value: Mapping[str, Any]) -> dict[str, Any]:
                 else "pending"
             )
             if result["attempt"] is not None:
-                worker = LocalRunStore(
-                    daemon.config.run_store_root
-                ).read_stage_worker_result(
+                worker = store.read_stage_worker_result(
                     admission.run_uri, stage.stage_name, attempt=result["attempt"]
                 )
         except _READ_ERRORS:
@@ -140,11 +200,17 @@ def read_logs(daemon: Any, value: Mapping[str, Any]) -> dict[str, Any]:
         }
         ref = None if worker is None else worker.get(f"{stream}_path")
         if isinstance(ref, str) and Path(ref).is_absolute():
+            try:
+                path = _qualified_path(daemon, store, attempt, stream, ref)
+            except (*_READ_ERRORS, sqlite3.Error, AccessFailure):
+                entry["availability"] = "unavailable"
+                result["streams"].append(entry)
+                continue
             entry["log_id"] = hashlib.sha256(
                 f"{result['admission_id']}\0{value['stage']}\0{result['attempt']}\0{stream}\0{ref}".encode()
             ).hexdigest()
             try:
-                entry.update(_tail(Path(ref), value["tail"]))
+                entry.update(_tail(path, value["tail"]))
             except FileNotFoundError:
                 entry["availability"] = "missing"
             except (OSError, ValueError, AccessFailure):

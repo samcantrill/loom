@@ -341,6 +341,8 @@ def test_https_real_authorization_and_codec(
 
     original = logs._authority
     monkeypatch.setattr(logs, "_authority", lambda _, uri: original(source, uri))
+    qualify = logs._qualified_path
+    monkeypatch.setattr(logs, "_qualified_path", lambda _, store, attempt, stream, ref: qualify(source, store, attempt, stream, ref))
     with CoordinatorClient.from_connection_file(connection) as client:
         result = client.read_run_logs(
             "log-run", stage="produce", stream="stderr", tail=1
@@ -421,3 +423,50 @@ def test_wire_huge_invalid_utf8_and_strict_request(completed):
                     "path": "/private",
                 },
             )
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_executor_result_cannot_authorize_unrelated_regular_file(
+    completed, tmp_path, monkeypatch, stream
+):
+    import loom.queue._remote_logs as logs
+
+    _, _, admission, store, worker = completed
+    secret = tmp_path / "coordinator-connection.json"
+    secret.write_text("PRIVATE CONNECTION CREDENTIAL")
+    # StageExecutionResult can choose stdout_path/stderr_path; the native
+    # _result_from_execution_result and publication preserve that ordinary field.
+    changed = {**worker, f"{stream}_path": str(secret)}
+    store.write_stage_worker_result(admission.run_uri, "produce", changed, attempt=1)
+    original = logs._tail
+
+    def checked(path, lines):
+        assert path != secret, "unqualified result reference reached the file reader"
+        return original(path, lines)
+
+    monkeypatch.setattr(logs, "_tail", checked)
+    try:
+        with _client(completed) as client:
+            result = client.read_run_logs("log-run", stage="produce", stream=stream)
+        assert result["streams"][0]["availability"] == "unavailable"
+        assert result["streams"][0]["text"] is None
+        assert "PRIVATE" not in json.dumps(result)
+        assert str(secret) not in json.dumps(result)
+    finally:
+        store.write_stage_worker_result(admission.run_uri, "produce", worker, attempt=1)
+
+
+def test_resident_source_requires_owning_assignment(completed, monkeypatch):
+    import loom.queue._remote_logs as logs
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+
+    original = _ResidentAssignmentWorkspace.read_request
+
+    def other_attempt(path):
+        return replace(original(path), attempt_id="another-native-attempt")
+
+    monkeypatch.setattr(_ResidentAssignmentWorkspace, "read_request", other_attempt)
+    monkeypatch.setattr(logs, "_tail", lambda *a: pytest.fail("unowned source opened"))
+    with _client(completed) as client:
+        result = client.read_run_logs("log-run", stage="produce")
+    assert all(e["availability"] == "unavailable" for e in result["streams"])
