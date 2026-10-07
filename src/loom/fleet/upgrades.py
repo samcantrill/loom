@@ -613,7 +613,10 @@ def _restore(operation, *, abort=False):
     if (operation.receipts / "open" / "intent.json").exists():
         operation.maintenance("open", "open")
         return
-    operation.settled()
+    # Abort restores administrative policy while admitted ordinary work continues.
+    # Successful replacement still requires every native effect to settle.
+    if not abort:
+        operation.settled()
     for identity in list(operation.gate()["checks"]):
         operation.maintenance("revoke-" + identity, "revoke", identity)
     operation.maintenance("open", "open")

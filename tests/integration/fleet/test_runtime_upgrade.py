@@ -537,3 +537,126 @@ def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
         inspect(request)
     assert config.control_database.read_bytes() == before
     assert not list(config.coordinator_root.glob("*.backup"))
+
+
+def test_abort_reopens_while_admitted_pipeline_remains_active(
+    site,  # noqa: F811
+    tmp_path,
+    capsys,
+):
+    from loom.cli.main import main
+    from loom.coordinator import RunRequest
+    from loom.deployment import load_deployment
+    from loom.queue.preparation import PrepareRunRequest
+
+    inventory, base, selection = site
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    barrier = tmp_path / "outputs/active-work"
+    barrier.mkdir()
+    location = {
+        "kind": "loom.shared-location",
+        "schema_version": 1,
+        "root_id": "outputs",
+        "path": "active-work",
+    }
+    for profile in authored["preparation"]["profiles"].values():
+        profile["shared_locations"] = [location]
+    write(inventory.hosts[0].config, authored)
+    setup = apply(
+        inventory,
+        operation_id="setup-active-abort",
+        issuer=base / "issuer",
+        check_selection=selection,
+    )
+    assert setup["outcome"] == "complete", setup
+    source = tmp_path / "projects/pipeline.yaml"
+    pipeline = json.loads(source.read_text())
+    stage = pipeline["pipeline"]["stages"][0]
+    stage["factory"] = {
+        "_target_": "tests.support.pipeline_execution_stages.ReleaseStage"
+    }
+    stage["config"] = {"marker_dir": location, "timeout_seconds": 180}
+    write(source, pipeline)
+    deployment = load_deployment(setup["deployment"])
+    assert deployment.connection is not None
+    request = RunRequest(
+        PrepareRunRequest(
+            "admitted-work",
+            "admitted-work",
+            deployment.source,
+            selection["config"],
+            deployment.preparation_profile,
+        ),
+        "admitted-work",
+    )
+    with (
+        CoordinatorClient.from_connection_file(deployment.connection) as client,
+        CoordinatorOperatorClient.from_connection_file(
+            setup["operator_connection"]
+        ) as operator,
+    ):
+        client.start_run(request)
+        try:
+            deadline = time.monotonic() + 30
+            while not (barrier / "produce.started").exists():
+                assert time.monotonic() < deadline, client.observe_run(
+                    "admitted-work", wait=False
+                )
+                time.sleep(0.05)
+            active = client.observe_run("admitted-work", wait=False).admission
+            assert active is not None and active.state.value == "ACTIVE"
+            original_control = operator.observe_agent("worker").value["control"]
+            result = upgrades.upgrade(
+                inventory,
+                operation_id="abort-active-work",
+                apply=True,
+                runtime_release=target_bundle(inventory, tmp_path),
+                deployment=Path(setup["deployment"]),
+                connection=Path(setup["operator_connection"]),
+                config=selection["config"],
+            )
+            assert (
+                result["outcome"] == "waiting"
+                and "accepted_work_or_preparation" in result["reason"]
+            )
+            assert operator.observe_maintenance()["state"] == "closed"
+            directory = inventory.path.parent / "operations/abort-active-work"
+            assert not (directory / "irreversible.json").exists()
+            assert not (directory / "steps/worker-drain/intent.json").exists()
+            capsys.readouterr()
+            assert (
+                main(
+                    [
+                        "fleet",
+                        "operation",
+                        "abort",
+                        "abort-active-work",
+                        "--fleet",
+                        str(inventory.path),
+                        "--format",
+                        "json",
+                    ]
+                )
+                == 0
+            )
+            assert json.loads(capsys.readouterr().out)["outcome"] == "aborted"
+            gate = operator.observe_maintenance()
+            assert (
+                gate["state"] == "open"
+                and gate["checks"] == {}
+                and gate["settled"] is False
+            )
+            assert operator.observe_agent("worker").value["control"] == original_control
+            continuing = client.observe_run("admitted-work", wait=False).admission
+            assert continuing is not None and continuing.state.value == "ACTIVE"
+            assert continuing.admission_id == active.admission_id
+            assert not (barrier / "release").exists()
+        finally:
+            (barrier / "release").touch()
+            completed = client.observe_run(
+                "admitted-work", timeout_seconds=30
+            ).admission
+            assert completed is not None and completed.state.value == "SUCCEEDED"
