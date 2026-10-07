@@ -1059,3 +1059,71 @@ opens schema 2/3 supervisor journals without inventing historical boot proof.
 This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
+
+### Maintenance admission
+
+The `maintenance-admission-v1` capability provides a durable native admission
+barrier. An operator needs the explicit `maintenance` action in its protected
+local-owner or transport-principal policy. Check authorization additionally
+requires that action's selected agent and pool scopes.
+
+```sh
+loom queue daemon-maintenance --connection operator.json --format json
+loom queue daemon-maintenance --connection operator.json --close --operation-id maintenance-018
+loom queue daemon-maintenance --connection operator.json --open --operation-id maintenance-018
+```
+
+Read-only use reports the gate's state, revision, owning maintenance ID/intent,
+coordinator identity and exact check permissions. Close/open obtain the expected
+coordinator and gate revision and retain an exact control ID. Repeating the CLI
+operation observes its retained receipt after a lost reply. A new maintenance
+window requires a new operation ID. Opening requires the same maintenance owner
+and intent and the observed revision; restart never opens the gate implicitly.
+
+Closure and new acceptance serialize at the coordinator transaction boundary.
+Already accepted requests replay; changed intent conflicts before maintenance
+classification. Existing preparations, later DAG stages and policy retries
+continue under their accepted owner. New submissions, preparations, reconciled
+observer requests and user retry/fresh intent receive `maintenance_in_progress`
+with `mutation_outcome=not_applied`, caller operation ID and maintenance ID.
+Refusal creates no accepted receipt: retrying that same ID after opening is
+allowed. Observation and cancellation keep their existing authorization and
+containment/release semantics. There is no cross-database transaction with the
+per-run authority and no result or scientific-success reinterpretation.
+
+`CoordinatorOperatorClient.observe_maintenance()`, `maintenance(control,
+expected_coordinator_id=...)` and `maintenance_operation(operation_id)` expose
+these guarded controls. A control has `operation_id`, `maintenance_id`, immutable
+`maintenance_intent_digest`, `action`, `expected_revision`, and `check`.
+Actions are `close`/`open` (`check=None`), `authorize` (the exact binding below),
+and `revoke` (`check` is the check's native preparation operation ID). A mutation
+receipt includes its exact control/digest, resulting gate and `applied` outcome.
+Timeouts remain `unknown`; observe the original control before exact replay.
+Remove all temporary check permissions before opening. The maintenance workflow
+owns checking completion and settlement before reopening or replacing a failed
+check; native admission does not turn a failed check into a successful upgrade.
+
+An authorized check binds the complete exact `RunRequest.to_dict()` in `request`,
+its `principal_id`, `agent_id`, `pool`, full resident `profile` descriptor, native
+`ResourceRequest.to_dict()` documents for target `resources` and
+`preparation_resources`, a positive `max_stages`, and `previous_check_id` (null
+for the first attempt). This is a finite permission for that request, including
+its source and options, not a caller-supplied bypass flag. It uses the same
+principal-bound preparation intent and replay rules as normal work. The profile
+must equal the protected selected preparation profile. Before each preparation
+child and target admission, the retained native intent must match the exact
+agent, pool, execution profile fingerprints and respective resource request;
+target stage count cannot exceed `max_stages`. Resource amounts and units retain
+the native resource codec's meaning. The fixed preparation child consumes the retained operator agent/pool selection;
+its resources continue to come from the protected native preparation profile. An out-of-bounds composition fails
+with no admission at that handoff. Revocation prevents future acceptance while
+accepted work retains its original constraint binding.
+
+Check IDs remain bound to their original permission after revocation. Explicit
+successors retain the previous check ID and unchanged agent/profile/resource
+slot under the same maintenance owner. The upgrade workflow must first verify
+the previous failure and native settlement; ordinary resume never allocates a
+new attempt. Schema 19 introduces this durable owner; the offline migration
+supports the schema-18 bridge while preserving existing older native readers and
+forward migration paths. Fleet's narrower automated population is a separate
+compatibility policy.

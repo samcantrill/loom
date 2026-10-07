@@ -219,6 +219,14 @@ def register_subparser(
     operation_wait.add_argument("--timeout", type=float, default=None)
     operation_wait.set_defaults(handler=handle_daemon_operation_wait)
     _add_output_options(operation_wait)
+    maintenance = queue_subparsers.add_parser("daemon-maintenance", help="observe or guard native maintenance admission")
+    _add_client_connection_arguments(maintenance)
+    maintenance.add_argument("--operation-id")
+    modes = maintenance.add_mutually_exclusive_group()
+    modes.add_argument("--close", action="store_true")
+    modes.add_argument("--open", action="store_true")
+    maintenance.set_defaults(handler=handle_daemon_maintenance)
+    _add_output_options(maintenance)
     for kind in ("drain", "resume", "reload"):
         control = queue_subparsers.add_parser(
             f"daemon-agent-{kind}", help=f"{kind} one managed agent"
@@ -1060,3 +1068,31 @@ def handle_operator_assignment(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_maintenance(namespace: argparse.Namespace) -> int:
+    from loom.coordinator import CoordinatorClientError
+    from loom.queue.operations import control_intent_digest
+    try:
+        with _operator_client(namespace) as client:
+            gate = client.observe_maintenance()
+            if not namespace.close and not namespace.open:
+                return _emit_daemon_payload(namespace, dict(gate))
+            if not namespace.operation_id:
+                raise QueueServiceError("maintenance mutation requires --operation-id")
+            action = "close" if namespace.close else "open"
+            control_id = f"maintenance:{namespace.operation_id}:{action}"
+            try:
+                retained = client.maintenance_operation(control_id)
+            except CoordinatorClientError as exc:
+                if exc.code != "not_found":
+                    raise
+            else:
+                return _emit_daemon_payload(namespace, dict(retained))
+            control = {"operation_id": control_id, "maintenance_id": namespace.operation_id,
+                "maintenance_intent_digest": control_intent_digest({"maintenance_id": namespace.operation_id}),
+                "action": action, "expected_revision": gate["revision"], "check": None}
+            result = client.maintenance(control, expected_coordinator_id=str(gate["coordinator_id"]))
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, dict(result))

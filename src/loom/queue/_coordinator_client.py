@@ -204,6 +204,10 @@ class NativeCoordinatorClient:
                     from .operations import OPERATOR_CAPABILITY
                     if OPERATOR_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY})
+                if operation.startswith("operator_maintenance"):
+                    from ._maintenance import MAINTENANCE_CAPABILITY
+                    if MAINTENANCE_CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": MAINTENANCE_CAPABILITY})
                 requested = envelope.get("request")
                 if operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"} and "artifact-read-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)

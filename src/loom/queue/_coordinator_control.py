@@ -46,8 +46,9 @@ from ._preparation_operations import PreparationChildReserved, PreparationNotAcc
 
 
 from .operations import OPERATOR_CAPABILITY, OperatorObservation
+from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
 
-OPERATOR_OPERATIONS = frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation"})
+OPERATOR_OPERATIONS = frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OBSERVATION_SECONDS = 25.0
@@ -92,7 +93,7 @@ CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
     }
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
-MUTATION_OPERATIONS = frozenset({"operator_control"}) | frozenset(
+MUTATION_OPERATIONS = frozenset({"operator_control", "operator_maintenance_control"}) | frozenset(
     {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation", "patch_run_annotations", "append_run_note"}
 )
 
@@ -368,7 +369,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return CoordinatorConnectionDescription.from_dict(value)
     if operation in {"operator_status", "operator_agent", "operator_assignment"}:
         return OperatorObservation.from_dict(value)
-    if operation in {"operator_control", "operator_operation"}:
+    if operation in {"operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"}:
         return dict(value)
     if operation == "status":
         return DaemonStatus.from_dict(value)
@@ -479,6 +480,9 @@ def validate_request(
     fields = {
         "operator_handshake": set(),
         "operator_status": set(),
+        "operator_maintenance": set(),
+        "operator_maintenance_control": {"control", "intent_digest"},
+        "operator_maintenance_operation": {"operation_id"},
         "operator_agent": {"agent_id"},
         "operator_assignment": {"assignment_id"},
         "operator_control": {"control", "intent_digest"},
@@ -512,6 +516,14 @@ def validate_request(
         raise control_error("unsupported", operation, payload)
     value = dict(payload)
     value.pop("expected_coordinator_id", None)
+    if operation == "operator_maintenance_control":
+        from ._maintenance import validate_control
+        from .operations import control_intent_digest
+        if optional_id(payload.get("expected_coordinator_id")) is None or not isinstance(value.get("control"), Mapping):
+            raise ValueError("maintenance requires coordinator and control identity")
+        maintenance = validate_control(cast(Mapping[str, object], value["control"]))
+        if value.get("intent_digest") != control_intent_digest(maintenance):
+            raise ValueError("maintenance control intent digest differs")
     if operation == "operator_control":
         from .agent_sessions import AgentControl
         if optional_id(payload.get("expected_coordinator_id")) is None or not isinstance(value.get("control"), Mapping):
@@ -788,11 +800,12 @@ def dispatch_control(
         return cast(Mapping[str, PlainData], plain)
     except ServiceRetiring as exc:
         raise control_error("unavailable", operation, payload, boundary="coordinator", dispatched=False) from exc
-    except (PreparationNotAccepted, PreparationChildReserved) as exc:
+    except (PreparationNotAccepted, PreparationChildReserved, MaintenanceInProgress) as exc:
         raise control_error(
             exc.code,
             operation,
             payload,
+            ids=getattr(exc, "ids", None),
             boundary="coordinator",
             dispatched=False,
             applied=False,
@@ -837,6 +850,22 @@ def dispatch_control(
 
 def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, operation: str, value: Mapping[str, object], payload: Mapping[str, object]) -> Mapping[str, PlainData]:
     view = daemon.operator_view(principal)
+    if operation == "operator_maintenance":
+        return view.observe_maintenance()
+    if operation in {"operator_maintenance_control", "operator_maintenance_operation"}:
+        try:
+            daemon._authorizer().require_operator(principal, "maintenance")
+            check = cast(Mapping[str, object], value.get("control", {})).get("check")
+            if isinstance(check, Mapping):
+                daemon._authorizer().require_operator(principal, "maintenance", agent_id=cast(str, check["agent_id"]), pool=cast(str, check["pool"]))
+        except QueueServiceError as exc:
+            raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
+        try:
+            if operation == "operator_maintenance_operation":
+                return view.maintenance_operation(cast(str, value["operation_id"]))
+            return view.maintenance(cast(Mapping[str, object], value["control"]), expected_coordinator_id=cast(str, payload["expected_coordinator_id"]))
+        except QueueConflictError as exc:
+            raise control_error("conflict", operation, payload, boundary="coordinator") from exc
     if operation == "operator_status":
         return view.observe_status().to_dict()
     if operation == "operator_agent":
@@ -876,6 +905,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
         (
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
+            MAINTENANCE_CAPABILITY,
             "run-context-v1",
             "run-query-v1",
             "output-query-v1",
