@@ -138,13 +138,13 @@ def fleet(tmp_path):
             "credential_id": "other",
             "principal_id": "operator",
             "role": "operator",
-            "actions": ["drain"],
+            "actions": ["drain", "maintenance"],
             "agent_ids": ["worker"],
             "pools": ["default"],
         },
     ]
     authored["agent_policy"]["local_owner"] = {
-        "actions": ["drain"],
+        "actions": ["drain", "maintenance"],
         "agent_ids": ["worker"],
         "pools": ["default"],
     }
@@ -535,6 +535,55 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
                 ).fetchone()[0]
                 == 1
             )
+
+
+def test_interrupted_dispatch_retains_replay_refusal_after_admission_reopens(
+    fleet, monkeypatch
+):
+    from loom.coordinator import CoordinatorClient
+    from tests.integration.queue.test_maintenance_admission import change
+
+    inventory, deployment, daemon, _ = fleet
+    original = CoordinatorClient.start_run
+
+    def interrupt_before_acceptance(client, request):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(CoordinatorClient, "start_run", interrupt_before_acceptance)
+    with pytest.raises(KeyboardInterrupt):
+        self_test(
+            inventory,
+            deployment=deployment,
+            operator_connection=inventory.path.parent / "operator.json",
+            config="pipeline.yaml",
+            checks=("cpu",),
+        )
+    monkeypatch.setattr(CoordinatorClient, "start_run", original)
+    directory = next((inventory.path.parent / "checks").iterdir())
+    intent = (directory / "intent.json").read_bytes()
+    identity = json.loads(intent)["requests"]["cpu"]["preparation"]["operation_id"]
+    assert json.loads((directory / "cpu.dispatch.json").read_text()) == {
+        "operation_id": identity
+    }
+
+    change(daemon, "close")
+    refused = self_test(inventory, operation_id=directory.name)
+    assert refused["outcome"] == "failed", refused
+    assert refused["checks"]["cpu"]["code"] == "maintenance_in_progress"
+    assert refused["checks"]["cpu"]["native_error"]["mutation_outcome"] == "not_applied"
+    assert json.loads((directory / "cpu.rejected.json").read_text()) == refused[
+        "checks"
+    ]["cpu"]["native_error"]
+
+    change(daemon, "open")
+    continued = self_test(inventory, operation_id=directory.name)
+    assert continued["checks"]["cpu"] == refused["checks"]["cpu"]
+    assert (directory / "intent.json").read_bytes() == intent
+    with sqlite3.connect(daemon.config.control_database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM preparation_operations WHERE operation_id = ?",
+            (identity,),
+        ).fetchone()[0] == 0
 
 
 def test_failed_native_check_is_observed_without_retry(fleet):

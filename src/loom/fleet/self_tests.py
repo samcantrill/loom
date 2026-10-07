@@ -146,6 +146,23 @@ def verify_check(
     return {"outcome": "passed", "code": "check_complete"}
 
 
+def _submit_check(
+    client: CoordinatorClient, directory: Path, check: str, request: RunRequest
+) -> dict[str, Any] | None:
+    try:
+        client.start_run(request)
+    except CoordinatorClientError as exc:
+        if exc.mutation_outcome == "not_applied":
+            _publish(directory / (check + ".rejected.json"), exc.to_dict())
+            return {
+                "outcome": "failed",
+                "code": exc.code,
+                "native_error": exc.to_dict(),
+            }
+        return _waiting("submission_uncertain", native_error=exc.to_dict())
+    return None
+
+
 def _dispatch_check(
     client: CoordinatorClient,
     directory: Path,
@@ -157,17 +174,9 @@ def _dispatch_check(
     marker = directory / (check + ".dispatch.json")
     if not marker.exists():
         _publish(marker, {"operation_id": identity})
-        try:
-            client.start_run(request)
-        except CoordinatorClientError as exc:
-            if exc.mutation_outcome == "not_applied":
-                _publish(directory / (check + ".rejected.json"), exc.to_dict())
-                return {
-                    "outcome": "failed",
-                    "code": exc.code,
-                    "native_error": exc.to_dict(),
-                }
-            return _waiting("submission_uncertain", native_error=exc.to_dict())
+        submitted = _submit_check(client, directory, check, request)
+        if submitted is not None:
+            return submitted
     elif _read(marker) != {"operation_id": identity}:
         raise QueueConfigError("dispatch marker conflicts with immutable intent")
     rejected = directory / (check + ".rejected.json")
@@ -194,8 +203,9 @@ def _observe_check(
     except CoordinatorClientError as exc:
         if exc.code == "not_found":
             # The native API owns exact replay: no new ID, source or retry policy.
-            client.start_run(request)
-            return _waiting("exact_request_replayed")
+            return _submit_check(client, directory, check, request) or _waiting(
+                "exact_request_replayed"
+            )
         raise
     facts: dict[str, Any] = {"native": thaw_plain_data(observed.to_dict())}
     if (
