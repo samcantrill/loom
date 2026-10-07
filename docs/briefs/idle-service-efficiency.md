@@ -10,15 +10,22 @@ introduced. Worktree: `../loom-worktrees/idle-service-efficiency`, branch
 The user approved integration and qualification on `rphys-pure-current` on
 2026-10-08. The original `rphys` services are stopped; the active fleet selects
 rphys `636b1059c` and Loom `c79c8d93`. The latter restores ACTIVE provider
-bindings before recovered worker launch. Merge that exact fix into this branch
-without removing the idle-efficiency changes; never deploy the older prepared
+bindings before recovered worker launch. That exact fix is merged into combined
+Loom `99648e02b7be8297bd7f3bd236fdf0b9fb16243d`, selected by consumer
+rphys `9079ed70fae9070378ac9b1884787a88650976db`. Both branches are pushed.
+The deployed scientific source and configurations are unchanged in this
+consumer integration. Never deploy the older prepared
 `693dcebda` image over the recovery fix. A separate managed qualification fleet
 is running on both hosts and is outside this task's mutation scope.
 
 The original image `67c71cea6655d1e4dce0b42825b051aeeb4681b502ae566004018ede34034071`
 was built and verified on shared storage but not deployed by this task. The
-combined revision needs a new consumer pin, lock and image. Both hosts currently
-require interactive sudo for the maintained image builder.
+combined pin and lock are ready; its image remains outstanding. Both hosts
+currently require interactive sudo for the maintained image builder. The guarded
+operator command on shazza is
+`bash /nas/home/can134/work/rphys-worktrees/loom-idle-service-efficiency/build/idle-efficiency/build-combined-on-shazza.sh`.
+It requires the exact clean consumer revision above and writes only
+`/data/can134/loom/rphys-pure-current/image-build.idle-recovery.vDxQdoN7`.
 
 Integration coverage: GPU-provider and managed-local journal units, retry and
 control-wait units, plus the complete concurrent outbound-agent integration
@@ -29,6 +36,55 @@ coordinator evidence. Expand only on an integration failure or changed contract.
 Consumer checks cover the pinned native/extension identity and fleet upgrade
 boundaries. Physical CPU/latency and four-way CPU/GPU/cancellation qualification
 remain required; local fixtures do not discharge them.
+
+Combined Loom validation passed all 119 selected cases, with zero failures,
+errors or skips, in `build/idle-efficiency/combined-recovery.xml` (1193.66 seconds).
+The selection covers `test_gpu_resource_provider.py`, `test_managed_local.py`,
+`test_agent_control_waiting.py`, the two deployment recovery-retry cases, and
+the complete `test_concurrent_outbound_agent.py`. Changed-file Ruff, selected
+Pyright and diff checks passed. The consumer's locked targeted reference run
+passed all 93 cases with no failures, errors or skips, plus all three selected
+distribution builds, in `build/test-targeted/reference-povxidya/`. Its stable
+tree fingerprint is
+`7471dcad73a924b074daf5c54ed0fd4ccade90b0cfcf239119f1079af9a56bcd`.
+No physical upgrade or after-change qualification is claimed.
+
+### Active-fleet baseline
+
+The fresh pre-upgrade idle window ended at 2026-10-07T23:18:21Z (2026-10-08
+local time). The coordinator reported healthy with no active/waiting admissions
+or running assignments before and after. Shazza was ACTIVE and available, with
+all four GPU observations refreshed at 23:18:38Z. Explicit service PIDs and
+start-tick identities were stable; child CPU is excluded. Other validation was
+running on both hosts, so these are service CPU deltas under shared-host load,
+not an uncontended-machine benchmark. This task's local validation had finished.
+
+| Role | PID | 30-second CPU seconds | One-core CPU |
+| --- | ---: | ---: | ---: |
+| sleipnir coordinator | 1106591 | 5.18 | 17.27% |
+| shazza agent | 2810465 | 6.94 | 23.13% |
+| shazza supervisor | 2811068 | 0.02 | 0.07% |
+
+These measurements apply to the active c79c8d93 recovery runtime and its explicit
+0.2-second coordinator interval, not the older fleet measured below.
+
+The first owned running probe, `idle-efficiency-before-20261007T231852`, used
+legacy `clients/qualification.yaml`; its resident profile is no longer offered
+by shazza. It remained in preparation and was explicitly cancelled through the
+native API (confirmed `cancelled`), without starting an execution. Use
+`clients/pure-binding-636b1059c-shazza.yaml` for this deployment, and the newly
+returned client file after upgrade. No live profile was changed to accommodate
+the probe.
+
+The corrected probe `idle-efficiency-before-20261007T232359` requested one CPU
+on shazza and remained RUNNING for the entire 30-second window ending at
+23:25:21Z. Coordinator CPU was 13.61 seconds (45.37% of one core), agent 8.70
+seconds (29.00%), and supervisor 1.41 seconds (4.70%). Submission returned in
+0.589 seconds; RUNNING was observed after 41.657 seconds, including preparation
+and container startup. Cancellation of only this probe returned in 0.127 seconds
+and settled to CANCELLED with its assignment RELEASED after 9.190 seconds.
+The protected JSONL receipt is under the consumer's ignored
+`build/idle-efficiency/idle-efficiency-before-20261007T232359.jsonl`.
 
 ## Scope and delivery checks
 
