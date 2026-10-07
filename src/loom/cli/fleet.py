@@ -12,19 +12,60 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "fleet", help="inspect and prepare a generic native fleet"
     )
     commands = parser.add_subparsers(dest="fleet_command", required=True)
-    check = commands.add_parser("self-test", help="run deliberate native infrastructure checks")
+    check = commands.add_parser(
+        "self-test", help="run deliberate native infrastructure checks"
+    )
     check.add_argument("--fleet", required=True)
     check.add_argument("--deployment", type=Path)
     check.add_argument("--connection", type=Path, help="protected operator connection")
     check.add_argument("--config", default="fleet-check.yaml")
     check.add_argument("--agent", dest="agent_id")
     check.add_argument("--checks", default="cpu,storage")
-    check.add_argument("--operation-id", help="continue an existing check without a new identity")
-    check.add_argument("--retry-of", help="explicit new attempt linked to a failed check")
+    check.add_argument(
+        "--operation-id", help="continue an existing check without a new identity"
+    )
+    check.add_argument(
+        "--retry-of", help="explicit new attempt linked to a failed check"
+    )
     check.add_argument("--timeout", type=float, default=120)
     check.add_argument("--env-file", type=Path)
-    check.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    check.add_argument(
+        "--format", dest="output_format", choices=("text", "json"), default="text"
+    )
     check.set_defaults(handler=handle)
+    apply_command = commands.add_parser(
+        "apply", help="apply selected native setup over configured SSH"
+    )
+    apply_command.add_argument("--fleet", required=True)
+    apply_command.add_argument("--operation-id", required=True)
+    apply_command.add_argument("--hosts")
+    apply_command.add_argument(
+        "--issuer", type=Path, help="original coordinator-host-local CA directory"
+    )
+    apply_command.add_argument("--deployment", type=Path, required=True)
+    apply_command.add_argument("--config", default="fleet-check.yaml")
+    apply_command.add_argument(
+        "--connection", type=Path, help="existing pinned operator connection"
+    )
+    apply_command.add_argument("--client-credential-id")
+    apply_command.add_argument("--operator-credential-id")
+    apply_command.add_argument("--env-file", type=Path)
+    apply_command.add_argument(
+        "--format", dest="output_format", choices=("text", "json"), default="text"
+    )
+    apply_command.set_defaults(handler=handle)
+    operation = commands.add_parser(
+        "operation", help="inspect or continue retained setup"
+    )
+    operations = operation.add_subparsers(dest="operation_command", required=True)
+    for action in ("status", "resume"):
+        item = operations.add_parser(action)
+        item.add_argument("operation_id")
+        item.add_argument("--fleet", required=True)
+        item.add_argument(
+            "--format", dest="output_format", choices=("text", "json"), default="text"
+        )
+        item.set_defaults(handler=handle)
     init = commands.add_parser("init", help="create protected local placeholders")
     init.add_argument("name")
     init.add_argument(
@@ -42,8 +83,14 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         command.add_argument(
             "--env-file", type=Path, help="explicit native role environment"
         )
+        if name == "plan":
+            command.add_argument(
+                "--issuer", type=Path, help="coordinator-host-local CA directory"
+            )
         if name != "export-deployment":
-            command.add_argument("--profile", help="required native workload profile ID")
+            command.add_argument(
+                "--profile", help="required native workload profile ID"
+            )
         if name == "export-deployment":
             command.add_argument(
                 "--deployment",
@@ -112,14 +159,63 @@ def handle(namespace: argparse.Namespace) -> int:
             else fleet_path(namespace.fleet)
         )
         inventory = load_inventory(path)
-        hosts = None if getattr(namespace, "hosts", None) is None else namespace.hosts.split(",")
-        if command == "self-test":
+        hosts = (
+            None
+            if getattr(namespace, "hosts", None) is None
+            else namespace.hosts.split(",")
+        )
+        if command in {"apply", "operation"}:
+            from loom.fleet.ssh_operations import apply, operation_status
+
+            if command == "operation":
+                result = (
+                    operation_status(inventory, namespace.operation_id)
+                    if namespace.operation_command == "status"
+                    else apply(
+                        inventory, operation_id=namespace.operation_id, resume=True
+                    )
+                )
+            else:
+                result = apply(
+                    inventory,
+                    operation_id=namespace.operation_id,
+                    hosts=hosts,
+                    issuer=namespace.issuer,
+                    env_file=namespace.env_file,
+                    check_selection={
+                        "deployment": str(namespace.deployment.resolve()),
+                        "config": namespace.config,
+                        "operator_connection": None
+                        if namespace.connection is None
+                        else str(namespace.connection.resolve()),
+                        "client_credential_id": namespace.client_credential_id,
+                        "operator_credential_id": namespace.operator_credential_id,
+                    },
+                )
+        elif command == "plan" and inventory.service_manager == "tmux":
+            from loom.fleet.ssh_operations import plan
+
+            result = plan(
+                inventory,
+                hosts=hosts,
+                issuer=namespace.issuer,
+                env_file=namespace.env_file,
+            )
+        elif command == "self-test":
             from loom.fleet.self_tests import self_test
-            result = self_test(inventory, deployment=namespace.deployment, operator_connection=namespace.connection,
-                               config=namespace.config, agent_id=namespace.agent_id,
-                               checks=namespace.checks.split(","), operation_id=namespace.operation_id,
-                               retry_of=namespace.retry_of, timeout_seconds=namespace.timeout,
-                               env_file=namespace.env_file)
+
+            result = self_test(
+                inventory,
+                deployment=namespace.deployment,
+                operator_connection=namespace.connection,
+                config=namespace.config,
+                agent_id=namespace.agent_id,
+                checks=namespace.checks.split(","),
+                operation_id=namespace.operation_id,
+                retry_of=namespace.retry_of,
+                timeout_seconds=namespace.timeout,
+                env_file=namespace.env_file,
+            )
         elif command == "export-deployment":
             from loom.deployment import export_connection_deployment, load_deployment
             from loom.fleet.configuration import exclude_captures
@@ -164,9 +260,23 @@ def handle(namespace: argparse.Namespace) -> int:
         if "path" in result:
             print(result["path"])
         if "coordinator" in result:
-            print("coordinator observation: " + json.dumps(result["coordinator"], sort_keys=True))
+            print(
+                "coordinator observation: "
+                + json.dumps(result["coordinator"], sort_keys=True)
+            )
         for name, facts in result.get("hosts", {}).items():
             print(f"{name}: not qualified")
+            if "host" in facts:
+                print(
+                    f"  alias: {facts['host']}; dependency: {facts.get('dependency', False)}"
+                )
+            for field in ("actions", "conflict", "unavailable"):
+                if field in facts:
+                    value = facts[field]
+                    print(
+                        f"  {field}: "
+                        + ("; ".join(value) if isinstance(value, list) else str(value))
+                    )
             for kind, fact in facts.items():
                 if isinstance(fact, dict):
                     print(
@@ -177,16 +287,40 @@ def handle(namespace: argparse.Namespace) -> int:
                     if fact.get("value"):
                         print("    " + json.dumps(fact["value"], sort_keys=True))
         for name, fact in result.get("checks", {}).items():
-            print(f"  {name}: {fact['outcome']} ({fact.get('code', '')}); operation={fact.get('operation_id', '')}")
+            print(
+                f"  {name}: {fact['outcome']} ({fact.get('code', '')}); operation={fact.get('operation_id', '')}"
+            )
         if "operation_id" in result:
-            print("check operation: " + result["operation_id"])
+            print(
+                ("check operation: " if command == "self-test" else "setup operation: ")
+                + result["operation_id"]
+            )
+        if "reason" in result:
+            print("reason: " + result["reason"])
+        for reference in ("deployment", "operator_connection"):
+            if reference in result:
+                print(reference + ": " + result[reference])
+        if "identities" in result:
+            print(
+                "native identities: " + json.dumps(result["identities"], sort_keys=True)
+            )
         if "release" in result:
             print("release: " + json.dumps(result["release"], sort_keys=True))
         if "preview" in result:
             print("preview: " + json.dumps(result["preview"], sort_keys=True))
         print(result.get("next", ""))
+    if command in {"apply", "operation"}:
+        return (
+            0
+            if result["outcome"] == "complete"
+            else 2
+            if result["outcome"] in {"pending", "running", "waiting"}
+            else 1
+        )
     if command == "self-test":
-        return {"passed": 0, "failed": 1, "waiting": 2, "unsupported": 3}[result["outcome"]]
+        return {"passed": 0, "failed": 1, "waiting": 2, "unsupported": 3}[
+            result["outcome"]
+        ]
     if command == "preflight":
         return 2 if result["outcome"] == "failed" else 3
     return 0

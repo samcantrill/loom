@@ -2028,8 +2028,11 @@ def test_fleet_help_and_core_imports_do_not_load_administration_dependencies():
         assert main(['fleet', '--help']) == 0
         assert main(['fleet', 'preflight', '--help']) == 0
         assert main(['fleet', 'self-test', '--help']) == 0
+        assert main(['fleet', 'apply', '--help']) == 0
+        assert main(['fleet', 'operation', 'resume', '--help']) == 0
         for forbidden in ('loom.fleet.administration', 'loom.fleet.configuration',
-                          'loom.fleet.releases', 'loom.fleet.self_tests', 'loom.fleet.probes', 'yaml', 'dotenv', 'packaging',
+                          'loom.fleet.releases', 'loom.fleet.self_tests', 'loom.fleet.probes',
+                          'loom.fleet.ssh_operations', 'loom.fleet._host', 'yaml', 'dotenv', 'packaging',
                           'weave', 'torch', 'numpy'):
             assert forbidden not in sys.modules, forbidden
         """

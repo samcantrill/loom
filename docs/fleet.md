@@ -49,8 +49,9 @@ protected Weave composition and explicit `--env-file` resolution apply; there is
 no second template language or implicit shell-environment expansion.
 
 `systemd-user` and `tmux` are explicit choices. Missing systemd prerequisites
-never select tmux automatically. These commands perform no SSH or installation,
-start no native role or workload, and do not initialize/read private native SQL.
+never select tmux automatically. Status and preflight perform no SSH or installation, start no native role or
+workload, and do not initialize/read private native SQL. Tmux plan and explicit
+apply use the SSH setup path described below.
 They consume native operator projections. Select an existing protected
 `loom.coordinator-client` file with operator credentials and a pinned coordinator
 ID using `--connection`. An ordinary client is not granted operator privileges.
@@ -72,8 +73,8 @@ supplies those observations. This phase therefore never reports ready: preflight
 returns **2** for failed local validation and **3** for incomplete evidence even
 when all local checks pass. Parse the versioned JSON facts for details; ordinary
 CLI/configuration errors remain nonzero. Deliberate self-tests use the native
-execution path described below. Setup and upgrade automation are separate
-operations and are not yet provided.
+execution path described below. Setup uses the explicit SSH operation described below. Upgrade automation is a
+separate lifecycle operation.
 
 ## Immutable service bundles
 
@@ -208,3 +209,78 @@ Older native reports without parent-owned launch UUID evidence remain
 incomplete. Current reports carry this optional evidence through the existing
 native result channel; the operator projection never substitutes requested
 resources or reads worker-authored metadata as native allocation proof.
+
+## SSH setup and continuation
+
+For setup select `service_manager: tmux` explicitly. Fleet uses only configured
+SSH aliases and their existing authentication/host-key policy; aliases cannot
+contain SSH options or shell syntax. Each host must already provide Python 3.12,
+uv, tmux, OpenSSL and findmnt. Native state and IPC must be on a supported local
+filesystem; a directory beneath an NFS home is insufficient. Workload software,
+shared mounts and the selected resident Python or SIF profile must already exist.
+Tmux keeps services detached from the operator connection and promises **no boot
+startup**. Systemd setup and runtime/profile changes require their explicit
+lifecycle paths.
+
+Setup requires an immutable offline service bundle and an explicit native
+`loom.deployment` selection for the synthetic probe source/profile. For a fresh
+coordinator, use its native automatic-creation selection with the inventory's
+coordinator role and an explicit binding path. Fleet only reads that selection;
+it never launches its roles on the operator. Select the base probe config with
+`--config`. Existing fleets use an already pinned connection-only deployment
+and a separate pinned operator `--connection`.
+
+```sh
+loom fleet plan --fleet lab --issuer /LOCAL/PRIVATE/issuer
+loom fleet apply --fleet lab --operation-id setup-001 \
+  --issuer /LOCAL/PRIVATE/issuer --deployment /PRIVATE/probe-selection.json \
+  --config fleet-check.yaml
+loom fleet operation status setup-001 --fleet lab --format json
+loom fleet operation resume setup-001 --fleet lab
+```
+
+The issuer path belongs to the **coordinator host**. It explicitly selects its
+protected `ca.crt` and `ca.key`; Fleet never guesses the CA key from a certificate
+path. Only genuinely fresh unbound setup can create new signing material.
+Add-host issuance must match the existing client CA. Missing bound keys/roots
+block recovery rather than being regenerated. With complete preissued matching
+credentials, no issuer is needed for steps that require no issuance.
+
+Fresh client and operator leaf identities must select already-authored native
+principals with those respective roles. Unique choices are selected directly;
+use `--client-credential-id` and `--operator-credential-id` when ambiguous. Setup
+adds only their certificate fingerprints, preserving every declared scope.
+Their private keys remain in protected operator-local files; workers generate
+and keep their own keys; the CA key stays coordinator-local. Only public CSRs and
+certificates cross SSH. Pending fresh bindings are shown honestly in plan; the
+completed native declaration is validated before initialization. After native
+initialization, Fleet exports versioned connection-only selections pinned to the
+actual coordinator ID and reports their paths.
+
+To add an inventory entry, select it explicitly and reuse the exported deployment
+and operator connection. The coordinator is an explicit preview dependency for
+enrollment/reload even when only the worker is selected:
+
+```sh
+loom fleet apply --fleet lab --hosts gpu02 --operation-id add-gpu02 \
+  --issuer /LOCAL/PRIVATE/issuer --deployment /PRIVATE/EXPORTED/deployment.json \
+  --connection /PRIVATE/EXPORTED/operator.json --config fleet-check.yaml
+```
+
+Plan is read-only and reserves nothing. Apply verifies the exact offline bundle,
+retains protected intent and dispatch markers in `operations/<operation-id>`, and
+rechecks inputs before mutations. Native roots, resource ceilings, GPU selection,
+profiles and scheduling reload identities retain their native meanings. An
+unknown SSH reply leaves the operation waiting. Resume observes retained host
+receipts and native identity before continuing; it never allocates replacement
+self-tests. Confirmed failed or unsupported checks block completion. Inventory
+removal does not retire or uninstall a host.
+
+Status reads retained administrative evidence without contacting or repairing a
+host. Operation outcomes use `pending`, `running`, `waiting`, `blocked`, and
+`complete`; CLI exits are 0 for complete, 2 for pending/running/waiting, and 1 for
+blocked. Changed inputs require a new reviewed intent; a missing bound database
+requires explicit recovery. Completed receipts remain inspectable. Setup is
+complete only after fresh native resources and the relevant existing CPU,
+storage and GPU self-tests pass. This is infrastructure evidence, not scientific
+qualification. One operator and one active writer per operation are supported.
