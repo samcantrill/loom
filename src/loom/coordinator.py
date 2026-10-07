@@ -11,7 +11,10 @@ from collections.abc import Mapping, Iterator
 from dataclasses import dataclass
 import math
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from loom.diagnostics.run_explanation import RunExplanation
 
 from loom.serialization import PlainData
 from loom.runs.context import RunAnnotations, RunContext
@@ -58,6 +61,8 @@ class RunObservation:
     Existing services are borrowed. No service is stopped by this observer;
     cleanup records that decision separately from execution and containment.
     ``operation.state == 'applied'`` is an admission fact, not experiment success.
+    ``detail`` retains the existing owner join for pure explanations; the
+    established observation serialization is unchanged.
     """
 
     operation_id: str
@@ -65,6 +70,7 @@ class RunObservation:
     admission: LocalDaemonAdmission | None
     inspection: RunInspectionResponse | None
     connection: CoordinatorConnectionDescription
+    detail: LocalDaemonAdmissionDetail | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -263,12 +269,43 @@ class CoordinatorClient(NativeCoordinatorClient):
         inspection = None
         yield RunObservation(operation_id, operation, None, None, connection)
         if isinstance(retained, Mapping):
-            admission = cast(LocalDaemonAdmissionDetail, self._native_call(
+            detail = cast(LocalDaemonAdmissionDetail, self._native_call(
                 "admission", {"admission_id": retained["admission_id"]}, owner, deadline=deadline,
-            )).admission
-            yield RunObservation(operation_id, operation, admission, None, connection)
+            ))
+            admission = detail.admission
+            yield RunObservation(operation_id, operation, admission, None, connection, detail)
             inspection = self._inspect_run(admission.run_uri, owner, deadline)
-            yield RunObservation(operation_id, operation, admission, inspection, connection)
+            yield RunObservation(operation_id, operation, admission, inspection, connection, detail)
+
+    def explain_run(
+        self, operation_id: str, *, timeout_seconds: float = 25.0,
+        expected_coordinator_id: str | None = None, deployment: str | None = None,
+    ) -> "RunExplanation":
+        """Bounded connect-only explanation; retain completed reads on owner loss.
+
+        Unknown operations stay ``not_found``. Authentication, identity and codec
+        errors propagate. A later unavailable owner cannot erase earlier facts.
+        """
+        from loom.diagnostics.run_explanation import explain_run
+
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise control_error("invalid_request", "explain_run", {"operation_id": operation_id})
+        deadline = time.monotonic() + timeout_seconds
+        observation = None
+        error_code = None
+        try:
+            connection = self._native_call("handshake", {}, expected_coordinator_id, deadline=deadline)
+            for snapshot in self._run_observation_steps(operation_id, connection, deadline=deadline):
+                observation = snapshot
+        except CoordinatorClientError as exc:
+            if exc.code not in {"unavailable", "deadline_exceeded", "not_found", "maintenance_in_progress"}:
+                raise
+            error_code = exc.code
+        return explain_run(
+            None if observation is None else observation.inspection,
+            observation=observation, operation_id=operation_id, deployment=deployment,
+            error_code=error_code,
+        )
 
     def get_run_context(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunContext:
         """Read original intent, current annotations and native evidence without execution."""

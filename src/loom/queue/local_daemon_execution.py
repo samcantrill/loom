@@ -6090,12 +6090,27 @@ def build_local_daemon_owner_views(
                 run_uris,
             ):
                 record = StageWorkRecord.from_dict(json.loads(str(payload)))
+                profiles = list(config.remote_profiles)
+                if config.resident_worker_launch_profile is not None:
+                    profiles.append(ResidentProfileDescriptor.from_dict(
+                        config.resident_worker_launch_profile.descriptor
+                    ))
+                incompatible = (
+                    record.scheduling_state.value == "ready"
+                    and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
+                    and not any(
+                        _profile_satisfies_requirement(profile, record.execution_requirement)
+                        for profile in profiles
+                    )
+                )
                 stage_work_by_run.setdefault(record.run_uri, []).append(
                     {
                         "stage_work_id": record.stage_work_id,
                         "stage_name": record.stage_name,
                         "state": record.scheduling_state.value,
                         "projection_revision": record.projection_revision,
+                        "diagnostic": "incompatible_profile" if incompatible
+                        else record.scheduling_diagnostics.get("code"),
                     }
                 )
             for row in conn.execute(

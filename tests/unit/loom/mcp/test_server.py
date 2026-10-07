@@ -470,3 +470,56 @@ def test_cancelled_sdk_call_holds_capacity_until_native_completion(monkeypatch):
     finally:
         release.set()
         capacity.close()
+
+
+def test_inspection_text_uses_shared_explanation_preserving_raw_union() -> None:
+    from loom.mcp._server import _result
+    from loom.diagnostics.run_explanation import explain_run
+    from tests.integration.diagnostics.test_run_explanation import _inspection, _fact
+    value = _inspection(_fact())
+    result = _result(explain_run(value), "unused generic summary")
+    from mcp.types import TextContent
+    assert isinstance(result.content[0], TextContent)
+    assert result.structured_content == value.to_dict()
+    assert result.content[0].text == explain_run(value).format_text()
+
+
+@pytest.mark.parametrize("detail_code", [None, "unavailable", "unauthorized"])
+def test_inspection_supplement_uses_same_deadline_owner_and_preserves_raw(detail_code):
+    from contextlib import contextmanager
+    from dataclasses import replace
+    from loom.mcp._server import _Adapter, _result
+    from loom.diagnostics.run_explanation import explain_run
+    from loom.queue._coordinator_control import control_error
+    from loom.queue.local_daemon import LocalDaemonAdmissionDetail
+    from tests.integration.diagnostics.test_run_explanation import _inspection, _admission, _observation
+    inspection = replace(_inspection(), admission_id="a")
+    detail = LocalDaemonAdmissionDetail(_admission(), {}, {"execution": {
+        "owner": "agent", "availability": "available", "state": "populated", "freshness": "stale",
+        "journal": [{"state": "result_durable"}],
+    }})
+    calls = []
+    class Client:
+        _last_connection = _observation("applied").connection
+        def _native_call(self, operation, payload, owner, *, deadline):
+            calls.append((operation, owner, deadline))
+            if operation == "inspect_run":
+                return inspection.to_dict()
+            if detail_code is not None:
+                raise control_error(detail_code, operation, payload)
+            return detail
+    @contextmanager
+    def connect():
+        yield Client()
+    adapter = _Adapter("/unused")
+    adapter._connect = connect
+    try:
+        explanation = adapter._inspect_run(inspection.run_uri, None, 123.0)
+        result = _result(explanation, "unused")
+        from mcp.types import TextContent
+        assert isinstance(result.content[0], TextContent)
+        assert result.structured_content == inspection.to_dict()
+        assert calls == [("inspect_run", None, 123.0), ("admission", "owner", 123.0)]
+        assert result.content[0].text == explain_run(inspection, detail=detail if detail_code is None else None, error_code=detail_code).format_text()
+    finally:
+        adapter.close()
