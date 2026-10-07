@@ -126,6 +126,7 @@ def handle_follow(namespace: argparse.Namespace) -> int:
     operation_id = namespace.operation_id
     observation = None
     detached = None
+    deadline: float | None = None
     try:
         deadline = _deadline(namespace)
         selection = load_deployment(namespace.deployment)
