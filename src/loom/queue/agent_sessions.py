@@ -116,6 +116,7 @@ class AgentControlKind(StrEnum):
     DRAIN = "drain"
     RESUME = "resume"
     RELOAD = "reload"
+    PROMOTE = "promote"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,7 @@ class AgentControl:
     pool: str | None
     cancel_active: bool
     reason: str
+    promotion: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -140,6 +142,14 @@ class AgentControl:
         ):
             _identifier(getattr(self, name), name)
         object.__setattr__(self, "kind", AgentControlKind(self.kind))
+        if self.kind is AgentControlKind.PROMOTE:
+            from ._profile_promotion import validate_promotion
+            validate_promotion(self.promotion)
+            if self.cancel_active:
+                raise QueueServiceError("profile promotion cannot cancel work")
+            object.__setattr__(self, "promotion", freeze_plain_data(self.promotion))
+        elif self.promotion is not None:
+            raise QueueServiceError("promotion binding requires promote control")
         if self.pool is not None:
             _identifier(self.pool, "pool")
         if not isinstance(self.cancel_active, bool):
@@ -161,6 +171,7 @@ class AgentControl:
             "pool": self.pool,
             "cancel_active": self.cancel_active,
             "reason": self.reason,
+            **({"promotion": thaw_plain_data(self.promotion)} if self.promotion is not None else {}),
         }
 
     @classmethod
@@ -175,7 +186,7 @@ class AgentControl:
             "cancel_active",
             "reason",
         }
-        if set(value) != fields:
+        if set(value) not in (fields, fields | {"promotion"}):
             raise QueueServiceError("agent control fields are invalid")
         pool = value["pool"]
         if pool is not None and not isinstance(pool, str):
@@ -201,6 +212,7 @@ class AgentControl:
             pool,
             cast(bool, value["cancel_active"]),
             cast(str, value["reason"]),
+            cast(Mapping[str, PlainData] | None, value.get("promotion")),
         )
 
 

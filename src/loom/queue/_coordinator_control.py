@@ -894,7 +894,7 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
     from .agent_sessions import AgentControl
     control = AgentControl.from_value(cast(Mapping[str, object], value["control"]))
     try:
-        daemon._authorizer().require_operator(principal, control.kind.value, agent_id=control.agent_id, pool=control.pool)
+        daemon._authorizer().require_operator(principal, "maintenance" if control.promotion is not None else control.kind.value, agent_id=control.agent_id, pool=control.pool)
         if control.cancel_active:
             daemon._authorizer().require_operator(principal, "cancel_active", agent_id=control.agent_id, pool=control.pool)
     except QueueServiceError as exc:
@@ -923,6 +923,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
+            "quiescent-profile-promotion-v1",
             MAINTENANCE_CAPABILITY,
             "run-context-v1",
             "run-query-v1",

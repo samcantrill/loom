@@ -2725,7 +2725,7 @@ class LocalDaemon:
         authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
-            control.kind.value,
+            "maintenance" if control.promotion is not None else control.kind.value,
             agent_id=control.agent_id,
             pool=control.pool,
         )
@@ -2800,6 +2800,9 @@ class LocalDaemon:
             ).fetchone()
             if active is not None:
                 raise QueueConflictError("another agent control is still in progress")
+            if control.promotion is not None:
+                from ._profile_promotion import authorize
+                authorize(self, conn, control)
             conn.execute(
                 "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
                 (
@@ -2812,7 +2815,7 @@ class LocalDaemon:
             )
             # Withdrawal is coordinator-owned and happens before delivery.  It
             # changes only future offers; it never releases a durable claim.
-            if control.kind.value in {"drain", "reload"}:
+            if control.kind.value in {"drain", "reload", "promote"}:
                 conn.execute(
                     "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
                     (control.expected_session_id,),
@@ -2851,7 +2854,7 @@ class LocalDaemon:
                     if admission_row is not None:
                         _request_admission_cancellation(conn, str(admission_row[0]), principal_id=principal.subject, request_operation_id=cancellation_operation_id)
             conn.commit()
-        if control.kind.value in {"drain", "reload"}:
+        if control.kind.value in {"drain", "reload", "promote"}:
             self._poll_waiters.notify(control.expected_session_id)
         self._wake.set()
         return freeze_plain_data(
@@ -4075,7 +4078,7 @@ class LocalDaemonOperatorView:
         if row is None:
             raise QueueServiceError("managed operation was not found")
         control = AgentControl.from_value(json.loads(row["request_json"]))
-        self._daemon._authorizer().require_operator(self._principal, control.kind.value, agent_id=control.agent_id, pool=control.pool)
+        self._daemon._authorizer().require_operator(self._principal, "maintenance" if control.promotion is not None else control.kind.value, agent_id=control.agent_id, pool=control.pool)
         from .operations import control_intent_digest
         with self._daemon._connection() as conn:
             retained = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("agent-control-condition:" + operation_id,)).fetchone()

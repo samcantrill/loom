@@ -207,6 +207,8 @@ class _RemoteAgentJournal:
                     "immutable_fingerprint": expected_configuration_fingerprint,
                 }:
                     raise QueueServiceError("remote agent binding is invalid")
+            if metadata.get("profile_promotion_pending"):
+                raise QueueConflictError("profile promotion recovery required before capacity")
             active = metadata.get("active_configuration_fingerprint")
             pending = tuple(
                 conn.execute(
@@ -239,7 +241,7 @@ class _RemoteAgentJournal:
     ) -> None:
         """Bind one delivered reload to the exact fully prepared replacement."""
 
-        if control.kind.value != "reload" or not replacement_fingerprint:
+        if control.kind.value not in {"reload", "promote"} or not replacement_fingerprint:
             raise QueueConflictError("agent reload intent is invalid")
         encoded = _canonical_json(control.value())
         with self._connection() as conn:
@@ -362,6 +364,8 @@ class _RemoteAgentJournal:
                 "WHERE operation_id = ?",
                 (encoded_effect, control.operation_id),
             )
+            if control.promotion is not None:
+                conn.execute("DELETE FROM root_metadata WHERE key='profile_promotion_pending'")
             conn.commit()
 
     def recover_pending_reload(self, config: AgentTlsClientConfig) -> None:
@@ -390,7 +394,7 @@ class _RemoteAgentJournal:
         if not isinstance(raw_control, Mapping):
             raise QueueServiceError("agent reload intent is invalid")
         control = AgentControl.from_value(raw_control)
-        if control.kind.value != "reload":
+        if control.kind.value not in {"reload", "promote"}:
             raise QueueServiceError("agent reload intent is invalid")
         effect = AgentControlEffect(
             operation_id=control.operation_id,
@@ -1118,7 +1122,7 @@ class _RemoteAgentJournal:
     ) -> AgentControlEffect | None:
         """Persist delivery and withdrawal before applying owner-local effects."""
 
-        if replacement_fingerprint is not None and control.kind.value != "reload":
+        if replacement_fingerprint is not None and control.kind.value not in {"reload", "promote"}:
             raise QueueConflictError(
                 "only an agent reload can bind a replacement fingerprint"
             )
@@ -1176,7 +1180,7 @@ class _RemoteAgentJournal:
                 )
                 conn.commit()
                 return effect
-            if control.kind.value in {"drain", "reload"}:
+            if control.kind.value in {"drain", "reload", "promote"}:
                 conn.execute(
                     "UPDATE agent_offers_local SET state = 'DRAINED' "
                     "WHERE session_id = ?",
