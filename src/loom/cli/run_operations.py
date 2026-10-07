@@ -281,3 +281,30 @@ def handle_explain(namespace: argparse.Namespace) -> int:
     else:
         sys.stdout.write(result.format_text() + "\n")
     return int(ExitCode.RUN_STATE if missing else ExitCode.SUCCESS)
+
+
+def handle_logs(namespace: argparse.Namespace) -> int:
+    """Read retained stage logs using a connect-only deployment selection."""
+    from loom.deployment import load_deployment, connect_deployment
+    from loom.queue.errors import QueueError
+
+    try:
+        with connect_deployment(load_deployment(namespace.deployment)) as client:
+            result = client.read_run_logs(
+                namespace.operation_id, stage=namespace.stage,
+                stream=namespace.stream, tail=namespace.tail,
+            )
+    except QueueError as exc:
+        raise operation_error(exc, namespace.operation_id, namespace.deployment, action="runs.logs") from exc
+    if namespace.output_format == "json":
+        sys.stdout.write(format_json_envelope(
+            schema_version="loom.cli.runs.logs.v1", ok=True,
+            warnings=[], payload_name="result", payload=result,
+        ))
+    else:
+        sys.stdout.write(f"logs {result['operation_id']} stage {result['stage']} attempt {result['attempt']} ({result['owner']}; {result['observed_at']})\n")
+        for entry in result["streams"]:
+            sys.stdout.write(f"{entry['stream']}: {entry['availability']} source={entry['source']} id={entry['log_id']} truncated={entry['truncated']} decoding_replaced={entry['decoding_replaced']}\n")
+            if entry["text"] is not None:
+                sys.stdout.write(entry["text"] + ("" if entry["text"].endswith("\n") else "\n"))
+    return int(ExitCode.SUCCESS)

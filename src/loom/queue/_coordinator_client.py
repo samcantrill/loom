@@ -208,6 +208,8 @@ class NativeCoordinatorClient:
                     from ._maintenance import MAINTENANCE_CAPABILITY
                     if MAINTENANCE_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": MAINTENANCE_CAPABILITY})
+                if operation == "read_run_logs" and "bounded-run-logs-v1" not in description.capabilities:
+                    raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "bounded-run-logs-v1"})
                 requested = envelope.get("request")
                 if operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"} and "artifact-read-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
@@ -230,6 +232,8 @@ class NativeCoordinatorClient:
                     self._expected_coordinator_id = description.coordinator_id
                     envelope["expected_coordinator_id"] = description.coordinator_id
             except CoordinatorClientError as exc:
+                if operation == "read_run_logs" and exc.code == "unsupported":
+                    raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "bounded-run-logs-v1"}) from exc
                 if operation.startswith("operator_") and exc.code == "unsupported":
                     from .operations import OPERATOR_CAPABILITY
                     raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY}) from exc
@@ -268,6 +272,23 @@ class NativeCoordinatorClient:
             raise control_error(
                 "invalid_response", operation, envelope, dispatched=True
             ) from exc
+
+    def read_run_logs(
+        self, operation_id: str, *, stage: str, stream: str = "both", tail: int = 100,
+        expected_coordinator_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Read authorized retained logs for the current native stage attempt.
+
+        Positive ``tail`` counts lines; each stream is capped at 64 KiB of UTF-8
+        text before serialization. Replies label pending/missing/unavailable
+        sources, truncation and replacement decoding. No host paths are returned.
+        Older peers without ``bounded-run-logs-v1`` are explicitly unsupported.
+        """
+        if self._legacy:
+            raise control_error("unsupported_capability", "read_run_logs", {})
+        return self._native_call("read_run_logs", {
+            "operation_id": operation_id, "stage": stage, "stream": stream, "tail": tail,
+        }, expected_coordinator_id)
 
     def describe_connection(
         self, *, expected_coordinator_id: str | None = None

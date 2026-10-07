@@ -62,6 +62,7 @@ CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
         "agents",
         "agent",
         "inspect_run",
+        "read_run_logs",
         "get_run_context",
         "patch_run_annotations",
         "append_run_note",
@@ -421,6 +422,9 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         from loom.runs.annotations import RunNote, RunNotePage
 
         return RunNote.from_dict(value) if operation == "append_run_note" else RunNotePage.from_dict(value)
+    if operation == "read_run_logs":
+        from ._remote_logs import decode_logs
+        return decode_logs(value)
     if operation in {"inspect_run", "get_run_context"}:
         return value  # The diagnostic union decoder belongs above queue.
     if operation in {"trace_lineage", "select_outputs", "list_output_commits", "search_runs", "search_submissions", "search_jobs", "tag_keys", "tag_values"}:
@@ -505,6 +509,7 @@ def validate_request(
         "agent": {"agent_id"},
         "operation": {"operation_id"},
         "inspect_run": {"run_uri"},
+        "read_run_logs": {"operation_id", "stage", "stream", "tail"},
         "get_run_context": {"run_uri"},
         "patch_run_annotations": {"run_uri", "mutation_id", "patch"},
         "append_run_note": {"run_uri", "mutation_id", "text"},
@@ -542,6 +547,9 @@ def validate_request(
         value.setdefault("timeout", None)
     if set(value) != fields[operation]:
         raise ValueError("control request fields are invalid")
+    if operation == "read_run_logs":
+        from ._remote_logs import validate_log_selection
+        validate_log_selection(value["stage"], value["stream"], value["tail"])
     if operation in {"patch_run_annotations", "append_run_note", "list_run_notes"}:
         from loom.runs.annotations import mutation_request, page_notes
         from loom.runs.context import RUN_CONTEXT_LIMITS
@@ -709,9 +717,10 @@ def dispatch_control(
                 raise control_error("invalid_cursor", operation, payload, boundary="coordinator") from exc
             except QueryError as exc:
                 raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
-        elif operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"}:
+        elif operation in {"describe_artifact", "read_artifact_chunk", "read_artifact", "read_run_logs"}:
             from ._artifact_access import artifact_operation
-            result = artifact_operation(daemon, operation, value)
+            from ._remote_logs import read_logs
+            result = read_logs(daemon, value) if operation == "read_run_logs" else artifact_operation(daemon, operation, value)
         elif operation == "get_run_context":
             from ._run_context import get_run_context
 
@@ -911,6 +920,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             "output-query-v1",
             "lineage-query-v1",
             "artifact-read-v1",
+            "bounded-run-logs-v1",
             *(
                 ("agent-preparation-v1", "reconciled-run-v1")
                 if daemon.preparation_available
