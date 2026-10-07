@@ -23,6 +23,7 @@ from loom.fleet.ssh_operations import _file_hash, ssh
 from loom.fleet.upgrades import preview, upgrade
 from loom.queue.deployment import _load_protected_config
 from loom.queue.preparation import PrepareRunRequest
+from loom.serialization import thaw_plain_data
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -136,7 +137,7 @@ def test_installed_workload_upgrade():
         )
         assert previous.admission.run_uri == selected["old_run_uri"]
         assert previous.operation is not None
-        original_operation = previous.operation.to_dict()
+        original_operation = thaw_plain_data(previous.operation.to_dict())
         atomic(
             report,
             {
@@ -232,9 +233,9 @@ def test_installed_workload_upgrade():
                 "result": result,
                 "repeated": repeated,
                 "old_operation": original_operation,
-                "old_admission": previous.admission.to_dict(),
+                "old_admission": thaw_plain_data(previous.admission.to_dict()),
                 "history": selected["history"],
-                "old_selection_refusal": refusal.value.to_dict(),
+                "old_selection_refusal": thaw_plain_data(refusal.value.to_dict()),
                 "services": service_observations,
                 "checks": checks,
                 "final_gate": gate,
