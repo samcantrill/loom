@@ -241,3 +241,31 @@ native root/session identity, interrupted assignment containment and provider
 release. Idle and in-job reboot remain separately unavailable without this
 permission. SSH logout records whether the site's PAM integration created a
 logind session; it cannot claim last-logind-session evidence when none existed.
+
+### Installed runtime upgrades
+
+Run `tests/fleet_acceptance/test_runtime_upgrade.py` without marker exclusions,
+using the same locked dev/config/fleet environment and
+`LOOM_RUN_FLEET_ACCEPTANCE=1`, with `LOOM_FLEET_ACCEPTANCE_CONFIG` naming a
+protected JSON selection. It must contain `schema_version: 1`,
+`disposable: true`, `kind: runtime-upgrade`, and `cases` entries `upgrade` and
+`interruption`. An absent case is unavailable evidence, never a pass.
+
+Each case supplies `fleet`, `runtime_release`, `deployment`,
+`operator_connection`, source-relative `config`, a new `operation_id`,
+`roots` (inventory-entry to exact native root-ID map), `source_releases`
+(entry to installed descriptor-SHA256 map), a new `report`, and
+`timeout_seconds` (1..900). Optional `env_file` selects the protected native role
+environment. File paths resolve relative to the selection. Exactly two distinct
+SSH hosts are required. Both installed source and target must support the gate
+and conditional controls; retain the explicit bridge receipt separately.
+
+The test invokes real CLI subprocesses, replaces only the selected native
+services, checks exact before/after identities and releases, and verifies every
+required native check and resource acknowledgement/release. The interruption
+case terminates only its owned controller/SSH process group after observing the
+accepted maintenance gate, then resumes the same operation. Native service
+ownership survives. Cases borrow services and retain incomplete receipts on
+failure; they never reboot hosts, cancel work or forcibly clear claims. Prepare
+separate immutable targets and fresh operation/report identities for successive
+cases. Passing this file qualifies the selected same-boot upgrade only.
