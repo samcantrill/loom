@@ -669,6 +669,9 @@ def bind_principal(request, directory):
 
 def execute(request, repeated, directory):
     action = request["action"]
+    if action.startswith("workload-"):
+        from loom.fleet._workload_host import execute as workload_step
+        return workload_step(request, directory)
     if action.startswith("upgrade-"):
         from loom.fleet._upgrade_host import execute as upgrade_step
         return upgrade_step(request)
@@ -719,7 +722,7 @@ def main():
                 if publication.exists()
                 else None
             )
-        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement"}:
+        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-recover"}:
             if (
                 request.get("expected_declaration") is not None
                 and digest(payload(request)) != request["expected_declaration"]

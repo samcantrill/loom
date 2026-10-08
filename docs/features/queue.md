@@ -1144,3 +1144,41 @@ The native maintenance observation also reports `settled` and bounded
 `wait_reasons` for preparation/admissions, assignment references and controls.
 Fleet waits for these native facts before drain and replacement; terminal compute
 alone is insufficient.
+
+### Quiescent executable profile promotion
+
+`AgentControlKind.PROMOTE` uses the existing operator control transport and
+`maintenance` authorization. Its `promotion` mapping binds the owning closed
+gate (ID, intent digest and revision), agent root, exact predecessor immutable
+and active fingerprints, target immutable and active fingerprints, and selected
+native profile descriptor. The coordinator requires settled admitted work and
+controls, the guarded current session/configuration, and an applied drain.
+The agent independently requires settled local assignments/polls and a clean
+supervisor cut before accepting its exact predecessor transition. Ordinary
+reload still refuses changed executable bindings.
+
+The existing agent control journal retains promotion intent and effect. An
+accepted incomplete transition records `profile_promotion_pending` and fences
+the active fingerprint before changing any protected binding. Startup recovers
+the selected target under agent/supervisor locks before offering capacity;
+restarting against the old or a different configuration refuses. The supervisor
+keeps its identity, secret, and historical launch/receipt rows; only its current
+configuration and the agent's protected current binding advance. Exact completed
+control replay, including after a later promotion, never installs old bindings.
+One selected resident profile is supported; resource and shared-storage policy,
+transport, credentials and root identity cannot change in this operation.
+
+`quiescent-profile-promotion-v2` is reported by the running coordinator and in
+the running native service's process-bound observation. A separate service
+upgrade installs this capability before workload maintenance. Root schema 19
+and supervisor schema 3 are unchanged: the existing metadata and control stores
+own the transition. Older software refuses the pending active fingerprint and
+cannot decode the new control. No database reset or old-history migration is
+required for the preceding service upgrade.
+
+A promotion may carry a protected `candidate_source` in the canonical source's
+path frame. The trusted native service loader qualifies that source while the
+canonical predecessor stays startable. After accepting its local recovery intent,
+native promotion publishes the canonical source and completes the protected
+bindings under native locks. Startup resolves partial publication before joining
+the supervisor. An exact completed replay never republishes an earlier source.

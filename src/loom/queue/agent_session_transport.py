@@ -818,6 +818,7 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
         *,
         trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+        trusted_promotion_loader: Callable[[str], tuple[AgentTlsClientConfig, dict[str, Any]]] | None = None,
         prepare_role_reload: (
             Callable[[AgentTlsClientConfig], Callable[[], None]] | None
         ) = None,
@@ -826,6 +827,7 @@ class LocalDaemonAgentHttpClient:
         self._slurm_cursor: str | None = None
         self._resource_maintenance_enabled = False
         self._next_resource_maintenance = 0.0
+        self._trusted_promotion_loader = trusted_promotion_loader
         self._trusted_config_loader = trusted_config_loader
         self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
@@ -843,6 +845,9 @@ class LocalDaemonAgentHttpClient:
         self._supervisor: AgentProcessSupervisorClient | None = None
         # The journal validates the durable deployment binding and obtains the
         # exclusive application lock before an empty supervisor can be started.
+        from ._profile_promotion import recover
+        config = recover(config)
+        self._config = config
         self._journal = (
             _RemoteAgentJournal(
                 config.agent_root,
@@ -1318,7 +1323,7 @@ class LocalDaemonAgentHttpClient:
 
         session = self._require_journal().session(control.expected_session_id)
         with self._control_lock:
-            if control.kind.value in {"drain", "reload"}:
+            if control.kind.value in {"drain", "reload", "promote"}:
                 self._drained = True
             if prepared_error is not None:
                 return self._unchanged_control_effect(control, session, prepared_error)
@@ -1328,6 +1333,9 @@ class LocalDaemonAgentHttpClient:
                 and not (yield from _steps(self._cancel_active_assignments))
             ):
                 return self._unchanged_control_effect(control, session, "unknown_work")
+            if control.kind.value == "promote":
+                from ._profile_promotion import apply
+                return apply(self, control)
             if control.kind.value == "reload":
                 if prepared_reload is None and self._trusted_config_loader is None:
                     return self._unchanged_control_effect(
@@ -1393,6 +1401,8 @@ class LocalDaemonAgentHttpClient:
                         return self._unchanged_control_effect(
                             control, session, "reload_rejected"
                         )
+                if self._config.external_supervisor and self._supervisor is None:
+                    self._supervisor, _ = self._open_supervisor(self._config)
                 self._retained_profiles.clear()
                 self._reset_runtime_providers()
                 self._drained = False
@@ -2429,7 +2439,7 @@ class LocalDaemonAgentHttpClient:
             control = AgentControl.from_value(raw)
             self._service_control_due = True
             journal.prepare_control(control)
-            if control.kind.value in {"drain", "reload"}:
+            if control.kind.value in {"drain", "reload", "promote"}:
                 self._drained = True
             if control.cancel_active:
                 for _, assignment_id in journal.unresolved_assignment_references():

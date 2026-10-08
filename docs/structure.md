@@ -1478,3 +1478,13 @@ there is no Fleet scheduler or native SQL reader. The native remote workspace
 stamps actual launch UUIDs into existing execution metadata, replacing any
 worker assertion, and `queue/operations.py` exposes that evidence and native
 release proof through the existing targeted operator query.
+
+`queue/_profile_promotion.py` composes the existing authenticated agent control,
+local journal and supervisor owners for maintenance-only executable binding
+changes and startup recovery. It does not relax ordinary reload. Fleet's fixed
+`_workload_host.py` adapter qualifies candidates through native profile readiness
+and stages candidate agent sources. Native promotion owns canonical agent source
+publication, protected executable bindings and retained history.
+`fleet/workload_upgrades.py` composes this owner with the existing maintenance
+gate, conditional policy, check successor and versioned selection surfaces; it
+never installs a service runtime.

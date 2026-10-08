@@ -108,7 +108,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
-            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY],
+            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2"],
         },
     )
 
@@ -133,7 +133,7 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
         drain_state = conn.execute(
             "SELECT json_extract(request_json, '$.kind') AS kind "
             "FROM agent_controls WHERE session_id = ? AND "
-            "(json_extract(request_json, '$.kind') IN ('drain', 'reload') OR "
+            "(json_extract(request_json, '$.kind') IN ('drain', 'reload', 'promote') OR "
             "(json_extract(request_json, '$.kind') = 'resume' "
             "AND state = 'applied' AND acknowledged = 1)) "
             "ORDER BY rowid DESC LIMIT 1",
@@ -152,7 +152,7 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
     )
     control_value = None if control is None else json.loads(control["request_json"])
     # Resume intent does not undo an existing drain until the agent confirms it.
-    drained = drain_state is not None and drain_state["kind"] in {"drain", "reload"}
+    drained = drain_state is not None and drain_state["kind"] in {"drain", "reload", "promote"}
     value: dict[str, PlainData] = {
         **agent.to_dict(),
         "agent_root_id": session["agent_root_id"],
@@ -272,6 +272,7 @@ def inspect_native_service(
                 "session_id": state.get("session_id"),
                 "coordinator_id": state.get("coordinator_id"),
                 "service_manager": "unavailable",
+                "capabilities": state.get("capabilities", []),
             },
             reason,
         )
@@ -317,7 +318,7 @@ def probe_upgrade_compatibility(
             role == "coordinator" and current in {12, 15, 16, 17, 18}
         )
         missing = sorted(
-            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY}
+            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2"}
         )
         reason = (
             "unsupported_capability"
@@ -343,7 +344,7 @@ def probe_upgrade_compatibility(
                 "offline_required": current != target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
-                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY],
+                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2"],
                 "missing_capabilities": cast(list[PlainData], missing),
                 "profile_constraints": "unchanged_bindings_require_separate_qualification",
             },

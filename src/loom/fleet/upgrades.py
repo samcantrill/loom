@@ -100,7 +100,9 @@ def _capable(operator):
 def preview(
     inventory,
     *,
-    runtime_release,
+    runtime_release=None,
+    workload_profile=None,
+    image=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
@@ -111,6 +113,14 @@ def preview(
     Candidate installation/probing is the first apply step, before gate closure;
     preview never presents an uninstalled candidate as qualified.
     """
+    if workload_profile is not None or image is not None:
+        if runtime_release is not None:
+            raise QueueConfigError("service and workload targets are mutually exclusive")
+        from .workload_upgrades import preview as workload_preview
+        return workload_preview(inventory, workload_profile=workload_profile, image=image,
+            deployment=deployment, connection=connection, config=config, env_file=env_file)
+    if runtime_release is None:
+        raise QueueConfigError("upgrade requires a runtime or workload target")
     target = verify_release(Path(runtime_release), previous=inventory.runtime_release)
     selected = _checks(inventory, deployment, connection, config)
     rows, declarations = sshops._selection(inventory, None, env_file)
@@ -434,10 +444,11 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
     else:
         selection = operation.intent["check_selection"]
         deployment = load_deployment(selection["deployment"])
-        profile_id = operation.intent["declarations"][name]["resident_profiles"][0][
+        declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+        profile_id = declarations[name]["resident_profiles"][0][
             "descriptor"
         ]["profile_id"]
-        policies = operation.intent["declarations"]["coordinator"]["preparation"][
+        policies = declarations["coordinator"]["preparation"][
             "profiles"
         ]
         matches = [
@@ -487,7 +498,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
     from loom.fleet._credentials import fingerprint
 
     connection = load_coordinator_connection_file(intent["connection"])
-    declaration = operation.intent["declarations"]["coordinator"]
+    declaration = operation.intent.get("target_declarations", operation.intent["declarations"])["coordinator"]
     credential = declaration["agent_server"]["credential_fingerprints"].get(
         fingerprint(connection.certificate_path)
     )
@@ -534,8 +545,8 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
 
 def _run_checks(operation):
     attempts = _attempts(operation)
-    for name, declaration in operation.intent["declarations"].items():
-        if name == "coordinator":
+    for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
+        if name == "coordinator" or name not in operation.intent["agents"]:
             continue
         profile = declaration["resident_profiles"][0]
         for check in (
@@ -623,6 +634,9 @@ def _restore(operation, *, abort=False):
 
 
 def _continue(operation):
+    if operation.intent.get("kind") == "workload-upgrade":
+        from .workload_upgrades import continue_upgrade
+        return continue_upgrade(operation)
     if (operation.directory / "complete.json").exists():
         return read(operation.directory / "complete.json")
     operation.recheck()
@@ -710,6 +724,8 @@ def upgrade(
     *,
     operation_id=None,
     runtime_release=None,
+    workload_profile=None,
+    image=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
@@ -723,12 +739,15 @@ def upgrade(
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
-    if apply and runtime_release is None:
-        raise QueueConfigError("apply requires --runtime-release")
+    if runtime_release is not None and (workload_profile is not None or image is not None):
+        raise QueueConfigError("service and workload targets are mutually exclusive")
+    if apply and runtime_release is None and (workload_profile is None or image is None):
+        raise QueueConfigError("apply requires --runtime-release or --workload-profile and --image")
     if not apply and operation_id is None:
         return preview(
             inventory,
             runtime_release=runtime_release,
+            workload_profile=workload_profile, image=image,
             deployment=deployment,
             connection=connection,
             config=config,
@@ -750,12 +769,13 @@ def upgrade(
             plan = preview(
                 inventory,
                 runtime_release=runtime_release,
+                workload_profile=workload_profile, image=image,
                 deployment=deployment,
                 connection=connection,
                 config=config,
                 env_file=env_file,
             )
-            target = Path(str(runtime_release)).resolve()
+            target = Path(str(runtime_release or inventory.runtime_release)).resolve()
             inputs = sshops._inputs(inventory, plan["hosts"], env_file)
             for item in (
                 target,
@@ -777,23 +797,32 @@ def upgrade(
                 "env_file": None if env_file is None else str(Path(env_file).resolve()),
                 "timeout_seconds": timeout_seconds,
             }
+            if workload_profile is not None:
+                from .workload_upgrades import bind_intent
+                intent = bind_intent(intent, plan, directory)
             atomic(path, intent)
         intent = read(path)
-        if intent.get("kind") != "runtime-upgrade":
+        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
             raise QueueConflictError("operation belongs to another kind")
         if runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
             raise QueueConflictError("upgrade target intent changed")
+        if workload_profile is not None and (intent.get("workload_profile") != workload_profile or image is None or intent.get("image") != str(Path(image).resolve())):
+            raise QueueConflictError("workload target intent changed")
         if apply:
             selected = _checks(inventory, deployment, connection, config)
             if (
-                selected != intent["check_selection"]
+                selected != intent.get("original_check_selection", intent["check_selection"])
                 or (None if env_file is None else str(Path(env_file).resolve()))
                 != intent["env_file"]
             ):
                 raise QueueConflictError("upgrade check or environment intent changed")
-        operation = _Upgrade(inventory, directory, intent)
+        if intent["kind"] == "workload-upgrade":
+            from .workload_upgrades import WorkloadUpgrade
+            operation = WorkloadUpgrade(inventory, directory, intent)
+        else:
+            operation = _Upgrade(inventory, directory, intent)
         try:
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
