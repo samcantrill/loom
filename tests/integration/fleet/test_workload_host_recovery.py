@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 import os
+import json
+import select
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -167,6 +170,15 @@ AgentProcessSupervisorService.serve_initialized(root,
             pytest.fail("unexpected service mutation: " + repr(args))
         return ""
 
+    # This fixture keeps its communication client in the pytest process so it
+    # can inject the later control. Bridge only its process-exit proof; the
+    # separate SIGTERM regression below exercises real pidfd/receipt behavior.
+    def simulated_pidfd(_pid):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        return read_fd
+
+    monkeypatch.setattr(_workload_host.os, "pidfd_open", simulated_pidfd)
     monkeypatch.setattr(_services, "systemctl", systemctl)
     try:
         assert (
@@ -215,3 +227,115 @@ AgentProcessSupervisorService.serve_initialized(root,
                 if process.poll() is None:
                     process.terminate()
                 process.communicate(timeout=15)
+
+
+def test_recovery_proves_real_sigterm_exit_without_native_stopped_receipt(
+    tmp_path, monkeypatch
+):
+    from tests.integration.queue.test_agent_profile_promotion import config
+
+    script = """from dataclasses import replace
+from pathlib import Path
+import json, signal, sys
+from loom.queue._service_lifetime import record_process
+from tests.integration.queue.test_agent_profile_promotion import client, request, apply
+original, old, replacement = client(Path(sys.argv[1]))
+replacement = replace(replacement, external_supervisor=True)
+original._config = replace(old, external_supervisor=True)
+original._trusted_config_loader = lambda: replacement
+control = request(old, replacement, original.agent_root_id)
+assert apply(original, control).code == 'applied'
+original._require_journal().acknowledge_control(control.operation_id)
+record_process(replacement.agent_root, stopped=False,
+               coordinator_id='coordinator', session_id='session')
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+print(json.dumps({'root_id': original.agent_root_id}), flush=True)
+signal.pause()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout is not None
+        assert select.select([process.stdout], [], [], 30)[0], "agent startup timed out"
+        line = process.stdout.readline()
+        assert line, process.communicate(timeout=15)
+        root_id = json.loads(line)["root_id"]
+        replacement = replace(config(tmp_path, 2), external_supervisor=True)
+        root = replacement.agent_root
+        assert root is not None
+        admin = tmp_path / "admin"
+        admin.mkdir(mode=0o700)
+        selection = {
+            "root": str(root),
+            "config": str(tmp_path / "agent.json"),
+            "admin": str(admin),
+            "name": "worker",
+            "service_manager": "systemd-user",
+            "coordinator_id": "coordinator",
+            "expected_root_id": root_id,
+            "release": {"descriptor_sha256": "same-release"},
+            "promotion_id": "promote-1",
+            "allow_communication_stop": True,
+        }
+        _host.atomic(admin / "service.json", selection)
+        binding = (admin / "service.json").read_bytes()
+        before = _workload_host.owner(selection)
+        assert before["value"]["ownership"] == "live"
+        assert before["value"]["expected_process"] == process.pid
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            history = conn.execute(
+                "SELECT request_json,effect_json,acknowledged FROM agent_controls_local"
+            ).fetchall()
+        actions = []
+
+        def systemctl(*args):
+            if args[0] == "show":
+                return (
+                    str(process.pid)
+                    if args[1] == _services.unit_name(selection, "agent")
+                    else "0"
+                )
+            assert args == ("stop", _services.unit_name(selection, "agent"))
+            process.send_signal(signal.SIGTERM)
+            assert process.wait(timeout=15) == -signal.SIGTERM
+            actions.append("stop")
+            return ""
+
+        def start(retained):
+            assert retained == selection
+            assert actions == ["stop"]
+            stopped = _workload_host.owner(selection)
+            assert stopped["reason"] == "process_missing"
+            assert stopped["value"]["ownership"] == "unproven"
+            assert stopped["owner"] == before["owner"]
+            assert stopped["revision"] == before["revision"]
+            actions.append("start")
+
+        monkeypatch.setattr(_services, "systemctl", systemctl)
+        monkeypatch.setattr(_host, "start", start)
+        monkeypatch.setattr(
+            _workload_host,
+            "load_outbound_agent_service_config",
+            lambda *a, **k: SimpleNamespace(client=replacement),
+        )
+        monkeypatch.setattr(_workload_host, "payload", lambda _: {})
+        assert (
+            _workload_host.recover_service(selection)["publication_state"] == "applied"
+        )
+        assert actions == ["stop", "start"]
+        assert (admin / "service.json").read_bytes() == binding
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert (
+                conn.execute(
+                    "SELECT request_json,effect_json,acknowledged FROM agent_controls_local"
+                ).fetchall()
+                == history
+            )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.communicate(timeout=15)

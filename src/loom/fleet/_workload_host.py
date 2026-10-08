@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
 from pathlib import Path
 import tempfile
 from typing import Any, cast
@@ -163,26 +164,41 @@ def recover_service(request):
                 raise QueueConflictError("native workload service settlement required")
             agent_unit = unit_name(request, "agent")
             pid = systemctl("show", agent_unit, "--property=MainPID", "--value")
-            current = owner(request)
-            if (
-                pid != str(fact["value"]["expected_process"])
-                or current["owner"] != fact["owner"]
-                or current["revision"] != fact["revision"]
-                or current["value"]["ownership"] != "live"
-            ):
+            if pid != str(fact["value"]["expected_process"]):
                 raise QueueConflictError(
                     "workload communication service ownership changed"
                 )
-            # The managed supervisor takes owner.lock during startup. Stop only
-            # the settled communication unit, then reuse the retained ordered
-            # lifecycle; never relax that native lock or stop a healthy supervisor.
-            systemctl("stop", agent_unit)
-            fact = owner(request)
-            if (
-                fact["value"]["ownership"] == "live"
-                or fact.get("reason") != "service_stopped"
-            ):
-                raise QueueConflictError("native communication stop remains unproven")
+            descriptor = os.pidfd_open(fact["value"]["expected_process"])
+            try:
+                current = owner(request)
+                if (
+                    current["owner"] != fact["owner"]
+                    or current["revision"] != fact["revision"]
+                    or current["value"]["ownership"] != "live"
+                ):
+                    raise QueueConflictError(
+                        "workload communication service ownership changed"
+                    )
+                # The managed supervisor takes owner.lock during startup. Keep
+                # systemd responsible for stopping its unit, but prove exact
+                # process exit: SIGTERM need not publish a native stopped receipt.
+                systemctl("stop", agent_unit)
+                poll = select.poll()
+                poll.register(descriptor, select.POLLIN)
+                if not poll.poll(30000):
+                    raise QueueConflictError("native stop still pending; no escalation")
+                stopped = owner(request)
+                if (
+                    stopped["owner"] != fact["owner"]
+                    or stopped["revision"] != fact["revision"]
+                    or stopped["value"]["ownership"] == "live"
+                ):
+                    raise QueueConflictError(
+                        "native communication stop remains unproven"
+                    )
+                fact = stopped
+            finally:
+                os.close(descriptor)
     if fact["value"]["ownership"] != "live":
         service = load_outbound_agent_service_config(
             config(request), env_file=environment(request)
