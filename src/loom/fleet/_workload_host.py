@@ -6,6 +6,7 @@ this adapter only publishes trusted role source for that accepted control.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -16,7 +17,10 @@ from typing import Any, cast
 
 from loom.fleet._host import atomic, config, environment, payload, read, role, owner
 from loom.queue.errors import QueueConflictError
-from loom.queue.deployment import load_outbound_agent_service_config
+from loom.queue.deployment import (
+    load_coordinator_service_config,
+    load_outbound_agent_service_config,
+)
 from loom.serialization import thaw_plain_data
 
 
@@ -31,12 +35,21 @@ def _image(path, expected):
     return actual
 
 
-def qualify(request, declaration, *, check_promotion=False):
-    """Qualify using the native protected loader in the existing path frame."""
+@contextmanager
+def _candidate_config(request, declaration):
+    """Keep native relative paths and protection in the retained role frame."""
     descriptor, temporary = tempfile.mkstemp(dir=config(request).parent, suffix=".json")
     try:
         with os.fdopen(descriptor, "w") as stream:
             json.dump(declaration, stream)
+        yield temporary
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def qualify(request, declaration, *, check_promotion=False):
+    """Qualify using the native protected loader in the existing path frame."""
+    with _candidate_config(request, declaration) as temporary:
         service = load_outbound_agent_service_config(
             temporary, env_file=environment(request)
         )
@@ -52,8 +65,20 @@ def qualify(request, declaration, *, check_promotion=False):
             "active": service.active_fingerprint,
             "profile": service.client.resident_profiles[0].descriptor.to_dict(),
         }
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+
+
+def coordinator_probe(request):
+    """Qualify the derived coordinator target on its owning host without reload."""
+    if role(request) != "coordinator":
+        raise QueueConflictError("coordinator candidate requires a coordinator")
+    with _candidate_config(request, request["declaration"]) as temporary:
+        service = load_coordinator_service_config(
+            temporary, env_file=environment(request)
+        )
+        return {
+            "immutable": service.immutable_fingerprint,
+            "active": service.active_fingerprint,
+        }
 
 
 def probe(request):
@@ -235,6 +260,8 @@ def stage(request):
 
 
 def execute(request, directory):
+    if request["action"] == "workload-coordinator-probe":
+        return coordinator_probe(request)
     if request["action"] == "workload-probe":
         return probe(request)
     if request["action"] == "workload-recover":

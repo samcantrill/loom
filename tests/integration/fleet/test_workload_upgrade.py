@@ -24,6 +24,7 @@ from loom.coordinator import (
 )
 from loom.deployment import load_deployment
 from loom.queue.preparation import PrepareRunRequest
+from loom.queue.errors import QueueConflictError
 from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write, bind_environments  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -115,6 +116,8 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     }
     original_source = tmp_path / "projects" / "pipeline.yaml"
     retained = tmp_path / "retained-project"
+    candidate_include = None
+    candidate_top = None
     if promote_source:
         shutil.copytree(tmp_path / "projects", retained)
         repository = Path(__file__).resolve().parents[3]
@@ -133,10 +136,28 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
                 profile["project_root"] = str(retained)
                 selected_entry = candidate["agents"][entry.name]
             target = entry.config.with_name(entry.name + "-candidate.json")
-            write(target, declaration)
+            included = write(target.with_name(entry.name + "-included.json"), declaration)
+            write(target, {"_include_": included.name})
+            if entry.name == "coordinator":
+                candidate_include, candidate_top = included, target
             selected_entry["config"] = str(target)
         options["workload_inventory"] = write(tmp_path / "candidate-fleet.json", candidate)
         original_source = retained / "pipeline.yaml"
+        assert candidate_include is not None
+        valid_candidate = candidate_include.read_bytes()
+        invalid = read(candidate_include)
+        invalid["shared_roots"]["project"]["host_path"] = "relative-typo"
+        write(candidate_include, invalid)
+        canonical = {entry.config: entry.config.read_bytes() for entry in inventory.hosts}
+        with pytest.raises(QueueConflictError):
+            upgrades.upgrade(
+                inventory, operation_id="invalid-coordinator", apply=True, **options
+            )
+        assert all(path.read_bytes() == data for path, data in canonical.items())
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+            assert operator.observe_maintenance()["state"] == "open"
+        assert not (inventory.path.parent / "operations/invalid-coordinator/intent.json").exists()
+        candidate_include.write_bytes(valid_candidate)
     plan = upgrades.preview(inventory, **options)
     assert plan["gate"]["state"] == "open"
     assert old_selection.read_bytes() == old_bytes
@@ -153,10 +174,26 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     monkeypatch.setattr(workload_upgrades.WorkloadUpgrade, "native", interrupt)
     original_bytes = original_source.read_bytes()
     original_source.write_text("pipeline: [invalid")
+    bind_intent = workload_upgrades.bind_intent
+    if promote_source:
+        def lose_candidate_storage(intent, plan, directory):
+            result = bind_intent(intent, plan, directory)
+            (retained / "challenge").rename(retained / "unavailable-challenge")
+            return result
+
+        monkeypatch.setattr(workload_upgrades, "bind_intent", lose_candidate_storage)
     result = upgrades.upgrade(
         inventory, operation_id="workload-window", apply=True, **options
     )
     if promote_source:
+        assert result["outcome"] == "blocked", result
+        assert not lost
+        assert not (inventory.path.parent / "operations/workload-window/steps/close/intent.json").exists()
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+            assert operator.observe_maintenance()["state"] == "open"
+        (retained / "unavailable-challenge").rename(retained / "challenge")
+        monkeypatch.setattr(workload_upgrades, "bind_intent", bind_intent)
+        result = upgrades.upgrade(inventory, operation_id="workload-window")
         deadline = time.monotonic() + 240
         while result["outcome"] == "waiting" and not lost and time.monotonic() < deadline:
             time.sleep(0.2)
@@ -168,6 +205,16 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
         conflict = upgrades.upgrade(inventory, operation_id="workload-window")
         assert conflict["outcome"] == "blocked" and "input" in conflict["reason"], conflict
         candidate_path.write_bytes(retained_bytes)
+        assert candidate_include is not None and candidate_top is not None
+        top_bytes = candidate_top.read_bytes()
+        retained_include = candidate_include.read_bytes()
+        changed = read(candidate_include)
+        changed["preparation"]["source_roots"]["projects"]["path"] = str(tmp_path / "edited-source")
+        write(candidate_include, changed)
+        conflict = upgrades.upgrade(inventory, operation_id="workload-window")
+        assert conflict["outcome"] == "blocked" and "composed workload candidate" in conflict["reason"], conflict
+        assert candidate_top.read_bytes() == top_bytes
+        candidate_include.write_bytes(retained_include)
     deadline = time.monotonic() + 240
     while result["outcome"] == "waiting" and time.monotonic() < deadline:
         time.sleep(0.2)

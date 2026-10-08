@@ -61,4 +61,8 @@ def candidates(inventory, path, plan, consumers, env_file):
     _readonly_root_relocations(before.get("shared_roots", {}), after.get("shared_roots", {}))
     if set(before.get("shared_roots", {})) != set(after.get("shared_roots", {})):
         raise QueueConflictError("workload inventory must preserve logical storage roots")
-    return json.loads(json.dumps(declarations)), sshops._inputs(candidate, rows, env_file)
+    return (
+        json.loads(json.dumps(declarations)),
+        sshops._inputs(candidate, rows, env_file),
+        {"hosts": rows, "declarations": declarations},
+    )

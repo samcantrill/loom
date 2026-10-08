@@ -651,9 +651,12 @@ old source namespace and adds new immutable release directories beneath it;
 select the new release as the project/preparation path. Fleet never copies
 project trees or certifies application semantics.
 
-Preview qualifies the candidate without changing the running installation. The
-operation retains candidate inventory, role and environment input hashes; changed
-inputs refuse continuation. Source selection contributes to the new preparation
+Preview qualifies agents and the fully derived coordinator configuration on their
+owning hosts without changing the running installation. Apply rechecks that
+qualification before closing admission or promoting a profile. The operation
+retains candidate inventory, role and environment input hashes and composed role
+declarations; changes to included role files also refuse continuation. Source
+selection contributes to the new preparation
 generation even when image bytes are unchanged. Resume, failed-check successor,
 abort and historical-observation behavior match ordinary workload promotion.
 

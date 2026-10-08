@@ -95,13 +95,14 @@ def preview(
     sha = sshops._file_hash(image)
     target_declarations = None
     candidate_inputs = {}
+    candidate_sources = None
     if workload_inventory is not None:
         from .workload_sources import candidates as source_candidates
 
         for name in consumers:
             if SOURCE_PROMOTION_CAPABILITY not in plan["hosts"][name]["native_owner"]["value"].get("capabilities", ()):
                 raise QueueConflictError("source inventory promotion requires a capable agent runtime: " + name)
-        target_declarations, candidate_inputs = source_candidates(
+        target_declarations, candidate_inputs, candidate_sources = source_candidates(
             inventory, workload_inventory, plan, consumers, env_file
         )
     candidates = {}
@@ -151,6 +152,19 @@ def preview(
         if new in policies:
             raise QueueConflictError("target preparation generation already exists")
         policies[new] = policies.pop(old)
+    coordinator_target = None
+    if workload_inventory is not None:
+        row = plan["hosts"]["coordinator"]
+        coordinator_target = sshops.ssh(
+            row["host"],
+            {
+                **row,
+                "release": plan["release"],
+                "action": "workload-coordinator-probe",
+                "expected_declaration": digest(plan["declarations"]["coordinator"]),
+                "declaration": coordinator,
+            },
+        )
     plan.update(
         workload_profile=workload_profile,
         image=str(image),
@@ -158,6 +172,8 @@ def preview(
         generation=generation,
         workload_inventory=None if workload_inventory is None else str(Path(workload_inventory).resolve()),
         candidate_inputs=candidate_inputs,
+        candidate_sources=candidate_sources,
+        coordinator_target=coordinator_target,
         candidates=candidates,
         target_declarations=declarations,
         agents={name: plan["agents"][name] for name in consumers},
@@ -207,6 +223,8 @@ def bind_intent(intent, plan, directory):
                 "target_declarations",
                 "preparation_profile",
                 "workload_inventory",
+                "candidate_sources",
+                "coordinator_target",
             )
         },
         "original_check_selection": intent["check_selection"],
@@ -223,6 +241,19 @@ def bind_intent(intent, plan, directory):
 
 
 class WorkloadUpgrade(maintenance._Upgrade):
+    def recheck_composed(self, pending_inputs=None):
+        super().recheck_composed(pending_inputs)
+        sources = self.intent.get("candidate_sources")
+        if sources is not None:
+            for name, row in sources["hosts"].items():
+                current = _load_protected_config(
+                    Path(row["config"]), env_file=row["env_file"]
+                )[2]
+                if current != sources["declarations"][name]:
+                    raise QueueConflictError(
+                        "composed workload candidate changed since operation intent"
+                    )
+
     def recheck(self, pending_inputs=None):
         try:
             super().recheck(pending_inputs)
@@ -250,6 +281,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             raise
 
     def host_observe(self, name, action, **values):
+        self.recheck_composed()
         row = self.intent["hosts"][name]
         declaration = _load_protected_config(
             Path(row["config"]),
@@ -283,6 +315,13 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 name == "coordinator" or name in self.intent["candidates"]
             ) and SOURCE_PROMOTION_CAPABILITY not in native["value"].get("capabilities", ()):
                 raise QueueConflictError("running source inventory promotion capability unavailable")
+            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
+                target = self.host_observe(
+                    name, "workload-coordinator-probe",
+                    declaration=self.intent["target_declarations"][name],
+                )
+                if target != self.intent["coordinator_target"]:
+                    raise QueueConflictError("coordinator workload target qualification changed")
             if name in self.intent["candidates"]:
                 if native["value"]["ownership"] != "live" or CAPABILITY not in native[
                     "value"
