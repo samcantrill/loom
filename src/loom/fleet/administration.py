@@ -20,7 +20,7 @@ from loom.queue.errors import QueueError, QueueConfigError
 from loom.queue.operations import OperatorObservation
 from loom.timestamps import utc_timestamp
 
-from .configuration import Inventory
+from .configuration import Inventory, _environment_files
 from .releases import verify_release
 
 
@@ -43,13 +43,15 @@ def _native_failure(error: CoordinatorClientError, owner: str | None) -> dict[st
 
 
 def _binding(
-    inventory: Inventory, name: str, config: Path, env_file: Path | None
+    inventory: Inventory, name: str, config: Path, environments: Mapping[str, Path | None]
 ) -> dict[str, Any]:
     # The native coordinator policy owns agent IDs. Certificate DER fingerprints
     # map to its credential IDs; neither SSH aliases nor root IDs are agent IDs.
     coordinator = inventory.hosts[0]
-    inspect_role_declaration(coordinator.config, role="coordinator", env_file=env_file)
-    _, _, role, _ = _load_protected_config(coordinator.config, env_file=env_file)
+    inspect_role_declaration(
+        coordinator.config, role="coordinator", env_file=environments["coordinator"]
+    )
+    _, _, role, _ = _load_protected_config(coordinator.config, env_file=environments["coordinator"])
     policies = cast(
         list[dict[str, Any]], cast(Mapping[str, Any], role["agent_policy"])["agents"]
     )
@@ -58,7 +60,7 @@ def _binding(
         raise QueueConfigError(
             "inventory agent ID is absent or ambiguous in native policy"
         )
-    spec = read_agent_spec(config, env_file=env_file)
+    spec = read_agent_spec(config, env_file=environments[name])
     certificate = Path(str(spec.declarations["certificate_path"]))
     if not certificate.exists():
         return _unavailable("agent_certificate_unavailable", owner=name)
@@ -105,6 +107,7 @@ def observe(
     starts a process or infers remote installation/storage from operator paths.
     Status and plan do not hash release or workload images.
     """
+    environments = _environment_files(inventory, env_file)
     selected = inventory.select(hosts)
     rows: dict[str, Any] = {}
     failed = False
@@ -120,7 +123,7 @@ def observe(
             declaration = inspect_role_declaration(
                 host.config,
                 role="coordinator" if host.name == "coordinator" else "agent",
-                env_file=env_file,
+                env_file=environments[host.name],
             )
             row["declaration"] = declaration.to_dict()
             if profile is not None:
@@ -138,11 +141,11 @@ def observe(
                 failed = failed or not matched
             if host.name != "coordinator":
                 row["identity_binding"] = _binding(
-                    inventory, host.name, host.config, env_file
+                    inventory, host.name, host.config, environments
                 )
             if command == "preflight":
                 _, _, payload, _ = _load_protected_config(
-                    host.config, env_file=env_file
+                    host.config, env_file=environments[host.name]
                 )
                 credential_paths: list[tuple[object, bool]] = []
                 if host.name != "coordinator":

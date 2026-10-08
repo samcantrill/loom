@@ -22,7 +22,7 @@ from uuid import uuid4
 from typing import Any, cast
 from loom.serialization import thaw_plain_data
 
-from loom.fleet.configuration import Inventory, protected_directory
+from loom.fleet.configuration import Inventory, protected_directory, _environment_files
 from loom.fleet.releases import verify_release
 from loom.queue.deployment import (
     _load_protected_config,
@@ -85,6 +85,7 @@ def _file_hash(path):
 
 
 def _selection(inventory, hosts, env_file):
+    environments = _environment_files(inventory, env_file)
     selected = inventory.select(hosts)
     names = [entry.name for entry in selected]
     if any(entry.name != "coordinator" for entry in selected):
@@ -95,13 +96,14 @@ def _selection(inventory, hosts, env_file):
     declarations = {}
     rows = {}
     for entry in selected:
+        selected_env = environments[entry.name]
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", entry.name) is None:
             raise QueueConfigError(
                 "inventory entry must have a simple native agent identifier"
             )
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", entry.host) is None:
             raise QueueConfigError("inventory host must be a configured SSH alias")
-        _, _, declaration, _ = _load_protected_config(entry.config, env_file=env_file)
+        _, _, declaration, _ = _load_protected_config(entry.config, env_file=selected_env)
         declaration = cast(dict[str, Any], declaration)
         pending_binding = (
             entry.name == "coordinator"
@@ -114,7 +116,7 @@ def _selection(inventory, hosts, env_file):
             else inspect_role_declaration(
                 entry.config,
                 role="coordinator" if entry.name == "coordinator" else "agent",
-                env_file=env_file,
+                env_file=selected_env,
             )
         )
         if entry.name == "coordinator":
@@ -128,7 +130,7 @@ def _selection(inventory, hosts, env_file):
             if declaration["agent_server"] is None:
                 raise QueueConfigError("setup requires the native agent TLS listener")
         else:
-            spec = read_agent_spec(entry.config, env_file=env_file)
+            spec = read_agent_spec(entry.config, env_file=selected_env)
             declared = cast(dict[str, Any], thaw_plain_data(spec.declarations))
             if len(declared["resident_profiles"]) != 1 or declared["slurm_profiles"]:
                 raise QueueConfigError(
@@ -146,8 +148,8 @@ def _selection(inventory, hosts, env_file):
             else inspection.revision,
             "credential_binding": "pending" if pending_binding else "declared",
             "dependency": entry.name not in names,
-            "env_file": None if env_file is None else str(env_file.resolve()),
-            "env_sha256": None if env_file is None else _file_hash(env_file),
+            "env_file": None if selected_env is None else str(selected_env),
+            "env_sha256": None if selected_env is None else _file_hash(selected_env),
             "service_manager": inventory.service_manager,
         }
     aliases = [entry["host"] for entry in rows.values()]
@@ -242,6 +244,11 @@ def _inputs(inventory, rows, env_file):
     ]
     if env_file is not None:
         paths.append(env_file)
+    paths.extend(
+        Path(rows[host.name]["env_file"])
+        for host in inventory.hosts
+        if host.name in rows and host.env_file is not None
+    )
     return {str(path): _file_hash(path) for path in paths}
 
 
@@ -473,7 +480,10 @@ class _Operation:
         path = Path(self.intent["hosts"][name]["config"])
         updates_path = self.directory / "accepted-inputs.json"
         updates = read(updates_path) if updates_path.exists() else {}
-        current = _load_protected_config(path)[2]
+        environment = self.intent["hosts"][name]["env_file"]
+        current = _load_protected_config(
+            path, env_file=None if environment is None else Path(environment)
+        )[2]
         if current != response["declaration"]:
             expected = updates.get(str(path), self.intent["inputs"][str(path)])
             if _file_hash(path) != expected:
@@ -527,6 +537,7 @@ def apply(
     check_selection=None,
 ):
     """Apply or continue the immutable selected setup; unknown replies retain IDs."""
+    _environment_files(inventory, env_file)
     directory = _directory(inventory, operation_id)
     if resume and not (directory / "intent.json").exists():
         raise QueueConfigError("unknown administrative operation; cannot resume")
@@ -1003,6 +1014,7 @@ def migrate_services(inventory, *, operation_id, hosts=None, env_file=None):
     replay. This does not drain, cancel, kill, retire or reinitialize services.
     Repeat this command with the same ID to resume its original selection.
     """
+    _environment_files(inventory, env_file)
     if inventory.service_manager != "systemd-user":
         raise QueueConfigError("migration requires explicit systemd-user inventory")
     directory = _directory(inventory, operation_id)

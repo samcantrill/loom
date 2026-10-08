@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from loom.deployment import load_deployment, export_connection_deployment
 from loom.fleet._host import atomic, read, digest
+from loom.fleet.configuration import _environment_files
 from loom.fleet import ssh_operations as sshops
 from loom.fleet import upgrades as maintenance
 from loom.queue._profile_promotion import CAPABILITY
@@ -33,6 +34,7 @@ def preview(
     env_file=None,
 ):
     """Qualify immutable bytes on all consumers, without maintenance mutations."""
+    _environment_files(inventory, env_file)
     if not workload_profile or image is None:
         raise QueueConfigError(
             "workload upgrade requires --workload-profile and --image"

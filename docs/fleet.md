@@ -31,10 +31,12 @@ service_manager: systemd-user
 coordinator:
   host: CONTROL_SSH_ALIAS
   config: roles/coordinator.yaml
+  env_file: machines/control.env  # optional
 agents:
   gpu01:
     host: GPU_SSH_ALIAS
     config: roles/gpu01.yaml
+    env_file: machines/gpu01.env  # optional, distinct machine values
 ```
 
 Paths resolve relative to the inventory. `--fleet` also accepts an explicit
@@ -47,6 +49,18 @@ Native role declarations own capacity, devices, concurrency, state/storage paths
 profiles, registration and trust. Fleet does not copy those policies. Native
 protected Weave composition and explicit `--env-file` resolution apply; there is
 no second template language or implicit shell-environment expansion.
+
+Each optional `env_file` references an existing owner-protected native environment
+file, resolved relative to the inventory (absolute paths are also supported).
+The coordinator and each agent use their own file, including coordinator policy
+and agent certificate binding, SSH requests, self-tests and service/workload
+maintenance. Entries without a binding retain command-level `--env-file` behavior.
+An explicit global file that differs from a declared binding refuses before
+observation dispatch or effects; it never substitutes another host's values.
+Administrative operations retain these selected files and hashes in their existing
+intent: changing a bound file or its inventory reference blocks mutation replay.
+Version 1 inventories without the optional field remain compatible; older strict
+Fleet parsers reject the new key, so consumers must upgrade before adding it.
 
 `systemd-user` and `tmux` are explicit choices. Missing systemd prerequisites
 never select tmux automatically. Status and preflight perform no SSH or installation, start no native role or

@@ -39,6 +39,27 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def bind_environments(inventory):
+    """Keep root declarations native while binding different machine roots."""
+    authored = json.loads(inventory.path.read_text())
+    for host in inventory.hosts:
+        role = json.loads(host.config.read_text())
+        key = "deployment_root" if host.name == "coordinator" else "agent_root"
+        env = inventory.path.parent / (host.name + ".env")
+        env.write_text("FLEET_NATIVE_ROOT=" + role[key] + "\n")
+        env.chmod(0o600)
+        role[key] = "${oc.env:FLEET_NATIVE_ROOT}"
+        write(host.config, role)
+        entry = (
+            authored["coordinator"]
+            if host.name == "coordinator"
+            else authored["agents"][host.name]
+        )
+        entry["env_file"] = env.name
+    write(inventory.path, authored)
+    return load_inventory(inventory.path)
+
+
 @pytest.fixture(scope="session")
 def bundle(tmp_path_factory):
     """Repack the locked installed dependencies into real offline test wheels."""
@@ -617,6 +638,7 @@ def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(
     from loom.queue.operations import inspect_native_service
 
     inventory, base, selection = site
+    inventory = bind_environments(inventory)
     transport = operations.ssh
     before = True
     accepted = None
@@ -676,6 +698,20 @@ def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(
         check_selection=selection,
     )
     assert result["outcome"] == "waiting" and not (base / "c").exists()
+    environment = inventory.hosts[1].env_file
+    assert environment is not None
+    retained_environment = environment.read_bytes()
+    # Even an unused edit changes retained intent and must block replay before SSH.
+    environment.write_bytes(retained_environment + b"UNUSED_BINDING=changed\n")
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            operations,
+            "ssh",
+            lambda *a, **k: pytest.fail("changed environment dispatched"),
+        )
+        blocked = apply(inventory, operation_id="interrupted", resume=True)
+    assert blocked["outcome"] == "blocked" and "input changed" in blocked["reason"]
+    environment.write_bytes(retained_environment)
     result = apply(inventory, operation_id="interrupted", resume=True)
     assert result["outcome"] == "waiting" and accepted
     assert inspect_native_service(base / "c/coordinator").owner == accepted
@@ -686,7 +722,7 @@ def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(
     from loom.queue.deployment import load_coordinator_service_config
     from loom.queue import LocalDaemonSocketClient
 
-    service = load_coordinator_service_config(inventory.hosts[0].config)
+    service = load_coordinator_service_config(inventory.hosts[0].config, env_file=inventory.hosts[0].env_file)
     assert (
         LocalDaemonSocketClient(service.daemon.endpoint).status().scheduling_epoch
         == enrollment_epoch

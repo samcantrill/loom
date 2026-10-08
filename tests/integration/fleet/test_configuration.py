@@ -351,8 +351,9 @@ def test_native_observations_keep_identity_freshness_and_failure_codes(
             server.stop()
 
 
+@pytest.mark.parametrize("bound_environment", [False, True])
 @pytest.mark.parametrize("case", ["matched", "wrong_agent", "readable_key"])
-def test_native_certificate_binding_and_private_key_permissions(tmp_path, case):
+def test_native_certificate_binding_and_private_key_permissions(tmp_path, case, bound_environment):
     from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 
     path = inventory(tmp_path)
@@ -380,6 +381,34 @@ def test_native_certificate_binding_and_private_key_permissions(tmp_path, case):
         },
     }
     _write_protected(coordinator, payload)
+    if bound_environment:
+        authored = json.loads(path.read_text())
+        for name, config, entry, certificate in (
+            ("control", coordinator, authored["coordinator"], credentials["server"]),
+            ("agent", agent_path, authored["agents"]["gpu01"], credentials["agent"]),
+        ):
+            role = json.loads(config.read_text())
+            selected = role["agent_server"] if name == "control" else role
+            selected["certificate_path"] = "${oc.env:FLEET_CERTIFICATE}"
+            # The same key has different native meanings on the two hosts.
+            selected["private_key_path"] = "${oc.env:FLEET_PRIVATE_KEY}"
+            if name == "control":
+                role["agent_policy"]["agents"][0]["credential_id"] = (
+                    "${oc.env:FLEET_CREDENTIAL}"
+                )
+            credential = (
+                "gpu-credential" if name == "control" else "wrong-host-credential"
+            )
+            env = tmp_path / (name + ".env")
+            env.write_text(
+                f"FLEET_CERTIFICATE={certificate.with_suffix('.crt')}\n"
+                f"FLEET_PRIVATE_KEY={certificate.with_suffix('.key')}\n"
+                f"FLEET_CREDENTIAL={credential}\n"
+            )
+            env.chmod(0o600)
+            entry["env_file"] = env.name
+            _write_protected(config, role)
+        _write_protected(path, authored)
     if case == "readable_key":
         credentials["agent"].with_suffix(".key").chmod(0o644)
     code, result = cli("preflight", "--fleet", path, "--hosts", "gpu01")
@@ -416,3 +445,89 @@ def test_setup_plan_requires_complete_selection_before_ssh(tmp_path, monkeypatch
     code, _ = cli("plan", "--fleet", path)
     assert code != 0
     assert snapshot(tmp_path) == before
+
+
+def test_inventory_environment_compatibility_paths_and_protection(tmp_path):
+    from loom.fleet.configuration import _environment_files
+
+    path = inventory(tmp_path)
+    old = load_inventory(path)
+    assert all(host.env_file is None for host in old.hosts)
+    env = tmp_path / "machine.env"
+    env.write_text("VALUE=explicit\n")
+    env.chmod(0o600)
+    assert set(_environment_files(old, env).values()) == {env}
+    authored = json.loads(path.read_text())
+    authored["coordinator"]["env_file"] = "machine.env"
+    authored["agents"]["gpu01"]["env_file"] = str(env)
+    _write_protected(path, authored)
+    bound = load_inventory(path)
+    assert {host.env_file for host in bound.hosts} == {env}
+    assert _environment_files(bound, env) == _environment_files(bound, None)
+    env.chmod(0o644)
+    with pytest.raises(QueueConfigError, match="owner-protected"):
+        load_inventory(path)
+    env.unlink()
+    with pytest.raises(QueueConfigError, match="unavailable"):
+        load_inventory(path)
+
+
+@pytest.mark.parametrize(
+    "command", ["status", "plan", "setup", "migrate-services", "self-test", "upgrade"]
+)
+def test_environment_override_refuses_before_effects(tmp_path, monkeypatch, command):
+    from loom.fleet import administration, ssh_operations, self_tests, upgrades
+
+    path = inventory(tmp_path)
+    env = tmp_path / "machine.env"
+    env.write_text("VALUE=bound\n")
+    env.chmod(0o600)
+    authored = json.loads(path.read_text())
+    authored["coordinator"]["env_file"] = env.name
+    _write_protected(path, authored)
+    selected = load_inventory(path)
+    before = snapshot(tmp_path)
+    monkeypatch.setattr(ssh_operations, "ssh", forbid)
+    monkeypatch.setattr(subprocess, "Popen", forbid)
+    kwargs = {"env_file": tmp_path / "different.env"}
+    with pytest.raises(QueueConfigError, match="conflicts with inventory"):
+        if command == "status":
+            administration.observe(selected, command=command, **kwargs)
+        elif command == "plan":
+            ssh_operations.plan(selected, **kwargs)
+        elif command == "setup":
+            ssh_operations.apply(selected, operation_id="blocked", **kwargs)
+        elif command == "migrate-services":
+            ssh_operations.migrate_services(selected, operation_id="blocked", **kwargs)
+        elif command == "self-test":
+            self_tests.self_test(selected, **kwargs)
+        else:
+            upgrades.upgrade(selected, **kwargs)
+    assert snapshot(tmp_path) == before
+
+
+def test_global_environment_retains_existing_input_hash_keys(tmp_path, monkeypatch):
+    from loom.fleet.ssh_operations import _inputs, _file_hash
+
+    path = inventory(tmp_path)
+    selected = load_inventory(path)
+    selected.runtime_release.write_text("retained release fixture")
+    env = tmp_path / "global.env"
+    env.write_text("VALUE=retained\n")
+    env.chmod(0o600)
+    monkeypatch.chdir(tmp_path)
+    relative = Path("global.env")
+    rows = {
+        host.name: {"config": str(host.config), "env_file": str(env)}
+        for host in selected.hosts
+    }
+    # The previous producer retained the caller's global path spelling.
+    expected_paths = [
+        path,
+        selected.runtime_release,
+        *(host.config for host in selected.hosts),
+        relative,
+    ]
+    expected = {str(item): _file_hash(item) for item in expected_paths}
+    assert _inputs(selected, rows, relative) == expected
+    assert str(env) not in expected
