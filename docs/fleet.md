@@ -92,6 +92,27 @@ separate lifecycle operation.
 
 ## Immutable service bundles
 
+Build a bundle from a clean Loom Git checkout and its existing lock:
+
+```sh
+loom fleet build-release --source /CLEAN/LOOM --output /RELEASES/new-release
+```
+
+Run with Python 3.12 on a builder matching the deployment platform. The output
+parent must exist; the output directory must be new. The helper exports the
+locked Fleet dependency closure, builds real wheels (including pinned VCS
+dependencies), and writes exact hashed requirements. It then installs the bundle
+offline into a new environment, checks dependencies and imports the native host
+entry point before publishing `release.json`. Point the inventory's
+`runtime_release` at that descriptor. It does not install or restart a fleet.
+
+`build-receipt.json` records the source commit/tree/lock, platform, packaging
+tools, release hashes and offline installation result. Use published source
+revisions for deployment. Different build toolchains may produce different wheel
+bytes; the retained hashes identify this exact build. A failed build retains its
+private log and partial artifacts without a successful receipt or published
+descriptor. Select a new output directory when retrying.
+
 The operator prepares a complete Python 3.12 bundle using ordinary package build
 and lock tooling, independently of a research checkout. A descriptor is literal
 YAML; its paths must remain inside its directory, including symlink resolution:
@@ -364,6 +385,88 @@ physical lifecycle cases are qualified by the implementation itself. The
 installed owner records versions, exact identities, cgroup separation and
 owned-process cleanup. Operator SSH logout and disappearance of a last logind
 session are recorded distinctly when host PAM policy does not create sessions.
+
+## Adopting a retained tmux installation
+
+`loom fleet adopt` transfers an existing pure coordinator and separate resident
+agents to immutable Fleet service installations. It preserves native roots,
+credentials, identities, sessions, profiles and history. It retains tmux; backend
+migration is a separate operation. Adoption never initializes a missing root.
+
+Use a new protected inventory referring to the existing native role files and
+their explicit host environments. Select the candidate immutable service release
+in that inventory. Supply a protected binding file whose host keys exactly match
+the inventory, including `coordinator`:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "loom.fleet-adoption",
+  "hosts": {
+    "coordinator": {
+      "expected_root_id": "coordinator-RETAINED-ID",
+      "python": "/local/retained-service/bin/python"
+    },
+    "gpu01": {
+      "expected_root_id": "local-agent-RETAINED-ID",
+      "python": "/local/retained-service/bin/python"
+    }
+  }
+}
+```
+
+The identities and interpreters must come from the retained native services on
+their physical hosts. A legacy layout translator may prepare these inputs; an
+inventory reference alone never proves installation ownership.
+
+```sh
+loom fleet adopt --fleet lab-managed --bindings /PRIVATE/adoption.json --plan
+loom fleet adopt --fleet lab-managed --bindings /PRIVATE/adoption.json \
+  --apply --operation-id adopt-001 --operator-exclusion
+loom fleet operation status adopt-001 --fleet lab-managed
+loom fleet operation resume adopt-001 --fleet lab-managed
+```
+
+Preview reads declarations, bundle hashes and remote prerequisites without
+installing or stopping anything. An uninstalled candidate cannot prove legacy
+ownership; that inspection remains outstanding in preview. Apply prepares all
+candidate environments before any service stop. It then checks native ownership,
+candidate compatibility, profile/image bytes and native settlement on every host.
+
+The supported direct coordinator predecessor is schema 18 or the current schema;
+agents must be readable by the candidate's native reader. Bootless schema-18
+coordinator and schema-12 agent receipts require exact Linux process start
+identity and kernel owner-lock evidence. Coordinator migration may retain that
+same stopped receipt. A PID alone does not prove ownership. Another Fleet-managed
+installation must use `upgrade`, not `adopt`.
+
+`--operator-exclusion` acknowledges that the operator excludes **both new
+submissions and independent administration** for the whole handover and its
+subsequent qualification. Older sources cannot enforce all modern maintenance
+controls. Use their supported native controls to drain accepted work and resolve
+pending polls. A timeout, idle CPU or an empty coordinator queue never substitutes
+for native settlement. Missing or unsettled evidence leaves adoption waiting and
+does not authorize cancellation or forced termination.
+
+After settlement, exact retained host requests gracefully stop the positively
+owned communication processes. Native offline migration and service replacement
+guards own the handover, including clean supervisor shutdown. Fleet writes its
+service and active-release bindings only for the installed candidate. It verifies
+that the resulting live processes use that candidate and the retained identities.
+Old environments, native migration backups and predecessor observations remain.
+
+Lost responses resume the same operation and host requests. Changed inputs refuse
+continuation. `operation abort` is available before the first retained replacement
+intent; separately prepared candidates remain as evidence. After that boundary,
+continue the retained operation; automatic database/runtime rollback is unsupported.
+
+An adopted installation reports `installation: adopted`, `qualification: required`
+and `ready: false`. This is deliberately separate from installed infrastructure
+qualification. Keep operator exclusion while preparing a compatible workload
+image if needed, running native CPU/storage and declared GPU checks, and completing
+downstream workload checks. Publish the selected client and reopen ordinary use
+only after those checks and resource release succeed. Adoption does not invent
+credentials, retarget an existing client or certify a scientific workload.
 
 ## Whole-fleet service runtime upgrades
 
