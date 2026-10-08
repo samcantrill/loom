@@ -531,3 +531,27 @@ def test_global_environment_retains_existing_input_hash_keys(tmp_path, monkeypat
     expected = {str(item): _file_hash(item) for item in expected_paths}
     assert _inputs(selected, rows, relative) == expected
     assert str(env) not in expected
+
+
+@pytest.mark.parametrize("mode", ["--plan", "--apply"])
+def test_workload_inventory_reaches_preview_and_apply(tmp_path, monkeypatch, mode):
+    from loom.fleet import upgrades
+
+    path = inventory(tmp_path)
+    candidate = tmp_path / "candidate.json"
+    image = tmp_path / "candidate.sif"
+    observed = []
+
+    def selected(inventory, **options):
+        observed.append(options)
+        return {"outcome": "preview" if mode == "--plan" else "complete"}
+
+    monkeypatch.setattr(upgrades, "preview", selected)
+    monkeypatch.setattr(upgrades, "upgrade", selected)
+    code, _ = cli(
+        "upgrade", "--fleet", path, "--workload-profile", "selected", "--image", image,
+        "--workload-inventory", candidate, mode, "--operation-id", "source-move",
+    )
+    assert code == 0 and len(observed) == 1
+    assert observed[0]["workload_inventory"] == candidate
+    assert observed[0]["image"] == image

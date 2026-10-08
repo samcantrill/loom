@@ -103,6 +103,7 @@ def preview(
     runtime_release=None,
     workload_profile=None,
     image=None,
+    workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
@@ -114,11 +115,11 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
-    if workload_profile is not None or image is not None:
+    if workload_profile is not None or image is not None or workload_inventory is not None:
         if runtime_release is not None:
             raise QueueConfigError("service and workload targets are mutually exclusive")
         from .workload_upgrades import preview as workload_preview
-        return workload_preview(inventory, workload_profile=workload_profile, image=image,
+        return workload_preview(inventory, workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             deployment=deployment, connection=connection, config=config, env_file=env_file)
     if runtime_release is None:
         raise QueueConfigError("upgrade requires a runtime or workload target")
@@ -727,6 +728,7 @@ def upgrade(
     runtime_release=None,
     workload_profile=None,
     image=None,
+    workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
@@ -741,7 +743,7 @@ def upgrade(
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
-    if runtime_release is not None and (workload_profile is not None or image is not None):
+    if runtime_release is not None and (workload_profile is not None or image is not None or workload_inventory is not None):
         raise QueueConfigError("service and workload targets are mutually exclusive")
     if apply and runtime_release is None and (workload_profile is None or image is None):
         raise QueueConfigError("apply requires --runtime-release or --workload-profile and --image")
@@ -749,7 +751,7 @@ def upgrade(
         return preview(
             inventory,
             runtime_release=runtime_release,
-            workload_profile=workload_profile, image=image,
+            workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             deployment=deployment,
             connection=connection,
             config=config,
@@ -771,7 +773,7 @@ def upgrade(
             plan = preview(
                 inventory,
                 runtime_release=runtime_release,
-                workload_profile=workload_profile, image=image,
+                workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
                 deployment=deployment,
                 connection=connection,
                 config=config,
@@ -812,6 +814,10 @@ def upgrade(
             raise QueueConflictError("upgrade target intent changed")
         if workload_profile is not None and (intent.get("workload_profile") != workload_profile or image is None or intent.get("image") != str(Path(image).resolve())):
             raise QueueConflictError("workload target intent changed")
+        if workload_profile is not None and intent.get("workload_inventory") != (
+            None if workload_inventory is None else str(Path(workload_inventory).resolve())
+        ):
+            raise QueueConflictError("workload inventory intent changed")
         if apply:
             selected = _checks(inventory, deployment, connection, config)
             if (

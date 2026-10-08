@@ -609,7 +609,57 @@ require continuation; no automatic image rollback occurs. Failed terminal checks
 use the same explicit `operation retry-check` successor interface as service
 upgrades. Repeating a completed operation returns its retained result.
 
-Installed acceptance is opt-in:
+### Selected workload source promotion
+
+Image-only promotion keeps the authored project and source paths. To select
+retained source directories as well, add a protected candidate inventory:
+
+```sh
+loom fleet upgrade --fleet lab --workload-profile analysis \
+  --image /shared/images/analysis-v2.sif \
+  --workload-inventory /PRIVATE/candidate/fleet.json \
+  --deployment /PRIVATE/current-client.json \
+  --connection /PRIVATE/operator.json --config pipeline.yaml --plan
+```
+
+Apply the same selection with `--apply --operation-id source-upgrade-1`.
+The candidate uses the ordinary Fleet inventory and native role formats. Its
+role files must be separate siblings of the current role files, preserving the
+relative path frame. Keep host aliases, native roots, explicit environment files,
+runtime release and service backend unchanged. Copy unselected agent declarations
+unchanged. The candidate is input to the current installation's operation; it
+does not create another installed fleet.
+
+For the selected agent profile, choose the retained `project_root`, readiness
+requirements and container bindings using native configuration. Resource capacity,
+GPU declarations and preparation snapshot mappings stay fixed. The coordinator
+may select new preparation source paths while retaining source aliases, snapshot
+mappings and preparation policies. Fleet derives the new qualified descriptors,
+preparation generation and versioned client. Other coordinator policy stays fixed.
+
+A read-only shared root may move to a new `host_path` only when its alias,
+challenge, access, container path and publication policy are unchanged. Writable
+root relocation and logical-root replacement are refused. Native agent promotion
+and coordinator reload require settled closed maintenance before activating the
+move. The coordinator and selected agents must advertise
+`quiescent-source-promotion-v1`; upgrade their service runtime first if needed.
+
+The site must copy and verify historical source bytes before relocating a root,
+and retain old relative paths for historical consumers. Root qualification proves
+the declared challenge, not whole-tree equivalence. A useful layout retains the
+old source namespace and adds new immutable release directories beneath it;
+select the new release as the project/preparation path. Fleet never copies
+project trees or certifies application semantics.
+
+Preview qualifies the candidate without changing the running installation. The
+operation retains candidate inventory, role and environment input hashes; changed
+inputs refuse continuation. Source selection contributes to the new preparation
+generation even when image bytes are unchanged. Resume, failed-check successor,
+abort and historical-observation behavior match ordinary workload promotion.
+
+The following installed acceptance hook covers image-only promotion. A site
+source relocation also needs physical qualification of its retained source
+layout and workload. Installed acceptance is opt-in:
 `LOOM_RUN_FLEET_ACCEPTANCE=1 LOOM_FLEET_ACCEPTANCE_CONFIG=/protected/workload.json`
 with `tests/fleet_acceptance/test_workload_upgrade.py`. Its protected JSON selection
 has `schema_version: 1`, `disposable: true`, `kind: "workload-upgrade"`, and fields

@@ -31,7 +31,7 @@ def _image(path, expected):
     return actual
 
 
-def qualify(request, declaration):
+def qualify(request, declaration, *, check_promotion=False):
     """Qualify using the native protected loader in the existing path frame."""
     descriptor, temporary = tempfile.mkstemp(dir=config(request).parent, suffix=".json")
     try:
@@ -40,6 +40,13 @@ def qualify(request, declaration):
         service = load_outbound_agent_service_config(
             temporary, env_file=environment(request)
         )
+        if check_promotion:
+            from loom.queue._profile_promotion import validate_candidate
+
+            original = load_outbound_agent_service_config(
+                config(request), env_file=environment(request)
+            )
+            validate_candidate(original.client, service.client, request["workload_profile"])
         return {
             "immutable": service.immutable_fingerprint,
             "active": service.active_fingerprint,
@@ -64,7 +71,7 @@ def probe(request):
     if profiles[0].get("container", {}).get("kind") != "apptainer":
         raise QueueConflictError("workload upgrade requires an immutable SIF profile")
     sha = _image(request["image"], request["image_sha256"])
-    after = json.loads(json.dumps(authored))
+    after = json.loads(json.dumps(request.get("candidate_declaration", authored)))
     after["resident_profiles"][0]["container"]["container"]["image"] = {
         "reference": request["image"]
     }
@@ -74,7 +81,7 @@ def probe(request):
     }
     return {
         "source": qualify(request, authored),
-        "target": qualify(request, after),
+        "target": qualify(request, after, check_promotion=True),
         "image_sha256": sha,
         "declaration": after,
         "native_owner": owner(request),
