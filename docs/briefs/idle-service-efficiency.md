@@ -8,7 +8,7 @@ introduced. Worktree: `../loom-worktrees/idle-service-efficiency`, branch
 ## Current rollout target
 
 The user approved integration and qualification on `rphys-pure-current` on
-2026-10-08. The original `rphys` services are stopped; the active fleet selects
+2026-10-08. The original `rphys` services are stopped; the pre-upgrade fleet selected
 rphys `636b1059c` and Loom `c79c8d93`. The latter restores ACTIVE provider
 bindings before recovered worker launch. That exact fix is merged into combined
 Loom `99648e02b7be8297bd7f3bd236fdf0b9fb16243d`, selected by consumer
@@ -20,12 +20,19 @@ is running on both hosts and is outside this task's mutation scope.
 
 The original image `67c71cea6655d1e4dce0b42825b051aeeb4681b502ae566004018ede34034071`
 was built and verified on shared storage but not deployed by this task. The
-combined pin and lock are ready; its image remains outstanding. Both hosts
-currently require interactive sudo for the maintained image builder. The guarded
-operator command on shazza is
-`bash /nas/home/can134/work/rphys-worktrees/loom-idle-service-efficiency/build/idle-efficiency/build-combined-on-shazza.sh`.
-It requires the exact clean consumer revision above and writes only
-`/data/can134/loom/rphys-pure-current/image-build.idle-recovery.vDxQdoN7`.
+combined image was built on shazza with the maintained guarded builder and its
+digest verified both locally and after copying to shared storage:
+`/nas/home/can134/scratch/loom-fleet/rphys/images/9079ed70f/reference-4ecd3c2012199f886fd8ce35602afd6ab9c007d7dd5b623107a6fcce32d45091.sif`.
+It is read-only. The exact clean consumer and image passed upgrade preview;
+normal coordinated operation `upgrade-c5ab0c3b08d840f6` completed on sleipnir
+and shazza, including CPU, shared publication and enforced GPU qualification.
+Before starting, the target fleet had no active/waiting admissions or running
+assignments, and all four GPUs were free. No unrelated work was cancelled.
+The active client is `clients/upgrade-c5ab0c3b08d840f6-shazza.yaml` under the
+fleet's private root. A native guarded scheduling reload then applied the sole
+configuration change, `poll_interval_seconds: 0.2` to `1.0`, under operation
+`idle-efficiency-c5ab0c3b08d840f6-interval` (configuration revision 7). The protected
+pre-change role file is retained in the fleet's qualification directory.
 
 Integration coverage: GPU-provider and managed-local journal units, retry and
 control-wait units, plus the complete concurrent outbound-agent integration
@@ -34,8 +41,9 @@ one launch, control responsiveness, lost replies, independent recovery and
 mixed-resource concurrency. Reuse the previous unaffected owner-store and
 coordinator evidence. Expand only on an integration failure or changed contract.
 Consumer checks cover the pinned native/extension identity and fleet upgrade
-boundaries. Physical CPU/latency and four-way CPU/GPU/cancellation qualification
-remain required; local fixtures do not discharge them.
+boundaries. Physical CPU/latency samples and the completed four-way
+CPU/GPU/cancellation qualification are recorded below. Local fixtures alone do
+not discharge physical coverage.
 
 Combined Loom validation passed all 119 selected cases, with zero failures,
 errors or skips, in `build/idle-efficiency/combined-recovery.xml` (1193.66 seconds).
@@ -47,7 +55,33 @@ passed all 93 cases with no failures, errors or skips, plus all three selected
 distribution builds, in `build/test-targeted/reference-povxidya/`. Its stable
 tree fingerprint is
 `7471dcad73a924b074daf5c54ed0fd4ccade90b0cfcf239119f1079af9a56bcd`.
-No physical upgrade or after-change qualification is claimed.
+Physical concurrency qualification passed against this exact consumer/image.
+
+### Physical acceptance and closure
+
+The targeted physical run passed all four selected cases, with zero failures,
+errors, deselections or skips, in the consumer's
+`build/test-targeted/acceptance-7up8m2a8/` (1611.85 seconds wall time). The
+validation tree remained exactly the fingerprint above. JUnit properties verify
+consumer `9079ed70f`, native Loom `99648e02`, the selected image/lock digests,
+shazza session `session-5ceda5db-58a3-4e72-9f2d-4e709a51a3cb`, and four slots.
+
+- Four CPU jobs overlapped; excess work waited and ran after acknowledged release.
+- Four real CUDA jobs overlapped on four distinct claimed/observed GPU UUIDs;
+  the excess job waited, then reused a released device.
+- Three RTX 3090 jobs overlapped with CPU work. After the CPU slot released,
+  a further compatible-GPU job still waited for GPU capacity, then succeeded.
+- Cancelling one of four concurrent assignments produced the exact native
+  containment proof, while its three peers succeeded with overlapping intervals.
+
+At 2026-10-08T00:53:31Z the coordinator was healthy and scheduling-ready, with
+zero active/waiting admissions and zero running assignments. All 38 test
+assignments (including preparation) were RELEASED: 37 succeeded and the one
+deliberately cancelled workload was CANCELLED. Shazza was ACTIVE/available with
+four slots, an unexpired offer and all four GPU statuses available; an independent
+`nvidia-smi` query showed no compute processes. No unrelated work was cancelled.
+This qualifies the selected runtime/concurrency contracts, not a fresh full-data
+scientific experiment or a full repository test suite.
 
 ### Active-fleet baseline
 
@@ -86,6 +120,44 @@ and settled to CANCELLED with its assignment RELEASED after 9.190 seconds.
 The protected JSONL receipt is under the consumer's ignored
 `build/idle-efficiency/idle-efficiency-before-20261007T232359.jsonl`.
 
+### Upgraded physical samples
+
+The thirty-second idle sample ended at 2026-10-08T00:12:49Z. Coordinator PID
+1851058 and agent PID 2180152 each used 0.56 CPU seconds (1.87% of one core);
+supervisor PID 2180902 used 0.02 seconds (0.07%). Coordinator health, zero work,
+agent availability and fresh GPU evidence were checked around the window.
+
+The silent one-CPU probe `idle-efficiency-after-20261008T001302` was RUNNING on
+shazza throughout the window ending at 00:16:28Z. Coordinator CPU was 3.84 seconds
+(12.80%), agent 2.06 seconds (6.87%), supervisor 0.79 seconds (2.63%). Submission
+reply took 0.494 seconds; RUNNING took 164.846 seconds. Cancellation reply took
+0.115 seconds and settled to CANCELLED/RELEASED after 21.462 seconds. No other
+operation was cancelled. These results show lower CPU, but do not establish
+preserved launch/settlement latency: an independent image build was running on
+shazza and the agent was observed in IO wait. The preparation worker itself
+took two seconds in both samples; the added delay was outside that work.
+The independent image build was allowed to exit normally, without signalling it.
+
+The repeat probe `idle-efficiency-after-20261008T002353` reached RUNNING in
+48.571 seconds; submission returned in 0.477 seconds. Its thirty-second running
+window ended at 00:25:22Z: coordinator 3.94 CPU seconds (13.13%), agent 3.01
+(10.03%), supervisor 1.17 (3.90%). Cancellation returned in 0.122 seconds and
+settled to CANCELLED/RELEASED in 22.173 seconds. The worker's CANCELLED result
+was timestamped about five seconds after cancellation was issued; the remaining
+time includes collection, containment/publication and durable resource release.
+The baseline worker cancellation was about two seconds after issue, with full
+settlement in 9.190 seconds. These physical observations are not isolated-machine
+benchmarks or precise attribution to one internal phase.
+
+The idle reduction is substantial (coordinator 17.27% to 1.87%; agent 23.13% to
+1.87%). Silent-running overhead also falls (45.37% to 13.13% and 29.00% to
+10.03%). Operator request replies remain subsecond and repeat startup is near
+the baseline, but full cancellation settlement is slower in both after samples.
+Do not claim unchanged end-to-end cancellation latency. All three measured
+probes have explicit terminal cancellation and released ownership; none was
+relaunched or abandoned. Their protected JSONL receipts are retained under the
+consumer's ignored `build/idle-efficiency/` directory.
+
 ## Scope and delivery checks
 
 1. Reproducible quiet, running-without-output, retained-history and recoverable
@@ -123,8 +195,8 @@ never treat synthetic tests as physical fleet qualification.
 ## Current state
 
 - Implementation and downstream consumption use dedicated worktrees; unrelated
-  checkouts remain untouched. Normal unchanged-service fleet recovery is recorded
-  below; no new image or runtime has been deployed.
+  checkouts remain untouched. The combined recovery/efficiency runtime is deployed
+  on `rphys-pure-current`; the exact image and native upgrade receipt are above.
 - Baseline captured at `51f327c9` plus the diagnostic harness only, using
   `uv run --python 3.12 --isolated --locked --group dev python -m
   tools.service_benchmark --seconds 10 --coordinator-interval 0.2`.
@@ -150,10 +222,12 @@ never treat synthetic tests as physical fleet qualification.
 - Admission and outbound retained-assignment recovery now have independent
   jittered pacing, scoped progress resets and redacted retry-deadline diagnostics.
   Exact transport replay and embedded-observer pacing are now implemented as
-  well. Final affected-suite evidence is recorded below; downstream checks and
-  physical after-change qualification remain outstanding. The downstream source
-  pin is updated; the deployed runtime and image remain unchanged.
-- No implementation or deployment completion is claimed yet.
+  well. Local and downstream checks passed; physical after-change CPU/latency
+  and all four selected concurrency cases passed as recorded above.
+- Implementation, deployment and the selected physical qualification are complete.
+  TLS pooling remains deliberately deferred for lack of measured need. Slower
+  full cancellation settlement remains an explicit measured performance caveat;
+  no ownership or assignment-isolation failure was observed.
 
 ## Baseline evidence
 
@@ -171,8 +245,8 @@ in the before/after harness. These are not deployed-fleet idle measurements.
 
 The harness starts and cleans only its own roles and jobs, using the existing
 mutual-TLS and supervisor integration fixture. No physical GPUs are requested;
-GPU occupancy counters consequently remain zero. Physical GPU/renewal latency
-qualification remains a distinct outstanding gate.
+GPU occupancy counters consequently remain zero. The separate physical evidence
+above, not these synthetic counters, qualifies the deployed fleet.
 
 ## Coordinator/status checkpoint
 
@@ -224,10 +298,10 @@ Same ten-second instrumented fixture windows, with no concurrent task validation
 | Recoverable error | 0.428 | 4.28% | 223 | 160 | 9 | 6 | 2 | 2 | 10 |
 
 The empty-control hot loop is removed: two control waits per window, down from
-roughly ninety short requests. TLS counts are now five or six per window;
-connection pooling is not yet justified by these counts. Remaining running-job
-database/schema work and recoverable-error pacing are the next slices. CPU
-figures remain synthetic combined-process observations, not fleet measurements.
+roughly ninety short requests. TLS counts fell to five or six per window;
+connection pooling was not justified by these counts. The later deduplication
+and pacing evidence follows. CPU figures remain synthetic combined-process
+observations, not fleet measurements.
 
 ## Control-wait implementation constraints
 
@@ -269,8 +343,9 @@ progress/revision or changed scheduling epoch. Conflicts retain their existing
 terminal behavior. No resource-renewal, GPU freshness or control timing changes.
 Select deployment retry unit cases, coordinator/status units, real independent
 admission recovery and outbound recovery-with-peer-work cases, and mixed-device
-service release (the committed-progress reset consumer). Remaining transport
-indeterminate-reply and local-assignment observer retry loops still need audit.
+service release (the committed-progress reset consumer). Transport indeterminate
+replies and local-assignment observer retries are covered by the final selection
+below.
 
 Result: 88 passed in `build/idle-efficiency/recovery-pacing.xml` (retry units,
 status/coordinator units, scoped admission pacing, independent healthy admission,
@@ -298,13 +373,15 @@ establish the removed work, not a guarantee of monotonic CPU improvements.
 With only four to six TLS connections per ten seconds, defer connection pooling:
 there is no measured justification for adding connection ownership machinery.
 
-## Remaining delivery work
+## Delivery outcome
 
-- Build and deploy the combined consumer image on `rphys-pure-current`, then collect physical after-change
-  service CPU and control/submit latency evidence and concurrent CPU/GPU checks.
-  Local synthetic tests do not discharge this gate. No new fleet software is
-  deployed yet. Existing explicit coordinator timing must be changed deliberately
-  through guarded configuration reload, not silently rewritten by upgrade.
+The accepted implementation and selected physical checks are complete. Branches
+remain separate from develop; the deployed consumer is fixed at `9079ed70f`.
+The useful remaining performance investigation is phase-level cancellation
+settlement attribution (about 22 seconds after versus 9 seconds before), not
+weaker cleanup proofs or a longer urgent-control wait. No additional deployment,
+scientific rerun, connection pool or CPU/memory enforcement is implied by this
+completion.
 
 ## Transport and embedded-observer retry selection
 
@@ -326,43 +403,6 @@ the complete affected queue unit files, production daemon, concurrent outbound
 service, control-wait capacity, transport, and retirement recovery. Lost-reply
 observers recognize the negotiated control-wait operation rather than requiring
 legacy empty polling. No physical qualification is inferred from these tests.
-
-## Physical no-active-work sample
-
-Read-only measurements on 2026-10-05 at 04:27:58 UTC sampled explicit owned PIDs
-for 30 seconds with `tools/service_cpu_sample.py`. Coordinator status before and
-after reported healthy, with zero active/waiting admissions and zero running
-assignments. The unchanged deployment was `upgrade-26308d4f2ffc4b4c`, reference
-revision `93f70b84e7c093efa7a7283f7edfbe61e3f5be6d`; its coordinator interval is
-explicitly 0.2 seconds. These are process-window deltas, not lifetime `ps %CPU`.
-
-| Host / role | PID | CPU seconds | One-core CPU |
-| --- | ---: | ---: | ---: |
-| sleipnir coordinator | 3072806 | 7.72 | 25.73% |
-| shazza agent | 2167137 | 11.86 | 39.53% |
-| shazza process supervisor | 2167725 | 0.07 | 0.23% |
-
-Unrelated validation was running on sleipnir; child CPU is excluded. No service
-was changed for these samples. A subsequent native agent observation showed
-`available: false` and GPU observations stale since 03:28:56 UTC, preceding the
-sample. Therefore these numbers do **not** establish a healthy-idle baseline;
-coordinator health and zero admissions were insufficient to prove agent health.
-The exact instrumented launcher reports the agent process ready. Read-only
-agent inspection found all 47 assignments released, all 47 launches contained,
-no unresolved references/mutation intents, and poll 2158 pending. Subsequent
-normal guarded stop succeeded; starting the unchanged runtime created PID
-2236545 but timed out after 300 seconds waiting for native readiness. The owner
-was preserved; no database edits, forced signals or job cancellations were used.
-The prior upgrade is complete. Physical after-change measurements and workload
-latencies are still outstanding. Verified SSH to shazza works; `sudo -n true` on
-sleipnir requires an interactive password, so an administrator image build may
-need operator assistance. The downstream consumer worktree is
-`../rphys-worktrees/loom-idle-service-efficiency`, branch
-`chore/loom-idle-service-efficiency`, based on clean `790532a6b`. Fresh bootstrap
-and both coordinator templates now select the one-second fallback, with native
-template/bootstrap assertions and documentation that upgrades preserve explicit
-existing settings. The dependency pin and downstream validation are complete.
-Control checkouts and deployed sources remain unchanged.
 
 ## Final local validation
 
@@ -390,72 +430,16 @@ history 3.14%, recoverable error 4.43% of one core. Corresponding DB opens were
 requests two per window; error retries seven. Running-job overhead remains
 measurable; these results are not a claim of negligible supervision cost.
 
-The validated Loom checkpoint is published on `codex/idle-service-efficiency`;
-the downstream reference pin and matching extension lock now select its full
-commit `1d54b3ae97c88f4c2acb9400676a95d5c3efcb2b`. Consumer checks select native
-templates, fresh setup, detached operations, upgrades, and pinned native/extension
-identity. Physical concurrent CPU/GPU/cancellation cases remain a separate gate.
+## Operational entrypoint
 
-The unchanged fleet recovered after a normal coordinator stop/start, without
-editing retained records. Coordinator PID is now 1740750, agent PID 2236545,
-supervisor PID 2167725. Agent availability and all four fresh GPU observations
-were confirmed after epoch reconciliation. No new image or software was deployed
-for recovery.
+The consumer worktree is `../rphys-worktrees/loom-idle-service-efficiency`, branch
+`chore/loom-idle-service-efficiency`. Fresh bootstrap and coordinator templates
+select the one-second fallback; upgrades preserve explicitly authored settings.
+The combined pin and current physical evidence are recorded at the top.
 
-## Healthy physical baseline
-
-Thirty-second healthy-idle samples ended at 2026-10-05T05:14:44Z, after confirming
-current agent availability and all four fresh GPU observations. The coordinator
-used 6.14 CPU seconds (20.47% of one core), agent 7.11 seconds (23.70%), and
-supervisor 0.02 seconds (0.07%). The same PIDs and unchanged explicit 0.2-second
-coordinator interval apply. These are service-only process deltas, not lifetime
-CPU averages or child workload CPU.
-
-The finite owned probe `idle-efficiency-before-20261005T0515` succeeded and its
-assignment was released. Its running window ended before sampling; no running
-CPU claim is made from that probe. A second automated owned probe,
-`idle-efficiency-before-20261005T052319`, requested one CPU on shazza and slept
-silently for up to 180 seconds. Samples ended at 05:24:48Z; the exact assignment
-was RUNNING on shazza before and after the window. Coordinator CPU was 20.75
-seconds (69.17%), agent 7.13 seconds (23.77%), supervisor 1.51 seconds (5.03%).
-Submission reply took 0.577 seconds, and the assignment reached RUNNING after
-48.699 seconds including shared preparation and container startup. Cancellation
-of only that freshly created probe returned after 0.122 seconds and reached
-CANCELLED with its assignment RELEASED after 5.564 seconds. No unrelated work
-was cancelled. Protected request/result receipts and the automated measurement
-script are retained in the downstream worktree's ignored `build/idle-efficiency/`.
-
-The running-job coordinator overhead is substantial and is an important physical
-after-change comparison; the synthetic fixture does not predict its exact value.
-
-## Downstream validation and image handoff
-
-The consumer is committed at `693dcebda183e044a468ab2cad5e411667e241d4`. Targeted
-reference validation at tree fingerprint
-`1df7fc59748e202654485c786c55e042996fc05b94d3767083a0009c21c2342d` executed all 93
-selected cases. In `build/test-targeted/reference-p8igljpf/`, 89 passed and four
-failed because the temporary test roots were on tmpfs, which the existing
-persistent-local-storage guard correctly rejects. The same four cases passed
-unchanged using a fresh short ext4 `/tmp/lrie.*` pytest base in
-`build/test-targeted/reference-dovessmd/`; isolated environments remained on
-task-owned tmpfs. No skips, errors, source corrections or relaxed assertions.
-Both executions passed the three selected reference distribution builds.
-Changed Python files pass Ruff lint/format checks; diff checks pass. This remains
-targeted evidence, not full repository or physical SIF qualification.
-
-The original image was built after this handoff; the combined recovery/efficiency
-revision now needs a replacement image. Both hosts require an interactive sudo password.
-A guarded operator build
-launcher is prepared under the consumer's ignored
-`build/idle-efficiency/build-image-on-shazza.sh`. It requires the clean exact
-consumer commit and physical shazza host and writes only the fresh owned local
-directory `/data/can134/loom/rphys/image-build.idle-efficiency.7IDBE7Eu`. The image
-will be verified and placed on shared storage before the normal coordinated
-upgrade; no deployed source or image is modified in place.
-
-For that upgrade, retain the currently deployed operational launcher from
+Retain the deployed operational launcher from
 `../rphys-worktrees/fleet-upgrade-efficiency/tools/loom-fleet/rphys-fleet` on both
-hosts, and select the new consumer checkout with coordinator `--source`.
+hosts, selecting the consumer checkout with coordinator `--source` on an upgrade.
 Its agent lifecycle recognizes the current instrumented Python command as well
 as the plain legacy command; the consumer checkout's plain launcher does not
 recognize the current instrumented process. The operational wrapper and target
