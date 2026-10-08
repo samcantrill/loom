@@ -12,6 +12,23 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "fleet", help="inspect and prepare a generic native fleet"
     )
     commands = parser.add_subparsers(dest="fleet_command", required=True)
+    build = commands.add_parser("build-release", help="build and offline-verify a locked service bundle")
+    build.add_argument("--source", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--release-id")
+    build.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    build.set_defaults(handler=handle)
+    adoption = commands.add_parser("adopt", help="adopt quiesced retained tmux installations")
+    adoption.add_argument("--fleet", required=True)
+    adoption.add_argument("--bindings", type=Path, required=True)
+    adoption.add_argument("--operation-id")
+    adoption.add_argument("--env-file", type=Path)
+    adoption.add_argument("--operator-exclusion", action="store_true", help="acknowledge maintained submission and administration exclusion")
+    adoption_mode = adoption.add_mutually_exclusive_group()
+    adoption_mode.add_argument("--plan", action="store_true")
+    adoption_mode.add_argument("--apply", action="store_true")
+    adoption.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    adoption.set_defaults(handler=handle)
     check = commands.add_parser(
         "self-test", help="run deliberate native infrastructure checks"
     )
@@ -170,6 +187,17 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.fleet.administration import observe
 
     command = namespace.fleet_command
+    if command == "build-release":
+        from loom.fleet.release_build import build_release
+
+        result = build_release(namespace.source, namespace.output, release_id=namespace.release_id)
+        if namespace.output_format == "json":
+            print(json.dumps(result, sort_keys=True))
+        else:
+            print("service release: " + str(result["release"]))
+            print("offline installation: passed")
+            print("build receipt: " + str(result["receipt"]))
+        return 0
     if command == "init":
         result = init_fleet(
             namespace.name,
@@ -191,7 +219,10 @@ def handle(namespace: argparse.Namespace) -> int:
             if getattr(namespace, "hosts", None) is None
             else namespace.hosts.split(",")
         )
-        if command == "upgrade":
+        if command == "adopt":
+            from loom.fleet.adoption import adopt
+            result = adopt(inventory, bindings=namespace.bindings, operation_id=namespace.operation_id if namespace.apply else None, env_file=namespace.env_file, apply=namespace.apply, operator_exclusion=namespace.operator_exclusion)
+        elif command == "upgrade":
             from loom.fleet.upgrades import upgrade
             if not namespace.apply:
                 from loom.fleet.upgrades import preview
@@ -211,6 +242,9 @@ def handle(namespace: argparse.Namespace) -> int:
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
+                elif intent.get("kind") == "installation-adoption":
+                    from loom.fleet.adoption import adopt
+                    result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
                     result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None))
@@ -354,7 +388,7 @@ def handle(namespace: argparse.Namespace) -> int:
         if "preview" in result:
             print("preview: " + json.dumps(result["preview"], sort_keys=True))
         print(result.get("next", ""))
-    if command in {"apply", "operation", "upgrade"}:
+    if command in {"apply", "operation", "upgrade", "adopt"}:
         return (
             0
             if result["outcome"] in {"complete", "aborted", "preview"}

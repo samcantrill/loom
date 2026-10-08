@@ -25,7 +25,7 @@ from loom.queue.operations import probe_upgrade_compatibility
 from loom.queue.service_upgrade import inspect_service_settlement
 
 
-def inspect(request):
+def inspect(request, *, native_owner=None):
     """Recheck candidate storage, profile/image bytes and native root identity."""
     from loom.fleet.releases import verify_release
 
@@ -37,7 +37,7 @@ def inspect(request):
     )
     if verify_release(bundle / request["descriptor_name"]) != request["release"]:
         raise QueueConflictError("candidate bundle bytes changed")
-    observed = owner(request)
+    observed = owner(request) if native_owner is None else native_owner
     if observed["owner"] != request["expected_root_id"]:
         raise QueueConflictError("upgrade native root identity changed")
     compatibility = probe_upgrade_compatibility(
@@ -94,17 +94,26 @@ def _settled(request):
 def stop(request):
     """Stop only the positively identified communication process after settlement."""
     inspect(request)
+    return stop_owned(request, observe=owner)
+
+
+def stop_owned(request, *, observe):
+    """Recheck the native owner around pidfd acquisition; never escalate a stop."""
     proof = _settled(request)
-    observed = owner(request)
+    observed = observe(request)
     if observed["owner"] != request["expected_root_id"]:
         raise QueueConflictError("upgrade root identity changed")
     if observed["value"]["ownership"] == "live":
         descriptor = os.pidfd_open(observed["value"]["expected_process"])
         try:
-            current = owner(request)
+            current = observe(request)
             if (
                 current["owner"] != observed["owner"]
                 or current["revision"] != observed["revision"]
+                or current["availability"] != "available"
+                or current["value"].get("ownership") != "live"
+                or current["value"].get("expected_process")
+                != observed["value"]["expected_process"]
             ):
                 raise QueueConflictError("service process changed before stop")
             signal.pidfd_send_signal(descriptor, signal.SIGTERM)
@@ -116,7 +125,7 @@ def stop(request):
             os.close(descriptor)
     elif observed["reason"] != "service_stopped":
         raise QueueConflictError("native stop ownership is uncertain")
-    return {"outcome": "stopped", "settlement": proof, "native_owner": owner(request)}
+    return {"outcome": "stopped", "settlement": proof, "native_owner": observe(request)}
 
 
 def replace(request):
