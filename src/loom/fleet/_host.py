@@ -725,7 +725,7 @@ def main():
                 if publication.exists()
                 else None
             )
-        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-recover", "adopt-probe"}:
+        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-coordinator-probe", "workload-recover", "adopt-probe"}:
             if (
                 request.get("expected_declaration") is not None
                 and digest(payload(request)) != request["expected_declaration"]

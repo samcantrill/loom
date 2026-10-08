@@ -149,6 +149,39 @@ def _validate_target(config: Any, control: Any) -> None:
         )
 
 
+def validate_candidate(previous: Any, replacement: Any, profile_id: str) -> None:
+    """Check a selected native profile candidate before or during promotion.
+
+    Capacity, snapshot mappings and logical storage qualifications are retained.
+    A read-only root may move to an equally qualified path; native promotion's
+    existing maintenance, settlement and owner guards authorize activation.
+    """
+    allowed = {
+        "resident_profiles", "deployment_configuration_fingerprint",
+        "active_configuration_fingerprint", "declaration_digest",
+    }
+    if any(
+        getattr(previous, field.name) != getattr(replacement, field.name)
+        for field in fields(replacement) if field.name not in allowed
+    ):
+        raise QueueConflictError("profile promotion cannot change unrelated role configuration")
+    if (
+        len(previous.resident_profiles) != 1 or len(replacement.resident_profiles) != 1
+        or previous.resident_profiles[0].descriptor.profile_id != profile_id
+        or replacement.resident_profiles[0].descriptor.profile_id != profile_id
+    ):
+        raise QueueConflictError("profile promotion requires one selected resident profile")
+    old, new = previous.resident_profiles[0], replacement.resident_profiles[0]
+    for name in ("cpu_capacity", "memory_capacity_bytes", "gpu_devices", "preparation_shared_roots"):
+        if getattr(old, name) != getattr(new, name):
+            raise QueueConflictError("profile promotion cannot change resource or storage policy")
+    from .shared_execution import _readonly_root_relocations
+
+    _readonly_root_relocations(old.shared_roots, new.shared_roots)
+    if set(old.shared_roots) != set(new.shared_roots):
+        raise QueueConflictError("profile promotion cannot add or remove logical storage roots")
+
+
 def _supervisor_value(root_id: str, config: Any) -> dict[str, Any]:
     from ._agent_process_supervisor import SupervisorLaunchConfiguration, _profile_value
 
@@ -287,27 +320,7 @@ def apply(client: Any, control: Any) -> Any:
         raise QueueConflictError(
             "profile promotion predecessor or native settlement conflicts"
         )
-    allowed = {
-        "resident_profiles",
-        "deployment_configuration_fingerprint",
-        "active_configuration_fingerprint",
-        "declaration_digest",
-    }
-    if any(
-        getattr(client._config, field.name) != getattr(replacement, field.name)
-        for field in fields(replacement)
-        if field.name not in allowed
-    ):
-        raise QueueConflictError(
-            "profile promotion cannot change unrelated role configuration"
-        )
-    if (
-        len(client._config.resident_profiles) != 1
-        or client._config.resident_profiles[0].descriptor.profile_id != p["profile_id"]
-    ):
-        raise QueueConflictError(
-            "profile promotion requires one selected resident profile"
-        )
+    validate_candidate(client._config, replacement, p["profile_id"])
     root = Path(replacement.agent_root)
     install = (
         client._prepare_role_reload(replacement)
@@ -326,19 +339,6 @@ def apply(client: Any, control: Any) -> Any:
             effect = _finish(journal, replacement, pending)
         _install(client, replacement, install)
         return effect
-    for name in (
-        "cpu_capacity",
-        "memory_capacity_bytes",
-        "gpu_devices",
-        "shared_roots",
-        "preparation_shared_roots",
-    ):
-        if getattr(client._config.resident_profiles[0], name) != getattr(
-            replacement.resident_profiles[0], name
-        ):
-            raise QueueConflictError(
-                "profile promotion cannot change resource or storage policy"
-            )
     # The retained native guard proves a clean cut and holds the supervisor lock.
     with retained_supervisor_guard(root, agent_id=journal.root_id):
         pending = {

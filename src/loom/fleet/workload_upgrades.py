@@ -17,6 +17,7 @@ from loom.fleet.configuration import _environment_files
 from loom.fleet import ssh_operations as sshops
 from loom.fleet import upgrades as maintenance
 from loom.queue._profile_promotion import CAPABILITY
+from loom.queue.shared_execution import SOURCE_PROMOTION_CAPABILITY
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import _load_protected_config
 from loom.queue.errors import QueueConfigError, QueueConflictError
@@ -28,6 +29,7 @@ def preview(
     *,
     workload_profile,
     image,
+    workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
@@ -53,6 +55,8 @@ def preview(
                 + CAPABILITY
                 + "; complete a separate explicit --runtime-release upgrade first"
             )
+        if workload_inventory is not None and SOURCE_PROMOTION_CAPABILITY not in source["value"].get("capabilities", ()):
+            raise QueueConflictError("source inventory promotion requires a capable runtime upgrade first")
     plan = maintenance.preview(
         inventory,
         runtime_release=inventory.runtime_release,
@@ -89,6 +93,18 @@ def preview(
             )
     image = Path(image).resolve()
     sha = sshops._file_hash(image)
+    target_declarations = None
+    candidate_inputs = {}
+    candidate_sources = None
+    if workload_inventory is not None:
+        from .workload_sources import candidates as source_candidates
+
+        for name in consumers:
+            if SOURCE_PROMOTION_CAPABILITY not in plan["hosts"][name]["native_owner"]["value"].get("capabilities", ()):
+                raise QueueConflictError("source inventory promotion requires a capable agent runtime: " + name)
+        target_declarations, candidate_inputs, candidate_sources = source_candidates(
+            inventory, workload_inventory, plan, consumers, env_file
+        )
     candidates = {}
     for name, row in consumers.items():
         candidates[name] = sshops.ssh(
@@ -101,12 +117,13 @@ def preview(
                 "workload_profile": workload_profile,
                 "image": str(image),
                 "image_sha256": sha,
+                **({"candidate_declaration": target_declarations[name]} if target_declarations is not None else {}),
             },
         )
     profiles = [candidate["target"]["profile"] for candidate in candidates.values()]
     if any(profile != profiles[0] for profile in profiles):
         raise QueueConflictError("native target profile differs across consuming hosts")
-    declarations = json.loads(json.dumps(plan["declarations"]))
+    declarations = target_declarations or json.loads(json.dumps(plan["declarations"]))
     for name, candidate in candidates.items():
         declarations[name] = candidate["declaration"]
     coordinator = declarations["coordinator"]
@@ -115,8 +132,14 @@ def preview(
         for p in coordinator["remote_profiles"]
     ]
     policies = coordinator["preparation"]["profiles"]
+    generation = "image-" + sha[:16]
+    if workload_inventory is not None:
+        generation = "source-" + digest({
+            "image": sha, "declarations": declarations,
+            "profiles": profiles,
+        })[:16]
     aliases = {
-        name: name + "-image-" + sha[:16]
+        name: name + "-" + generation
         for name, value in policies.items()
         if value["resident_profile_id"] == workload_profile
     }
@@ -129,10 +152,28 @@ def preview(
         if new in policies:
             raise QueueConflictError("target preparation generation already exists")
         policies[new] = policies.pop(old)
+    coordinator_target = None
+    if workload_inventory is not None:
+        row = plan["hosts"]["coordinator"]
+        coordinator_target = sshops.ssh(
+            row["host"],
+            {
+                **row,
+                "release": plan["release"],
+                "action": "workload-coordinator-probe",
+                "expected_declaration": digest(plan["declarations"]["coordinator"]),
+                "declaration": coordinator,
+            },
+        )
     plan.update(
         workload_profile=workload_profile,
         image=str(image),
         image_sha256=sha,
+        generation=generation,
+        workload_inventory=None if workload_inventory is None else str(Path(workload_inventory).resolve()),
+        candidate_inputs=candidate_inputs,
+        candidate_sources=candidate_sources,
+        coordinator_target=coordinator_target,
         candidates=candidates,
         target_declarations=declarations,
         agents={name: plan["agents"][name] for name in consumers},
@@ -157,9 +198,7 @@ def preview(
 
 def bind_intent(intent, plan, directory):
     original = load_deployment(plan["checks"]["deployment"])
-    destination = directory / (
-        "deployment-image-" + plan["image_sha256"][:16] + ".json"
-    )
+    destination = directory / ("deployment-" + plan["generation"] + ".json")
     selected = replace(original, preparation_profile=plan["preparation_profile"])
     if destination.exists():
         retained = load_deployment(destination)
@@ -183,6 +222,9 @@ def bind_intent(intent, plan, directory):
                 "candidates",
                 "target_declarations",
                 "preparation_profile",
+                "workload_inventory",
+                "candidate_sources",
+                "coordinator_target",
             )
         },
         "original_check_selection": intent["check_selection"],
@@ -192,12 +234,26 @@ def bind_intent(intent, plan, directory):
         },
         "inputs": {
             **intent["inputs"],
+            **plan["candidate_inputs"],
             str(destination): sshops._file_hash(destination),
         },
     }
 
 
 class WorkloadUpgrade(maintenance._Upgrade):
+    def recheck_composed(self, pending_inputs=None):
+        super().recheck_composed(pending_inputs)
+        sources = self.intent.get("candidate_sources")
+        if sources is not None:
+            for name, row in sources["hosts"].items():
+                current = _load_protected_config(
+                    Path(row["config"]), env_file=row["env_file"]
+                )[2]
+                if current != sources["declarations"][name]:
+                    raise QueueConflictError(
+                        "composed workload candidate changed since operation intent"
+                    )
+
     def recheck(self, pending_inputs=None):
         try:
             super().recheck(pending_inputs)
@@ -225,6 +281,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             raise
 
     def host_observe(self, name, action, **values):
+        self.recheck_composed()
         row = self.intent["hosts"][name]
         declaration = _load_protected_config(
             Path(row["config"]),
@@ -254,6 +311,17 @@ class WorkloadUpgrade(maintenance._Upgrade):
             native = observed["native_owner"]
             if native is None or native["owner"] != row["expected_root_id"]:
                 raise QueueConflictError("workload native root identity changed")
+            if self.intent.get("workload_inventory") is not None and (
+                name == "coordinator" or name in self.intent["candidates"]
+            ) and SOURCE_PROMOTION_CAPABILITY not in native["value"].get("capabilities", ()):
+                raise QueueConflictError("running source inventory promotion capability unavailable")
+            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
+                target = self.host_observe(
+                    name, "workload-coordinator-probe",
+                    declaration=self.intent["target_declarations"][name],
+                )
+                if target != self.intent["coordinator_target"]:
+                    raise QueueConflictError("coordinator workload target qualification changed")
             if name in self.intent["candidates"]:
                 if native["value"]["ownership"] != "live" or CAPABILITY not in native[
                     "value"
@@ -267,6 +335,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     workload_profile=self.intent["workload_profile"],
                     image=self.intent["image"],
                     image_sha256=self.intent["image_sha256"],
+                    **({"candidate_declaration": self.intent["target_declarations"][name]}
+                       if self.intent.get("workload_inventory") is not None else {}),
                 )
                 if candidate["target"] != self.intent["candidates"][name]["target"]:
                     raise QueueConflictError(

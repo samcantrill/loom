@@ -84,6 +84,10 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     target.add_argument("--runtime-release", type=Path)
     target.add_argument("--workload-profile")
     upgrade.add_argument("--image", type=Path)
+    upgrade.add_argument(
+        "--workload-inventory", type=Path,
+        help="protected candidate inventory selecting retained source/profile paths",
+    )
     mode = upgrade.add_mutually_exclusive_group()
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -226,9 +230,9 @@ def handle(namespace: argparse.Namespace) -> int:
             from loom.fleet.upgrades import upgrade
             if not namespace.apply:
                 from loom.fleet.upgrades import preview
-                result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
+                result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
         elif command == "migrate-services":
             from loom.fleet.ssh_operations import migrate_services
             result = migrate_services(inventory, operation_id=namespace.operation_id,

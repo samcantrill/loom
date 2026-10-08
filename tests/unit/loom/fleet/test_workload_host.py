@@ -1,5 +1,6 @@
 """Immutable byte checks precede native candidate qualification/publication."""
 
+import copy
 import hashlib
 from pathlib import Path
 
@@ -41,8 +42,9 @@ def test_candidate_digest_mismatch_never_qualifies_or_publishes(tmp_path, monkey
     assert original["resident_profiles"][0]["descriptor"]["revision"] == "v1"
 
 
+@pytest.mark.parametrize("source_path", [None, "/retained/project"])
 def test_candidate_keeps_old_source_and_uses_native_target_qualification(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_path
 ):
     image = tmp_path / "candidate.sif"
     image.write_bytes(b"candidate")
@@ -62,22 +64,27 @@ def test_candidate_keeps_old_source_and_uses_native_target_qualification(
     monkeypatch.setattr(host, "owner", lambda _: {"owner": "original-root"})
     observed = []
 
-    def qualify(request, declaration):
-        observed.append(declaration)
+    def qualify(request, declaration, *, check_promotion=False):
+        observed.append((declaration, check_promotion))
         return {"observed": len(observed)}
 
     monkeypatch.setattr(host, "qualify", qualify)
+    candidate = copy.deepcopy(original)
+    candidate["project_root"] = source_path
     result = host.probe(
         {
             "name": "agent",
             "workload_profile": "selected",
             "image": str(image),
             "image_sha256": sha,
+            **({"candidate_declaration": candidate} if source_path else {}),
         }
     )
     assert result["source"] == {"observed": 1}
     assert result["target"] == {"observed": 2}
-    assert observed[0] == original
+    assert observed[0] == (original, False)
+    assert observed[1] == (result["declaration"], True)
+    assert result["declaration"].get("project_root") == source_path
     assert (
         result["declaration"]["resident_profiles"][0]["descriptor"]["revision"]
         == "image-" + sha[:24]

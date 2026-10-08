@@ -729,6 +729,60 @@ def test_pure_coordinator_shared_roots_reload_and_restart(tmp_path: Path) -> Non
         restarted.stop()
 
 
+def test_coordinator_relocates_qualified_read_only_roots_only_during_settled_maintenance(tmp_path):
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonPrincipal, LocalDaemonRole
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload", "maintenance"], "agent_ids": [], "pools": [],
+    }
+    original_path, stable_path = tmp_path / "development", tmp_path / "installed"
+    for path in (original_path, stable_path):
+        path.mkdir()
+        (path / "identity").write_bytes(b"same logical root")
+    binding = {
+        "host_path": str(original_path), "container_path": "/loom/project", "access": "ro",
+        "challenge": {"path": "identity", "sha256": hashlib.sha256(b"same logical root").hexdigest()},
+    }
+    payload["shared_roots"] = {"project": binding}
+    _write_protected(source, payload)
+    original = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(original.daemon)
+    daemon = LocalDaemon(original.daemon, trusted_scheduling_loader=lambda:
+        load_coordinator_service_config(source, current=original).daemon)
+    started = daemon.start()
+    operator = daemon.operator_view(LocalDaemonPrincipal(
+        f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR))
+    payload["shared_roots"] = {"project": {**binding, "host_path": str(stable_path)}}
+    _write_protected(source, payload)
+    try:
+        refused = operator.reload_scheduling(CoordinatorSchedulingReload(
+            "move-with-admission-open", started.scheduling_epoch, "relocate source"))
+        assert refused["code"] == "reload_rejected"
+        assert daemon.config.coordinator_shared_roots["project"] == binding
+        operator.maintenance({
+            "operation_id": "close-for-source", "maintenance_id": "source-upgrade",
+            "maintenance_intent_digest": "selected-source", "action": "close",
+            "expected_revision": 0, "check": None,
+        }, expected_coordinator_id=started.coordinator_id)
+        request = CoordinatorSchedulingReload(
+            "move-settled-source", started.scheduling_epoch, "relocate qualified source")
+        applied = operator.reload_scheduling(request)
+        assert applied["state"] == "applied"
+        assert daemon.config.coordinator_shared_roots["project"] == payload["shared_roots"]["project"]
+        assert operator.reload_scheduling(request) == applied
+    finally:
+        daemon.stop()
+    restarted = LocalDaemon(load_coordinator_service_config(source).daemon)
+    try:
+        assert restarted.start().coordinator_id == started.coordinator_id
+        assert restarted.config.coordinator_shared_roots["project"] == payload["shared_roots"]["project"]
+    finally:
+        restarted.stop()
+
+
 def test_pure_coordinator_initializes_and_waits_without_local_agent(
     tmp_path: Path,
 ) -> None:

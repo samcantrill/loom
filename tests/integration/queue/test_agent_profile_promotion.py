@@ -78,8 +78,8 @@ def request(
     )
 
 
-def client(tmp_path):
-    old, new = config(tmp_path), config(tmp_path, 2)
+def client(tmp_path, pair=None):
+    old, new = pair or (config(tmp_path), config(tmp_path, 2))
     LocalDaemonAgentHttpClient.initialize_agent_root(old)
     c = LocalDaemonAgentHttpClient(old, trusted_config_loader=lambda: new)
     j = c._require_journal()
@@ -121,6 +121,51 @@ def close(c):
 def apply(c, control):
     assert c._require_journal().prepare_control(control) is None
     return c._apply_agent_control(control)
+
+
+@pytest.mark.parametrize("change", ["relocate", "writable", "qualification"])
+def test_source_relocation_preserves_logical_roots_and_native_identity(tmp_path, change):
+    import hashlib
+
+    profiles = []
+    for generation in (1, 2):
+        root = tmp_path / f"project-{generation}"
+        root.mkdir()
+        marker = b"stable source collection" if change != "qualification" or generation == 1 else b"different collection"
+        (root / ".identity").write_bytes(marker)
+        # Source releases live inside a retained logical root. Relocation changes
+        # its host path, not the challenge, access or container location.
+        project = root / "releases" / str(generation)
+        project.mkdir(parents=True)
+        profile = config(tmp_path, generation)
+        profiles.append(replace(profile, resident_profiles=(replace(
+            profile.resident_profiles[0], project_root=project,
+            shared_roots={"project": {
+                "host_path": str(root), "container_path": "/loom/project",
+                "access": "rw" if change == "writable" else "ro",
+                "challenge": {"path": ".identity", "sha256": hashlib.sha256(marker).hexdigest()},
+            }},
+        ),)))
+    c, old, new = client(tmp_path, profiles)
+    original_id = c.agent_root_id
+    assert old.agent_root is not None
+    try:
+        binding = old.agent_root / "role-binding.json"
+        before = binding.read_bytes()
+        control = request(old, new, original_id)
+        if change != "relocate":
+            with pytest.raises(QueueConflictError, match="shared root identity or writable"):
+                apply(c, control)
+            assert binding.read_bytes() == before
+            return
+        result = apply(c, control)
+        assert result.code == "applied"
+        assert c.agent_root_id == original_id
+        assert c._config.resident_profiles[0].project_root == new.resident_profiles[0].project_root
+        assert c._config.resident_profiles[0].descriptor.shared_roots == old.resident_profiles[0].descriptor.shared_roots
+        assert c._require_journal().prepare_control(control) == result
+    finally:
+        close(c)
 
 
 def test_promotion_replay_and_later_promotion_preserve_native_history(tmp_path):

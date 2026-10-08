@@ -3494,10 +3494,18 @@ class LocalDaemon:
             raise QueueConflictError("scheduling reload cannot replace assignment payload root")
         current_roots = self.config.coordinator_shared_roots
         replacement_roots = replacement.coordinator_shared_roots
-        if any(replacement_roots.get(alias) != root for alias, root in current_roots.items()):
-            raise QueueConflictError(
-                "scheduling reload cannot replace retained coordinator shared mappings"
-            )
+        from .shared_execution import _readonly_root_relocations
+
+        relocations = _readonly_root_relocations(current_roots, replacement_roots)
+        if relocations:
+            # Reload already holds the cycle lock shared with admission and
+            # maintenance. Same logical read-only storage may move only at a
+            # settled, closed gate; mutable output mappings remain fixed.
+            from ._maintenance import observe
+
+            gate = observe(self)
+            if gate["state"] != "closed" or not gate["settled"] or gate["checks"]:
+                raise QueueConflictError("read-only root relocation requires settled maintenance")
         if replacement.agent_policy != self._agent_policy:
             with self._connection() as conn:
                 active = conn.execute(
