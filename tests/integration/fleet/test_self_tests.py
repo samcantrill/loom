@@ -471,6 +471,28 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
     inventory, deployment, daemon, _ = fleet
     import loom.queue.agent_session_transport as transport
 
+    from dataclasses import replace
+
+    coordinator = inventory.hosts[0]
+    role = json.loads(coordinator.config.read_text())
+    role["preparation"]["profiles"]["existing-project"]["resident_profile_id"] = (
+        "${oc.env:FLEET_PROFILE}"
+    )
+    coordinator.config.write_text(json.dumps(role))
+    environment = inventory.path.parent / "coordinator.env"
+    environment.write_text("FLEET_PROFILE=probe-profile\n")
+    environment.chmod(0o600)
+    agent_environment = inventory.path.parent / "agent.env"
+    agent_environment.write_text("FLEET_PROFILE=wrong-host-profile\n")
+    agent_environment.chmod(0o600)
+    inventory = replace(
+        inventory,
+        hosts=(
+            replace(coordinator, env_file=environment),
+            replace(inventory.hosts[1], env_file=agent_environment),
+        ),
+    )
+
     original = transport._Handler._reply
     dropped = []
 

@@ -22,7 +22,7 @@ from loom.coordinator import (
 )
 from loom.deployment import load_deployment
 from loom.queue.preparation import PrepareRunRequest
-from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write  # noqa: F401
+from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write, bind_environments  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
@@ -35,6 +35,7 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     from loom.queue.deployment import _load_protected_config
 
     inventory, base, selection = site
+    inventory = bind_environments(inventory)
     authored = read(inventory.hosts[0].config)
     for principal in authored["agent_policy"]["principals"]:
         if principal["role"] == "operator":
@@ -72,7 +73,7 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     def qualified_cpu(host, request):
         if request["action"] != "workload-probe":
             return ssh(host, request)
-        before = dict(_load_protected_config(Path(request["config"]))[2])
+        before = dict(_load_protected_config(Path(request["config"]), env_file=request["env_file"])[2])
         after = json.loads(json.dumps(before))
         after["resident_profiles"][0]["descriptor"] = {
             "profile_id": "probe",
@@ -195,7 +196,7 @@ def test_missing_source_promotion_refuses_before_candidate_or_mutation(
     )
     with pytest.raises(QueueConflictError, match="separate explicit --runtime-release"):
         workload_upgrades.preview(
-            SimpleNamespace(),
+            SimpleNamespace(hosts=()),
             workload_profile="selected",
             image=tmp_path / "candidate.sif",
         )

@@ -15,7 +15,7 @@ import math
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.deployment import load_deployment
-from loom.fleet.configuration import protected_directory
+from loom.fleet.configuration import protected_directory, _environment_files
 from loom.fleet._host import atomic, read, digest
 from loom.fleet import ssh_operations as sshops
 from loom.fleet.releases import verify_release
@@ -113,6 +113,7 @@ def preview(
     Candidate installation/probing is the first apply step, before gate closure;
     preview never presents an uninstalled candidate as qualified.
     """
+    _environment_files(inventory, env_file)
     if workload_profile is not None or image is not None:
         if runtime_release is not None:
             raise QueueConfigError("service and workload targets are mutually exclusive")
@@ -146,7 +147,7 @@ def preview(
     from loom.queue.deployment import load_coordinator_service_config
 
     accepted = load_coordinator_service_config(
-        inventory.hosts[0].config, env_file=env_file
+        inventory.hosts[0].config, env_file=_environment_files(inventory, env_file)["coordinator"]
     )
     if source["value"]["scheduling_fingerprint"] != accepted.active_fingerprint:
         raise QueueConflictError(
@@ -737,6 +738,7 @@ def upgrade(
     new_check=None,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
+    _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
     if runtime_release is not None and (workload_profile is not None or image is not None):

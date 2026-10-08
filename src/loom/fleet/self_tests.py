@@ -31,7 +31,7 @@ from loom.queue.preparation import PrepareRunRequest
 from loom.runs.outputs import OutputSelection
 from loom.serialization import thaw_plain_data
 
-from .configuration import Inventory, exclude_captures, protected_directory
+from .configuration import _environment_files, Inventory, exclude_captures, protected_directory
 from .probes import probe_configuration, verify_storage
 
 
@@ -305,6 +305,7 @@ def self_test(
     that deadline. The connection-only deployment pins native source/profile;
     the selected source must contain the base config and allow generic probes.
     """
+    environments = _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
     if (
@@ -349,7 +350,7 @@ def self_test(
         if agent_id not in agents:
             raise QueueConfigError("select an unambiguous inventory agent")
         _, _, role, _ = _load_protected_config(
-            inventory.hosts[0].config, env_file=env_file
+            inventory.hosts[0].config, env_file=environments["coordinator"]
         )
         preparation = cast(Mapping[str, Any], role.get("preparation") or {})
         policy = preparation.get("profiles", {}).get(selection.preparation_profile)

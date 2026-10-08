@@ -15,9 +15,12 @@ from loom.queue.errors import QueueConfigError, QueueConflictError
 
 @dataclass(frozen=True)
 class Host:
+    """Native role and optional protected environment reference."""
+
     name: str
     host: str
     config: Path
+    env_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,22 @@ class Inventory:
         if not names or set(names) - {host.name for host in self.hosts}:
             raise QueueConfigError("--hosts must name inventory entries")
         return tuple(host for host in self.hosts if host.name in names)
+
+
+def _environment_files(
+    inventory: Inventory, override: Path | None
+) -> dict[str, Path | None]:
+    """Select native environments and reject an explicit conflicting global file."""
+    global_file = None if override is None else Path(override).resolve()
+    selected = {}
+    for host in inventory.hosts:
+        bound = None if host.env_file is None else host.env_file.resolve()
+        if bound is not None and global_file is not None and bound != global_file:
+            raise QueueConfigError(
+                "--env-file conflicts with inventory environment binding: " + host.name
+            )
+        selected[host.name] = bound if bound is not None else global_file
+    return selected
 
 
 def fleet_path(name: str) -> Path:
@@ -113,14 +132,23 @@ def load_inventory(path: Path) -> Inventory:
             not isinstance(key, str)
             or not key
             or not isinstance(entry, dict)
-            or set(entry) != {"host", "config"}
+            or not {"host", "config"} <= set(entry) <= {"host", "config", "env_file"}
             or any(not isinstance(v, str) or not v for v in entry.values())
         ):
             raise QueueConfigError(
                 "Fleet entries require an explicit SSH alias and native config"
             )
         hosts.append(
-            Host(key, entry["host"], (source.parent / entry["config"]).resolve())
+            Host(
+                key,
+                entry["host"],
+                (source.parent / entry["config"]).resolve(),
+                None
+                if "env_file" not in entry
+                else _protected_input_path(
+                    source.parent / entry["env_file"], label="Fleet environment"
+                ),
+            )
         )
     return Inventory(
         source, name, (source.parent / release).resolve(), manager, tuple(hosts)

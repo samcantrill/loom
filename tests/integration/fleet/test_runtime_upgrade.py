@@ -18,7 +18,7 @@ from loom.coordinator import (
     CoordinatorClient,
     CoordinatorClientError,
 )
-from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write  # noqa: F401
+from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write, bind_environments  # noqa: F401
 
 from tests.integration.queue.test_operator_observations import owner as native_owner  # noqa: F401
 
@@ -54,6 +54,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     capsys,
 ):
     inventory, base, selection = site
+    inventory = bind_environments(inventory)
     authored = read(inventory.hosts[0].config)
     for principal in authored["agent_policy"]["principals"]:
         if principal["role"] == "operator":
