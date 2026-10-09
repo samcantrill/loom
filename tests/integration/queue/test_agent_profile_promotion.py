@@ -168,7 +168,10 @@ def test_source_relocation_preserves_logical_roots_and_native_identity(tmp_path,
         close(c)
 
 
-def test_promotion_replay_and_later_promotion_preserve_native_history(tmp_path):
+@pytest.mark.parametrize("transient_unknown", [False, True])
+def test_promotion_replay_and_later_promotion_preserve_native_history(
+    tmp_path, transient_unknown
+):
     c, old, new = client(tmp_path)
     assert old.agent_root is not None and new.agent_root is not None
     root = c.agent_root_id
@@ -176,7 +179,9 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(tmp_path):
     assert first.promotion is not None
     try:
         secret = (old.agent_root / "supervisor" / "service.secret").read_bytes()
-        from loom.queue._agent_process_supervisor import ResidentWorkerLaunch
+        from loom.queue._agent_process_supervisor import (
+            ResidentWorkerLaunch, SupervisorLaunchState,
+        )
 
         supervisor = c._supervisor
         assert supervisor is not None
@@ -197,6 +202,13 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(tmp_path):
             {},
         )
         supervisor.launch(launch)
+        if transient_unknown:
+            # A transient supervision failure can precede a drain. Containment
+            # then settles the launch while the drained service stops offering.
+            c._service_progress = True
+            c._observe_supervisor_ownership(
+                replace(supervisor.query(launch), state=SupervisorLaunchState.UNKNOWN)
+            )
         supervisor.contain(launch)
         database = old.agent_root / "supervisor" / "supervisor.sqlite"
         with sqlite3.connect(database) as conn:
@@ -229,6 +241,31 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(tmp_path):
         )
         with pytest.raises(QueueConflictError, match="conflicts"):
             c._require_journal().prepare_control(changed)
+        c._require_journal().acknowledge_control(second.operation_id)
+        session = c._require_journal().active_session()
+        resume = AgentControl(
+            "resume-promoted", AgentControlKind.RESUME, "agent-a",
+            session.session_id, session.config_revision, None, False, "resume",
+        )
+        assert apply(c, resume).code == "applied"
+        assert not c._drained
+        if transient_unknown:
+            # Replaying an older promotion cannot clear newer ownership doubt.
+            supervisor = c._supervisor
+            workspace = tmp_path / "current"
+            workspace.mkdir()
+            current = ResidentWorkerLaunch(
+                supervisor.supervisor_id, supervisor.continuity_epoch, root,
+                "session", "new-assignment", "new-process", "new-fence", "new-launch",
+                "b" * 64, workspace, third.resident_profiles[0].launch_profile, {},
+            )
+            supervisor.launch(current)
+            c._observe_supervisor_ownership(
+                replace(supervisor.query(current), state=SupervisorLaunchState.UNKNOWN)
+            )
+            assert promotion.apply(c, first) == effect
+            assert c._restart_with_retained_work
+            supervisor.contain(current)
     finally:
         close(c)
 
