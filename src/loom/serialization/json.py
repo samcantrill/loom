@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from json import JSONDecodeError
+import math
 
 from loom.serialization.plain import ensure_plain_data, to_plain_data
 from .errors import DeserializationError
@@ -48,7 +49,30 @@ def json_loads(text: str, *, path: str = "$") -> object:
     """Parse JSON text and validate as plain data."""
 
     try:
-        parsed = json.loads(text)
+        # The decoder already creates an owned tree of plain dictionaries,
+        # lists and scalars. Only its non-finite number extensions need a check;
+        # copying every decoded member again is costly for retained reports.
+        try:
+            return json.loads(
+                text, parse_float=_finite_float, parse_constant=_nonfinite_constant
+            )
+        except _NonfiniteNumber:
+            # Keep the established nested-path diagnostic on this uncommon path.
+            return ensure_plain_data(json.loads(text), path=path)
     except JSONDecodeError as exc:
         raise DeserializationError(f"Invalid JSON at {path}: {exc.msg}") from exc
-    return ensure_plain_data(parsed, path=path)
+
+
+class _NonfiniteNumber(ValueError):
+    pass
+
+
+def _finite_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise _NonfiniteNumber
+    return result
+
+
+def _nonfinite_constant(value: str) -> None:
+    raise _NonfiniteNumber

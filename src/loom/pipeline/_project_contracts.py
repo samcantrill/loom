@@ -49,11 +49,23 @@ def _native_digest(value: object) -> None:
 
 def node_result(value: object) -> dict[str, PlainData]:
     result = plain_mapping(value)
+    _check_node_result(result)
+    return result
+
+
+def _plain_mapping_view(value: PlainData) -> dict[str, PlainData]:
+    """Read an already normalized tree without copying its opaque payload."""
+    if not isinstance(value, dict):
+        raise ValueError("project contract must be a plain mapping")
+    return value
+
+
+def _check_node_result(result: dict[str, PlainData]) -> None:
     if set(result) != {"semantic_key", "payload"}:
         raise ValueError("project node contract fields are invalid")
     key = result["semantic_key"]
     if key is not None:
-        key = plain_mapping(key)
+        key = _plain_mapping_view(key)
         if (
             set(key) != {"version", "digest"}
             or type(key["version"]) is not int
@@ -61,7 +73,6 @@ def node_result(value: object) -> dict[str, PlainData]:
         ):
             raise ValueError("project semantic key version is unsupported")
         _digest(key["digest"])
-    return result
 
 
 def declaration(stage: Any) -> dict[str, PlainData]:
@@ -125,6 +136,11 @@ def envelope(
 
 def validate_envelope(value: object) -> dict[str, PlainData]:
     data = plain_mapping(value)
+    _check_envelope(data)
+    return data
+
+
+def _check_envelope(data: dict[str, PlainData]) -> None:
     if (
         set(data)
         != {"schema_version", "namespace", "semantic_key", "payload", "binding_digest"}
@@ -134,9 +150,8 @@ def validate_envelope(value: object) -> dict[str, PlainData]:
         raise ValueError("native project contract version or fields are unsupported")
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ValueError("project namespace is invalid")
-    node_result({key: data[key] for key in ("semantic_key", "payload")})
+    _check_node_result({key: data[key] for key in ("semantic_key", "payload")})
     _native_digest(data["binding_digest"])
-    return data
 
 
 def report_entry(value: object) -> dict[str, PlainData]:
@@ -176,24 +191,28 @@ def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | Non
         return None
     data = report_entry(prepared["metadata"][CONTRACTS])
     ref = ArtifactRef.from_dict(data["report_ref"])
-    report = plain_mapping(
+    # report_entry requires the built-in JSON codec, whose decoder owns plain
+    # data validation. All children below belong to that same fresh tree.
+    report = _plain_mapping_view(cast(PlainData,
         LocalArtifactStore(store.local_artifact_root(run_uri)).load(ref)
-    )
-    project = plain_mapping(report["project_preparation"])
-    processor = plain_mapping(project["processor"])
+    ))
+    project = _plain_mapping_view(report["project_preparation"])
+    processor = _plain_mapping_view(project["processor"])
     if (
         processor["schema_version"] != 3
         or processor["evidence_namespace"] != data["namespace"]
     ):
         raise ValueError("retained report installation namespace conflicts")
-    composition = plain_mapping(report["composition"])
+    composition = _plain_mapping_view(report["composition"])
     if composition["resolved"] != json.loads(
         store.read_config_snapshot(run_uri, "resolved")
     ):
         raise ValueError("retained report captured declaration conflicts")
-    contracts = plain_mapping(report["project_contracts"])
+    contracts = _plain_mapping_view(report["project_contracts"])
     for value in contracts.values():
-        if validate_envelope(value)["namespace"] != data["namespace"]:
+        checked = _plain_mapping_view(value)
+        _check_envelope(checked)
+        if checked["namespace"] != data["namespace"]:
             raise ValueError("retained node namespace conflicts")
     return report
 
@@ -204,8 +223,15 @@ def worker_contract_metadata(
     report = load_contract_report(store, run_uri)
     if report is None:
         return {}
-    contracts = plain_mapping(report["project_contracts"])
-    attached = validate_envelope(contracts[stage.name])
+    return _worker_contract_metadata(report, stage)
+
+
+def _worker_contract_metadata(
+    report: dict[str, PlainData], stage: Any
+) -> dict[str, PlainData]:
+    """Select one attachment from the freshly checked report owned by the caller."""
+    contracts = _plain_mapping_view(report["project_contracts"])
+    attached = _plain_mapping_view(contracts[stage.name])
     capture = capture_digest(report)
     expected = envelope(
         cast(str, attached["namespace"]),

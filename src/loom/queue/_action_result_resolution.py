@@ -17,7 +17,7 @@ from loom.pipeline._project_contracts import (
     CONTRACT,
     load_contract_report,
     plain_mapping,
-    worker_contract_metadata,
+    _worker_contract_metadata,
 )
 from loom.pipeline.cleanup.preparation_pins import (
     preparation_path_is_retained,
@@ -127,7 +127,7 @@ class ActionResultResolution:
             "processor": plain_mapping(report["project_preparation"])["processor"],
         }
         spec = intent.pipeline.get_stage(node)
-        contract = worker_contract_metadata(self.execution.run_store, run_uri, spec)[
+        contract = _worker_contract_metadata(report, spec)[
             CONTRACT
         ]
         snapshot = authority.open_run(run_uri)
