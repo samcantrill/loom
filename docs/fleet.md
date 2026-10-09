@@ -220,7 +220,11 @@ GPU occupancy or retained claims report waiting. GPU observations are limited
 to infrastructure and cannot establish scientific accuracy or throughput.
 
 Protected receipts live beside the inventory in `checks/<operation-id>` outside
-selected source captures. Immutable native requests and dispatch markers are
+selected source captures. Temporary artifact downloads use the operator's system
+temporary directory (honoring `TMPDIR`) and are removed after verification.
+That temporary filesystem must support Linux atomic non-replacing directory
+publication; the receipt directory may reside on NFS independently.
+Immutable native requests and dispatch markers are
 fsynced before sending. Reconnection observes the exact IDs; if the native owner
 has no accepted request, it replays only the retained identical request under
 native idempotency. Selected requests are dispatched before result downloads,
