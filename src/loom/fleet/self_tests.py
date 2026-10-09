@@ -250,7 +250,9 @@ def _observe_check(
     artifact = selected.items[0].get("artifact") or {}
     if "loom.shared_publication" not in (artifact.get("metadata") or {}):
         return {"outcome": "failed", "code": "shared_publication_required", **facts}
-    with tempfile.TemporaryDirectory(dir=directory) as destination:
+    # Operator receipts may live on NFS, where atomic artifact-directory
+    # publication is unavailable. Downloads use the operator's temporary storage.
+    with tempfile.TemporaryDirectory(prefix="loom-fleet-check-") as destination:
         fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
         row = fetched["items"][0]
         if row["outcome"] != "available":

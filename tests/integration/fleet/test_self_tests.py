@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -469,9 +470,27 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
 
 def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monkeypatch):
     inventory, deployment, daemon, _ = fleet
+    import loom._artifact_fetch as artifact_fetch
     import loom.queue.agent_session_transport as transport
 
     from dataclasses import replace
+
+    publish = artifact_fetch._publish
+    downloaded = []
+    rejected = []
+
+    def receipt_filesystem_lacks_atomic_directory_publication(source, target):
+        # An NFS-backed operator home accepts receipts but rejects renameat2's
+        # RENAME_NOREPLACE. Temporary downloads need their own storage choice.
+        if source.is_relative_to(inventory.path.parent):
+            rejected.append(source)
+            raise OSError(errno.EINVAL, "atomic directory publication unsupported")
+        publish(source, target)
+        downloaded.append(target)
+
+    monkeypatch.setattr(
+        artifact_fetch, "_publish", receipt_filesystem_lacks_atomic_directory_publication
+    )
 
     coordinator = inventory.hosts[0]
     role = json.loads(coordinator.config.read_text())
@@ -518,6 +537,7 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
         timeout_seconds=45,
     )
     assert dropped
+    assert not rejected
     result = finish(inventory, result["operation_id"])
     assert result["outcome"] == "passed", result
     assert result["checks"]["cpu"]["report"]["result"] == 49995000
@@ -546,6 +566,9 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
         )
         == 2
     )
+    assert not rejected
+    assert len(downloaded) >= 2
+    assert all(not path.exists() for path in downloaded)
 
     with sqlite3.connect(daemon.config.control_database) as connection:
         for check in ("cpu", "storage"):
