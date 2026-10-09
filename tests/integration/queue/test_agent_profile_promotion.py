@@ -251,11 +251,21 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(
         assert not c._drained
         if transient_unknown:
             # Replaying an older promotion cannot clear newer ownership doubt.
+            supervisor = c._supervisor
+            workspace = tmp_path / "current"
+            workspace.mkdir()
+            current = ResidentWorkerLaunch(
+                supervisor.supervisor_id, supervisor.continuity_epoch, root,
+                "session", "new-assignment", "new-process", "new-fence", "new-launch",
+                "b" * 64, workspace, third.resident_profiles[0].launch_profile, {},
+            )
+            supervisor.launch(current)
             c._observe_supervisor_ownership(
-                replace(supervisor.query(launch), state=SupervisorLaunchState.UNKNOWN)
+                replace(supervisor.query(current), state=SupervisorLaunchState.UNKNOWN)
             )
             assert promotion.apply(c, first) == effect
             assert c._restart_with_retained_work
+            supervisor.contain(current)
     finally:
         close(c)
 
