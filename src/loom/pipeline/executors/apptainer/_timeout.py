@@ -39,7 +39,15 @@ def namespace_argv(argv: Sequence[str]) -> tuple[str, ...]:
     """Select the init shim without changing caller or enclosing group ownership."""
     if len(argv) < 3 or argv[1] != "exec":
         raise UnsupportedTimeoutError("timeout supervision requires foreground exec")
-    flags = {"--cleanenv", "--nv", "--rocm", "--fakeroot", "--no-home", "--pid", "--contain"}
+    flags = {
+        "--cleanenv",
+        "--nv",
+        "--rocm",
+        "--fakeroot",
+        "--no-home",
+        "--pid",
+        "--contain",
+    }
     values = {"--cpus", "--memory", "--pwd", "--bind", "--env", "--no-mount"}
     index = 2
     options: list[str] = []
@@ -87,12 +95,13 @@ def _require_runtime(command: str, deadline: float) -> None:
     if (
         version.returncode != 0
         or re.fullmatch(
-            r"singularity(?:-ce)? version 3\.10\.4(?:-focal)?\s*", version.stdout
+            r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.1)\s*",
+            version.stdout,
         )
         is None
     ):
         raise UnsupportedTimeoutError(
-            "container timeout cleanup is currently verified for SingularityCE 3.10.4 "
+            "container timeout cleanup is currently verified for SingularityCE 3.10.4 or 4.1.1 "
             "foreground exec with its PID-namespace init; select that runtime or "
             "explicitly disable the timeout"
         )

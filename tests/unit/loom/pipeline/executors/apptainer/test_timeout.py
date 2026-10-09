@@ -46,19 +46,48 @@ def test_unsupported_modes_fail_before_launch(argv: tuple[str, ...]) -> None:
         namespace_argv(argv)
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        "apptainer version 1.4.0\n",
+        "singularity-ce version 4.1.2\n",
+        "singularity version 3.10.5\n",
+    ],
+)
 def test_unverified_runtime_rejected_before_payload(
     monkeypatch: pytest.MonkeyPatch,
+    output: str,
 ) -> None:
     calls: list[object] = []
 
     def version(argv, **kwargs):  # noqa: ANN001, ANN003, ANN202
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "apptainer version 1.4.0\n", "")
+        return subprocess.CompletedProcess(argv, 0, output, "")
 
     monkeypatch.setattr(subprocess, "run", version)
     with pytest.raises(UnsupportedTimeoutError, match="SingularityCE 3.10.4"):
         _require_runtime("runtime", monotonic() + 1)
     assert calls == [["runtime", "--version"]]
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "singularity version 3.10.4\n",
+        "singularity-ce version 3.10.4-focal\n",
+        "singularity-ce version 4.1.1\n",
+    ],
+)
+def test_qualified_runtime_versions_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+    output: str,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, output, ""),
+    )
+    _require_runtime("runtime", monotonic() + 1)
 
 
 def test_no_timeout_preserves_unrestricted_command(
