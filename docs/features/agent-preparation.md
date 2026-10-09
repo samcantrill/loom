@@ -914,6 +914,13 @@ explicitly forwards that envelope. The private request capture digest permits
 binding verification at decoding and is not forwarded into the context. Runtime
 location resolution does not traverse the opaque attachment.
 
+Each report read verifies the artifact bytes and shared closure. JSON decoding
+validates finite plain data once; native envelope checks then use that owned tree
+without recursively copying each opaque payload again. Action resolution selects
+its attachment from the report it has just checked. This is local reuse within
+one read, not a persistent cache: subsequent reads still detect changed artifacts
+and validate the original namespace and declaration bindings.
+
 Native context also supplies `loom.execution_binding` with exactly
 `schema_version: 1`, `origin_run_id`, `origin_node_id`, positive `attempt`,
 `environment_fingerprint`, and `run_state_root`. Original identity comes from the
