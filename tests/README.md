@@ -143,7 +143,7 @@ only when an additional execution/report is required. The summary e2e row runs w
 
 The timeout acceptance image needs `sh`, `setsid`, and `sleep`; the supplied path
 must already exist. Tests use temporary bind-mounted readiness files, fixture-owned
-pidfds, and the selected Linux/SingularityCE 3.10.4 foreground namespace path.
+pidfds, and the selected Linux/SingularityCE 3.10.4 or 4.1.1 foreground namespace path.
 They exercise direct timeout/startup/interruption, root-first exit, TERM-resistant
 descendants, uncertain cleanup, ordinary results, and both managed group owners.
 They neither pull/build an image nor request CPU/RAM cgroups or GPUs.
