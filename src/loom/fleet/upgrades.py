@@ -551,10 +551,15 @@ def _run_checks(operation):
         if name == "coordinator" or name not in operation.intent["agents"]:
             continue
         profile = declaration["resident_profiles"][0]
+        # Provider-backed GPUs belong to the native inventory, so their legacy
+        # resident-profile device list can be empty even on a GPU agent.
+        devices = profile.get("gpu_devices") or (
+            operation.intent["agents"][name].get("offer") or {}
+        ).get("gpu_devices")
         for check in (
             "cpu",
             "storage",
-            *(["gpu"] if profile.get("gpu_devices") else []),
+            *(["gpu"] if devices else []),
         ):
             slot = name + ":" + check
             if slot not in attempts:
