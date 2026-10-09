@@ -407,6 +407,11 @@ def _install(client: Any, replacement: Any, install: Any) -> None:
     else:
         client._supervisor, _ = client._open_supervisor(replacement)
     client._reset_runtime_providers()
+    # Promotion has proved empty native claims/deliveries and a clean supervisor
+    # cut under the mutation gate. A previous UNKNOWN observation must not strand
+    # this drained service; no capacity returns until the explicit resume.
+    client._restart_with_retained_work = False
+    client._service_recovery_admission = False
 
 
 def recover(config: Any) -> Any:

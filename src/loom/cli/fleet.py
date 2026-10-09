@@ -103,13 +103,16 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
         if action == "retry-check":
             item.add_argument("--failed-check", required=True)
             item.add_argument("--operation-id", dest="new_check", required=True)
+        if action == "retry-control":
+            item.add_argument("--failed-control", required=True)
+            item.add_argument("--operation-id", dest="new_control", required=True)
         item.add_argument(
             "--format", dest="output_format", choices=("text", "json"), default="text"
         )
@@ -247,15 +250,17 @@ def handle(namespace: argparse.Namespace) -> int:
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
                 elif intent.get("kind") == "installation-adoption":
+                    if namespace.operation_command not in {"resume", "abort"}:
+                        raise ValueError("retry requires a maintenance upgrade")
                     from loom.fleet.adoption import adopt
                     result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None))
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:
-                    raise ValueError("abort/retry-check requires a maintenance upgrade")
+                    raise ValueError("abort/retry requires a maintenance upgrade")
             else:
                 result = apply(
                     inventory,

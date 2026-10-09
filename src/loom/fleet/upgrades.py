@@ -339,6 +339,10 @@ class _Upgrade(sshops._Operation):
             "expected_control_id": predecessor
         }:
             raise QueueConflictError("policy continuation intent changed")
+        successors = _control_successors(self, key)
+        if successors:
+            request = successors[-1]
+            key += "-retry-" + str(len(successors))
 
         def invoke(value):
             condition = value["condition"]
@@ -353,7 +357,10 @@ class _Upgrade(sshops._Operation):
         result = self.native(key, request, invoke)
         if result["state"] != "applied" or not result["acknowledged"]:
             if result["state"] == "failed":
-                raise QueueConflictError("native control failed: " + str(result))
+                detail = "native control failed"
+                if kind == "resume" and result.get("code") == "retained_work":
+                    detail += "; explicit operation retry-control after recovery required"
+                raise QueueConflictError(detail + ": " + str(result))
             raise _Waiting("native control acknowledgement: " + request["operation_id"])
         return request["operation_id"]
 
@@ -604,13 +611,12 @@ def _restore(operation, *, abort=False):
             path = operation.receipts / key / "intent.json"
             if path.exists():
                 request = read(path)
-                operation.policy(
+                predecessor = operation.policy(
                     name,
                     key,
                     request["kind"],
                     request["condition"]["expected_control_id"],
                 )
-                predecessor = request["operation_id"]
                 changed = True
         if changed:
             # Temporary check capacity already restored an originally open policy.
@@ -743,6 +749,8 @@ def upgrade(
     action="resume",
     failed_check=None,
     new_check=None,
+    failed_control=None,
+    new_control=None,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     _environment_files(inventory, env_file)
@@ -855,6 +863,8 @@ def upgrade(
                     result = {"state": "aborted"}
             elif action == "retry-check":
                 result = _retry_check(operation, failed_check, new_check)
+            elif action == "retry-control":
+                result = _retry_control(operation, failed_control, new_control)
             else:
                 result = _continue(operation)
         except (_Waiting, sshops.SshUnavailable) as exc:
@@ -874,6 +884,87 @@ def upgrade(
             operation.close()
         atomic(directory / "result.json", result)
         return sshops.operation_status(inventory, operation_id)
+
+
+def _control_successors(operation, key):
+    path = operation.receipts / key / "successors.json"
+    return read(path) if path.exists() else []
+
+
+def _retry_control(operation, failed, successor):
+    """Select an explicit conditional successor for a failed maintenance resume.
+
+    Existing native requests/effects remain immutable. The operator must resolve
+    the underlying cause first; this action neither restarts nor replaces a role.
+    """
+    if not failed or not successor:
+        raise QueueConfigError("retry-control requires --failed-control and --operation-id")
+    sshops._directory(operation.inventory, successor)
+    operation.recheck()
+    selected = []
+    for name in operation.intent["agents"]:
+        for suffix in ("checks-capacity", "restore"):
+            key = name + "-" + suffix
+            path = operation.receipts / key / "intent.json"
+            if not path.exists():
+                continue
+            original = read(path)
+            rows = _control_successors(operation, key)
+            requests = [original, *rows]
+            if any(row["operation_id"] == failed for row in requests):
+                selected.append((name, key, original, rows))
+    if len(selected) != 1:
+        raise QueueConflictError("failed control does not belong to this maintenance owner")
+    name, key, original, rows = selected[0]
+    current = rows[-1] if rows else original
+    if current["operation_id"] == successor and current["condition"] == {
+        "expected_control_id": failed
+    }:
+        return _continue(operation)
+    operation.gate()
+    if current["operation_id"] != failed:
+        raise QueueConflictError("another successor already selects this policy")
+    if current["kind"] != "resume":
+        raise QueueConflictError("only failed maintenance resume controls can be retried")
+    result = operation.operator.observe_control(failed)
+    if result["state"] != "failed" or not result["acknowledged"]:
+        raise QueueConflictError("replacement requires acknowledged native control failure")
+    if result["code"] != "retained_work":
+        raise QueueConflictError("resume retry requires a recovered retained_work failure")
+    observed = operation.verify_policy(name, failed)
+    if (
+        not observed["drained"]
+        or observed["session_id"] != current["expected_session_id"]
+        or observed["config_revision"] != current["expected_config_revision"]
+    ):
+        raise QueueConflictError("failed resume agent policy changed")
+    operation.settled()
+    fact = operation.host_observe(name, "upgrade-settlement")
+    if fact["availability"] != "available" or not fact["value"].get("settled"):
+        raise _Waiting("failed resume native effects remain: " + failed)
+    # A successor is new authority, never an alias for another native request.
+    # Retained intents catch local lost-reply attempts; the native lookup catches
+    # controls created independently of this Fleet operation.
+    for path in operation.receipts.glob("*/intent.json"):
+        if read(path).get("operation_id") == successor:
+            raise QueueConflictError("successor identity already belongs to another intent")
+    for path in operation.receipts.glob("*/successors.json"):
+        if any(row["operation_id"] == successor for row in read(path)):
+            raise QueueConflictError("successor identity already belongs to another intent")
+    try:
+        operation.operator.observe_control(successor)
+    except CoordinatorClientError as exc:
+        if exc.code != "not_found":
+            raise
+    else:
+        raise QueueConflictError("successor identity already belongs to a native control")
+    request = {
+        **current,
+        "operation_id": successor,
+        "condition": {"expected_control_id": failed},
+    }
+    atomic(operation.receipts / key / "successors.json", [*rows, request])
+    return _continue(operation)
 
 
 def _retry_check(operation, failed, successor):

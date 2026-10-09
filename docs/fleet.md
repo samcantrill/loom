@@ -518,6 +518,25 @@ remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
+A resume control can also fail with `retained_work`. Resolve the underlying
+native recovery first and keep the maintenance gate closed. Ordinary operation
+resume replays the failed control; it does not erase that result. Select a new
+conditional control explicitly:
+
+```sh
+loom fleet operation retry-control upgrade-018 --fleet lab \
+  --failed-control upgrade-018-worker-checks-capacity \
+  --operation-id upgrade-018-worker-resume-recovered
+```
+
+This requires an acknowledged `retained_work` failure belonging to the operation,
+the same drained agent/session/configuration and latest policy control, and
+settled coordinator and host effects. It preserves the failed intent and receipt.
+The successor atomically requires that failed control as its predecessor; an
+independent policy edit refuses it. Repeat the exact retry command after a lost
+reply, or use ordinary operation resume once the successor is retained. No role
+restart, runtime retargeting or work cancellation is performed by this command.
+
 `operation abort` restores only controls still owned by that operation, using
 native atomic expected-predecessor guards. An independent applied control
 conflicts even if its drain value matches. Before closure abort has no native
