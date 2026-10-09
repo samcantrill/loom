@@ -231,7 +231,7 @@ def endpoint(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def site(tmp_path, bundle, endpoint):
+def site(tmp_path, bundle, endpoint, request):
     import tempfile
     from tests.integration.queue.test_preparation_operations import _service
     from loom.queue._remote_stage_execution import (
@@ -245,6 +245,15 @@ def site(tmp_path, bundle, endpoint):
     from loom.queue.operations import inspect_native_service
 
     base = Path(tempfile.mkdtemp(prefix="lf7-", dir="/tmp"))
+    socket_bytes = getattr(request, "param", None)
+    if socket_bytes is not None:
+        tmux_socket_path = base / (".loom-fleet-" + "0" * 16) / "tmux.sock"
+        padding = socket_bytes - len(os.fsencode(tmux_socket_path))
+        assert padding > 0
+        extended = base.with_name(base.name + "x" * padding)
+        assert not extended.exists()
+        base.rename(extended)
+        base = extended
     _service(tmp_path)
     outputs = tmp_path / "outputs"
     outputs.mkdir()

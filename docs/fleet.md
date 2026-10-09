@@ -253,6 +253,7 @@ contain SSH options or shell syntax. Each host must already provide Python 3.12,
 uv, OpenSSL, findmnt and the selected service manager. Native state and IPC must be on a supported local
 filesystem; a directory beneath an NFS home is insufficient. Workload software,
 shared mounts and the selected resident Python or SIF profile must already exist.
+For tmux, the generated socket path must fit Linux's 107-byte pathname limit.
 Tmux keeps services detached from the operator connection and promises **no boot
 startup**. Systemd setup uses the managed lifetimes below; runtime/profile changes
 require their explicit lifecycle paths. The completed setup result reports

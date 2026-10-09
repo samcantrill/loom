@@ -63,6 +63,9 @@ def retained_installation(inventory, base, tmp_path):
     return load_inventory(inventory.path), path, owners
 
 
+@pytest.mark.parametrize(
+    "site", [None, 107], indirect=True, ids=["short-path", "linux-max-socket"]
+)
 def test_quiesced_adoption_preserves_native_history_and_resolves_lost_reply(
     site,  # noqa: F811
     tmp_path,

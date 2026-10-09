@@ -361,7 +361,8 @@ def start(request):
     if not binding.exists():
         atomic(binding, request)
     socket = admin / "tmux.sock"
-    if len(os.fsencode(socket)) > 90:
+    # Linux sockaddr_un reserves one of its 108 bytes for the trailing NUL.
+    if len(os.fsencode(socket)) > 107:
         raise QueueConflictError("native host-local path is too long for tmux IPC")
     argv = ["tmux", "-f", "/dev/null", "-S", str(socket)]
     session = "loom"
