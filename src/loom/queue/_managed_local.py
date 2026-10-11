@@ -88,6 +88,7 @@ from ._remote_stage_execution import (
     _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
+    _RemoteTransferLimitError,
     _read_regular_file_bytes,
     _resident_input_refs,
 )
@@ -4206,7 +4207,18 @@ def run_managed_local_assignment(
                 worker_result_state="unqualified_success",
             )
             return finalize_result(worker_result, coordinator_expected="running")
-        report = workspace.retain_outputs()
+        try:
+            report = workspace.retain_outputs()
+        except _RemoteTransferLimitError as exc:
+            # The exact owned group has exited and its result is contained.
+            # An over-limit output is a known publication failure, not unknown work.
+            worker_result = _managed_root_failed_worker_result(
+                worker_request,
+                exc,
+                process_exit_code=contained.exit_code,
+                worker_result_state="output_exceeds_byte_bound",
+            )
+            return finalize_result(worker_result, coordinator_expected="running")
         worker_result = _project_resident_result(
             child_result,
             report=report,

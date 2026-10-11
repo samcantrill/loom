@@ -65,10 +65,15 @@ class JsonProducerStage:
                     codec_key="json.v1",
                 )
             }
+        payload = {"value": value}
+        padding_bytes = context.stage_config.get("padding_bytes")
+        if padding_bytes is not None:
+            assert isinstance(padding_bytes, int) and padding_bytes >= 0
+            payload["padding"] = "x" * padding_bytes
         return {
             "data": context.save_artifact(
                 "data",
-                {"value": value},
+                payload,
                 artifact_type="json",
                 codec_key="json.v1",
             )

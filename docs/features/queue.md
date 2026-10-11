@@ -292,6 +292,15 @@ transaction:
    availability revision then makes released atoms schedulable. Authority
    terminality alone never asserts that provider release already occurred.
 
+For a same-host managed assignment, an owned, contained worker may exit
+successfully while producing a regular output larger than the 64 MiB transfer
+bound. The parent records that known publication failure as a failed attempt,
+without committing or transferring the oversized output, and releases capacity
+through the ordinary terminal acknowledgement sequence. The original worker
+result and containment evidence remain intact. Reopening the same assignment
+repairs or replays that failure; it does not launch the worker again. Unknown
+ownership and other publication conflicts still retain work for recovery.
+
 For the protected same-host resident route, Loom preserves the regular files in
 the stage artifact directory as one atomically published local tree and stages a
 separate copy beside each primary input. This lets a declared file artifact use

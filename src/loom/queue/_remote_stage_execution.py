@@ -76,6 +76,10 @@ MAX_TRANSFER_BYTES = 64 * 1024 * 1024
 TRANSFER_CHUNK_BYTES = 32 * 1024
 
 
+class _RemoteTransferLimitError(QueueConflictError):
+    """A regular producer output is definitively larger than its byte bound."""
+
+
 def _identifier(value: object, field: str) -> str:
     if (
         not isinstance(value, str)
@@ -2202,6 +2206,8 @@ class _ResidentAssignmentWorkspace:
                     source = unresolved_source.resolve(strict=True)
                     source.relative_to(self.root)
                     data = _read_regular_file_bytes(source)
+                except _RemoteTransferLimitError:
+                    raise
                 except (OSError, ValueError, QueueConflictError) as exc:
                     raise QueueConflictError(
                         "remote output is not a regular file in its assignment workspace"
@@ -2713,7 +2719,7 @@ def _read_regular_file_bytes(
     finally:
         os.close(descriptor)
     if len(data) > max_bytes:
-        raise QueueConflictError("remote transfer source exceeds its byte bound")
+        raise _RemoteTransferLimitError("remote transfer source exceeds its byte bound")
     return data
 
 
