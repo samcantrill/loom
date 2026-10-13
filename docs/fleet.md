@@ -524,6 +524,24 @@ loom fleet operation retry-check upgrade-018 --fleet lab \
 loom fleet operation resume upgrade-018 --fleet lab
 ```
 
+If failure came from selecting the wrong source-relative check recipe, add
+`--config configs/infrastructure.yaml` to `retry-check`. This explicit correction
+applies to the new successor and checks not yet created. Fleet records it in the
+operation's protected `check-config-corrections.json`; it does not change the
+service/image target, original maintenance intent, existing requests, or passed
+evidence. Repeating that successor may omit `--config` or repeat the same value;
+a different value is refused. The recipe must already be permitted by the
+selected source capture. Choose a recipe that composes without scientific
+run inputs: these probes qualify infrastructure, not training. Without this
+option, retry retains the current check recipe.
+
+Upgrade probes select a processor-free preparation policy for the same resident
+profile. A matching client policy is preferred; otherwise exactly one such
+policy must exist. Preview refuses a missing or ambiguous infrastructure policy
+before maintenance begins. Scientific project inspection remains reserved for
+scientific submissions.
+
+
 The predecessor must be a confirmed native terminal failure with no outstanding
 native effects. The successor is appended to the same maintenance history and
 receives exact operator authorization before dispatch. Prior failure evidence

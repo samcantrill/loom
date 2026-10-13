@@ -126,6 +126,10 @@ def preview(
     target = verify_release(Path(runtime_release), previous=inventory.runtime_release)
     selected = _checks(inventory, deployment, connection, config)
     rows, declarations = sshops._selection(inventory, None, env_file)
+    preferred_profile = load_deployment(selected["deployment"]).preparation_profile
+    for name in rows:
+        if name != "coordinator":
+            _check_profile(declarations, name, preferred_profile)
     if len(rows) < 2:
         raise QueueConfigError(
             "upgrade requires one pure coordinator and separate agents"
@@ -440,6 +444,34 @@ def _attempts(operation):
     return read(path) if path.exists() else {}
 
 
+def _check_config_corrections(operation):
+    path = operation.directory / "check-config-corrections.json"
+    return read(path) if path.exists() else []
+
+
+def _check_profile(declarations, name, preferred):
+    profile_id = declarations[name]["resident_profiles"][0]["descriptor"]["profile_id"]
+    policies = declarations["coordinator"]["preparation"]["profiles"]
+    matches = [
+        key for key, value in policies.items()
+        if value["resident_profile_id"] == profile_id
+        and value.get("project_processor") is None
+    ]
+    if preferred in matches:
+        return preferred
+    if len(matches) == 1:
+        return matches[0]
+    raise QueueConfigError("infrastructure checks require one unambiguous processor-free preparation profile for " + name)
+
+
+def _check_selection(operation):
+    selection = dict(operation.intent["check_selection"])
+    corrections = _check_config_corrections(operation)
+    if corrections:
+        selection["config"] = corrections[-1]["config"]
+    return selection
+
+
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = {
@@ -451,32 +483,13 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         if intent.get("maintenance_binding") != binding:
             raise QueueConflictError("check belongs to another maintenance intent")
     else:
-        selection = operation.intent["check_selection"]
+        selection = _check_selection(operation)
         deployment = load_deployment(selection["deployment"])
         declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
-        profile_id = declarations[name]["resident_profiles"][0][
-            "descriptor"
-        ]["profile_id"]
-        policies = declarations["coordinator"]["preparation"][
-            "profiles"
-        ]
-        matches = [
-            key
-            for key, value in policies.items()
-            if value["resident_profile_id"] == profile_id
-        ]
-        chosen = (
-            deployment.preparation_profile
-            if deployment.preparation_profile in matches
-            else matches[0]
-            if len(matches) == 1
-            else None
-        )
-        if chosen is None:
-            raise QueueConfigError("check preparation profile is ambiguous for " + name)
+        chosen = _check_profile(declarations, name, deployment.preparation_profile)
         from loom.deployment import export_connection_deployment
 
-        selected_path = operation.directory / (name + "-check-selection.json")
+        selected_path = operation.directory / (name + "-" + identity + "-check-selection.json")
         if selected_path.exists():
             retained_selection = load_deployment(selected_path)
             if (
@@ -749,11 +762,14 @@ def upgrade(
     action="resume",
     failed_check=None,
     new_check=None,
+    check_config=None,
     failed_control=None,
     new_control=None,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     _environment_files(inventory, env_file)
+    if check_config is not None and action != "retry-check":
+        raise QueueConfigError("check configuration correction requires retry-check")
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
     if runtime_release is not None and (workload_profile is not None or image is not None or workload_inventory is not None):
@@ -862,7 +878,7 @@ def upgrade(
                     atomic(directory / "aborted.json", {"state": "aborted"})
                     result = {"state": "aborted"}
             elif action == "retry-check":
-                result = _retry_check(operation, failed_check, new_check)
+                result = _retry_check(operation, failed_check, new_check, check_config)
             elif action == "retry-control":
                 result = _retry_control(operation, failed_control, new_control)
             else:
@@ -967,7 +983,7 @@ def _retry_control(operation, failed, successor):
     return _continue(operation)
 
 
-def _retry_check(operation, failed, successor):
+def _retry_check(operation, failed, successor, config=None):
     if not failed or not successor:
         raise QueueConfigError("retry-check requires --failed-check and --operation-id")
     sshops._directory(operation.inventory, successor)
@@ -985,10 +1001,26 @@ def _retry_check(operation, failed, successor):
             "failed check does not belong to this maintenance owner"
         )
     rows = selected[0]
+    corrections = _check_config_corrections(operation)
+    retained = next((row for row in corrections if row["successor"] == successor), None)
+    if config is not None:
+        from loom.queue.preparation import _relative
+        from loom.queue.errors import QueueServiceError
+
+        try:
+            config = _relative(config, "check config")
+        except QueueServiceError as exc:
+            raise QueueConfigError(str(exc)) from exc
+        if retained is not None and retained != {
+            "failed_check": failed, "successor": successor, "config": config
+        }:
+            raise QueueConflictError("retained check configuration correction changed")
     if (
         rows[-1]["operation_id"] == successor
         and rows[-1]["previous_check_id"] == failed
     ):
+        if config is not None and retained is None:
+            raise QueueConflictError("cannot change an already selected successor configuration")
         return _continue(operation)
     if rows[-1]["operation_id"] != failed:
         raise QueueConflictError("another successor already selects this slot")
@@ -1017,6 +1049,18 @@ def _retry_check(operation, failed, successor):
         for row in values
     ):
         raise QueueConflictError("successor identity already belongs to another intent")
+    if config is not None and retained is None:
+        pending = operation.inventory.path.parent / "checks" / successor / "intent.json"
+        if pending.exists() and any(
+            request["preparation"]["config_path"] != config
+            for request in read(pending)["requests"].values()
+        ):
+            raise QueueConflictError("cannot change an already prepared successor configuration")
+        # Only future requests use this correction. Existing check intents/results
+        # and the service/image target remain immutable under the operation lock.
+        atomic(operation.directory / "check-config-corrections.json", [
+            *corrections, {"failed_check": failed, "successor": successor, "config": config}
+        ])
     rows.append(_prepare_attempt(operation, name, check, successor, previous=failed))
     atomic(operation.directory / "checks.json", attempts)
     return _continue(operation)

@@ -110,6 +110,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         if action == "retry-check":
             item.add_argument("--failed-check", required=True)
             item.add_argument("--operation-id", dest="new_check", required=True)
+            item.add_argument("--config", dest="check_config", help="correct source-relative recipe for the successor and remaining checks")
         if action == "retry-control":
             item.add_argument("--failed-control", required=True)
             item.add_argument("--operation-id", dest="new_control", required=True)
@@ -256,7 +257,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), check_config=getattr(namespace, "check_config", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None))
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:
