@@ -30,7 +30,10 @@ from ._managed_local import (
     _start_failed_worker_result, _worker_environment,
 )
 from .agent_sessions import AgentSession
-from ._remote_stage_execution import _ResidentAssignmentBundle, _ResidentAssignmentWorkspace
+from ._remote_stage_execution import (
+    _ResidentAssignmentBundle, _ResidentAssignmentWorkspace,
+    _PreparationReportRetentionError,
+)
 from ._agent_process_supervisor import (
     ResidentWorkerLaunch, SupervisorReceipt, SupervisorLaunchState,
     _launch_from_value, _launch_value,
@@ -930,7 +933,12 @@ def _complete_remote_result_and_release(
         (yield from _external("bulk", workspace.persist_worker_result, result))
         result = cast(StageWorkerResult, workspace.worker_result())
         execution_journal.record_result(assignment.assignment_id, result.to_dict())
-    report = (yield from _external("bulk", workspace.retain_outputs))
+    try:
+        report = (yield from _external("bulk", workspace.retain_outputs))
+    except _PreparationReportRetentionError as exc:
+        report = (yield from _external(
+            "bulk", workspace.failed_preparation_retention_report, exc
+        ))
     workspace.append_event(
         f"{request.assignment_id}:result-output-durable",
         {"kind": "result_and_output_durable", "status": report.status.value},

@@ -91,6 +91,22 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
         assert set(entry["data"]) == {"schema_version", "namespace", "report_ref"}
         assert entry["data"]["report_ref"] == first["report_ref"]
         report = cast(Any, load_contract_report(store, uri))
+        # Retained contracts cannot claim complete native evidence from a
+        # primary alone, even though their checked payloads remain inline.
+        from loom.preparation import load_preparation_report
+        from loom.artifacts import ArtifactRef
+        report_ref = ArtifactRef.from_dict(entry["data"]["report_ref"])
+        artifact_store = LocalArtifactStore(store.local_artifact_root(uri))
+        primary_path = artifact_store.local_path(report_ref)
+        primary = cast(Any, artifact_store.load(report_ref))
+        companion_path = primary_path.parent / primary["composition"]["evidence_ref"]["uri"]
+        companion_bytes = companion_path.read_bytes()
+        companion_path.unlink()
+        with pytest.raises(QueueConflictError):
+            load_contract_report(store, uri)
+        companion_path.write_bytes(companion_bytes)
+        assert load_preparation_report(report_ref, primary_path) == report
+
         assert report["composition"] == report["requested_composition"]
         assert set(report["project_contracts"]) == {"author", "reader"}
         assert (

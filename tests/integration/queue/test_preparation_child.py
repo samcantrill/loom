@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.preparation_reports import load_report
+
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
@@ -23,7 +25,7 @@ from loom.pipeline.execution.models import (
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalRunStore
 from loom.preparation import (
     decode_preparation_report,
     preparation_checks_allow_publication,
@@ -324,9 +326,7 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
 ) -> None:
     service, binding, result, workspace, counter = _child(tmp_path)
     assert result.status is StageStatus.SUCCEEDED, result.failure
-    report = LocalArtifactStore(workspace.root / "artifacts").load(
-        result.outputs["report"]
-    )
+    report = load_report(workspace.root / "artifacts", result.outputs["report"])
     assert isinstance(report, dict)
     composed, requirements, preflight = decode_preparation_report(
         report, expected=binding
@@ -402,9 +402,7 @@ def test_real_child_preserves_failed_checks_or_native_worker_failure(
         assert result.failure is not None and not result.outputs
     else:
         assert result.status is StageStatus.SUCCEEDED, result.failure
-        report = LocalArtifactStore(workspace.root / "artifacts").load(
-            result.outputs["report"]
-        )
+        report = load_report(workspace.root / "artifacts", result.outputs["report"])
         if fault == "portability":
             with pytest.raises(QueueServiceError, match="path-bearing"):
                 decode_preparation_report(report, expected=binding)
@@ -420,9 +418,7 @@ def test_real_child_preserves_failed_checks_or_native_worker_failure(
 def test_preparation_report_requires_its_exact_selected_profile(tmp_path: Path) -> None:
     _service, binding, result, workspace, _counter = _child(tmp_path)
     assert result.status is StageStatus.SUCCEEDED
-    report = LocalArtifactStore(workspace.root / "artifacts").load(
-        result.outputs["report"]
-    )
+    report = load_report(workspace.root / "artifacts", result.outputs["report"])
     other = replace(
         binding, profile_descriptor={**binding.profile_descriptor, "revision": "v2"}
     )
@@ -448,7 +444,7 @@ def test_ordered_invocation_reaches_checked_report_and_published_runtime(
     assert result.status is StageStatus.SUCCEEDED, result.failure
     report = cast(
         dict[str, Any],
-        LocalArtifactStore(workspace.root / "artifacts").load(result.outputs["report"]),
+        load_report(workspace.root / "artifacts", result.outputs["report"]),
     )
     composed, requirements, preflight = decode_preparation_report(
         report, expected=binding
