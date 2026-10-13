@@ -1825,3 +1825,201 @@ def test_agent_recovers_cumulative_output_acknowledgement_before_commit(
         slurm_output_size=output_size,
         lose_output_ack_at=min(output_size, 65536),
     )
+
+
+@pytest.mark.optional_dependency
+def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_replay(
+    tmp_path, monkeypatch
+):
+    """Transport real native bytes through the ready-result interfaces only.
+
+    This bounded protocol fixture supplies an observed ready assignment to the
+    storage interface. It does not force dispatcher eligibility or claim native
+    preparation execution on Slurm, which has no preparation-input capability.
+    """
+    from tests.integration.queue.test_preparation_child import _child
+    from loom.queue.slurm_ready_stage import (
+        SQLiteSlurmStageAssignments,
+        SlurmStageAssignment,
+    )
+    from loom.preparation import load_preparation_report
+    from loom.io.uris import uri_to_path
+
+    (tmp_path / "native-source").mkdir()
+    _service, _binding, produced, native_workspace, counter = _child(
+        tmp_path / "native-source"
+    )
+    assert counter.read_text() == "1"
+    original = produced.outputs["report"]
+    logical = load_preparation_report(original, uri_to_path(original.uri))
+    runner = FakeSlurmCommandRunner(starting_job_id=1200)
+    profile = _profile(runner)
+    assignment = SlurmStageAssignment(
+        assignment_id="native-pair",
+        operation_id="native-pair-operation",
+        run_uri="file:///observed-native-pair",
+        stage_work_id="native-pair-work",
+        stage_name="prepare",
+        attempt=1,
+        attempt_id="prepare-1",
+        profile_id=profile.profile_id,
+        profile_descriptor=profile.descriptor,
+        profile_configuration_fingerprint=profile.configuration_fingerprint,
+        request_digest="d" * 64,
+        agent_id="agent-pair",
+        agent_root_id="root-pair",
+    )
+    from loom.pipeline.resources import ResourceRequest
+    source_request = native_workspace.worker_request(resolve_shared=True)
+    # Normalize the fixture's empty resource envelope through its current owner.
+    transport_request = replace(source_request, run_uri=assignment.run_uri,
+        resolved_runtime={**source_request.resolved_runtime, "resources": ResourceRequest().to_dict()})
+    delivery = SlurmStageDelivery.from_worker_request(
+        assignment=assignment,
+        worker_request=transport_request,
+        project_fingerprint=profile.project_fingerprint,
+        environment_fingerprint=profile.environment_fingerprint,
+        executor_fingerprint=profile.executor_fingerprint,
+        inputs=(),
+        declared_outputs=("report",),
+    )
+    workspace = SlurmBootstrapWorkspace(tmp_path / "compute", assignment.assignment_id)
+    workspace.persist_delivery(delivery)
+    # Relocation is a transport fixture, not new native execution authority.
+    primary = uri_to_path(original.uri)
+    artifact_root = workspace.root / "artifacts/prepare"
+    artifact_root.mkdir(parents=True)
+    for path in primary.parent.iterdir():
+        if path.is_file():
+            shutil.copyfile(path, artifact_root / path.name)
+    relocated = replace(original, uri=(artifact_root / primary.name).as_uri())
+    result = replace(
+        produced,
+        run_uri=f"loom-slurm:{assignment.assignment_id}",
+        outputs={"report": relocated},
+    )
+    report = workspace.retain_result(result)
+    assert report.schema_version == 5
+    assert (
+        len(report.outputs) == 1
+        and report.outputs[0].preparation_report_transfer is not None
+    )
+    owner = SQLiteSlurmStageAssignments(tmp_path / "ready.sqlite", tmp_path / "relay")
+    owner._initialize()
+    # Populate the supported storage-interface observation, including all its
+    # original assignment/delivery/fence identities. No scheduler is bypassed.
+    with sqlite3.connect(owner.path) as conn:
+        conn.execute(
+            "INSERT INTO slurm_stage_assignments (assignment_id,operation_id,run_uri,stage_work_id,profile_id,state,identity_json,request_json,delivery_json,input_paths_json,issuer_epoch,job_id,cluster,bootstrap_incarnation,input_ready,fence,process_execution_id,report_json,capability_verifier,submission_eligible,capability_consumed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                assignment.assignment_id,
+                assignment.operation_id,
+                assignment.run_uri,
+                assignment.stage_work_id,
+                assignment.profile_id,
+                "running",
+                json.dumps(assignment.to_dict()),
+                json.dumps({"digest": assignment.request_digest}),
+                json.dumps(delivery.to_dict()),
+                "{}",
+                "epoch-pair",
+                "1200",
+                "cluster-a",
+                "bootstrap-pair",
+                1,
+                "fence-pair",
+                "worker-pair",
+                None,
+                "e" * 64,
+                1,
+                1,
+            ),
+        )
+    downgraded = replace(
+        report, schema_version=3,
+        outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs),
+    )
+    with pytest.raises(QueueConflictError, match="native preparation transfer capability"):
+        owner.declare_report(assignment.assignment_id, "bootstrap-pair", "fence-pair", downgraded)
+    owner.declare_report(
+        assignment.assignment_id, "bootstrap-pair", "fence-pair", report
+    )
+    item = report.outputs[0]
+    with pytest.raises(QueueConflictError, match="coordinator-accessible"):
+        owner.committed_result(assignment.assignment_id, "bootstrap-pair", "fence-pair")
+    offset = 0
+    original_publish = slurm_ready_stage._publish_staged_file
+    crashed = False
+    while True:
+        chunk, final = workspace.output_chunk(item.transfer_id, offset)
+        if final and not crashed:
+            crashed = True
+
+            def after_publish(part, target):
+                original_publish(part, target)
+                raise OSError("native pair lost acknowledgement")
+
+            monkeypatch.setattr(
+                slurm_ready_stage, "_publish_staged_file", after_publish
+            )
+            with pytest.raises(OSError, match="lost acknowledgement"):
+                owner.write_output_chunk(
+                    assignment.assignment_id,
+                    "bootstrap-pair",
+                    item.transfer_id,
+                    offset,
+                    chunk,
+                    final=final,
+                )
+            monkeypatch.setattr(
+                slurm_ready_stage, "_publish_staged_file", original_publish
+            )
+            with pytest.raises(QueueConflictError, match="coordinator-accessible"):
+                owner.committed_result(
+                    assignment.assignment_id, "bootstrap-pair", "fence-pair"
+                )
+        offset = owner.write_output_chunk(
+            assignment.assignment_id,
+            "bootstrap-pair",
+            item.transfer_id,
+            offset,
+            chunk,
+            final=final,
+        )
+        if final:
+            break
+    received, outputs = owner.committed_result(
+        assignment.assignment_id, "bootstrap-pair", "fence-pair"
+    )
+    assert received == report
+    restored = outputs["report"]
+    assert replace(original, uri=restored.uri) == restored
+    assert load_preparation_report(restored, uri_to_path(restored.uri)) == logical
+    assert "preparation_report_transfer" not in restored.metadata
+    replay = SlurmBootstrapWorkspace(tmp_path / "compute", assignment.assignment_id)
+    assert replay.retained_report() == report
+    assert workspace.retain_result(result) == report
+    owner.declare_report(
+        assignment.assignment_id, "bootstrap-pair", "fence-pair", report
+    )
+    offset = 0
+    while True:
+        chunk, final = replay.output_chunk(item.transfer_id, offset)
+        offset = owner.write_output_chunk(
+            assignment.assignment_id,
+            "bootstrap-pair",
+            item.transfer_id,
+            offset,
+            chunk,
+            final=final,
+        )
+        if final:
+            break
+    assert owner.committed_result(
+        assignment.assignment_id, "bootstrap-pair", "fence-pair"
+    ) == (report, outputs)
+    with pytest.raises(QueueConflictError, match="authorization"):
+        owner.committed_result(
+            assignment.assignment_id, "bootstrap-other", "fence-pair"
+        )
+    assert counter.read_text() == "1"

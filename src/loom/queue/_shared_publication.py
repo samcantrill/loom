@@ -171,6 +171,10 @@ def retain(
                 and ref.checksum != "sha256:" + str(member["digest"])
             ):
                 raise QueueConflictError("shared primary output integrity conflicts")
+            from ._preparation_report_transfer import native_role
+            if native_role(request.fingerprint):
+                from loom.preparation import load_preparation_report
+                load_preparation_report(ref, available / relative)
             outputs[name] = relative
         receipt = {
             "schema_version": 1,
@@ -292,6 +296,11 @@ def publish(
                 item.digest,
             ):
                 raise QueueConflictError("shared primary output bytes conflict")
+            from ._preparation_report_transfer import native_role
+            if native_role(request.fingerprint):
+                from loom.preparation import load_preparation_report
+                path = available / str(reference["primary"])
+                load_preparation_report(item.local_ref(path), path)
             outputs[item.logical_name] = item.local_ref(
                 final / str(reference["primary"])
             )

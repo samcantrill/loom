@@ -191,11 +191,10 @@ def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | Non
         return None
     data = report_entry(prepared["metadata"][CONTRACTS])
     ref = ArtifactRef.from_dict(data["report_ref"])
-    # report_entry requires the built-in JSON codec, whose decoder owns plain
-    # data validation. All children below belong to that same fresh tree.
-    report = _plain_mapping_view(cast(PlainData,
-        LocalArtifactStore(store.local_artifact_root(run_uri)).load(ref)
-    ))
+    from loom.preparation import load_preparation_report
+
+    artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+    report = load_preparation_report(ref, artifact_store.local_path(ref))
     project = _plain_mapping_view(report["project_preparation"])
     processor = _plain_mapping_view(project["processor"])
     if (
